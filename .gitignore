@@ -1,0 +1,20 @@
+# 忽略整个虚拟环境目录
+.venv/
+
+# 其他常见忽略项
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.env
+*.log
+*.sqlite3
+*.swp
+.DS_Store
+.ipynb_checkpoints/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
