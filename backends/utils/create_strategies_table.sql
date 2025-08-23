@@ -1,9 +1,10 @@
 -- 必填字段：name; strategy_type; params
 CREATE TABLE strategies (
-    id UUID NOT NULL,
+    id UUID NOT NULL PRIMARY KEY,
     name VARCHAR(128) NOT NULL,
     strategy_type VARCHAR(32) NOT NULL,
     params JSONB NOT NULL,
+    cur_position JSONB DEFAULT '{}'::jsonb,   -- 当前持仓，键值对形式
     status VARCHAR(16) NOT NULL DEFAULT 'draft',
     version INTEGER NOT NULL DEFAULT 1,
     idempotency_key VARCHAR(64) UNIQUE,
