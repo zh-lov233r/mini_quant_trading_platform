@@ -6,7 +6,7 @@
 #   
 
 
-# api/v1/strategies.py
+# src/api/strategies.py
 from typing import Any, Dict, Optional, Literal
 from uuid import UUID
 
@@ -15,9 +15,9 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from core.db import get_db
+from src.core.db import get_db
+from src.models.tables import Strategy
 from sqlalchemy.orm import declarative_base
-from sqlalchemy import Column, String, Integer, DateTime, func, JSON
 try:
     # Postgres 下优先用 JSONB（若切到 MySQL 依然能工作，只是走 JSON）
     from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
@@ -28,31 +28,6 @@ except Exception:
     USE_JSONB = False
 
 Base = declarative_base()
-
-
-# ==== ORM mapping to current strategies table ====
-class Strategy(Base):
-    __tablename__ = "strategies"
-
-    # 注意：你的表里 id 是 UUID 主键；用 PGUUID 更精准（MySQL 下可退化）
-    id = Column(PGUUID(as_uuid=True) if PGUUID else String, primary_key=True)
-
-    name = Column(String(128), nullable=False)
-    strategy_type = Column(String(32), nullable=False)
-    params = Column(JSONB if USE_JSONB else JSON, nullable=False)
-
-    # 这些字段在你的建表 SQL 中均存在
-    status = Column(String(16), nullable=False, default="draft")
-    version = Column(Integer, nullable=False, default=1)
-    idempotency_key = Column(String(64), unique=True)
-
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True),
-                        server_default=func.now(), onupdate=func.now())
-
-    # 注意：如果你后来为表新增了 cur_position/jsonb 列，
-    # 这份 ORM 没有声明也没关系——插入时不触碰该列，数据库会用默认值。
-
 
 # ==== Pydantic 入参/出参模型 ====
 class StrategyCreate(BaseModel):
@@ -71,7 +46,7 @@ class StrategyOut(BaseModel):
     version: int
 
 
-router = APIRouter(prefix="/api/v1/strategies", tags=["strategies"])
+router = APIRouter(prefix="/api/strategies", tags=["strategies"])
 
 
 # ==== 创建策略 ====
