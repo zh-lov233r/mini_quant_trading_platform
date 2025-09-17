@@ -110,7 +110,7 @@ def create_strategy(
     )
 
 
-# ====（可选）按 ID 查询，便于你本地自测 ====
+# ====（可选）按 ID 查询，便于本地自测 ====
 @router.get("/{strategy_id}", response_model=StrategyOut)
 def get_strategy(strategy_id: UUID, db: Session = Depends(get_db)):
     obj = db.get(Strategy, strategy_id)

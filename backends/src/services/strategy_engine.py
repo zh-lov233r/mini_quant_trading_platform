@@ -13,7 +13,13 @@ def run_trend_following_strategy():
 def generate_signals():
     pass
 
+def trend_following(): 
+    # 1. 通过polygon service获取数据库中每一只股票的SMA，EMA；持久化到数据库中
 
+
+    
+    # 2. 在获取到数据后直接进行金叉死叉的计算
+    pass
 
 
 
