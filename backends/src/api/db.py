@@ -2,7 +2,7 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-# 注意把用户名/密码/库名改成你的
+
 DATABASE_URL = "postgresql+psycopg2://quant_user:quant_password@localhost:5432/quant_db"
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)

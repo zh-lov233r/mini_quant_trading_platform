@@ -1,9 +1,7 @@
 # core/db.py
 from __future__ import annotations
-
 import os
 from typing import Generator
-
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 

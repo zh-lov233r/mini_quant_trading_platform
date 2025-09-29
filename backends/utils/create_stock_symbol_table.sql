@@ -1,3 +1,4 @@
+-- 创建股票代码表，用于获取股票数据
 CREATE TABLE public.stocks_min (
   symbol   TEXT PRIMARY KEY,   -- 主键：每个股票代码唯一
   name     TEXT NOT NULL,      -- 公司名
