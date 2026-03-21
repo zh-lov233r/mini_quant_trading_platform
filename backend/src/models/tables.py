@@ -1,28 +1,212 @@
 # 数据模型; Data Model
-# Pydantic 模型; 数据类型验证
-from sqlalchemy.orm import declarative_base
+from __future__ import annotations
 
-# Base 就是所有 ORM 模型的基类
+import uuid
+
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    Column,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import declarative_base, relationship
+
+
 Base = declarative_base()
+JSON_VARIANT = JSONB().with_variant(JSON(), "sqlite")
 
-# 示例模型：strategies 表
+
 class Strategy(Base):
     __tablename__ = "strategies"
-
-    # 列定义（你的建表 SQL 要对应）
-    from sqlalchemy import Column, String, Integer, DateTime, func
-    from sqlalchemy.dialects.postgresql import UUID, JSONB
-    import uuid
+    __table_args__ = (
+        UniqueConstraint("name", "version", name="uq_strategy_name_version"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(128), nullable=False)
     strategy_type = Column(String(32), nullable=False)
-    params = Column(JSONB, nullable=False)
+    params = Column(JSON_VARIANT, nullable=False)
+    cur_position = Column(JSON_VARIANT, default=dict)
     status = Column(String(16), nullable=False, default="draft")
-    cur_position = Column(JSONB, default="{}")
     version = Column(Integer, nullable=False, default=1)
     idempotency_key = Column(String(64), unique=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+    runs = relationship(
+        "StrategyRun",
+        back_populates="strategy",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    signals = relationship(
+        "Signal",
+        back_populates="strategy",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    transactions = relationship(
+        "Transaction",
+        back_populates="strategy",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
+
+class StrategyRun(Base):
+    __tablename__ = "strategy_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "mode IN ('backtest', 'paper', 'live')",
+            name="ck_strategy_runs_mode",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'completed', 'failed', 'cancelled')",
+            name="ck_strategy_runs_status",
+        ),
+        CheckConstraint(
+            "window_end IS NULL OR window_start IS NULL OR window_end >= window_start",
+            name="ck_strategy_runs_window",
+        ),
+        CheckConstraint(
+            "finished_at IS NULL OR started_at IS NULL OR finished_at >= started_at",
+            name="ck_strategy_runs_times",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    strategy_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("strategies.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    strategy_version = Column(Integer, nullable=False)
+    mode = Column(String(16), nullable=False)
+    status = Column(String(16), nullable=False, default="queued")
+    requested_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    started_at = Column(DateTime(timezone=True))
+    finished_at = Column(DateTime(timezone=True))
+    window_start = Column(Date)
+    window_end = Column(Date)
+    initial_cash = Column(Numeric(20, 8))
+    final_equity = Column(Numeric(20, 8))
+    benchmark_symbol = Column(Text)
+    config_snapshot = Column(JSON_VARIANT, nullable=False, default=dict)
+    summary_metrics = Column(JSON_VARIANT, nullable=False, default=dict)
+    error_message = Column(Text)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    strategy = relationship("Strategy", back_populates="runs")
+    signals = relationship(
+        "Signal",
+        back_populates="run",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    transactions = relationship(
+        "Transaction",
+        back_populates="run",
+        passive_deletes=True,
+    )
+    portfolio_snapshots = relationship(
+        "PortfolioSnapshot",
+        back_populates="run",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="PortfolioSnapshot.ts",
+    )
+
+
+class Signal(Base):
+    __tablename__ = "signals"
+    __table_args__ = (
+        CheckConstraint("signal IN ('BUY', 'SELL', 'HOLD')", name="ck_signals_signal"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("strategy_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    strategy_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("strategies.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ts = Column(DateTime(timezone=True), nullable=False)
+    symbol = Column(Text, nullable=False)
+    signal = Column(Text, nullable=False)
+    score = Column(Numeric(20, 8))
+    reason = Column(Text)
+    features = Column(JSON_VARIANT, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    run = relationship("StrategyRun", back_populates="signals")
+    strategy = relationship("Strategy", back_populates="signals")
+
+
+class Transaction(Base):
+    __tablename__ = "transactions"
+    __table_args__ = (
+        CheckConstraint("side IN ('BUY', 'SELL')", name="ck_transactions_side"),
+        CheckConstraint("qty > 0", name="ck_transactions_qty"),
+        CheckConstraint("price >= 0", name="ck_transactions_price"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    strategy_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("strategies.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("strategy_runs.id", ondelete="SET NULL"),
+    )
+    ts = Column(DateTime(timezone=True), nullable=False)
+    symbol = Column(Text, nullable=False)
+    side = Column(Text, nullable=False)
+    qty = Column(Numeric(20, 8), nullable=False)
+    price = Column(Numeric(20, 8), nullable=False)
+    fee = Column(Numeric(20, 8), default=0)
+    order_id = Column(Text)
+    meta = Column(JSON_VARIANT, nullable=False, default=dict)
+
+    strategy = relationship("Strategy", back_populates="transactions")
+    run = relationship("StrategyRun", back_populates="transactions")
+
+
+class PortfolioSnapshot(Base):
+    __tablename__ = "portfolio_snapshots"
+    __table_args__ = (
+        UniqueConstraint("run_id", "ts", name="uq_portfolio_snapshots_run_ts"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("strategy_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ts = Column(DateTime(timezone=True), nullable=False)
+    cash = Column(Numeric(20, 8), nullable=False)
+    equity = Column(Numeric(20, 8), nullable=False)
+    gross_exposure = Column(Numeric(20, 8), default=0)
+    net_exposure = Column(Numeric(20, 8), default=0)
+    drawdown = Column(Numeric(20, 8))
+    positions = Column(JSON_VARIANT, nullable=False, default=dict)
+    metrics = Column(JSON_VARIANT, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    run = relationship("StrategyRun", back_populates="portfolio_snapshots")

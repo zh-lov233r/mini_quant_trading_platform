@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Iterator, Sequence
 
 import psycopg
+from sqlalchemy import bindparam, text
+from sqlalchemy.orm import Session
 
 
 DATE_IN_PATH_RE = re.compile(r"(?P<date>\d{4}-\d{2}-\d{2})")
@@ -192,12 +194,107 @@ class FlatFileImportStats:
     unresolved_symbols: int
 
 
+@dataclass(frozen=True)
+class HistoricalBar:
+    symbol: str
+    instrument_id: int
+    ts_utc: datetime
+    trade_date: date
+    open_px: float | None
+    high_px: float | None
+    low_px: float | None
+    close_px: float | None
+    volume: int | None
+    trades: int | None
+
+
 def subscribe_market_data():
     pass
 
 
-def get_historical_data():
-    pass
+def get_historical_data(
+    db: Session,
+    symbols: Sequence[str],
+    start_date: date,
+    end_date: date,
+    *,
+    adjusted: bool = False,
+) -> dict[str, list[HistoricalBar]]:
+    normalized_symbols = sorted({symbol.strip().upper() for symbol in symbols if symbol and symbol.strip()})
+    if not normalized_symbols:
+        return {}
+
+    px_open = "COALESCE(e.open_fa, e.open_u)" if adjusted else "e.open_u"
+    px_high = "COALESCE(e.high_fa, e.high_u)" if adjusted else "e.high_u"
+    px_low = "COALESCE(e.low_fa, e.low_u)" if adjusted else "e.low_u"
+    px_close = "COALESCE(e.close_fa, e.close_u)" if adjusted else "e.close_u"
+
+    stmt = text(
+        f"""
+        SELECT
+            COALESCE(sh.symbol, instr.ticker_canonical) AS symbol,
+            e.instrument_id,
+            e.ts_utc,
+            e.dt_ny,
+            {px_open} AS open_px,
+            {px_high} AS high_px,
+            {px_low} AS low_px,
+            {px_close} AS close_px,
+            e.volume,
+            e.trades
+        FROM eod_bars e
+        JOIN instruments instr
+          ON instr.id = e.instrument_id
+        LEFT JOIN symbol_history sh
+          ON sh.instrument_id = instr.id
+         AND sh.symbol IN :symbols
+         AND sh.valid_from <= e.dt_ny
+         AND (sh.valid_to IS NULL OR sh.valid_to >= e.dt_ny)
+        WHERE e.dt_ny BETWEEN :start_date AND :end_date
+          AND (
+            instr.ticker_canonical IN :symbols
+            OR sh.symbol IS NOT NULL
+          )
+        ORDER BY COALESCE(sh.symbol, instr.ticker_canonical), e.dt_ny, sh.valid_from DESC NULLS LAST
+        """
+    ).bindparams(bindparam("symbols", expanding=True))
+
+    rows = db.execute(
+        stmt,
+        {
+            "symbols": normalized_symbols,
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+    ).mappings()
+
+    bars_by_symbol: dict[str, list[HistoricalBar]] = {symbol: [] for symbol in normalized_symbols}
+    seen: set[tuple[str, date]] = set()
+
+    for row in rows:
+        symbol = str(row["symbol"]).upper()
+        trade_date = row["dt_ny"]
+        key = (symbol, trade_date)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        bars_by_symbol.setdefault(symbol, []).append(
+            HistoricalBar(
+                symbol=symbol,
+                instrument_id=int(row["instrument_id"]),
+                ts_utc=row["ts_utc"],
+                trade_date=trade_date,
+                open_px=_to_float_or_none(row["open_px"]),
+                high_px=_to_float_or_none(row["high_px"]),
+                low_px=_to_float_or_none(row["low_px"]),
+                close_px=_to_float_or_none(row["close_px"]),
+                volume=_to_int_or_none(row["volume"]),
+                trades=_to_int_or_none(row["trades"]),
+            )
+        )
+
+    return {symbol: bars for symbol, bars in bars_by_symbol.items() if bars}
 
 
 def _read_text_value(row: dict[str, str], *keys: str, required: bool = False) -> str | None:
@@ -227,6 +324,14 @@ def _to_int(value: str | None) -> int | None:
             return int(Decimal(value).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
         except (InvalidOperation, ValueError) as exc:
             raise ValueError(f"Could not parse integer-like value: {value}") from exc
+
+
+def _to_float_or_none(value: object) -> float | None:
+    return None if value is None else float(value)
+
+
+def _to_int_or_none(value: object) -> int | None:
+    return None if value is None else int(value)
 
 
 def _ns_to_utc_datetime(ns_value: str) -> datetime:

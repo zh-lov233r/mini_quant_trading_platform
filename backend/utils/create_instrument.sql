@@ -130,6 +130,70 @@ CREATE INDEX IF NOT EXISTS idx_symbol_reference_common
   ON symbol_reference (is_common_stock, symbol);
 
 
+-- Corporate actions drive price adjustment and total-return calculations.
+-- Keep them on the stable instrument identity, not on raw tickers.
+CREATE TABLE IF NOT EXISTS corporate_actions (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+
+  instrument_id   BIGINT NOT NULL REFERENCES instruments(id) ON DELETE CASCADE,
+
+  action_type     TEXT NOT NULL,
+  ex_date         DATE NOT NULL,
+  announcement_date DATE,
+  record_date     DATE,
+  payable_date    DATE,
+
+  -- Split-style events: 2-for-1 => split_from=1, split_to=2
+  split_from      NUMERIC(20, 8),
+  split_to        NUMERIC(20, 8),
+
+  -- Cash dividend per share in the declared currency
+  cash_amount     NUMERIC(20, 8),
+  currency        TEXT NOT NULL DEFAULT 'USD',
+
+  vendor_event_id TEXT,
+  vendor_source   TEXT NOT NULL DEFAULT 'massive',
+  vendor_payload  JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  CHECK (
+    action_type IN (
+      'split',
+      'reverse_split',
+      'cash_dividend',
+      'stock_dividend',
+      'spin_off',
+      'merger',
+      'delisting'
+    )
+  ),
+  CHECK (currency = UPPER(currency)),
+  CHECK (split_from IS NULL OR split_from > 0),
+  CHECK (split_to IS NULL OR split_to > 0),
+  CHECK (cash_amount IS NULL OR cash_amount >= 0)
+);
+
+DROP TRIGGER IF EXISTS trg_corporate_actions_touch ON corporate_actions;
+CREATE TRIGGER trg_corporate_actions_touch
+BEFORE UPDATE ON corporate_actions
+FOR EACH ROW EXECUTE FUNCTION _touch_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_ca_instrument_ex_date
+  ON corporate_actions (instrument_id, ex_date);
+
+CREATE INDEX IF NOT EXISTS idx_ca_ex_date
+  ON corporate_actions (ex_date);
+
+CREATE INDEX IF NOT EXISTS idx_ca_action_type
+  ON corporate_actions (action_type);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ca_vendor_event
+  ON corporate_actions (vendor_source, vendor_event_id)
+  WHERE vendor_event_id IS NOT NULL;
+
+
 -- Symbol history lookup indexes.
 CREATE INDEX IF NOT EXISTS idx_sh_ex_sym_from
   ON symbol_history (exchange, symbol, valid_from DESC);

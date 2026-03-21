@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # 引入你的 API 路由
 from src.api.strategies import router as strategies_router
+from src.core.db import ensure_extensions
 
 # -----------------------------
 # 基本配置（可用环境变量覆盖）
@@ -44,6 +45,7 @@ app.include_router(strategies_router)
 # -----------------------------
 @app.on_event("startup")
 def on_startup():
+    ensure_extensions()
     log.info("App started")
 
 @app.on_event("shutdown")
@@ -60,7 +62,6 @@ def root():
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
-
 
 
 
