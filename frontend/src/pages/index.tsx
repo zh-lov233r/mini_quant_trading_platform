@@ -26,6 +26,19 @@ export default function Home() {
         </p>
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <Link
+            href="/dashboard"
+            style={{
+              padding: "10px 14px",
+              borderRadius: 12,
+              background: "#0f172a",
+              color: "#fff",
+              textDecoration: "none",
+              fontWeight: 600,
+            }}
+          >
+            打开 Dashboard
+          </Link>
+          <Link
             href="/strategies/new"
             style={{
               padding: "10px 14px",

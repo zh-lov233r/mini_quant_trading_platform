@@ -119,6 +119,8 @@ def run_backtest(
 
     The backtest reuses the same strategy handlers as the signal engine, but applies a
     simplified execution model:
+    - signals are generated on day T using day-T close data
+    - fills are executed on the next available session using day-(T+1) close data
     - BUY opens a new long position
     - SELL closes an existing long position
     - no shorting, no partial fills, no intraday execution
@@ -184,17 +186,59 @@ def run_backtest(
         max_drawdown = 0.0
         total_fees = 0.0
         total_slippage = 0.0
+        pending_signals: list[SignalEvent] = []
 
         for trade_day in sorted(snapshots_by_date):
             day_snapshots = snapshots_by_date[trade_day]
-            _inject_backtest_positions(day_snapshots, holdings)
 
             for symbol, snapshot in day_snapshots.items():
                 close_px = snapshot.get("close")
                 if close_px is not None:
                     last_prices[symbol] = float(close_px)
 
+            cash_state = {"cash": cash}
+            sell_stats = _apply_sell_signals(
+                db=db,
+                strategy=strategy,
+                run=run,
+                signals=pending_signals,
+                holdings=holdings,
+                last_prices=last_prices,
+                execution_snapshots=day_snapshots,
+                cash_ref=cash_state,
+                cost_config=cost_config,
+            )
+            trade_count += sell_stats.trade_count
+            total_fees += sell_stats.total_fees
+            total_slippage += sell_stats.total_slippage
+
+            equity_before = _portfolio_equity(float(cash_state["cash"]), holdings, last_prices)
+            max_positions = int(risk_cfg["max_positions"])
+            position_size_pct = float(risk_cfg["position_size_pct"])
+
+            buy_stats = _apply_buy_signals(
+                db=db,
+                strategy=strategy,
+                run=run,
+                signals=pending_signals,
+                holdings=holdings,
+                last_prices=last_prices,
+                execution_snapshots=day_snapshots,
+                cash_ref=cash_state,
+                equity_before=equity_before,
+                max_positions=max_positions,
+                position_size_pct=position_size_pct,
+                cost_config=cost_config,
+            )
+            trade_count += buy_stats.trade_count
+            total_fees += buy_stats.total_fees
+            total_slippage += buy_stats.total_slippage
+            cash = float(cash_state["cash"])
+
+            _inject_backtest_positions(day_snapshots, holdings)
+
             signals = handler(runtime, day_snapshots)
+            pending_signals = signals
             signal_count += len(signals)
             for event in signals:
                 db.add(
@@ -210,45 +254,7 @@ def run_backtest(
                     )
                 )
 
-            equity_before = _portfolio_equity(cash, holdings, last_prices)
             signal_by_symbol = {event.symbol: event for event in signals}
-
-            cash_state = {"cash": cash}
-            sell_stats = _apply_sell_signals(
-                db=db,
-                strategy=strategy,
-                run=run,
-                signals=signals,
-                holdings=holdings,
-                last_prices=last_prices,
-                cash_ref=cash_state,
-                cost_config=cost_config,
-            )
-            trade_count += sell_stats.trade_count
-            total_fees += sell_stats.total_fees
-            total_slippage += sell_stats.total_slippage
-
-            max_positions = int(risk_cfg["max_positions"])
-            position_size_pct = float(risk_cfg["position_size_pct"])
-
-            buy_stats = _apply_buy_signals(
-                db=db,
-                strategy=strategy,
-                run=run,
-                signals=signals,
-                holdings=holdings,
-                last_prices=last_prices,
-                cash_ref=cash_state,
-                equity_before=equity_before,
-                max_positions=max_positions,
-                position_size_pct=position_size_pct,
-                cost_config=cost_config,
-            )
-            trade_count += buy_stats.trade_count
-            total_fees += buy_stats.total_fees
-            total_slippage += buy_stats.total_slippage
-            cash = float(cash_state["cash"])
-
             equity = _portfolio_equity(cash, holdings, last_prices)
             peak_equity = max(peak_equity, equity)
             drawdown = 0.0 if peak_equity <= 0 else (peak_equity - equity) / peak_equity
@@ -288,6 +294,8 @@ def run_backtest(
             "total_fees": total_fees,
             "total_slippage": total_slippage,
             "total_transaction_cost": total_fees + total_slippage,
+            "pending_signal_count": len(pending_signals),
+            "execution_lag": "next_session_close",
             "universe_size": len(symbols),
             "symbols_loaded": sorted(snapshots_by_date[next(iter(snapshots_by_date))].keys()),
             "strategy_type": runtime["strategy_type"],
@@ -572,17 +580,19 @@ def _apply_sell_signals(
     signals: list[SignalEvent],
     holdings: dict[str, float],
     last_prices: dict[str, float],
+    execution_snapshots: dict[str, dict[str, Any]],
     cash_ref: dict[str, float],
     cost_config: BacktestCostConfig,
 ) -> ExecutionStats:
-    """Close existing long positions for SELL signals and persist the fills."""
+    """Close existing long positions for queued SELL signals on the next session."""
     stats = ExecutionStats()
     for event in signals:
         if event.action != "SELL":
             continue
         qty = holdings.get(event.symbol, 0.0)
         price = last_prices.get(event.symbol)
-        if qty <= 0 or price is None:
+        execution_snapshot = execution_snapshots.get(event.symbol)
+        if qty <= 0 or price is None or execution_snapshot is None:
             continue
         # SELL receives a worse price than the mark because of slippage.
         execution_price = _sell_execution_price(float(price), cost_config)
@@ -599,7 +609,7 @@ def _apply_sell_signals(
             Transaction(
                 strategy_id=strategy.id,
                 run_id=run.id,
-                ts=event.ts,
+                ts=_execution_ts(execution_snapshot),
                 symbol=event.symbol,
                 side="SELL",
                 qty=qty,
@@ -609,6 +619,8 @@ def _apply_sell_signals(
                 meta={
                     "reason": event.reason,
                     "source": "backtest",
+                    "signal_ts": event.ts.isoformat(),
+                    "execution_trade_date": _execution_trade_date(execution_snapshot),
                     "reference_price": float(price),
                     "slippage_bps": cost_config.slippage_bps,
                     "slippage_cost": slippage_cost,
@@ -628,13 +640,14 @@ def _apply_buy_signals(
     signals: list[SignalEvent],
     holdings: dict[str, float],
     last_prices: dict[str, float],
+    execution_snapshots: dict[str, dict[str, Any]],
     cash_ref: dict[str, float],
     equity_before: float,
     max_positions: int,
     position_size_pct: float,
     cost_config: BacktestCostConfig,
 ) -> ExecutionStats:
-    """Open new long positions for BUY signals, subject to cash and position limits."""
+    """Open new long positions for queued BUY signals on the next session."""
     stats = ExecutionStats()
     for event in signals:
         if event.action != "BUY":
@@ -645,7 +658,8 @@ def _apply_buy_signals(
             continue
 
         price = last_prices.get(event.symbol)
-        if price is None or price <= 0:
+        execution_snapshot = execution_snapshots.get(event.symbol)
+        if price is None or price <= 0 or execution_snapshot is None:
             continue
 
         # Size each entry off current equity, but never spend more cash than we have.
@@ -672,7 +686,7 @@ def _apply_buy_signals(
             Transaction(
                 strategy_id=strategy.id,
                 run_id=run.id,
-                ts=event.ts,
+                ts=_execution_ts(execution_snapshot),
                 symbol=event.symbol,
                 side="BUY",
                 qty=qty,
@@ -682,6 +696,8 @@ def _apply_buy_signals(
                 meta={
                     "reason": event.reason,
                     "source": "backtest",
+                    "signal_ts": event.ts.isoformat(),
+                    "execution_trade_date": _execution_trade_date(execution_snapshot),
                     "reference_price": float(price),
                     "slippage_bps": cost_config.slippage_bps,
                     "slippage_cost": slippage_cost,
@@ -726,3 +742,12 @@ def _snapshot_ts(day_snapshots: dict[str, dict[str, Any]]) -> datetime:
     """Use the day's market timestamp as the portfolio snapshot timestamp."""
     first_snapshot = next(iter(day_snapshots.values()))
     return first_snapshot.get("ts") or datetime.now(timezone.utc)
+
+
+def _execution_ts(execution_snapshot: dict[str, Any]) -> datetime:
+    return execution_snapshot.get("ts") or datetime.now(timezone.utc)
+
+
+def _execution_trade_date(execution_snapshot: dict[str, Any]) -> str | None:
+    trade_date = execution_snapshot.get("dt_ny")
+    return str(trade_date) if trade_date is not None else None

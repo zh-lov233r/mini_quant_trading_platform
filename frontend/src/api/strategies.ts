@@ -3,6 +3,7 @@ import type {
   StrategyCatalogItem,
   StrategyCreate,
   StrategyOut,
+  StrategyRuntimeOut,
 } from "@/types/strategy";
 
 export async function createStrategy(
@@ -31,6 +32,16 @@ export function listStrategies(): Promise<StrategyOut[]> {
 
 export function getStrategyCatalog(): Promise<StrategyCatalogItem[]> {
   return http<StrategyCatalogItem[]>("/api/strategies/catalog", {
+    method: "GET",
+  });
+}
+
+export function getStrategy(strategyId: string): Promise<StrategyOut> {
+  return http<StrategyOut>(`/api/strategies/${strategyId}`, { method: "GET" });
+}
+
+export function getStrategyRuntime(strategyId: string): Promise<StrategyRuntimeOut> {
+  return http<StrategyRuntimeOut>(`/api/strategies/${strategyId}/runtime`, {
     method: "GET",
   });
 }

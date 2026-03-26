@@ -1,95 +1,200 @@
 openapi: 3.1.0
 info:
-  title: Quant Trading Platform API
-  version: "1.0.0"
+  title: Quant Trading System API
+  version: "1.1.0"
   description: >
-    回测（趋势跟踪/均值回归）与实盘下单的最小接口集。
-    采用异步回测任务、统一错误返回、订单幂等键。
-    The minimum interface set for backtesting (trend tracking/mean reversion) and live trading orders. 
-    Adopted asynchronous backtesting tasks, unified error return, and order idempotent keys.
+    OpenAPI specification for the current quant-trading-system project.
+    It is organized around the real backend domain model:
+    Strategy -> StrategyRun -> Signal / Transaction / PortfolioSnapshot,
+    plus market-data and broker-trading integrations.
+
+    Notes:
+    - Operations marked with x-implementation-status: implemented are already reflected by the current FastAPI codebase.
+    - Operations marked with x-implementation-status: planned are aligned with existing service-layer and database structure,
+      and are intended to guide the next API/router implementation pass.
 servers:
-  - url: https://api.example.com/api/v1
-    description: Production
-  - url: http://localhost:8000/api/v1
-    description: Local
+  - url: http://localhost:8000
+    description: Local development
 
 tags:
-  - name: Market
-  - name: Strategies
-  - name: Backtests
-  - name: Trading
   - name: Health
+    description: Service health and root endpoints.
+  - name: Strategies
+    description: Strategy catalog, CRUD-style reads, and runtime configuration views.
+  - name: Backtests
+    description: Backtest creation and backtest-run inspection.
+  - name: Runs
+    description: Generic strategy-run queries across backtest / paper / live modes.
+  - name: Market
+    description: Historical bar data, instrument lookup, and market reference data.
+  - name: Trading
+    description: Broker-facing order placement, position inspection, and rebalance workflows.
 
 paths:
+  /:
+    get:
+      tags: [Health]
+      summary: Root endpoint
+      operationId: getRoot
+      x-implementation-status: implemented
+      responses:
+        "200":
+          description: Service metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RootResponse"
+
   /healthz:
     get:
       tags: [Health]
-      summary: 健康检查
+      summary: Health check
+      operationId: getHealthz
+      x-implementation-status: implemented
       responses:
         "200":
-          description: OK
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
 
-  /strategies:
+  /api/strategies/catalog:
     get:
       tags: [Strategies]
-      summary: 列出可用策略及参数schema
+      summary: List strategy templates supported by the registry
+      operationId: listStrategyCatalog
+      x-implementation-status: implemented
       responses:
         "200":
-          description: 策略列表
+          description: Strategy catalog
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: "#/components/schemas/StrategySpec"
+                  $ref: "#/components/schemas/StrategyCatalogItem"
 
-  /market/kline:
+  /api/strategies:
     get:
-      tags: [Market]
-      summary: 获取K线
+      tags: [Strategies]
+      summary: List stored strategies
+      operationId: listStrategies
+      x-implementation-status: implemented
       parameters:
-        - in: query
-          name: symbol
-          schema: { type: string, example: AAPL }
-          required: true
-        - in: query
-          name: timeframe
-          schema: { $ref: "#/components/schemas/Timeframe" }
-          required: true
-        - in: query
-          name: start
-          description: ISO8601 开始时间
-          schema: { type: string, format: date-time }
-          required: true
-        - in: query
-          name: end
-          description: ISO8601 结束时间
-          schema: { type: string, format: date-time }
-          required: true
-        - in: query
-          name: limit
-          schema: { type: integer, minimum: 1, maximum: 10000, default: 1000 }
+        - $ref: "#/components/parameters/StrategyStatusFilter"
+        - $ref: "#/components/parameters/StrategyTypeFilter"
+        - $ref: "#/components/parameters/StrategyNameFilter"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
       responses:
         "200":
-          description: K线
+          description: Strategy list
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  symbol: { type: string }
-                  timeframe: { $ref: "#/components/schemas/Timeframe" }
-                  bars:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Bar"
-        "400":
-          $ref: "#/components/responses/BadRequest"
+                type: array
+                items:
+                  $ref: "#/components/schemas/StrategyOut"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+    post:
+      tags: [Strategies]
+      summary: Create a strategy definition
+      operationId: createStrategy
+      x-implementation-status: implemented
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StrategyCreate"
+      responses:
+        "201":
+          description: Strategy created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrategyOut"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
 
-  /backtests:
+  /api/strategies/{strategy_id}:
+    get:
+      tags: [Strategies]
+      summary: Get a single strategy
+      operationId: getStrategy
+      x-implementation-status: implemented
+      parameters:
+        - $ref: "#/components/parameters/StrategyIdPath"
+      responses:
+        "200":
+          description: Strategy detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrategyOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/strategies/{strategy_id}/runtime:
+    get:
+      tags: [Strategies]
+      summary: Get normalized runtime payload for a strategy
+      operationId: getStrategyRuntime
+      x-implementation-status: implemented
+      parameters:
+        - $ref: "#/components/parameters/StrategyIdPath"
+      responses:
+        "200":
+          description: Runtime-ready strategy payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrategyRuntimeOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/strategies/{strategy_id}/runs:
+    get:
+      tags: [Strategies]
+      summary: List runs for one strategy
+      description: >
+        Intended to query strategy_runs filtered by strategy_id, with optional mode / status filters.
+        This endpoint maps naturally to the Strategy -> StrategyRun relationship in the current ORM model.
+      operationId: listStrategyRuns
+      x-implementation-status: planned
+      parameters:
+        - $ref: "#/components/parameters/StrategyIdPath"
+        - $ref: "#/components/parameters/RunModeFilter"
+        - $ref: "#/components/parameters/RunStatusFilter"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Strategy runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StrategyRunSummary"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/backtests:
     post:
       tags: [Backtests]
-      summary: 提交回测任务（异步）
+      summary: Run a backtest for an existing strategy
+      description: >
+        Aligned with the current synchronous run_backtest service. The backend persists a StrategyRun,
+        signals, transactions, and portfolio snapshots, then returns a compact backtest summary.
+      operationId: createBacktest
+      x-implementation-status: planned
       requestBody:
         required: true
         content:
@@ -97,48 +202,250 @@ paths:
             schema:
               $ref: "#/components/schemas/BacktestCreate"
       responses:
-        "202":
-          description: 已接受任务
+        "200":
+          description: Backtest completed and persisted
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  task_id:
-                    type: string
-                    format: uuid
-                    example: "7b7b8d2d-5b8a-4c69-9a6a-8a0e0f9a1234"
-        "400":
-          $ref: "#/components/responses/BadRequest"
+                $ref: "#/components/schemas/BacktestResult"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
 
-  /backtests/{id}:
+  /api/backtests/{run_id}:
     get:
       tags: [Backtests]
-      summary: 查询回测任务状态与结果
+      summary: Get one backtest run
+      operationId: getBacktestRun
+      x-implementation-status: planned
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/RunIdPath"
       responses:
         "200":
-          description: 任务状态
+          description: Backtest run detail
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Backtest"
+                $ref: "#/components/schemas/StrategyRunDetail"
         "404":
           $ref: "#/components/responses/NotFound"
 
-  /trades/orders:
+  /api/backtests/{run_id}/signals:
+    get:
+      tags: [Backtests]
+      summary: List signals generated by a backtest run
+      operationId: listBacktestSignals
+      x-implementation-status: planned
+      parameters:
+        - $ref: "#/components/parameters/RunIdPath"
+      responses:
+        "200":
+          description: Signals for the requested backtest run
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SignalRecord"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/backtests/{run_id}/transactions:
+    get:
+      tags: [Backtests]
+      summary: List simulated fills generated by a backtest run
+      operationId: listBacktestTransactions
+      x-implementation-status: planned
+      parameters:
+        - $ref: "#/components/parameters/RunIdPath"
+      responses:
+        "200":
+          description: Transactions for the requested backtest run
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TransactionRecord"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/backtests/{run_id}/snapshots:
+    get:
+      tags: [Backtests]
+      summary: List portfolio snapshots for a backtest run
+      operationId: listBacktestSnapshots
+      x-implementation-status: planned
+      parameters:
+        - $ref: "#/components/parameters/RunIdPath"
+      responses:
+        "200":
+          description: Portfolio snapshots for the requested backtest run
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PortfolioSnapshotRecord"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/runs:
+    get:
+      tags: [Runs]
+      summary: List strategy runs across all modes
+      operationId: listRuns
+      x-implementation-status: planned
+      parameters:
+        - $ref: "#/components/parameters/RunModeFilter"
+        - $ref: "#/components/parameters/RunStatusFilter"
+        - $ref: "#/components/parameters/StrategyIdFilter"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Strategy runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StrategyRunSummary"
+
+  /api/runs/{run_id}:
+    get:
+      tags: [Runs]
+      summary: Get one strategy run
+      operationId: getRun
+      x-implementation-status: planned
+      parameters:
+        - $ref: "#/components/parameters/RunIdPath"
+      responses:
+        "200":
+          description: Strategy run detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrategyRunDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/runs/{run_id}/signals:
+    get:
+      tags: [Runs]
+      summary: List signals for a run
+      operationId: listRunSignals
+      x-implementation-status: planned
+      parameters:
+        - $ref: "#/components/parameters/RunIdPath"
+      responses:
+        "200":
+          description: Run signals
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SignalRecord"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/runs/{run_id}/transactions:
+    get:
+      tags: [Runs]
+      summary: List transactions for a run
+      operationId: listRunTransactions
+      x-implementation-status: planned
+      parameters:
+        - $ref: "#/components/parameters/RunIdPath"
+      responses:
+        "200":
+          description: Run transactions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TransactionRecord"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/runs/{run_id}/snapshots:
+    get:
+      tags: [Runs]
+      summary: List portfolio snapshots for a run
+      operationId: listRunSnapshots
+      x-implementation-status: planned
+      parameters:
+        - $ref: "#/components/parameters/RunIdPath"
+      responses:
+        "200":
+          description: Run portfolio snapshots
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PortfolioSnapshotRecord"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/market/bars:
+    get:
+      tags: [Market]
+      summary: Get historical daily bars for one or more symbols
+      description: >
+        Designed around the current get_historical_data service, which returns daily EOD bars
+        using either unadjusted or forward-adjusted prices.
+      operationId: getHistoricalBars
+      x-implementation-status: planned
+      parameters:
+        - $ref: "#/components/parameters/SymbolsQuery"
+        - $ref: "#/components/parameters/StartDate"
+        - $ref: "#/components/parameters/EndDate"
+        - $ref: "#/components/parameters/AdjustedQuery"
+      responses:
+        "200":
+          description: Historical bars grouped by symbol
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HistoricalBarsResponse"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /api/instruments/search:
+    get:
+      tags: [Market]
+      summary: Search instruments from the security master
+      operationId: searchInstruments
+      x-implementation-status: planned
+      parameters:
+        - $ref: "#/components/parameters/InstrumentQuery"
+        - $ref: "#/components/parameters/InstrumentActiveOnly"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Matching instruments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InstrumentSummary"
+
+  /api/trading/orders:
     post:
       tags: [Trading]
-      summary: 下单（支持幂等键）
+      summary: Place a broker order
+      description: >
+        Intended to wrap the current Alpaca paper-trading integration.
+      operationId: createOrder
+      x-implementation-status: planned
       parameters:
-        - in: header
-          name: Idempotency-Key
-          required: false
-          schema: { type: string, maxLength: 64 }
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
       requestBody:
         required: true
         content:
@@ -147,72 +454,69 @@ paths:
               $ref: "#/components/schemas/OrderCreate"
       responses:
         "201":
-          description: 已创建订单
+          description: Order accepted by the broker adapter
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Order"
-        "400":
-          $ref: "#/components/responses/BadRequest"
+                $ref: "#/components/schemas/OrderResponse"
         "409":
-          description: 幂等重复
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
     get:
       tags: [Trading]
-      summary: 查询订单（可分页）
+      summary: List broker orders
+      operationId: listOrders
+      x-implementation-status: planned
       parameters:
-        - $ref: "#/components/parameters/Page"
-        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
       responses:
         "200":
-          description: 订单列表
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  items:
-                    type: array
-                    items: { $ref: "#/components/schemas/Order" }
-                  page: { type: integer }
-                  page_size: { type: integer }
-                  total: { type: integer }
-
-  /trades/orders/{id}:
-    delete:
-      tags: [Trading]
-      summary: 撤单
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string }
-      responses:
-        "204":
-          description: 已撤单
-        "404":
-          $ref: "#/components/responses/NotFound"
-
-  /trades/positions:
-    get:
-      tags: [Trading]
-      summary: 当前持仓
-      responses:
-        "200":
-          description: 持仓列表
+          description: Orders
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/Position" }
+                items:
+                  $ref: "#/components/schemas/OrderResponse"
 
-  /trades/rebalance:
+  /api/trading/orders/{order_id}:
+    delete:
+      tags: [Trading]
+      summary: Cancel an order
+      operationId: cancelOrder
+      x-implementation-status: planned
+      parameters:
+        - $ref: "#/components/parameters/OrderIdPath"
+      responses:
+        "204":
+          description: Order cancelled
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/trading/positions:
+    get:
+      tags: [Trading]
+      summary: List current broker positions
+      operationId: listPositions
+      x-implementation-status: planned
+      responses:
+        "200":
+          description: Open positions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Position"
+
+  /api/trading/rebalance:
     post:
       tags: [Trading]
-      summary: 生成并执行调仓（可选择仅生成建议）
+      summary: Generate or execute rebalance orders from strategy signals
+      operationId: rebalancePortfolio
+      x-implementation-status: planned
       requestBody:
         required: true
         content:
@@ -221,199 +525,957 @@ paths:
               $ref: "#/components/schemas/RebalanceRequest"
       responses:
         "200":
-          description: 调仓结果/建议单
+          description: Rebalance result
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/RebalanceResponse"
-        "400":
-          $ref: "#/components/responses/BadRequest"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
 
 components:
   parameters:
-    Page:
+    IdempotencyKeyHeader:
+      in: header
+      name: Idempotency-Key
+      required: false
+      schema:
+        type: string
+        maxLength: 64
+      description: Optional idempotency key used for create-order or create-strategy calls.
+
+    StrategyIdPath:
+      in: path
+      name: strategy_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    RunIdPath:
+      in: path
+      name: run_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    OrderIdPath:
+      in: path
+      name: order_id
+      required: true
+      schema:
+        type: string
+
+    StrategyStatusFilter:
       in: query
-      name: page
-      schema: { type: integer, minimum: 1, default: 1 }
-    PageSize:
+      name: status
+      required: false
+      schema:
+        $ref: "#/components/schemas/StrategyStatus"
+
+    StrategyTypeFilter:
       in: query
-      name: page_size
-      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      name: strategy_type
+      required: false
+      schema:
+        $ref: "#/components/schemas/StrategyType"
+
+    StrategyNameFilter:
+      in: query
+      name: name
+      required: false
+      schema:
+        type: string
+      description: Case-insensitive fuzzy match on strategy name.
+
+    StrategyIdFilter:
+      in: query
+      name: strategy_id
+      required: false
+      schema:
+        type: string
+        format: uuid
+
+    RunModeFilter:
+      in: query
+      name: mode
+      required: false
+      schema:
+        $ref: "#/components/schemas/RunMode"
+
+    RunStatusFilter:
+      in: query
+      name: status
+      required: false
+      schema:
+        $ref: "#/components/schemas/RunStatus"
+
+    SymbolsQuery:
+      in: query
+      name: symbols
+      required: true
+      description: Comma-separated ticker list, for example AAPL,MSFT,NVDA.
+      schema:
+        type: string
+        example: AAPL,MSFT
+
+    StartDate:
+      in: query
+      name: start_date
+      required: true
+      schema:
+        type: string
+        format: date
+
+    EndDate:
+      in: query
+      name: end_date
+      required: true
+      schema:
+        type: string
+        format: date
+
+    AdjustedQuery:
+      in: query
+      name: adjusted
+      required: false
+      schema:
+        type: boolean
+        default: false
+      description: When true, return forward-adjusted prices when available.
+
+    InstrumentQuery:
+      in: query
+      name: q
+      required: true
+      schema:
+        type: string
+      description: Search by canonical ticker, alias symbol, or instrument name.
+
+    InstrumentActiveOnly:
+      in: query
+      name: active_only
+      required: false
+      schema:
+        type: boolean
+        default: true
+
+    Limit:
+      in: query
+      name: limit
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+        default: 100
+
+    Offset:
+      in: query
+      name: offset
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
 
   responses:
-    BadRequest:
-      description: 参数错误
-      content:
-        application/json:
-          schema: { $ref: "#/components/schemas/Error" }
     NotFound:
-      description: 未找到
+      description: Resource not found
       content:
         application/json:
-          schema: { $ref: "#/components/schemas/Error" }
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Conflict or duplicate request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    UnprocessableEntity:
+      description: Validation or normalization error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
 
   schemas:
-    StrategyName:
-      type: string
-      enum: [sma_cross, rsi_reversion]
-      description: 目前支持两类策略
-    StrategySpec:
+    RootResponse:
       type: object
+      required: [app, message]
       properties:
-        name: { $ref: "#/components/schemas/StrategyName" }
-        summary: { type: string, example: "SMA短长均线交叉趋势策略" }
-        params_schema:
-          type: object
-          description: JSON Schema 片段，用于前端表单渲染
-          example:
-            short_window: { type: "integer", minimum: 2, maximum: 200, default: 20 }
-            long_window: { type: "integer", minimum: 5, maximum: 400, default: 50 }
-            take_profit: { type: "number", minimum: 0, maximum: 1, default: 0.1 }
-            stop_loss: { type: "number", minimum: 0, maximum: 1, default: 0.05 }
+        app:
+          type: string
+          example: Quant Backend
+        message:
+          type: string
+          example: OK
 
-    Timeframe:
-      type: string
-      enum: [1m,5m,15m,1h,1d]
-
-    Bar:
+    HealthResponse:
       type: object
+      required: [status]
       properties:
-        t: { type: string, format: date-time }
-        o: { type: number }
-        h: { type: number }
-        l: { type: number }
-        c: { type: number }
-        v: { type: number }
-
-    BacktestCreate:
-      type: object
-      required: [strategy, symbols, timeframe, start, end, params]
-      properties:
-        strategy: { $ref: "#/components/schemas/StrategyName" }
-        symbols:
-          type: array
-          items: { type: string }
-          example: ["AAPL","MSFT"]
-        timeframe: { $ref: "#/components/schemas/Timeframe" }
-        start: { type: string, format: date-time }
-        end: { type: string, format: date-time }
-        params:
-          type: object
-          description: 与策略匹配的参数对象
-          example: { short_window: 20, long_window: 50, stop_loss: 0.05, take_profit: 0.1 }
-        cost_bps:
-          type: number
-          description: 单边交易成本（基点）
-          example: 2
-
-    Backtest:
-      type: object
-      properties:
-        id: { type: string, format: uuid }
         status:
           type: string
-          enum: [queued, running, completed, failed]
-        metrics:
-          $ref: "#/components/schemas/BacktestMetrics"
-        report_uri:
-          type: string
-          description: S3 报告地址
-          example: "s3://quant/backtests/7b7b8d2d/report.json"
-        error:
-          type: string
-          nullable: true
+          example: ok
 
-    BacktestMetrics:
+    ErrorResponse:
       type: object
       properties:
-        annual_return: { type: number, example: 0.132 }
-        sharpe: { type: number, example: 1.45 }
-        sortino: { type: number, example: 1.8 }
-        max_drawdown: { type: number, example: -0.18 }
-        win_rate: { type: number, example: 0.54 }
-        turnover: { type: number, example: 3.2 }
+        detail:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                $ref: "#/components/schemas/ValidationError"
+      example:
+        detail: strategy not found
 
-    OrderSide:
+    ValidationError:
+      type: object
+      required: [loc, msg, type]
+      properties:
+        loc:
+          type: array
+          items:
+            oneOf:
+              - type: string
+              - type: integer
+        msg:
+          type: string
+        type:
+          type: string
+
+    FreeFormObject:
+      type: object
+      additionalProperties: true
+
+    StrategyType:
+      type: string
+      enum: [trend, mean_reversion, custom]
+
+    StrategyStatus:
+      type: string
+      enum: [draft, active, archived]
+
+    RunMode:
+      type: string
+      enum: [backtest, paper, live]
+
+    RunStatus:
+      type: string
+      enum: [queued, running, completed, failed, cancelled]
+
+    SignalAction:
+      type: string
+      enum: [BUY, SELL, HOLD]
+
+    TransactionSide:
+      type: string
+      enum: [BUY, SELL]
+
+    BrokerOrderSide:
       type: string
       enum: [buy, sell]
 
-    OrderType:
+    BrokerOrderType:
       type: string
       enum: [market, limit]
 
+    IndicatorSpec:
+      type: object
+      required: [kind, window]
+      properties:
+        kind:
+          type: string
+          enum: [ema, sma]
+        window:
+          type: integer
+          minimum: 1
+
+    TrendStrategyParams:
+      type: object
+      required: [signal, universe, risk, execution, metadata]
+      properties:
+        signal:
+          type: object
+          required:
+            [fast_indicator, slow_indicator, volume_multiplier, atr_multiplier, price_field, trigger]
+          properties:
+            fast_indicator:
+              $ref: "#/components/schemas/IndicatorSpec"
+            slow_indicator:
+              $ref: "#/components/schemas/IndicatorSpec"
+            volume_multiplier:
+              type: number
+              exclusiveMinimum: 0
+            atr_multiplier:
+              type: number
+              exclusiveMinimum: 0
+            price_field:
+              type: string
+              example: close
+            trigger:
+              type: string
+              example: cross_over
+        universe:
+          $ref: "#/components/schemas/UniverseConfig"
+        risk:
+          type: object
+          required: [max_positions, position_size_pct, stop_loss_atr]
+          properties:
+            max_positions:
+              type: integer
+              minimum: 1
+            position_size_pct:
+              type: number
+              exclusiveMinimum: 0
+              maximum: 1
+            stop_loss_atr:
+              type: number
+              exclusiveMinimum: 0
+        execution:
+          $ref: "#/components/schemas/ExecutionConfig"
+        metadata:
+          $ref: "#/components/schemas/MetadataConfig"
+
+    MeanReversionStrategyParams:
+      type: object
+      required: [signal, universe, risk, execution, metadata]
+      properties:
+        signal:
+          type: object
+          required: [lookback_window, zscore_entry, zscore_exit, price_field]
+          properties:
+            lookback_window:
+              type: integer
+              minimum: 1
+            zscore_entry:
+              type: number
+              exclusiveMinimum: 0
+            zscore_exit:
+              type: number
+              exclusiveMinimum: 0
+            price_field:
+              type: string
+              example: close
+        universe:
+          $ref: "#/components/schemas/UniverseConfig"
+        risk:
+          type: object
+          required: [max_positions, position_size_pct]
+          properties:
+            max_positions:
+              type: integer
+              minimum: 1
+            position_size_pct:
+              type: number
+              exclusiveMinimum: 0
+              maximum: 1
+        execution:
+          $ref: "#/components/schemas/ExecutionConfig"
+        metadata:
+          $ref: "#/components/schemas/MetadataConfig"
+
+    UniverseConfig:
+      type: object
+      required: [symbols, selection_mode]
+      properties:
+        symbols:
+          type: array
+          items:
+            type: string
+          example: [AAPL, MSFT, NVDA]
+        selection_mode:
+          type: string
+          example: manual
+
+    ExecutionConfig:
+      type: object
+      required: [timeframe, rebalance, run_at]
+      properties:
+        timeframe:
+          type: string
+          example: 1d
+        rebalance:
+          type: string
+          example: daily
+        run_at:
+          type: string
+          example: close
+        backtest:
+          type: object
+          properties:
+            commission_bps:
+              type: number
+            commission_min:
+              type: number
+            slippage_bps:
+              type: number
+
+    MetadataConfig:
+      type: object
+      required: [description, schema_version]
+      properties:
+        description:
+          type: string
+        schema_version:
+          type: integer
+          minimum: 1
+
+    StrategyCatalogItem:
+      type: object
+      required: [strategy_type, label, description, engine_ready, defaults]
+      properties:
+        strategy_type:
+          $ref: "#/components/schemas/StrategyType"
+        label:
+          type: string
+        description:
+          type: string
+        engine_ready:
+          type: boolean
+        defaults:
+          oneOf:
+            - $ref: "#/components/schemas/TrendStrategyParams"
+            - $ref: "#/components/schemas/MeanReversionStrategyParams"
+            - $ref: "#/components/schemas/FreeFormObject"
+
+    StrategyCreate:
+      type: object
+      required: [name, strategy_type, params]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        description:
+          type: string
+          maxLength: 500
+          nullable: true
+        strategy_type:
+          $ref: "#/components/schemas/StrategyType"
+        params:
+          oneOf:
+            - $ref: "#/components/schemas/TrendStrategyParams"
+            - $ref: "#/components/schemas/MeanReversionStrategyParams"
+            - $ref: "#/components/schemas/FreeFormObject"
+        status:
+          $ref: "#/components/schemas/StrategyStatus"
+
+    StrategyOut:
+      type: object
+      required:
+        [id, name, strategy_type, params, status, version, engine_ready]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        strategy_type:
+          type: string
+        params:
+          $ref: "#/components/schemas/FreeFormObject"
+        status:
+          type: string
+        version:
+          type: integer
+          minimum: 1
+        engine_ready:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    StrategyRuntimeOut:
+      type: object
+      required:
+        [strategy_id, name, version, status, strategy_type, engine_ready, params]
+      properties:
+        strategy_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        version:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+        strategy_type:
+          type: string
+        engine_ready:
+          type: boolean
+        params:
+          $ref: "#/components/schemas/FreeFormObject"
+
+    BacktestCreate:
+      type: object
+      required: [strategy_id, start_date, end_date]
+      properties:
+        strategy_id:
+          type: string
+          format: uuid
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        initial_cash:
+          type: number
+          exclusiveMinimum: 0
+          default: 100000
+        benchmark_symbol:
+          type: string
+          nullable: true
+          example: SPY
+        commission_bps:
+          type: number
+          minimum: 0
+          nullable: true
+        commission_min:
+          type: number
+          minimum: 0
+          nullable: true
+        slippage_bps:
+          type: number
+          minimum: 0
+          nullable: true
+
+    BacktestResult:
+      type: object
+      required:
+        [run_id, strategy_id, status, initial_cash, final_equity, total_return, max_drawdown,
+         signal_count, trade_count, total_fees, total_slippage]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        strategy_id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        initial_cash:
+          type: number
+        final_equity:
+          type: number
+        total_return:
+          type: number
+        max_drawdown:
+          type: number
+        signal_count:
+          type: integer
+        trade_count:
+          type: integer
+        total_fees:
+          type: number
+        total_slippage:
+          type: number
+
+    StrategyRunSummary:
+      type: object
+      required: [id, strategy_id, strategy_version, mode, status, requested_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        strategy_id:
+          type: string
+          format: uuid
+        strategy_version:
+          type: integer
+        mode:
+          $ref: "#/components/schemas/RunMode"
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        requested_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+        window_start:
+          type: string
+          format: date
+          nullable: true
+        window_end:
+          type: string
+          format: date
+          nullable: true
+        initial_cash:
+          type: number
+          nullable: true
+        final_equity:
+          type: number
+          nullable: true
+        benchmark_symbol:
+          type: string
+          nullable: true
+        summary_metrics:
+          $ref: "#/components/schemas/FreeFormObject"
+        error_message:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    StrategyRunDetail:
+      allOf:
+        - $ref: "#/components/schemas/StrategyRunSummary"
+        - type: object
+          properties:
+            config_snapshot:
+              $ref: "#/components/schemas/FreeFormObject"
+
+    SignalRecord:
+      type: object
+      required: [id, run_id, strategy_id, ts, symbol, signal, features]
+      properties:
+        id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        strategy_id:
+          type: string
+          format: uuid
+        ts:
+          type: string
+          format: date-time
+        symbol:
+          type: string
+        signal:
+          $ref: "#/components/schemas/SignalAction"
+        score:
+          type: number
+          nullable: true
+        reason:
+          type: string
+          nullable: true
+        features:
+          $ref: "#/components/schemas/FreeFormObject"
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    TransactionRecord:
+      type: object
+      required: [id, strategy_id, ts, symbol, side, qty, price, meta]
+      properties:
+        id:
+          type: string
+          format: uuid
+        strategy_id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+          nullable: true
+        ts:
+          type: string
+          format: date-time
+        symbol:
+          type: string
+        side:
+          $ref: "#/components/schemas/TransactionSide"
+        qty:
+          type: number
+        price:
+          type: number
+        fee:
+          type: number
+          nullable: true
+        order_id:
+          type: string
+          nullable: true
+        meta:
+          $ref: "#/components/schemas/FreeFormObject"
+
+    PositionSnapshotEntry:
+      type: object
+      properties:
+        qty:
+          type: number
+        close:
+          type: number
+        market_value:
+          type: number
+        latest_signal:
+          type: string
+          nullable: true
+
+    PortfolioSnapshotRecord:
+      type: object
+      required: [id, run_id, ts, cash, equity, positions, metrics]
+      properties:
+        id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        ts:
+          type: string
+          format: date-time
+        cash:
+          type: number
+        equity:
+          type: number
+        gross_exposure:
+          type: number
+          nullable: true
+        net_exposure:
+          type: number
+          nullable: true
+        drawdown:
+          type: number
+          nullable: true
+        positions:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/PositionSnapshotEntry"
+        metrics:
+          $ref: "#/components/schemas/FreeFormObject"
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    HistoricalBar:
+      type: object
+      required: [symbol, instrument_id, ts_utc, trade_date]
+      properties:
+        symbol:
+          type: string
+        instrument_id:
+          type: integer
+        ts_utc:
+          type: string
+          format: date-time
+        trade_date:
+          type: string
+          format: date
+        open_px:
+          type: number
+          nullable: true
+        high_px:
+          type: number
+          nullable: true
+        low_px:
+          type: number
+          nullable: true
+        close_px:
+          type: number
+          nullable: true
+        volume:
+          type: integer
+          nullable: true
+        trades:
+          type: integer
+          nullable: true
+
+    HistoricalBarsResponse:
+      type: object
+      required: [bars_by_symbol]
+      properties:
+        bars_by_symbol:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              $ref: "#/components/schemas/HistoricalBar"
+
+    InstrumentSummary:
+      type: object
+      properties:
+        instrument_id:
+          type: integer
+        ticker_canonical:
+          type: string
+          nullable: true
+        exchange:
+          type: string
+        mic:
+          type: string
+          nullable: true
+        asset_type:
+          type: string
+        name:
+          type: string
+          nullable: true
+        currency:
+          type: string
+        country:
+          type: string
+          nullable: true
+        is_active:
+          type: boolean
+
     OrderCreate:
       type: object
-      required: [symbol, side, qty, type]
+      required: [symbol, qty, side, type]
       properties:
-        symbol: { type: string, example: AAPL }
-        side: { $ref: "#/components/schemas/OrderSide" }
-        qty: { type: number, example: 10 }
-        type: { $ref: "#/components/schemas/OrderType" }
-        limit_price: { type: number, nullable: true }
-        time_in_force: { type: string, enum: [day, gtc], default: day }
-        allow_partial: { type: boolean, default: false }
+        symbol:
+          type: string
+          example: AAPL
+        qty:
+          type: integer
+          minimum: 1
+        side:
+          $ref: "#/components/schemas/BrokerOrderSide"
+        type:
+          $ref: "#/components/schemas/BrokerOrderType"
+        tif:
+          type: string
+          enum: [day, gtc]
+          default: day
+        limit_price:
+          type: number
+          nullable: true
 
-    Order:
+    OrderResponse:
       type: object
       properties:
-        id: { type: string }
-        symbol: { type: string }
-        side: { $ref: "#/components/schemas/OrderSide" }
-        qty: { type: number }
-        filled_qty: { type: number }
-        status: { type: string, enum: [accepted, filled, partially_filled, canceled, rejected] }
-        avg_fill_price: { type: number, nullable: true }
-        broker_order_id: { type: string, nullable: true }
-        created_at: { type: string, format: date-time }
+        id:
+          type: string
+          nullable: true
+        client_order_id:
+          type: string
+          nullable: true
+        symbol:
+          type: string
+          nullable: true
+        qty:
+          oneOf:
+            - type: string
+            - type: integer
+            - type: number
+          nullable: true
+        side:
+          type: string
+          nullable: true
+        type:
+          type: string
+          nullable: true
+        time_in_force:
+          type: string
+          nullable: true
+        status:
+          type: string
+          nullable: true
+        filled_qty:
+          oneOf:
+            - type: string
+            - type: integer
+            - type: number
+          nullable: true
+        filled_avg_price:
+          oneOf:
+            - type: string
+            - type: number
+          nullable: true
+        submitted_at:
+          type: string
+          format: date-time
+          nullable: true
+        raw:
+          $ref: "#/components/schemas/FreeFormObject"
 
     Position:
       type: object
       properties:
-        symbol: { type: string }
-        qty: { type: number }
-        avg_price: { type: number }
-        market_price: { type: number }
-        pnl: { type: number }
+        symbol:
+          type: string
+        qty:
+          oneOf:
+            - type: string
+            - type: integer
+            - type: number
+        avg_entry_price:
+          oneOf:
+            - type: string
+            - type: number
+          nullable: true
+        market_value:
+          oneOf:
+            - type: string
+            - type: number
+          nullable: true
+        unrealized_pl:
+          oneOf:
+            - type: string
+            - type: number
+          nullable: true
+        raw:
+          $ref: "#/components/schemas/FreeFormObject"
 
     RebalanceRequest:
       type: object
-      required: [strategy, params, symbols, dry_run]
+      required: [strategy_id, trade_date, dry_run]
       properties:
-        strategy: { $ref: "#/components/schemas/StrategyName" }
-        params: { type: object }
+        strategy_id:
+          type: string
+          format: uuid
+        trade_date:
+          type: string
+          format: date
+        mode:
+          type: string
+          enum: [paper, live]
+          default: paper
         symbols:
           type: array
-          items: { type: string }
-        max_position_pct:
-          type: number
-          description: 单票最大仓位（占净值），如 0.1=10%
-          example: 0.1
+          items:
+            type: string
+          nullable: true
         dry_run:
           type: boolean
-          description: true=只生成建议单; false=直接下单
+          default: true
 
     RebalanceResponse:
       type: object
       properties:
-        dry_run: { type: boolean }
-        generated_at: { type: string, format: date-time }
+        dry_run:
+          type: boolean
+        trade_date:
+          type: string
+          format: date
+        mode:
+          type: string
+        run_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
         orders:
           type: array
           items:
             oneOf:
-              - $ref: "#/components/schemas/Order"
-              - type: object
-                description: 建议单（未执行）
-                properties:
-                  symbol: { type: string }
-                  side: { $ref: "#/components/schemas/OrderSide" }
-                  qty: { type: number }
-                  reason: { type: string, example: "signal: long, sizing: 8% NAV" }
-
-    Error:
-      type: object
-      required: [code, message]
-      properties:
-        code: { type: string, example: ERR_PARAM }
-        message: { type: string, example: "invalid timeframe" }
-        details: { type: object, nullable: true }
+              - $ref: "#/components/schemas/OrderResponse"
+              - $ref: "#/components/schemas/FreeFormObject"

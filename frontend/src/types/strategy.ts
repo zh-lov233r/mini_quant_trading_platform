@@ -58,6 +58,16 @@ export interface StrategyOut {
   updated_at?: string | null;
 }
 
+export interface StrategyRuntimeOut {
+  strategy_id: string;
+  name: string;
+  version: number;
+  status: string;
+  strategy_type: StrategyType | string;
+  engine_ready: boolean;
+  params: Record<string, unknown>;
+}
+
 export interface StrategyCatalogItem {
   strategy_type: StrategyType;
   label: string;

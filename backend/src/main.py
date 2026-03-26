@@ -4,7 +4,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# 引入你的 API 路由
+# 引入 API routers 和数据库初始化函数
 from src.api.strategies import router as strategies_router
 from src.core.db import ensure_extensions
 
