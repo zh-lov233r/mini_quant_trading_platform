@@ -22,7 +22,7 @@ export default function StrategyForm() {
   const [slowWindow, setSlowWindow] = useState(200);
   const [volMul, setVolMul] = useState(1.5);
   const [atrMul, setAtrMul] = useState(2.0);
-  const [symbols, setSymbols] = useState("AAPL,MSFT,NVDA");
+  const [symbols, setSymbols] = useState("");
   const [maxPositions, setMaxPositions] = useState(10);
   const [positionSizePct, setPositionSizePct] = useState(0.1);
   const [rebalance, setRebalance] = useState("daily");
@@ -61,7 +61,13 @@ export default function StrategyForm() {
   }, [catalog, strategyType]);
 
   const trendParams = useMemo(
-    () => ({
+    () => {
+      const parsedSymbols = symbols
+        .split(",")
+        .map((item) => item.trim().toUpperCase())
+        .filter(Boolean);
+
+      return {
       signal: {
         fast_indicator: {
           kind: fastKind,
@@ -77,11 +83,8 @@ export default function StrategyForm() {
         trigger: "cross_over",
       },
       universe: {
-        symbols: symbols
-          .split(",")
-          .map((item) => item.trim().toUpperCase())
-          .filter(Boolean),
-        selection_mode: "manual",
+        symbols: parsedSymbols,
+        selection_mode: parsedSymbols.length > 0 ? "manual" : "all_common_stock",
       },
       risk: {
         max_positions: Number(maxPositions),
@@ -97,7 +100,8 @@ export default function StrategyForm() {
         description,
         schema_version: 1,
       },
-    }),
+      };
+    },
     [
       atrMul,
       description,
@@ -368,15 +372,18 @@ export default function StrategyForm() {
                 </div>
               </div>
 
-              <div style={boxStyle}>
-                <label>股票池</label>
-                <input
-                  style={inputStyle}
-                  value={symbols}
-                  onChange={(e) => setSymbols(e.target.value)}
-                  placeholder="AAPL,MSFT,NVDA"
-                />
-              </div>
+                <div style={boxStyle}>
+                  <label>股票池</label>
+                  <input
+                    style={inputStyle}
+                    value={symbols}
+                    onChange={(e) => setSymbols(e.target.value)}
+                    placeholder="留空则默认绑定全部 common stock；也可以手动输入 AAPL,MSFT,NVDA"
+                  />
+                </div>
+                <div style={{ color: "#64748b", fontSize: 13, lineHeight: 1.6 }}>
+                  当前默认行为：如果股票池留空，策略会把 universe 解释为全部 active US common stock。
+                </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
                 <div style={boxStyle}>

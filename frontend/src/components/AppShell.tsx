@@ -11,7 +11,9 @@ interface AppShellProps {
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/strategies", label: "策略库" },
+  { href: "/stock-baskets", label: "股票库" },
   { href: "/strategies/new", label: "创建策略" },
+  { href: "/backtests", label: "回测" },
   { href: "/market", label: "行情" },
   { href: "/orders", label: "订单" },
 ];

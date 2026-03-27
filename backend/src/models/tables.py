@@ -25,6 +25,25 @@ Base = declarative_base()
 JSON_VARIANT = JSONB().with_variant(JSON(), "sqlite")
 
 
+class StockBasket(Base):
+    __tablename__ = "stock_baskets"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_stock_baskets_name"),
+        CheckConstraint(
+            "status IN ('draft', 'active', 'archived')",
+            name="ck_stock_baskets_status",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(128), nullable=False)
+    description = Column(Text)
+    symbols = Column(JSON_VARIANT, nullable=False, default=list)
+    status = Column(String(16), nullable=False, default="draft")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class Strategy(Base):
     __tablename__ = "strategies"
     __table_args__ = (

@@ -20,7 +20,7 @@ TREND_DEFAULTS: Dict[str, Any] = {
     },
     "universe": {
         "symbols": [],
-        "selection_mode": "manual",
+        "selection_mode": "all_common_stock",
     },
     "risk": {
         "max_positions": 10,
@@ -47,7 +47,7 @@ MEAN_REVERSION_DEFAULTS: Dict[str, Any] = {
     },
     "universe": {
         "symbols": [],
-        "selection_mode": "manual",
+        "selection_mode": "all_common_stock",
     },
     "risk": {
         "max_positions": 10,
@@ -68,7 +68,7 @@ CUSTOM_DEFAULTS: Dict[str, Any] = {
     "rules": [],
     "universe": {
         "symbols": [],
-        "selection_mode": "manual",
+        "selection_mode": "all_common_stock",
     },
     "risk": {
         "max_positions": 10,
@@ -287,6 +287,10 @@ def _normalize_trend_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         normalized["metadata"]["description"] = raw["description"]
 
     normalized["universe"]["symbols"] = _normalize_symbols(normalized["universe"].get("symbols", []))
+    normalized["universe"]["selection_mode"] = _normalize_selection_mode(
+        normalized["universe"].get("selection_mode"),
+        normalized["universe"]["symbols"],
+    )
     normalized["risk"]["max_positions"] = _positive_int(
         normalized["risk"].get("max_positions", TREND_DEFAULTS["risk"]["max_positions"]),
         "risk.max_positions",
@@ -350,6 +354,10 @@ def _normalize_mean_reversion_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         "signal.zscore_exit",
     )
     normalized["universe"]["symbols"] = _normalize_symbols(normalized["universe"].get("symbols", []))
+    normalized["universe"]["selection_mode"] = _normalize_selection_mode(
+        normalized["universe"].get("selection_mode"),
+        normalized["universe"]["symbols"],
+    )
     normalized["risk"]["max_positions"] = _positive_int(
         normalized["risk"].get("max_positions", 10),
         "risk.max_positions",
@@ -382,6 +390,10 @@ def _normalize_custom_params(raw: Dict[str, Any]) -> Dict[str, Any]:
     normalized["metadata"] = _merge_nested_section(normalized["metadata"], raw.get("metadata"))
 
     normalized["universe"]["symbols"] = _normalize_symbols(normalized["universe"].get("symbols", []))
+    normalized["universe"]["selection_mode"] = _normalize_selection_mode(
+        normalized["universe"].get("selection_mode"),
+        normalized["universe"]["symbols"],
+    )
     normalized["risk"]["max_positions"] = _positive_int(
         normalized["risk"].get("max_positions", 10),
         "risk.max_positions",
@@ -452,6 +464,15 @@ def _normalize_symbols(value: Any) -> list[str]:
         seen.add(symbol)
         symbols.append(symbol)
     return symbols
+
+
+def _normalize_selection_mode(value: Any, symbols: list[str]) -> str:
+    raw = str(value).strip().lower() if value is not None else ""
+    if raw not in {"manual", "all_common_stock", "stock_basket"}:
+        return "manual" if symbols else "all_common_stock"
+    if raw == "manual" and not symbols:
+        return "all_common_stock"
+    return raw
 
 
 def _positive_int(value: Any, label: str) -> int:

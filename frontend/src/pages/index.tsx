@@ -65,6 +65,19 @@ export default function Home() {
           >
             查看策略库
           </Link>
+          <Link
+            href="/backtests"
+            style={{
+              padding: "10px 14px",
+              borderRadius: 12,
+              background: "#f59e0b",
+              color: "#111827",
+              textDecoration: "none",
+              fontWeight: 600,
+            }}
+          >
+            发起回测
+          </Link>
         </div>
       </section>
     </main>

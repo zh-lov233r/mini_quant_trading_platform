@@ -78,6 +78,7 @@ export default function DashboardPage() {
         <>
           {actionLink("/strategies/new", "创建策略", true)}
           {actionLink("/strategies", "查看策略库")}
+          {actionLink("/backtests", "开始回测")}
         </>
       }
     >

@@ -17,6 +17,7 @@ StrategyHandler = Callable[[Dict[str, Any], Dict[str, Dict[str, Any]]], list["Si
 FEATURE_SNAPSHOT_SQL = """
 SELECT
     i.ticker_canonical AS symbol,
+    i.asset_type,
     curr.dt_ny,
     bars.ts_utc AS ts,
     COALESCE(bars.close_fa, bars.close_u) AS close,
@@ -106,6 +107,7 @@ def load_feature_market_data(
         stmt = text(sql).bindparams(bindparam("symbols", expanding=True))
         params["symbols"] = [symbol.upper() for symbol in symbols]
     else:
+        sql += " AND i.asset_type = 'CS'"
         stmt = text(sql)
 
     rows = db.execute(stmt, params).mappings().all()
@@ -114,6 +116,7 @@ def load_feature_market_data(
         symbol = str(row["symbol"]).upper()
         snapshots[symbol] = {
             "symbol": symbol,
+            "asset_type": row["asset_type"],
             "dt_ny": row["dt_ny"],
             "ts": row["ts"] or datetime.now(timezone.utc),
             "close": row["close"],
@@ -335,7 +338,15 @@ def _trend_following_handler(
 ) -> list[SignalEvent]:
     params = runtime_strategy["params"]
     signal_cfg = params["signal"]
-    universe = params["universe"]["symbols"] or sorted(market_data_by_symbol.keys())
+    universe_cfg = params["universe"]
+    if universe_cfg.get("selection_mode") == "all_common_stock" and not universe_cfg.get("symbols"):
+        universe = sorted(
+            symbol
+            for symbol, snapshot in market_data_by_symbol.items()
+            if str(snapshot.get("asset_type", "")).upper() == "CS"
+        )
+    else:
+        universe = universe_cfg["symbols"] or sorted(market_data_by_symbol.keys())
 
     fast = signal_cfg["fast_indicator"]
     slow = signal_cfg["slow_indicator"]
@@ -402,7 +413,15 @@ def _mean_reversion_handler(
 ) -> list[SignalEvent]:
     params = runtime_strategy["params"]
     signal_cfg = params["signal"]
-    universe = params["universe"]["symbols"] or sorted(market_data_by_symbol.keys())
+    universe_cfg = params["universe"]
+    if universe_cfg.get("selection_mode") == "all_common_stock" and not universe_cfg.get("symbols"):
+        universe = sorted(
+            symbol
+            for symbol, snapshot in market_data_by_symbol.items()
+            if str(snapshot.get("asset_type", "")).upper() == "CS"
+        )
+    else:
+        universe = universe_cfg["symbols"] or sorted(market_data_by_symbol.keys())
 
     lookback = int(signal_cfg["lookback_window"])
     zscore_key = f"zscore_{lookback}"

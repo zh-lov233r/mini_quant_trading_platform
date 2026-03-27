@@ -9,6 +9,10 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from src.models.tables import PortfolioSnapshot, Signal, Strategy, StrategyRun, Transaction
+from src.services.stock_basket_service import (
+    DEFAULT_COMMON_STOCK_BASKET_NAME,
+    load_default_common_stock_symbols,
+)
 from src.services.strategy_engine import STRATEGY_HANDLERS, SignalEvent
 from src.services.strategy_registry import build_runtime_payload
 
@@ -114,6 +118,8 @@ def run_backtest(
     commission_bps: float | None = None,
     commission_min: float | None = None,
     slippage_bps: float | None = None,
+    universe_symbols: list[str] | None = None,
+    universe_metadata: dict[str, Any] | None = None,
 ) -> BacktestResult:
     """Run a long-only daily backtest and persist signals, fills, and equity snapshots.
 
@@ -138,6 +144,19 @@ def run_backtest(
         raise ValueError("initial_cash must be positive")
 
     runtime = build_runtime_payload(strategy)
+    if universe_symbols is not None:
+        normalized_symbols = _normalize_symbol_universe(universe_symbols)
+        runtime["params"]["universe"]["symbols"] = normalized_symbols
+        runtime["params"]["universe"]["selection_mode"] = "stock_basket"
+        if universe_metadata:
+            runtime["params"]["universe"]["basket"] = universe_metadata
+    elif (
+        not runtime["params"]["universe"].get("symbols")
+        and runtime["params"]["universe"].get("selection_mode") == "all_common_stock"
+    ):
+        normalized_symbols = _normalize_symbol_universe(load_default_common_stock_symbols(db))
+        runtime["params"]["universe"]["symbols"] = normalized_symbols
+        runtime["params"]["universe"]["default_label"] = DEFAULT_COMMON_STOCK_BASKET_NAME
     if not runtime["engine_ready"]:
         raise ValueError("strategy is not engine-ready")
     cost_config = _resolve_backtest_cost_config(
@@ -343,6 +362,8 @@ def run_backtest_trend(
     commission_bps: float | None = None,
     commission_min: float | None = None,
     slippage_bps: float | None = None,
+    universe_symbols: list[str] | None = None,
+    universe_metadata: dict[str, Any] | None = None,
 ) -> BacktestResult:
     """Convenience wrapper that narrows ``run_backtest`` to trend strategies."""
     strategy = db.get(Strategy, strategy_id)
@@ -360,6 +381,8 @@ def run_backtest_trend(
         commission_bps=commission_bps,
         commission_min=commission_min,
         slippage_bps=slippage_bps,
+        universe_symbols=universe_symbols,
+        universe_metadata=universe_metadata,
     )
 
 
@@ -374,6 +397,8 @@ def run_backtest_mean_reversion(
     commission_bps: float | None = None,
     commission_min: float | None = None,
     slippage_bps: float | None = None,
+    universe_symbols: list[str] | None = None,
+    universe_metadata: dict[str, Any] | None = None,
 ) -> BacktestResult:
     """Convenience wrapper that narrows ``run_backtest`` to mean-reversion strategies."""
     strategy = db.get(Strategy, strategy_id)
@@ -391,6 +416,8 @@ def run_backtest_mean_reversion(
         commission_bps=commission_bps,
         commission_min=commission_min,
         slippage_bps=slippage_bps,
+        universe_symbols=universe_symbols,
+        universe_metadata=universe_metadata,
     )
 
 
@@ -504,6 +531,20 @@ def _resolve_backtest_cost_config(
         commission_min=resolved_commission_min,
         slippage_bps=resolved_slippage_bps,
     )
+
+
+def _normalize_symbol_universe(symbols: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_symbol in symbols:
+        symbol = str(raw_symbol).strip().upper()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        normalized.append(symbol)
+    if not normalized:
+        raise ValueError("universe_symbols must contain at least one non-empty ticker")
+    return normalized
 
 
 def _commission_for_notional(notional: float, cost_config: BacktestCostConfig) -> float:

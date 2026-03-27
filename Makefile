@@ -5,13 +5,14 @@ BACKEND_DIR := $(ROOT_DIR)/backend
 FRONTEND_DIR := $(ROOT_DIR)/frontend
 PYTHON := $(ROOT_DIR)/.venv/bin/python
 
-.PHONY: help dev dev-backend dev-frontend
+.PHONY: help dev dev-backend dev-frontend backfill-daily
 
 help:
 	@echo "Available targets:"
 	@echo "  make dev          Start backend and frontend together"
 	@echo "  make dev-backend  Start FastAPI backend only"
 	@echo "  make dev-frontend Start Next.js frontend only"
+	@echo "  make backfill-daily Run the daily market-data catch-up flow"
 
 dev:
 	@trap 'kill 0' INT TERM EXIT; \
@@ -24,3 +25,6 @@ dev-backend:
 
 dev-frontend:
 	@cd "$(FRONTEND_DIR)" && npm run dev
+
+backfill-daily:
+	@cd "$(ROOT_DIR)" && "$(PYTHON)" backend/utils/run_daily_market_backfill.py $(BACKFILL_ARGS)

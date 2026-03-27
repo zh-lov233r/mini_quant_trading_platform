@@ -1,3 +1,7 @@
+# 放应用入口层的东西
+# 创建 FastAPI 实例，配置 CORS，挂载路由，设置启动/停止事件等
+
+
 # backends/src/main.py
 import os
 import logging
@@ -5,8 +9,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # 引入 API routers 和数据库初始化函数
+from src.api.backtests import router as backtests_router
+from src.api.stock_baskets import router as stock_baskets_router
 from src.api.strategies import router as strategies_router
-from src.core.db import ensure_extensions
+from src.core.db import SessionLocal, ensure_extensions
+from src.services.stock_basket_service import ensure_default_common_stock_basket
 
 # -----------------------------
 # 基本配置（可用环境变量覆盖）
@@ -39,6 +46,8 @@ app.add_middleware(
 
 # 挂载你的业务路由
 app.include_router(strategies_router)
+app.include_router(backtests_router)
+app.include_router(stock_baskets_router)
 
 # -----------------------------
 # 启动/停止事件
@@ -46,6 +55,11 @@ app.include_router(strategies_router)
 @app.on_event("startup")
 def on_startup():
     ensure_extensions()
+    db = SessionLocal()
+    try:
+        ensure_default_common_stock_basket(db)
+    finally:
+        db.close()
     log.info("App started")
 
 @app.on_event("shutdown")
@@ -62,7 +76,4 @@ def root():
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
-
-
-
 
