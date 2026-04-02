@@ -14,8 +14,7 @@ const NAV_ITEMS = [
   { href: "/stock-baskets", label: "股票库" },
   { href: "/strategies/new", label: "创建策略" },
   { href: "/backtests", label: "回测" },
-  { href: "/market", label: "行情" },
-  { href: "/orders", label: "订单" },
+  { href: "/paper-trading", label: "Paper Trading" },
 ];
 
 export default function AppShell({
@@ -28,23 +27,23 @@ export default function AppShell({
     <main
       style={{
         minHeight: "100vh",
-        padding: "28px 16px 56px",
+        padding: "28px 10px 56px",
         background:
-          "radial-gradient(circle at top left, rgba(255,244,214,0.8), transparent 34%), linear-gradient(180deg, #f7f4ee 0%, #fbfaf7 45%, #f4f6f7 100%)",
-        color: "#111827",
+          "radial-gradient(circle at top left, rgba(34,211,238,0.18), transparent 28%), radial-gradient(circle at top right, rgba(245,158,11,0.14), transparent 24%), radial-gradient(circle at bottom left, rgba(59,130,246,0.12), transparent 30%), linear-gradient(180deg, #06131a 0%, #0b1723 45%, #0f172a 100%)",
+        color: "#e2e8f0",
         fontFamily:
           "\"Iowan Old Style\", \"Palatino Linotype\", \"Book Antiqua\", Georgia, serif",
       }}
     >
-      <div style={{ maxWidth: 1180, margin: "0 auto" }}>
+      <div style={{ maxWidth: 1380, margin: "0 auto" }}>
         <header
           style={{
             marginBottom: 20,
             padding: 18,
             borderRadius: 24,
-            border: "1px solid rgba(15, 23, 42, 0.08)",
-            background: "rgba(255,255,255,0.68)",
-            boxShadow: "0 18px 50px rgba(15, 23, 42, 0.06)",
+            border: "1px solid rgba(148, 163, 184, 0.16)",
+            background: "rgba(8, 15, 24, 0.68)",
+            boxShadow: "0 22px 60px rgba(2, 6, 23, 0.42)",
             backdropFilter: "blur(8px)",
           }}
         >
@@ -62,7 +61,7 @@ export default function AppShell({
               href="/"
               style={{
                 textDecoration: "none",
-                color: "#0f172a",
+                color: "#f8fafc",
                 fontSize: 13,
                 fontWeight: 700,
                 letterSpacing: "0.08em",
@@ -81,9 +80,9 @@ export default function AppShell({
                   style={{
                     padding: "8px 12px",
                     borderRadius: 999,
-                    border: "1px solid rgba(148, 163, 184, 0.28)",
-                    background: "rgba(255,255,255,0.72)",
-                    color: "#1f2937",
+                    border: "1px solid rgba(148, 163, 184, 0.16)",
+                    background: "rgba(15, 23, 42, 0.72)",
+                    color: "#dbeafe",
                     textDecoration: "none",
                     fontSize: 13,
                     fontWeight: 600,
@@ -113,6 +112,7 @@ export default function AppShell({
                   fontSize: 42,
                   lineHeight: 1.05,
                   fontWeight: 700,
+                  color: "#f8fafc",
                 }}
               >
                 {title}
@@ -120,7 +120,7 @@ export default function AppShell({
               <p
                 style={{
                   margin: 0,
-                  color: "#475569",
+                  color: "rgba(226, 232, 240, 0.78)",
                   fontSize: 16,
                   lineHeight: 1.7,
                   fontFamily:

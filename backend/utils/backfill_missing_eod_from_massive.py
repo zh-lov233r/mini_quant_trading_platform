@@ -1,8 +1,16 @@
 from __future__ import annotations
+"""Daily market backfill entrypoint.
+
+This script keeps the local market database current by syncing the security
+master first, then filling missing eod_bars rows, and finally refreshing the
+daily_features window used by backtests and paper trading.
+"""
 
 import argparse
 import json
 import os
+import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -37,6 +45,8 @@ WITH symbol_map AS (
     WHERE sh.valid_from <= %(trade_date)s::date
       AND (sh.valid_to IS NULL OR sh.valid_to >= %(trade_date)s::date)
       AND instr.asset_type = 'CS'
+      AND (instr.listed_at IS NULL OR instr.listed_at <= %(trade_date)s::date)
+      AND (instr.delisted_at IS NULL OR instr.delisted_at >= %(trade_date)s::date)
     GROUP BY sh.symbol
 )
 SELECT
@@ -131,13 +141,16 @@ class GroupedDailyBar:
 class DaySyncStats:
     trade_date: date
     missing_symbols: int
+    unique_missing_instruments: int
     api_rows: int
     staged_rows: int
     upserted_rows: int
     api_missing_symbols: int
+    deduped_symbol_aliases: int
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI flags for daily EOD gap filling."""
     parser = argparse.ArgumentParser(
         description=(
             "Fill missing eod_bars rows from Massive grouped daily aggregates. "
@@ -175,19 +188,32 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Detect and fetch gaps but do not write to eod_bars.",
     )
+    parser.add_argument(
+        "--skip-features",
+        action="store_true",
+        help="Only fill eod_bars and skip the daily_features refresh step.",
+    )
+    parser.add_argument(
+        "--skip-security-master",
+        action="store_true",
+        help="Skip the instrument + symbol_history sync step before gap filling.",
+    )
     return parser.parse_args()
 
 
 def _psycopg_dsn(url: str) -> str:
+    """Normalize SQLAlchemy-style URLs into raw psycopg DSNs."""
     normalized = url.replace("postgresql+psycopg://", "postgresql://", 1)
     return normalized.replace("postgresql+psycopg2://", "postgresql://", 1)
 
 
 def _parse_date(value: str | None) -> date | None:
+    """Parse an optional ISO date string."""
     return date.fromisoformat(value) if value else None
 
 
 def _default_end_date() -> date:
+    """Choose the latest trade date that should have complete daily data."""
     now_ny = datetime.now(NEW_YORK)
     cutoff_hour = 20
     if now_ny.hour >= cutoff_hour:
@@ -196,6 +222,7 @@ def _default_end_date() -> date:
 
 
 def _resolve_date_range(args: argparse.Namespace) -> tuple[date, date]:
+    """Resolve the effective sync window from explicit args or lookback days."""
     if args.lookback_days < 1:
         raise SystemExit("--lookback-days must be >= 1")
 
@@ -214,6 +241,7 @@ def _resolve_date_range(args: argparse.Namespace) -> tuple[date, date]:
 
 
 def _iter_weekdays(start_date: date, end_date: date) -> list[date]:
+    """Expand a date range into weekday trade dates."""
     days: list[date] = []
     current = start_date
     while current <= end_date:
@@ -224,10 +252,12 @@ def _iter_weekdays(start_date: date, end_date: date) -> list[date]:
 
 
 def _to_float(value: object) -> float | None:
+    """Convert API payload values into floats when present."""
     return None if value is None else float(value)
 
 
 def _to_int(value: object) -> int | None:
+    """Convert API payload values into rounded integers when present."""
     if value in (None, ""):
         return None
     if isinstance(value, int):
@@ -239,16 +269,71 @@ def _to_int(value: object) -> int | None:
 
 
 def _ts_ms_to_utc(ts_ms: int | float | str) -> datetime:
+    """Convert Massive millisecond timestamps into UTC datetimes."""
     return datetime.fromtimestamp(float(ts_ms) / 1000.0, tz=timezone.utc)
 
 
 def _load_missing_symbols(conn, trade_date: date) -> list[tuple[str, int]]:
+    """Load symbols that are expected for trade_date but missing in eod_bars."""
     with conn.cursor() as cur:
         cur.execute(MISSING_SYMBOLS_SQL, {"trade_date": trade_date.isoformat()})
         return [(str(row[0]).upper(), int(row[1])) for row in cur.fetchall()]
 
 
+def _build_stage_rows(
+    missing_symbols: list[tuple[str, int]],
+    bars_by_symbol: dict[str, GroupedDailyBar],
+) -> tuple[list[tuple], int, int]:
+    """Map fetched API bars into unique instrument-level stage rows."""
+    symbols_by_instrument: dict[int, list[str]] = {}
+    for symbol, instrument_id in missing_symbols:
+        symbols_by_instrument.setdefault(instrument_id, []).append(symbol)
+
+    stage_rows: list[tuple] = []
+    api_missing_symbols = 0
+    deduped_symbol_aliases = 0
+
+    for instrument_id, candidate_symbols in symbols_by_instrument.items():
+        available_bars = [
+            (symbol, bars_by_symbol[symbol])
+            for symbol in candidate_symbols
+            if symbol in bars_by_symbol
+        ]
+        if not available_bars:
+            api_missing_symbols += len(candidate_symbols)
+            continue
+
+        # Multiple live aliases can point at the same instrument_id.
+        # Choose a single bar per instrument to match the eod_bars primary key.
+        chosen_symbol, chosen_bar = max(
+            available_bars,
+            key=lambda item: (
+                item[1].ts_utc,
+                item[1].volume or 0,
+                item[0],
+            ),
+        )
+        deduped_symbol_aliases += max(0, len(available_bars) - 1)
+        api_missing_symbols += len(candidate_symbols) - len(available_bars)
+        stage_rows.append(
+            (
+                instrument_id,
+                chosen_bar.ts_utc,
+                chosen_bar.open_u,
+                chosen_bar.high_u,
+                chosen_bar.low_u,
+                chosen_bar.close_u,
+                chosen_bar.volume,
+                chosen_bar.vwap,
+                chosen_bar.trades,
+            )
+        )
+
+    return stage_rows, api_missing_symbols, deduped_symbol_aliases
+
+
 def _stage_and_upsert_rows(conn, rows: list[tuple]) -> int:
+    """Bulk stage grouped daily bars and upsert them into eod_bars."""
     with conn.cursor() as cur:
         cur.execute(STAGE_TABLE_SQL)
         with cur.copy(COPY_STAGE_SQL) as copy:
@@ -261,6 +346,7 @@ def _stage_and_upsert_rows(conn, rows: list[tuple]) -> int:
 
 
 def _fetch_json(url: str, *, headers: dict[str, str], params: dict[str, str] | None) -> dict:
+    """Issue a GET request and decode the JSON payload."""
     final_url = url
     if params:
         final_url = f"{url}?{parse.urlencode(params)}"
@@ -282,6 +368,7 @@ def _fetch_grouped_daily(
     headers: dict[str, str],
     trade_date: date,
 ) -> dict[str, GroupedDailyBar]:
+    """Fetch grouped daily bars from Massive for one trade date."""
     next_url: str | None = GROUPED_DAILY_URL.format(trade_date=trade_date.isoformat())
     next_params: dict | None = {"adjusted": "false"}
     bars: dict[str, GroupedDailyBar] = {}
@@ -314,7 +401,42 @@ def _fetch_grouped_daily(
     return bars
 
 
+def _run_security_master_sync(*, database_url: str) -> None:
+    """Refresh instruments and symbol_history before looking for market-data gaps."""
+    sync_script = REPO_ROOT / "backend" / "utils" / "backfill_instruments_and_symbol.py"
+    command = [sys.executable, str(sync_script)]
+    printable = " ".join(command)
+    env = os.environ.copy()
+    env["DATABASE_URL"] = database_url
+    print(f"\n[sync-security-master] {printable}", flush=True)
+    subprocess.run(command, cwd=REPO_ROOT, env=env, check=True)
+
+
+def _run_feature_refresh(
+    *,
+    database_url: str,
+    start_date: date,
+    end_date: date,
+) -> None:
+    """Refresh daily_features for the same date window after EOD writes."""
+    feature_script = REPO_ROOT / "backend" / "utils" / "backfill_daily_features.py"
+    command = [
+        sys.executable,
+        str(feature_script),
+        "--start-date",
+        start_date.isoformat(),
+        "--end-date",
+        end_date.isoformat(),
+        "--database-url",
+        database_url,
+    ]
+    printable = " ".join(command)
+    print(f"\n[refresh-daily-features] {printable}", flush=True)
+    subprocess.run(command, cwd=REPO_ROOT, check=True)
+
+
 def main() -> None:
+    """Run the full daily sync flow: security master, EOD gaps, then features."""
     load_dotenv(REPO_ROOT / ".env")
     args = parse_args()
     try:
@@ -341,11 +463,20 @@ def main() -> None:
         flush=True,
     )
 
+    if args.dry_run:
+        print("Dry run enabled; skipping security master sync because it writes to the database.", flush=True)
+    elif args.skip_security_master:
+        print("Skipping security master sync by request.", flush=True)
+    else:
+        _run_security_master_sync(database_url=args.database_url)
+
     total_missing = 0
+    total_unique_missing_instruments = 0
     total_api_rows = 0
     total_staged = 0
     total_upserted = 0
     total_api_missing = 0
+    total_deduped_aliases = 0
 
     headers = {"Authorization": f"Bearer {api_key}"}
     with psycopg.connect(_psycopg_dsn(args.database_url)) as conn:
@@ -353,42 +484,31 @@ def main() -> None:
             missing_symbols = _load_missing_symbols(conn, trade_date)
             missing_count = len(missing_symbols)
             total_missing += missing_count
+            unique_missing_instruments = len({instrument_id for _, instrument_id in missing_symbols})
+            total_unique_missing_instruments += unique_missing_instruments
 
             if not missing_symbols:
                 print(f"[{trade_date}] no database gaps detected", flush=True)
                 continue
 
             print(
-                f"[{trade_date}] missing_symbols={missing_count} fetching Massive grouped daily bars",
+                f"[{trade_date}] missing_symbols={missing_count} "
+                f"unique_instruments={unique_missing_instruments} "
+                f"fetching Massive grouped daily bars",
                 flush=True,
             )
             bars_by_symbol = _fetch_grouped_daily(headers, trade_date)
             api_rows = len(bars_by_symbol)
             total_api_rows += api_rows
 
-            stage_rows: list[tuple] = []
-            for symbol, instrument_id in missing_symbols:
-                bar = bars_by_symbol.get(symbol)
-                if bar is None:
-                    continue
-                stage_rows.append(
-                    (
-                        instrument_id,
-                        bar.ts_utc,
-                        bar.open_u,
-                        bar.high_u,
-                        bar.low_u,
-                        bar.close_u,
-                        bar.volume,
-                        bar.vwap,
-                        bar.trades,
-                    )
-                )
-
+            stage_rows, api_missing_symbols, deduped_symbol_aliases = _build_stage_rows(
+                missing_symbols,
+                bars_by_symbol,
+            )
             staged_rows = len(stage_rows)
-            api_missing_symbols = missing_count - staged_rows
             total_staged += staged_rows
             total_api_missing += api_missing_symbols
+            total_deduped_aliases += deduped_symbol_aliases
 
             if args.dry_run:
                 upserted_rows = 0
@@ -399,24 +519,49 @@ def main() -> None:
             stats = DaySyncStats(
                 trade_date=trade_date,
                 missing_symbols=missing_count,
+                unique_missing_instruments=unique_missing_instruments,
                 api_rows=api_rows,
                 staged_rows=staged_rows,
                 upserted_rows=upserted_rows,
                 api_missing_symbols=api_missing_symbols,
+                deduped_symbol_aliases=deduped_symbol_aliases,
             )
             print(
                 f"[{stats.trade_date}] api_rows={stats.api_rows} "
+                f"unique_instruments={stats.unique_missing_instruments} "
                 f"staged={stats.staged_rows} upserted={stats.upserted_rows} "
-                f"still_missing={stats.api_missing_symbols}",
+                f"still_missing={stats.api_missing_symbols} "
+                f"deduped_aliases={stats.deduped_symbol_aliases}",
                 flush=True,
             )
 
     print("\nSync complete.", flush=True)
     print(
-        f"total_missing_symbols={total_missing} total_api_rows={total_api_rows} "
+        f"total_missing_symbols={total_missing} "
+        f"total_unique_missing_instruments={total_unique_missing_instruments} "
+        f"total_api_rows={total_api_rows} "
         f"total_staged={total_staged} total_upserted={total_upserted} "
-        f"total_still_missing={total_api_missing}",
+        f"total_still_missing={total_api_missing} "
+        f"total_deduped_aliases={total_deduped_aliases}",
         flush=True,
+    )
+
+    if args.dry_run:
+        print("\nDry run enabled; skipping daily_features refresh.", flush=True)
+        return
+
+    if args.skip_features:
+        print("\nSkipping daily_features refresh by request.", flush=True)
+        return
+
+    if total_upserted <= 0:
+        print("\nNo eod_bars rows were written; skipping daily_features refresh.", flush=True)
+        return
+
+    _run_feature_refresh(
+        database_url=args.database_url,
+        start_date=start_date,
+        end_date=end_date,
     )
 
 

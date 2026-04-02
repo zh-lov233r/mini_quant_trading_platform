@@ -16,9 +16,10 @@ export default function MetricCard({
       style={{
         padding: 18,
         borderRadius: 22,
-        border: "1px solid rgba(148, 163, 184, 0.18)",
-        background: "rgba(255,255,255,0.85)",
-        boxShadow: "0 14px 36px rgba(15, 23, 42, 0.06)",
+        border: "1px solid rgba(148, 163, 184, 0.14)",
+        background:
+          "linear-gradient(180deg, rgba(11,23,35,0.92), rgba(15,23,42,0.88))",
+        boxShadow: "0 18px 40px rgba(2, 6, 23, 0.28)",
       }}
     >
       <div
@@ -27,7 +28,7 @@ export default function MetricCard({
           marginBottom: 12,
           padding: "4px 9px",
           borderRadius: 999,
-          background: `${accent}16`,
+          background: `${accent}22`,
           color: accent,
           fontSize: 12,
           fontWeight: 700,
@@ -38,11 +39,13 @@ export default function MetricCard({
       >
         {label}
       </div>
-      <div style={{ marginBottom: 10, fontSize: 32, fontWeight: 700 }}>{value}</div>
+      <div style={{ marginBottom: 10, fontSize: 32, fontWeight: 700, color: "#f8fafc" }}>
+        {value}
+      </div>
       <p
         style={{
           margin: 0,
-          color: "#64748b",
+          color: "rgba(203, 213, 225, 0.74)",
           lineHeight: 1.6,
           fontSize: 14,
           fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",

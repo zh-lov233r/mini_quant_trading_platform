@@ -7,7 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from src.core.db import get_db
@@ -16,6 +16,7 @@ from src.services.strategy_registry import (
     build_runtime_payload,
     build_strategy_catalog,
     extract_description,
+    get_trend_engine_supported_windows,
     is_engine_ready,
     json_signature,
     normalize_strategy_params,
@@ -30,6 +31,10 @@ class StrategyCreate(BaseModel):
     status: Literal["draft", "active", "archived"] = "draft"
 
 
+class StrategyRename(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128, description="新的策略名称")
+
+
 class StrategyCatalogItem(BaseModel):
     strategy_type: str
     label: str
@@ -38,8 +43,19 @@ class StrategyCatalogItem(BaseModel):
     defaults: Dict[str, Any]
 
 
+class TrendIndicatorSupportOut(BaseModel):
+    ema_windows: list[int]
+    sma_windows: list[int]
+
+
+class StrategyFeatureSupportOut(BaseModel):
+    trend: TrendIndicatorSupportOut
+
+
 class StrategyOut(BaseModel):
     id: UUID
+    strategy_key: str
+    display_name: str
     name: str
     description: Optional[str] = None
     strategy_type: str
@@ -53,6 +69,8 @@ class StrategyOut(BaseModel):
 
 class StrategyRuntimeOut(BaseModel):
     strategy_id: str
+    strategy_key: str
+    display_name: str
     name: str
     version: int
     status: str
@@ -72,6 +90,8 @@ def _to_strategy_out(obj: Strategy) -> StrategyOut:
     )
     return StrategyOut(
         id=obj.id,
+        strategy_key=obj.strategy_key,
+        display_name=obj.name,
         name=obj.name,
         description=extract_description(normalized_params),
         strategy_type=obj.strategy_type,
@@ -84,9 +104,84 @@ def _to_strategy_out(obj: Strategy) -> StrategyOut:
     )
 
 
+def _load_supported_daily_feature_columns(db: Session) -> set[str]:
+    rows = db.execute(
+        text(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'daily_features'
+            """
+        )
+    ).all()
+    return {str(row[0]).strip().lower() for row in rows}
+
+
+def _build_feature_support_payload(db: Session) -> StrategyFeatureSupportOut:
+    available_columns = _load_supported_daily_feature_columns(db)
+    engine_supported = get_trend_engine_supported_windows()
+
+    ema_windows = [
+        window
+        for window in engine_supported["ema"]
+        if f"ema_{window}" in available_columns
+    ]
+    sma_windows = [
+        window
+        for window in engine_supported["sma"]
+        if f"sma_{window}" in available_columns
+    ]
+
+    return StrategyFeatureSupportOut(
+        trend=TrendIndicatorSupportOut(
+            ema_windows=ema_windows,
+            sma_windows=sma_windows,
+        )
+    )
+
+
+def _validate_feature_support(
+    db: Session,
+    *,
+    strategy_type: str,
+    params: Dict[str, Any],
+) -> None:
+    if strategy_type != "trend":
+        return
+
+    support = _build_feature_support_payload(db)
+    signal = params.get("signal") or {}
+    fast = signal.get("fast_indicator") or {}
+    slow = signal.get("slow_indicator") or {}
+
+    for label, indicator in (("快线", fast), ("慢线", slow)):
+        kind = str(indicator.get("kind") or "").strip().lower()
+        window = indicator.get("window")
+        if kind not in {"ema", "sma"}:
+            raise ValueError(f"{label}类型不受支持: {kind or '空'}")
+        if not isinstance(window, int):
+            raise ValueError(f"{label}周期格式不正确")
+
+        supported_windows = (
+            support.trend.ema_windows if kind == "ema" else support.trend.sma_windows
+        )
+        if window not in supported_windows:
+            supported_text = ", ".join(str(item) for item in supported_windows) or "无"
+            raise ValueError(
+                f"当前数据库不支持 {label}{kind.upper()}{window}。"
+                f"可用 {kind.upper()} 周期: {supported_text}"
+            )
+
+
 @router.get("/catalog", response_model=list[StrategyCatalogItem])
 def get_strategy_catalog():
     return [StrategyCatalogItem(**item) for item in build_strategy_catalog()]
+
+
+@router.get("/feature-support", response_model=StrategyFeatureSupportOut)
+def get_strategy_feature_support(db: Session = Depends(get_db)):
+    return _build_feature_support_payload(db)
 
 
 @router.get("", response_model=list[StrategyOut])
@@ -130,6 +225,11 @@ def create_strategy(
             payload.params,
             payload.description,
         )
+        _validate_feature_support(
+            db,
+            strategy_type=payload.strategy_type,
+            params=normalized_params,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
@@ -151,11 +251,19 @@ def create_strategy(
             and json_signature(existing_normalized) == json_signature(normalized_params)
         ):
             return _to_strategy_out(latest_same_name)
-        next_version = latest_same_name.version + 1
+        strategy_key = latest_same_name.strategy_key
+        latest_same_family = db.execute(
+            select(Strategy)
+            .where(Strategy.strategy_key == strategy_key)
+            .order_by(Strategy.version.desc())
+        ).scalars().first()
+        next_version = (latest_same_family.version if latest_same_family else latest_same_name.version) + 1
     else:
+        strategy_key = payload.name.strip()
         next_version = 1
 
     obj = Strategy(
+        strategy_key=strategy_key,
         name=payload.name.strip(),
         strategy_type=payload.strategy_type,
         params=normalized_params,
@@ -191,4 +299,51 @@ def get_strategy(strategy_id: UUID, db: Session = Depends(get_db)):
     obj = db.get(Strategy, strategy_id)
     if not obj:
         raise HTTPException(status_code=404, detail="strategy not found")
+    return _to_strategy_out(obj)
+
+
+@router.patch("/{strategy_id}", response_model=StrategyOut)
+def rename_strategy(
+    strategy_id: UUID,
+    payload: StrategyRename,
+    db: Session = Depends(get_db),
+):
+    obj = db.get(Strategy, strategy_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+    next_name = payload.name.strip()
+    if not next_name:
+        raise HTTPException(status_code=422, detail="strategy name cannot be empty")
+
+    if next_name == obj.name:
+        return _to_strategy_out(obj)
+
+    conflicting = db.execute(
+        select(Strategy)
+        .where(Strategy.id != strategy_id)
+        .where(Strategy.name == next_name)
+        .limit(1)
+    ).scalars().first()
+    if conflicting is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "target strategy name already exists; first rename version only allows "
+                "renaming to a brand-new name to avoid merging strategy version families"
+            ),
+        )
+
+    obj.name = next_name
+
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"rename strategy failed: {str(exc)}",
+        ) from exc
+
+    db.refresh(obj)
     return _to_strategy_out(obj)

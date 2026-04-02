@@ -120,6 +120,7 @@ def run_backtest(
     slippage_bps: float | None = None,
     universe_symbols: list[str] | None = None,
     universe_metadata: dict[str, Any] | None = None,
+    existing_run_id: UUID | str | None = None,
 ) -> BacktestResult:
     """Run a long-only daily backtest and persist signals, fills, and equity snapshots.
 
@@ -174,19 +175,38 @@ def run_backtest(
     if not symbols:
         raise ValueError("backtest currently requires a non-empty manual symbol universe")
 
-    run = StrategyRun(
-        strategy_id=strategy.id,
-        strategy_version=strategy.version,
-        mode="backtest",
-        status="running",
-        started_at=datetime.now(timezone.utc),
-        window_start=start_date,
-        window_end=end_date,
-        initial_cash=initial_cash,
-        benchmark_symbol=benchmark_symbol,
-        config_snapshot=runtime["params"],
-    )
-    db.add(run)
+    if existing_run_id is not None:
+        run = db.get(StrategyRun, existing_run_id)
+        if run is None:
+            raise ValueError("backtest run not found")
+        run.strategy_id = strategy.id
+        run.strategy_version = strategy.version
+        run.mode = "backtest"
+        run.status = "running"
+        run.started_at = datetime.now(timezone.utc)
+        run.finished_at = None
+        run.window_start = start_date
+        run.window_end = end_date
+        run.initial_cash = initial_cash
+        run.final_equity = None
+        run.benchmark_symbol = benchmark_symbol
+        run.config_snapshot = runtime["params"]
+        run.summary_metrics = {}
+        run.error_message = None
+    else:
+        run = StrategyRun(
+            strategy_id=strategy.id,
+            strategy_version=strategy.version,
+            mode="backtest",
+            status="running",
+            started_at=datetime.now(timezone.utc),
+            window_start=start_date,
+            window_end=end_date,
+            initial_cash=initial_cash,
+            benchmark_symbol=benchmark_symbol,
+            config_snapshot=runtime["params"],
+        )
+        db.add(run)
     db.commit()
     db.refresh(run)
 

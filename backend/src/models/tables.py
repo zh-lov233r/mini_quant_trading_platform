@@ -47,10 +47,11 @@ class StockBasket(Base):
 class Strategy(Base):
     __tablename__ = "strategies"
     __table_args__ = (
-        UniqueConstraint("name", "version", name="uq_strategy_name_version"),
+        UniqueConstraint("strategy_key", "version", name="uq_strategy_key_version"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    strategy_key = Column(String(128), nullable=False)
     name = Column(String(128), nullable=False)
     strategy_type = Column(String(32), nullable=False)
     params = Column(JSON_VARIANT, nullable=False)
@@ -73,12 +74,122 @@ class Strategy(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    allocations = relationship(
+        "StrategyAllocation",
+        back_populates="strategy",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     transactions = relationship(
         "Transaction",
         back_populates="strategy",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+
+
+class PaperTradingAccount(Base):
+    __tablename__ = "paper_trading_accounts"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_paper_trading_accounts_name"),
+        CheckConstraint(
+            "broker IN ('alpaca')",
+            name="ck_paper_trading_accounts_broker",
+        ),
+        CheckConstraint(
+            "mode IN ('paper', 'live')",
+            name="ck_paper_trading_accounts_mode",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'archived')",
+            name="ck_paper_trading_accounts_status",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(128), nullable=False)
+    broker = Column(String(32), nullable=False, default="alpaca")
+    mode = Column(String(16), nullable=False, default="paper")
+    api_key_env = Column(String(128), nullable=False, default="ALPACA_API_KEY")
+    secret_key_env = Column(String(128), nullable=False, default="ALPACA_SECRET_KEY")
+    base_url = Column(String(255), nullable=False, default="https://paper-api.alpaca.markets")
+    timeout_seconds = Column(Numeric(10, 4), nullable=False, default=20)
+    notes = Column(Text)
+    status = Column(String(16), nullable=False, default="active")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    portfolios = relationship(
+        "StrategyPortfolio",
+        back_populates="paper_account",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class StrategyPortfolio(Base):
+    __tablename__ = "strategy_portfolios"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_strategy_portfolios_name"),
+        CheckConstraint(
+            "status IN ('active', 'archived')",
+            name="ck_strategy_portfolios_status",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    paper_account_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("paper_trading_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name = Column(String(64), nullable=False)
+    description = Column(Text)
+    status = Column(String(16), nullable=False, default="active")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    paper_account = relationship("PaperTradingAccount", back_populates="portfolios")
+
+
+class StrategyAllocation(Base):
+    __tablename__ = "strategy_allocations"
+    __table_args__ = (
+        UniqueConstraint(
+            "strategy_id",
+            "portfolio_name",
+            name="uq_strategy_allocations_strategy_portfolio",
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'active', 'archived')",
+            name="ck_strategy_allocations_status",
+        ),
+        CheckConstraint(
+            "allocation_pct >= 0 AND allocation_pct <= 1",
+            name="ck_strategy_allocations_pct",
+        ),
+        CheckConstraint(
+            "capital_base IS NULL OR capital_base >= 0",
+            name="ck_strategy_allocations_capital_base",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    strategy_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("strategies.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    portfolio_name = Column(String(64), nullable=False, default="default")
+    allocation_pct = Column(Numeric(12, 8), nullable=False, default=0)
+    capital_base = Column(Numeric(20, 8))
+    allow_fractional = Column(Integer, nullable=False, default=1)
+    notes = Column(Text)
+    status = Column(String(16), nullable=False, default="active")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    strategy = relationship("Strategy", back_populates="allocations")
 
 
 class StrategyRun(Base):

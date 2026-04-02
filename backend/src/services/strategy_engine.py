@@ -360,8 +360,8 @@ def _trend_following_handler(
         if not snapshot:
             continue
 
-        volume = float(snapshot.get("volume", 0))
-        avg_volume = float(snapshot.get("volume_sma_20", 0))
+        volume = _safe_float(snapshot.get("volume"))
+        avg_volume = _safe_float(snapshot.get("volume_sma_20"))
         if avg_volume <= 0 or volume < signal_cfg["volume_multiplier"] * avg_volume:
             continue
 
@@ -405,6 +405,15 @@ def _trend_following_handler(
         )
 
     return signals
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _mean_reversion_handler(

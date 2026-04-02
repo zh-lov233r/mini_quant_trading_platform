@@ -4,20 +4,20 @@ type BadgeTone = "neutral" | "success" | "warning" | "info";
 
 const TONE_STYLES: Record<BadgeTone, CSSProperties> = {
   neutral: {
-    background: "#e2e8f0",
-    color: "#334155",
+    background: "rgba(51, 65, 85, 0.78)",
+    color: "#e2e8f0",
   },
   success: {
-    background: "#dcfce7",
-    color: "#166534",
+    background: "rgba(20, 83, 45, 0.78)",
+    color: "#bbf7d0",
   },
   warning: {
-    background: "#fef3c7",
-    color: "#92400e",
+    background: "rgba(120, 53, 15, 0.78)",
+    color: "#fde68a",
   },
   info: {
-    background: "#dbeafe",
-    color: "#1d4ed8",
+    background: "rgba(30, 64, 175, 0.72)",
+    color: "#bfdbfe",
   },
 };
 

@@ -16,9 +16,9 @@ function actionLink(href: string, label: string, filled = false) {
       style={{
         padding: "11px 16px",
         borderRadius: 14,
-        border: filled ? "none" : "1px solid rgba(148, 163, 184, 0.28)",
-        background: filled ? "#0f766e" : "rgba(255,255,255,0.8)",
-        color: filled ? "#fff" : "#0f172a",
+        border: filled ? "none" : "1px solid rgba(148, 163, 184, 0.16)",
+        background: filled ? "#0891b2" : "rgba(15, 23, 42, 0.72)",
+        color: filled ? "#f8fafc" : "#dbeafe",
         textDecoration: "none",
         fontWeight: 700,
         fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",

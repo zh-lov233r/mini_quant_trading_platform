@@ -45,8 +45,14 @@ export interface StrategyCreate {
   params: Record<string, unknown>;
 }
 
+export interface StrategyRename {
+  name: string;
+}
+
 export interface StrategyOut {
   id: string;
+  strategy_key: string;
+  display_name?: string | null;
   name: string;
   description?: string | null;
   strategy_type: StrategyType | string;
@@ -60,6 +66,8 @@ export interface StrategyOut {
 
 export interface StrategyRuntimeOut {
   strategy_id: string;
+  strategy_key?: string;
+  display_name?: string | null;
   name: string;
   version: number;
   status: string;
@@ -74,4 +82,13 @@ export interface StrategyCatalogItem {
   description: string;
   engine_ready: boolean;
   defaults: Record<string, unknown>;
+}
+
+export interface TrendIndicatorSupport {
+  ema_windows: number[];
+  sma_windows: number[];
+}
+
+export interface StrategyFeatureSupport {
+  trend: TrendIndicatorSupport;
 }

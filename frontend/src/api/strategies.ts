@@ -1,7 +1,9 @@
-import http, { API_BASE } from "@/api/client";
+import http, { API_BASE, readApiError } from "@/api/client";
 import type {
   StrategyCatalogItem,
   StrategyCreate,
+  StrategyFeatureSupport,
+  StrategyRename,
   StrategyOut,
   StrategyRuntimeOut,
 } from "@/types/strategy";
@@ -20,8 +22,7 @@ export async function createStrategy(
   });
 
   if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(`${res.status} ${res.statusText} ${txt}`.trim());
+    throw await readApiError(res, "/api/strategies");
   }
   return res.json() as Promise<StrategyOut>;
 }
@@ -36,6 +37,12 @@ export function getStrategyCatalog(): Promise<StrategyCatalogItem[]> {
   });
 }
 
+export function getStrategyFeatureSupport(): Promise<StrategyFeatureSupport> {
+  return http<StrategyFeatureSupport>("/api/strategies/feature-support", {
+    method: "GET",
+  });
+}
+
 export function getStrategy(strategyId: string): Promise<StrategyOut> {
   return http<StrategyOut>(`/api/strategies/${strategyId}`, { method: "GET" });
 }
@@ -43,5 +50,15 @@ export function getStrategy(strategyId: string): Promise<StrategyOut> {
 export function getStrategyRuntime(strategyId: string): Promise<StrategyRuntimeOut> {
   return http<StrategyRuntimeOut>(`/api/strategies/${strategyId}/runtime`, {
     method: "GET",
+  });
+}
+
+export function renameStrategy(
+  strategyId: string,
+  payload: StrategyRename
+): Promise<StrategyOut> {
+  return http<StrategyOut>(`/api/strategies/${strategyId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
   });
 }

@@ -2,6 +2,7 @@
 -- Not NULL fields：name; strategy_type; params
 CREATE TABLE IF NOT EXISTS strategies (
     id UUID NOT NULL PRIMARY KEY,
+    strategy_key VARCHAR(128) NOT NULL,
     name VARCHAR(128) NOT NULL,
     strategy_type VARCHAR(32) NOT NULL,
     params JSONB NOT NULL,
@@ -13,16 +14,26 @@ CREATE TABLE IF NOT EXISTS strategies (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Avoid repeating the same-name strategy under the same version number
+ALTER TABLE strategies
+    ADD COLUMN IF NOT EXISTS strategy_key VARCHAR(128);
+
+UPDATE strategies
+SET strategy_key = name
+WHERE strategy_key IS NULL OR BTRIM(strategy_key) = '';
+
+ALTER TABLE strategies
+    ALTER COLUMN strategy_key SET NOT NULL;
+
+-- Avoid repeating the same strategy family under the same version number
 DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1
     FROM pg_constraint
-    WHERE conname = 'uq_strategy_name_version'
+    WHERE conname = 'uq_strategy_key_version'
   ) THEN
     ALTER TABLE strategies
-    ADD CONSTRAINT uq_strategy_name_version UNIQUE (name, version);
+    ADD CONSTRAINT uq_strategy_key_version UNIQUE (strategy_key, version);
   END IF;
 END $$;
 

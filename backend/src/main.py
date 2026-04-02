@@ -10,9 +10,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # 引入 API routers 和数据库初始化函数
 from src.api.backtests import router as backtests_router
+from src.api.paper_accounts import router as paper_accounts_router
+from src.api.paper_trading import router as paper_trading_router
 from src.api.stock_baskets import router as stock_baskets_router
+from src.api.strategy_allocations import router as strategy_allocations_router
 from src.api.strategies import router as strategies_router
 from src.core.db import SessionLocal, ensure_extensions
+from src.services.paper_account_service import (
+    ensure_default_paper_account,
+    ensure_default_strategy_portfolio,
+)
 from src.services.stock_basket_service import ensure_default_common_stock_basket
 
 # -----------------------------
@@ -48,6 +55,9 @@ app.add_middleware(
 app.include_router(strategies_router)
 app.include_router(backtests_router)
 app.include_router(stock_baskets_router)
+app.include_router(paper_accounts_router)
+app.include_router(strategy_allocations_router)
+app.include_router(paper_trading_router)
 
 # -----------------------------
 # 启动/停止事件
@@ -58,6 +68,8 @@ def on_startup():
     db = SessionLocal()
     try:
         ensure_default_common_stock_basket(db)
+        ensure_default_paper_account(db)
+        ensure_default_strategy_portfolio(db)
     finally:
         db.close()
     log.info("App started")
@@ -76,4 +88,3 @@ def root():
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
-

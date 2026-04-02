@@ -4,12 +4,12 @@ from datetime import date, datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from src.core.db import get_db
+from src.core.db import SessionLocal, get_db
 from src.models.tables import PortfolioSnapshot, Signal, StockBasket, Strategy, StrategyRun, Transaction
 from src.services.backtest_engine import BacktestResult, run_backtest
 from src.services.stock_basket_service import DEFAULT_COMMON_STOCK_BASKET_NAME
@@ -100,6 +100,42 @@ def _serialize_signal(signal: Signal) -> dict[str, Any]:
 router = APIRouter(prefix="/api/backtests", tags=["backtests"])
 
 
+def _run_backtest_in_background(
+    run_id: UUID,
+    strategy_id: UUID,
+    start_date: date,
+    end_date: date,
+    initial_cash: float,
+    benchmark_symbol: str | None,
+    commission_bps: float | None,
+    commission_min: float | None,
+    slippage_bps: float | None,
+    basket_symbols: list[str] | None,
+    basket_metadata: dict[str, Any] | None,
+) -> None:
+    db = SessionLocal()
+    try:
+        run_backtest(
+            db=db,
+            strategy_id=strategy_id,
+            start_date=start_date,
+            end_date=end_date,
+            initial_cash=initial_cash,
+            benchmark_symbol=benchmark_symbol,
+            commission_bps=commission_bps,
+            commission_min=commission_min,
+            slippage_bps=slippage_bps,
+            universe_symbols=basket_symbols,
+            universe_metadata=basket_metadata,
+            existing_run_id=run_id,
+        )
+    except Exception:
+        # The backtest service marks the run as failed when execution raises.
+        db.rollback()
+    finally:
+        db.close()
+
+
 def _to_backtest_run_out(run: StrategyRun, strategy_name: str | None = None) -> BacktestRunOut:
     universe = (run.config_snapshot or {}).get("universe") or {}
     basket = universe.get("basket") if isinstance(universe, dict) else {}
@@ -159,10 +195,16 @@ def _to_backtest_detail_out(
 
 
 @router.post("", response_model=BacktestRunOut, status_code=status.HTTP_201_CREATED)
-def create_backtest(payload: BacktestCreate, db: Session = Depends(get_db)):
+def create_backtest(
+    payload: BacktestCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     strategy = db.get(Strategy, payload.strategy_id)
     if strategy is None:
         raise HTTPException(status_code=404, detail="strategy not found")
+    if payload.end_date < payload.start_date:
+        raise HTTPException(status_code=422, detail="end_date must be on or after start_date")
     basket = None
     basket_symbols = None
     basket_metadata = None
@@ -181,28 +223,44 @@ def create_backtest(payload: BacktestCreate, db: Session = Depends(get_db)):
             "symbol_count": len(basket_symbols),
         }
 
-    try:
-        result: BacktestResult = run_backtest(
-            db=db,
-            strategy_id=payload.strategy_id,
-            start_date=payload.start_date,
-            end_date=payload.end_date,
-            initial_cash=payload.initial_cash,
-            benchmark_symbol=payload.benchmark_symbol,
-            commission_bps=payload.commission_bps,
-            commission_min=payload.commission_min,
-            slippage_bps=payload.slippage_bps,
-            universe_symbols=basket_symbols,
-            universe_metadata=basket_metadata,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"backtest failed: {exc}") from exc
+    run = StrategyRun(
+        strategy_id=strategy.id,
+        strategy_version=strategy.version,
+        mode="backtest",
+        status="queued",
+        window_start=payload.start_date,
+        window_end=payload.end_date,
+        initial_cash=payload.initial_cash,
+        benchmark_symbol=payload.benchmark_symbol,
+        config_snapshot={
+            "submit_payload": {
+                "basket_id": str(payload.basket_id) if payload.basket_id else None,
+                "basket_name": basket.name if basket is not None else None,
+                "commission_bps": payload.commission_bps,
+                "commission_min": payload.commission_min,
+                "slippage_bps": payload.slippage_bps,
+            }
+        },
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
 
-    run = db.get(StrategyRun, UUID(result.run_id))
-    if run is None:
-        raise HTTPException(status_code=500, detail="backtest completed but run record was not found")
+    background_tasks.add_task(
+        _run_backtest_in_background,
+        run.id,
+        strategy.id,
+        payload.start_date,
+        payload.end_date,
+        payload.initial_cash,
+        payload.benchmark_symbol,
+        payload.commission_bps,
+        payload.commission_min,
+        payload.slippage_bps,
+        basket_symbols,
+        basket_metadata,
+    )
+
     return _to_backtest_run_out(run, strategy.name)
 
 

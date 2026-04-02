@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 
 import { getStrategyCatalog, listStrategies } from "@/api/strategies";
@@ -17,6 +18,7 @@ import {
 } from "@/utils/strategy";
 
 export default function StrategiesPage() {
+  const router = useRouter();
   const [items, setItems] = useState<StrategyOut[]>([]);
   const [catalog, setCatalog] = useState<StrategyCatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -316,6 +318,16 @@ export default function StrategiesPage() {
                             background:
                               "linear-gradient(140deg, rgba(255,248,237,0.96), rgba(255,255,255,0.98))",
                             boxShadow: "0 14px 36px rgba(15, 23, 42, 0.06)",
+                            cursor: "pointer",
+                          }}
+                          role="link"
+                          tabIndex={0}
+                          onClick={() => router.push(`/strategies/${item.id}`)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              void router.push(`/strategies/${item.id}`);
+                            }
                           }}
                         >
                             <div
@@ -409,10 +421,10 @@ export default function StrategiesPage() {
                               paddingTop: 14,
                               borderTop: "1px solid rgba(226, 232, 240, 0.9)",
                             }}
-                          >
-                            <span
-                              style={{
-                                color: "#64748b",
+                            >
+                              <span
+                                style={{
+                                  color: "#64748b",
                                 fontSize: 13,
                                 fontFamily:
                                   "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -431,19 +443,22 @@ export default function StrategiesPage() {
                               >
                                 下一步建议：补策略详情页
                               </span>
-                              <Link
-                                href={`/strategies/${item.id}`}
-                                style={{
-                                  color: "#0f172a",
-                                  textDecoration: "none",
-                                  fontSize: 14,
-                                  fontWeight: 700,
-                                  fontFamily:
-                                    "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-                                }}
-                              >
-                                查看详情
-                              </Link>
+                              <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                                <Link
+                                  href={`/strategies/${item.id}#rename`}
+                                  onClick={(event) => event.stopPropagation()}
+                                  style={{
+                                    color: "#0f766e",
+                                    textDecoration: "none",
+                                    fontSize: 14,
+                                    fontWeight: 700,
+                                    fontFamily:
+                                      "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+                                  }}
+                                >
+                                  改名
+                                </Link>
+                              </div>
                             </div>
                           </article>
                       );

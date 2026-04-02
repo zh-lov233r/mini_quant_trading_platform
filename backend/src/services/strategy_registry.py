@@ -85,6 +85,11 @@ CUSTOM_DEFAULTS: Dict[str, Any] = {
     },
 }
 
+TREND_ENGINE_SUPPORTED_WINDOWS: Dict[str, list[int]] = {
+    "ema": [12, 15, 20, 50],
+    "sma": [10, 20, 50, 100, 200],
+}
+
 
 def build_strategy_catalog() -> list[Dict[str, Any]]:
     return [
@@ -110,6 +115,13 @@ def build_strategy_catalog() -> list[Dict[str, Any]]:
             "defaults": copy.deepcopy(CUSTOM_DEFAULTS),
         },
     ]
+
+
+def get_trend_engine_supported_windows() -> Dict[str, list[int]]:
+    return {
+        kind: list(windows)
+        for kind, windows in TREND_ENGINE_SUPPORTED_WINDOWS.items()
+    }
 
 
 def normalize_strategy_params(
@@ -176,6 +188,8 @@ def build_runtime_payload(strategy: Any) -> Dict[str, Any]:
     )
     return {
         "strategy_id": str(strategy.id),
+        "strategy_key": str(getattr(strategy, "strategy_key", strategy.name)),
+        "display_name": strategy.name,
         "name": strategy.name,
         "version": strategy.version,
         "status": strategy.status,

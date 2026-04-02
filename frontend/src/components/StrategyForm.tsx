@@ -1,17 +1,26 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/router";
 
-import { createStrategy, getStrategyCatalog } from "@/api/strategies";
+import {
+  createStrategy,
+  getStrategyCatalog,
+  getStrategyFeatureSupport,
+} from "@/api/strategies";
 import type {
   StrategyCatalogItem,
   StrategyCreate,
+  StrategyFeatureSupport,
   StrategyOut,
   StrategyStatus,
   StrategyType,
 } from "@/types/strategy";
 
 export default function StrategyForm() {
+  const router = useRouter();
   const [catalog, setCatalog] = useState<StrategyCatalogItem[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [featureSupport, setFeatureSupport] = useState<StrategyFeatureSupport | null>(null);
+  const [featureSupportError, setFeatureSupportError] = useState<string | null>(null);
   const [name, setName] = useState("Trend_EMA15_SMA200");
   const [description, setDescription] = useState("双均线趋势策略");
   const [strategyType, setStrategyType] = useState<StrategyType>("trend");
@@ -34,15 +43,17 @@ export default function StrategyForm() {
 
   useEffect(() => {
     let cancelled = false;
-    getStrategyCatalog()
-      .then((items) => {
+    Promise.all([getStrategyCatalog(), getStrategyFeatureSupport()])
+      .then(([items, support]) => {
         if (!cancelled) {
           setCatalog(items);
+          setFeatureSupport(support);
         }
       })
       .catch((error: Error) => {
         if (!cancelled) {
           setCatalogError(error.message || "无法加载策略模板");
+          setFeatureSupportError(error.message || "无法加载数据库支持的指标配置");
         }
       });
     return () => {
@@ -59,6 +70,40 @@ export default function StrategyForm() {
       setRawJson(JSON.stringify(item.defaults, null, 2));
     }
   }, [catalog, strategyType]);
+
+  const fastWindowOptions = useMemo(
+    () =>
+      fastKind === "ema"
+        ? featureSupport?.trend.ema_windows || []
+        : featureSupport?.trend.sma_windows || [],
+    [fastKind, featureSupport]
+  );
+
+  const slowWindowOptions = useMemo(
+    () =>
+      slowKind === "ema"
+        ? featureSupport?.trend.ema_windows || []
+        : featureSupport?.trend.sma_windows || [],
+    [slowKind, featureSupport]
+  );
+
+  useEffect(() => {
+    if (fastWindowOptions.length === 0) {
+      return;
+    }
+    if (!fastWindowOptions.includes(Number(fastWindow))) {
+      setFastWindow(fastWindowOptions[0]);
+    }
+  }, [fastWindow, fastWindowOptions]);
+
+  useEffect(() => {
+    if (slowWindowOptions.length === 0) {
+      return;
+    }
+    if (!slowWindowOptions.includes(Number(slowWindow))) {
+      setSlowWindow(slowWindowOptions[0]);
+    }
+  }, [slowWindow, slowWindowOptions]);
 
   const trendParams = useMemo(
     () => {
@@ -163,6 +208,16 @@ export default function StrategyForm() {
       if (strategyType === "trend") {
         if (!(Number(fastWindow) > 0)) throw new Error("短周期必须 > 0");
         if (!(Number(slowWindow) > 0)) throw new Error("长周期必须 > 0");
+        if (fastWindowOptions.length > 0 && !fastWindowOptions.includes(Number(fastWindow))) {
+          throw new Error(
+            `当前数据库不支持快线 ${fastKind.toUpperCase()}${fastWindow}，可用周期: ${fastWindowOptions.join(", ")}`
+          );
+        }
+        if (slowWindowOptions.length > 0 && !slowWindowOptions.includes(Number(slowWindow))) {
+          throw new Error(
+            `当前数据库不支持慢线 ${slowKind.toUpperCase()}${slowWindow}，可用周期: ${slowWindowOptions.join(", ")}`
+          );
+        }
         if (!(Number(volMul) > 0)) throw new Error("成交量过滤倍数必须 > 0");
         if (!(Number(atrMul) > 0)) throw new Error("ATR 乘数必须 > 0");
         if (!(Number(maxPositions) > 0)) throw new Error("最大持仓数必须 > 0");
@@ -189,6 +244,11 @@ export default function StrategyForm() {
       const idem = (crypto as any)?.randomUUID?.() || String(Date.now());
       const data = await createStrategy(payload, idem);
       setResp(data);
+      if (typeof window !== "undefined" && window.history.length > 1) {
+        router.back();
+      } else {
+        await router.push("/strategies");
+      }
     } catch (error: any) {
       setErr(error?.message || "提交失败");
     } finally {
@@ -203,50 +263,74 @@ export default function StrategyForm() {
     margin: "0 0 12px",
   };
   const inputStyle: React.CSSProperties = {
-    padding: 10,
-    border: "1px solid #d1d5db",
-    borderRadius: 8,
+    padding: 12,
+    border: "1px solid rgba(203, 213, 225, 0.95)",
+    borderRadius: 14,
     fontSize: 14,
+    background: "rgba(255,255,255,0.92)",
+    color: "#0f172a",
+    fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
   };
   const cardStyle: React.CSSProperties = {
-    padding: 18,
-    border: "1px solid #e5e7eb",
-    borderRadius: 16,
-    background: "#fff",
-    boxShadow: "0 8px 30px rgba(15, 23, 42, 0.06)",
+    padding: 22,
+    border: "1px solid rgba(148, 163, 184, 0.18)",
+    borderRadius: 24,
+    background: "rgba(255,255,255,0.82)",
+    boxShadow: "0 18px 44px rgba(15, 23, 42, 0.06)",
   };
 
   return (
     <form
       onSubmit={submit}
       style={{
-        maxWidth: 960,
-        margin: "32px auto",
-        padding: "0 16px 48px",
-        fontFamily: "ui-sans-serif, -apple-system, BlinkMacSystemFont, sans-serif",
+        margin: 0,
+        padding: "0 0 48px",
+        fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
         color: "#111827",
       }}
     >
-      <div
-        style={{
-          marginBottom: 20,
-          padding: 24,
-          borderRadius: 20,
-          background:
-            "linear-gradient(135deg, rgba(15,118,110,0.12), rgba(14,165,233,0.08))",
-        }}
-      >
-        <h2 style={{ margin: "0 0 10px", fontSize: 28 }}>创建策略</h2>
-        <p style={{ margin: 0, color: "#4b5563", lineHeight: 1.6 }}>
-          前端填写策略定义，后端会统一标准化后落库，策略引擎直接消费标准化配置。
-        </p>
+      <div style={{ marginBottom: 16 }}>
+        <button
+          type="button"
+          onClick={() => {
+            if (typeof window !== "undefined" && window.history.length > 1) {
+              router.back();
+            } else {
+              router.push("/strategies");
+            }
+          }}
+          style={{
+            padding: "10px 14px",
+            borderRadius: 14,
+            border: "1px solid rgba(148, 163, 184, 0.28)",
+            background: "rgba(255,255,255,0.8)",
+            color: "#0f172a",
+            fontWeight: 700,
+            cursor: "pointer",
+            fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+          }}
+        >
+          返回上一页
+        </button>
       </div>
 
       {catalogError && (
         <div style={{ color: "crimson", marginBottom: 16 }}>{catalogError}</div>
       )}
+      {featureSupportError && (
+        <div style={{ color: "#92400e", marginBottom: 16 }}>
+          {featureSupportError}
+        </div>
+      )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 20 }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1.3fr) minmax(320px, 1fr)",
+          gap: 20,
+          alignItems: "start",
+        }}
+      >
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <section style={cardStyle}>
             <div style={boxStyle}>
@@ -304,6 +388,13 @@ export default function StrategyForm() {
           {strategyType === "trend" ? (
             <section style={cardStyle}>
               <h3 style={{ marginTop: 0 }}>趋势参数</h3>
+              <div style={{ marginBottom: 14, color: "#64748b", fontSize: 13, lineHeight: 1.6 }}>
+                当前数据库支持的趋势均线周期:
+                {" "}
+                EMA {featureSupport?.trend.ema_windows.join(", ") || "加载中"}
+                {" "}
+                | SMA {featureSupport?.trend.sma_windows.join(", ") || "加载中"}
+              </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <div style={boxStyle}>
@@ -319,13 +410,21 @@ export default function StrategyForm() {
                 </div>
                 <div style={boxStyle}>
                   <label>快线周期</label>
-                  <input
-                    type="number"
-                    min={1}
+                  <select
                     style={inputStyle}
                     value={fastWindow}
                     onChange={(e) => setFastWindow(Number(e.target.value))}
-                  />
+                  >
+                    {fastWindowOptions.length === 0 ? (
+                      <option value={fastWindow}>{fastWindow}</option>
+                    ) : (
+                      fastWindowOptions.map((window) => (
+                        <option key={`fast-${fastKind}-${window}`} value={window}>
+                          {window}
+                        </option>
+                      ))
+                    )}
+                  </select>
                 </div>
                 <div style={boxStyle}>
                   <label>慢线类型</label>
@@ -340,13 +439,21 @@ export default function StrategyForm() {
                 </div>
                 <div style={boxStyle}>
                   <label>慢线周期</label>
-                  <input
-                    type="number"
-                    min={1}
+                  <select
                     style={inputStyle}
                     value={slowWindow}
                     onChange={(e) => setSlowWindow(Number(e.target.value))}
-                  />
+                  >
+                    {slowWindowOptions.length === 0 ? (
+                      <option value={slowWindow}>{slowWindow}</option>
+                    ) : (
+                      slowWindowOptions.map((window) => (
+                        <option key={`slow-${slowKind}-${window}`} value={window}>
+                          {window}
+                        </option>
+                      ))
+                    )}
+                  </select>
                 </div>
                 <div style={boxStyle}>
                   <label>成交量过滤倍数</label>

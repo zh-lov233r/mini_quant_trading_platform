@@ -26,9 +26,9 @@ function actionLink(href: string, label: string, filled = false) {
       style={{
         padding: "11px 16px",
         borderRadius: 14,
-        border: filled ? "none" : "1px solid rgba(148, 163, 184, 0.28)",
-        background: filled ? "#0f766e" : "rgba(255,255,255,0.8)",
-        color: filled ? "#fff" : "#0f172a",
+        border: filled ? "none" : "1px solid rgba(148, 163, 184, 0.16)",
+        background: filled ? "#0891b2" : "rgba(15, 23, 42, 0.72)",
+        color: filled ? "#f8fafc" : "#dbeafe",
         textDecoration: "none",
         fontWeight: 700,
         fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -174,6 +174,33 @@ export default function BacktestsPage() {
     };
   }, [preselectedStrategyId]);
 
+  useEffect(() => {
+    if (loading || !runs.some((run) => run.status === "queued" || run.status === "running")) {
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      listBacktests()
+        .then((items) => {
+          if (!cancelled) {
+            setRuns(items);
+            setSubmitSuccessRun((current) =>
+              current ? items.find((item) => item.id === current.id) || current : null
+            );
+          }
+        })
+        .catch(() => {
+          // Ignore one-off polling failures and keep the current UI stable.
+        });
+    }, 4000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [loading, runs]);
+
   const eligibleStrategies = useMemo(
     () => strategies.filter((item) => item.engine_ready),
     [strategies]
@@ -295,7 +322,7 @@ export default function BacktestsPage() {
           <section
             style={{
               display: "grid",
-              gridTemplateColumns: "minmax(320px, 0.95fr) minmax(0, 1.2fr)",
+              gridTemplateColumns: "minmax(0, 1fr)",
               gap: 18,
               alignItems: "start",
             }}
@@ -328,7 +355,7 @@ export default function BacktestsPage() {
                     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                   }}
                 >
-                  这一步会直接调用后端同步回测接口。当前版本适合先验证策略定义、特征表和结果落库链路。
+                  这一步会先创建一条 queued run，再由后端在后台继续执行回测。提交后你可以切到别的页面，稍后再回来查看状态。
                 </p>
                 <div
                   style={{
@@ -342,7 +369,7 @@ export default function BacktestsPage() {
                 >
                   <div>1. 先选择一个 `engine-ready` 的策略。</div>
                   <div>2. 设定回测区间、初始资金和对标基准。</div>
-                  <div>3. 根据你想要的保守程度调整手续费和滑点假设。</div>
+                  <div>3. 提交后后端会在后台把 run 从 queued/running 推进到 completed 或 failed。</div>
                 </div>
               </div>
 
@@ -581,7 +608,7 @@ export default function BacktestsPage() {
                     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                   }}
                 >
-                  {submitting ? "回测中..." : "开始回测"}
+                  {submitting ? "提交中..." : "开始回测"}
                 </button>
               </form>
 
@@ -598,7 +625,10 @@ export default function BacktestsPage() {
                     lineHeight: 1.6,
                   }}
                 >
-                  <div>回测已完成，结果已经写入后端。</div>
+                  <div>
+                    回测任务已提交到后台，当前状态是 <strong>{submitSuccessRun.status}</strong>。
+                    你现在切到别的页面也不会影响这次 run 继续执行。
+                  </div>
                   <Link
                     href={`/backtests/${encodeURIComponent(submitSuccessRun.id)}`}
                     style={{

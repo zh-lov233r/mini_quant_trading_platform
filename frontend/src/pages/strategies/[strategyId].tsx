@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import type { CSSProperties, FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useMemo, useState } from "react";
@@ -8,6 +8,7 @@ import {
   getStrategy,
   getStrategyCatalog,
   getStrategyRuntime,
+  renameStrategy,
 } from "@/api/strategies";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
@@ -35,9 +36,9 @@ function actionLink(href: string, label: string, filled = false) {
       style={{
         padding: "11px 16px",
         borderRadius: 14,
-        border: filled ? "none" : "1px solid rgba(148, 163, 184, 0.28)",
-        background: filled ? "#0f766e" : "rgba(255,255,255,0.8)",
-        color: filled ? "#fff" : "#0f172a",
+        border: filled ? "none" : "1px solid rgba(148, 163, 184, 0.16)",
+        background: filled ? "#0891b2" : "rgba(15, 23, 42, 0.72)",
+        color: filled ? "#f8fafc" : "#dbeafe",
         textDecoration: "none",
         fontWeight: 700,
         fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -159,6 +160,9 @@ export default function StrategyDetailPage() {
   const [latestRunDetail, setLatestRunDetail] = useState<BacktestDetailOut | null>(null);
   const [showParamsJson, setShowParamsJson] = useState(false);
   const [showRuntimeJson, setShowRuntimeJson] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renameSaving, setRenameSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [runsLoading, setRunsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -187,6 +191,7 @@ export default function StrategyDetailPage() {
         }
         setStrategy(strategyData);
         setRuntime(runtimeData);
+        setRenameValue(strategyData.name);
         setCatalog(catalogData);
         setRecentRuns(runs.slice(0, 5));
 
@@ -245,6 +250,39 @@ export default function StrategyDetailPage() {
     () => (latestRunDetail?.transactions ? latestRunDetail.transactions.slice(0, 3) : []),
     [latestRunDetail]
   );
+
+  const handleRename = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!strategy) {
+      return;
+    }
+
+    const nextName = renameValue.trim();
+    if (!nextName) {
+      setRenameError("策略名不能为空");
+      return;
+    }
+
+    try {
+      setRenameSaving(true);
+      setRenameError(null);
+      const updated = await renameStrategy(strategy.id, { name: nextName });
+      setStrategy(updated);
+      setRuntime((prev) =>
+        prev
+          ? {
+              ...prev,
+              name: updated.name,
+            }
+          : prev
+      );
+      setRenameValue(updated.name);
+    } catch (err: any) {
+      setRenameError(err?.message || "改名失败");
+    } finally {
+      setRenameSaving(false);
+    }
+  };
 
   if (!loading && !error && !strategy) {
     return (
@@ -349,6 +387,7 @@ export default function StrategyDetailPage() {
                   </div>
 
                   {infoRow("策略 ID", strategy.id)}
+                  {infoRow("策略族 Key", strategy.strategy_key)}
                   {infoRow("类型", String(strategy.strategy_type))}
                   {infoRow(
                     "调仓频率",
@@ -426,6 +465,78 @@ export default function StrategyDetailPage() {
                   </div>
                 </div>
               </div>
+            )}
+          </section>
+
+          <section id="rename" style={{ marginBottom: 18 }}>
+            {sectionCard(
+              "改名",
+              "第一版改名会直接修改这条策略记录的 name，但只允许改成一个全新的名字，不允许并入另一个已存在名字的版本族。",
+              <form
+                onSubmit={handleRename}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(260px, 1fr) auto",
+                  gap: 12,
+                  alignItems: "end",
+                  fontFamily:
+                    "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+                }}
+              >
+                <label style={{ display: "grid", gap: 8 }}>
+                  <span style={{ color: "#0f172a", fontWeight: 700 }}>新的策略名</span>
+                  <input
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    placeholder="输入新的策略名称"
+                    style={{
+                      padding: 12,
+                      borderRadius: 14,
+                      border: "1px solid #dbe4ee",
+                      background: "#fff",
+                      fontSize: 14,
+                      color: "#0f172a",
+                    }}
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={renameSaving}
+                  style={{
+                    padding: "12px 16px",
+                    borderRadius: 14,
+                    border: "none",
+                    background: "#0f766e",
+                    color: "#fff",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    minWidth: 120,
+                  }}
+                >
+                  {renameSaving ? "保存中..." : "保存新名称"}
+                </button>
+                {renameError ? (
+                  <div
+                    style={{
+                      gridColumn: "1 / -1",
+                      color: "crimson",
+                      fontSize: 14,
+                    }}
+                  >
+                    {renameError}
+                  </div>
+                ) : null}
+                <div
+                  style={{
+                    gridColumn: "1 / -1",
+                    color: "#64748b",
+                    lineHeight: 1.6,
+                    fontSize: 14,
+                  }}
+                >
+                  当前规则下，改名不会改变 `strategy_id`、`strategy_key`、`version`、已有回测和 allocation 关联，只会更新展示名称。
+                </div>
+              </form>
             )}
           </section>
 
