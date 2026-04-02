@@ -28,6 +28,8 @@ EXCLUDED_TEST_SYMBOLS = (
     "ZXIET",
 )
 EXCLUDED_TEST_SYMBOLS_SQL = ", ".join(f"'{symbol}'" for symbol in EXCLUDED_TEST_SYMBOLS)
+BENCHMARK_PROXY_SYMBOLS = ("SPY", "QQQ")
+BENCHMARK_PROXY_SYMBOLS_SQL = ", ".join(f"'{symbol}'" for symbol in BENCHMARK_PROXY_SYMBOLS)
 
 STAGE_TABLE_SQL = """
 CREATE TEMP TABLE massive_day_aggs_stage (
@@ -49,8 +51,8 @@ COPY massive_day_aggs_stage (
 ) FROM STDIN
 """
 
-COMMON_STOCK_SYMBOL_MAP_SQL = """
-CREATE TEMP TABLE common_stock_symbol_map ON COMMIT DROP AS
+SUPPORTED_SYMBOL_MAP_SQL = """
+CREATE TEMP TABLE supported_symbol_map ON COMMIT DROP AS
 SELECT
     sh.symbol,
     MIN(instrument_id) AS instrument_id,
@@ -60,7 +62,13 @@ JOIN instruments instr
   ON instr.id = sh.instrument_id
 WHERE sh.valid_from <= %(trade_date)s::date
   AND (sh.valid_to IS NULL OR sh.valid_to >= %(trade_date)s::date)
-  AND instr.asset_type = 'CS'
+  AND (
+    instr.asset_type = 'CS'
+    OR (
+      instr.asset_type = 'ETF'
+      AND instr.ticker_canonical IN (""" + BENCHMARK_PROXY_SYMBOLS_SQL + """)
+    )
+  )
 GROUP BY sh.symbol;
 """
 
@@ -77,13 +85,16 @@ GROUP BY symbol;
 FILTERED_COUNT_SQL = """
 SELECT COUNT(*)
 FROM massive_day_aggs_stage stage
-LEFT JOIN common_stock_symbol_map map ON map.symbol = stage.symbol
+LEFT JOIN supported_symbol_map map ON map.symbol = stage.symbol
 LEFT JOIN symbol_classification_map cls ON cls.symbol = stage.symbol
 WHERE map.symbol IS NULL
   AND (
     stage.symbol IN (""" + EXCLUDED_TEST_SYMBOLS_SQL + """)
     OR
-    COALESCE(cls.has_non_common_stock, FALSE)
+    (
+      COALESCE(cls.has_non_common_stock, FALSE)
+      AND stage.symbol NOT IN (""" + BENCHMARK_PROXY_SYMBOLS_SQL + """)
+    )
     OR stage.symbol LIKE '%%.WS'
     OR stage.symbol LIKE '%%.W'
     OR stage.symbol LIKE '%%.U'
@@ -97,7 +108,7 @@ WHERE map.symbol IS NULL
 UNRESOLVED_COUNT_SQL = """
 SELECT COUNT(*)
 FROM massive_day_aggs_stage stage
-LEFT JOIN common_stock_symbol_map map ON map.symbol = stage.symbol
+LEFT JOIN supported_symbol_map map ON map.symbol = stage.symbol
 LEFT JOIN symbol_classification_map cls ON cls.symbol = stage.symbol
 WHERE (map.symbol IS NULL OR map.match_count <> 1)
   AND NOT (
@@ -105,7 +116,10 @@ WHERE (map.symbol IS NULL OR map.match_count <> 1)
     AND (
       stage.symbol IN (""" + EXCLUDED_TEST_SYMBOLS_SQL + """)
       OR
-      COALESCE(cls.has_non_common_stock, FALSE)
+      (
+        COALESCE(cls.has_non_common_stock, FALSE)
+        AND stage.symbol NOT IN (""" + BENCHMARK_PROXY_SYMBOLS_SQL + """)
+      )
       OR stage.symbol LIKE '%%.WS'
       OR stage.symbol LIKE '%%.W'
       OR stage.symbol LIKE '%%.U'
@@ -136,7 +150,7 @@ WITH ranked_stage AS (
                 stage.symbol
         ) AS rn
     FROM massive_day_aggs_stage stage
-    JOIN common_stock_symbol_map map
+    JOIN supported_symbol_map map
       ON map.symbol = stage.symbol
      AND map.match_count = 1
     JOIN instruments
@@ -407,7 +421,7 @@ def import_massive_day_agg_file(
                 copy.write_row(row)
                 staged_rows += 1
 
-        cur.execute(COMMON_STOCK_SYMBOL_MAP_SQL, {"trade_date": trade_date.isoformat()})
+        cur.execute(SUPPORTED_SYMBOL_MAP_SQL, {"trade_date": trade_date.isoformat()})
         cur.execute(SYMBOL_CLASSIFICATION_MAP_SQL)
         cur.execute(FILTERED_COUNT_SQL)
         filtered_rows = int(cur.fetchone()[0])

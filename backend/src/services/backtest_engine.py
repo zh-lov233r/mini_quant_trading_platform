@@ -9,12 +9,15 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from src.models.tables import PortfolioSnapshot, Signal, Strategy, StrategyRun, Transaction
+from src.services.data_service import get_historical_data
 from src.services.stock_basket_service import (
     DEFAULT_COMMON_STOCK_BASKET_NAME,
     load_default_common_stock_symbols,
 )
 from src.services.strategy_engine import STRATEGY_HANDLERS, SignalEvent
 from src.services.strategy_registry import build_runtime_payload
+
+DEFAULT_COMPARISON_SYMBOLS = ("SPY", "QQQ")
 
 
 # One SQL query loads the full daily snapshot needed by the backtest loop:
@@ -105,6 +108,48 @@ class ExecutionStats:
     trade_count: int = 0
     total_fees: float = 0.0
     total_slippage: float = 0.0
+
+
+def _normalize_symbols(symbols: list[str | None]) -> list[str]:
+    normalized_symbols: list[str] = []
+    seen: set[str] = set()
+    for symbol in symbols:
+        normalized_symbol = str(symbol or "").strip().upper()
+        if not normalized_symbol or normalized_symbol in seen:
+            continue
+        seen.add(normalized_symbol)
+        normalized_symbols.append(normalized_symbol)
+    return normalized_symbols
+
+
+def _load_close_maps_by_symbol(
+    db: Session,
+    symbols: list[str | None],
+    start_date: date,
+    end_date: date,
+) -> dict[str, dict[date, float]]:
+    normalized_symbols = _normalize_symbols(symbols)
+    if not normalized_symbols:
+        return {}
+
+    bars_by_symbol = get_historical_data(
+        db,
+        normalized_symbols,
+        start_date,
+        end_date,
+        adjusted=True,
+    )
+    close_maps: dict[str, dict[date, float]] = {}
+    for symbol in normalized_symbols:
+        bars = bars_by_symbol.get(symbol, [])
+        close_by_date = {
+            bar.trade_date: float(bar.close_px)
+            for bar in bars
+            if bar.close_px is not None
+        }
+        if close_by_date:
+            close_maps[symbol] = close_by_date
+    return close_maps
 
 
 def run_backtest(
@@ -214,6 +259,28 @@ def run_backtest(
         snapshots_by_date = _load_feature_snapshots_by_date(db, symbols, start_date, end_date)
         if not snapshots_by_date:
             raise ValueError("no feature snapshots found for the requested universe and window")
+        benchmark_symbol_normalized = _normalize_symbols([benchmark_symbol])[0] if benchmark_symbol else None
+        comparison_symbols = _normalize_symbols([*DEFAULT_COMPARISON_SYMBOLS, benchmark_symbol_normalized])
+        comparison_close_maps = _load_close_maps_by_symbol(
+            db,
+            comparison_symbols,
+            start_date,
+            end_date,
+        )
+        benchmark_close_by_date = (
+            comparison_close_maps.get(benchmark_symbol_normalized, {})
+            if benchmark_symbol_normalized
+            else {}
+        )
+        comparison_curve_states = {
+            symbol: {
+                "base_close": None,
+                "last_close": None,
+                "points": [],
+            }
+            for symbol in DEFAULT_COMPARISON_SYMBOLS
+            if symbol in comparison_close_maps
+        }
 
         risk_cfg = runtime["params"]["risk"]
         cash = float(initial_cash)
@@ -226,9 +293,15 @@ def run_backtest(
         total_fees = 0.0
         total_slippage = 0.0
         pending_signals: list[SignalEvent] = []
+        benchmark_base_close: float | None = None
+        benchmark_last_close: float | None = None
+        benchmark_last_equity: float | None = None
+        benchmark_last_return: float | None = None
+        benchmark_points = 0
 
         for trade_day in sorted(snapshots_by_date):
             day_snapshots = snapshots_by_date[trade_day]
+            snapshot_ts = _snapshot_ts(day_snapshots)
 
             for symbol, snapshot in day_snapshots.items():
                 close_px = snapshot.get("close")
@@ -299,10 +372,48 @@ def run_backtest(
             drawdown = 0.0 if peak_equity <= 0 else (peak_equity - equity) / peak_equity
             max_drawdown = max(max_drawdown, drawdown)
 
+            for symbol, curve_state in comparison_curve_states.items():
+                comparison_close = comparison_close_maps[symbol].get(trade_day, curve_state["last_close"])
+                if comparison_close is None:
+                    continue
+                curve_state["last_close"] = comparison_close
+                if curve_state["base_close"] is None:
+                    curve_state["base_close"] = comparison_close
+                if curve_state["base_close"] <= 0:
+                    continue
+
+                comparison_equity = initial_cash * (comparison_close / curve_state["base_close"])
+                curve_state["points"].append(
+                    {
+                        "ts": snapshot_ts.isoformat(),
+                        "symbol": symbol,
+                        "close": comparison_close,
+                        "equity": comparison_equity,
+                        "return": (comparison_equity / initial_cash) - 1 if initial_cash else 0.0,
+                    }
+                )
+
+            benchmark_close = benchmark_close_by_date.get(trade_day, benchmark_last_close)
+            benchmark_equity: float | None = None
+            benchmark_return: float | None = None
+            benchmark_excess_return: float | None = None
+            if benchmark_close is not None:
+                benchmark_last_close = benchmark_close
+                if benchmark_base_close is None:
+                    benchmark_base_close = benchmark_close
+                if benchmark_base_close and benchmark_base_close > 0:
+                    benchmark_equity = initial_cash * (benchmark_close / benchmark_base_close)
+                    benchmark_return = (benchmark_equity / initial_cash) - 1 if initial_cash else 0.0
+                    strategy_return_to_date = (equity / initial_cash) - 1 if initial_cash else 0.0
+                    benchmark_excess_return = strategy_return_to_date - benchmark_return
+                    benchmark_last_equity = benchmark_equity
+                    benchmark_last_return = benchmark_return
+                    benchmark_points += 1
+
             db.add(
                 PortfolioSnapshot(
                     run_id=run.id,
-                    ts=_snapshot_ts(day_snapshots),
+                    ts=snapshot_ts,
                     cash=cash,
                     equity=equity,
                     gross_exposure=_gross_exposure(holdings, last_prices),
@@ -315,11 +426,21 @@ def run_backtest(
                         "trade_count_cumulative": trade_count,
                         "fees_cumulative": total_fees,
                         "slippage_cumulative": total_slippage,
+                        "benchmark_symbol": benchmark_symbol_normalized,
+                        "benchmark_close": benchmark_close,
+                        "benchmark_equity": benchmark_equity,
+                        "benchmark_return": benchmark_return,
+                        "benchmark_excess_return": benchmark_excess_return,
                     },
                 )
             )
 
         final_equity = _portfolio_equity(cash, holdings, last_prices)
+        comparison_curves = {
+            symbol: curve_state["points"]
+            for symbol, curve_state in comparison_curve_states.items()
+            if curve_state["points"]
+        }
         run.status = "completed"
         run.finished_at = datetime.now(timezone.utc)
         run.final_equity = final_equity
@@ -343,6 +464,18 @@ def run_backtest(
                 "commission_min": cost_config.commission_min,
                 "slippage_bps": cost_config.slippage_bps,
             },
+            "benchmark_symbol": benchmark_symbol_normalized,
+            "benchmark_points": benchmark_points,
+            "benchmark_initial_close": benchmark_base_close,
+            "benchmark_final_close": benchmark_last_close,
+            "benchmark_final_equity": benchmark_last_equity,
+            "benchmark_total_return": benchmark_last_return,
+            "excess_return": (
+                ((final_equity / initial_cash) - 1) - benchmark_last_return
+                if initial_cash and benchmark_last_return is not None
+                else None
+            ),
+            "comparison_curves": comparison_curves,
         }
         db.commit()
         db.refresh(run)

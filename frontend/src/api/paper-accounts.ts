@@ -5,6 +5,7 @@ import type {
   PaperTradingAccountOverviewOut,
   StrategyPortfolioCreate,
   StrategyPortfolioOut,
+  StrategyPortfolioRename,
 } from "@/types/paper-account";
 
 export function listPaperAccounts(
@@ -61,6 +62,16 @@ export function createStrategyPortfolio(
 ): Promise<StrategyPortfolioOut> {
   return http<StrategyPortfolioOut>("/api/strategy-portfolios", {
     method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function renameStrategyPortfolio(
+  portfolioId: string,
+  payload: StrategyPortfolioRename
+): Promise<StrategyPortfolioOut> {
+  return http<StrategyPortfolioOut>(`/api/strategy-portfolios/${portfolioId}`, {
+    method: "PATCH",
     body: JSON.stringify(payload),
   });
 }

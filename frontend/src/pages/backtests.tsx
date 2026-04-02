@@ -9,6 +9,7 @@ import { listStrategies } from "@/api/strategies";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
+import { useI18n } from "@/i18n/provider";
 import type { BacktestCreate, BacktestRunOut } from "@/types/backtest";
 import type { StockBasketOut } from "@/types/stock-basket";
 import type { StrategyOut } from "@/types/strategy";
@@ -27,7 +28,7 @@ function actionLink(href: string, label: string, filled = false) {
         padding: "11px 16px",
         borderRadius: 14,
         border: filled ? "none" : "1px solid rgba(148, 163, 184, 0.16)",
-        background: filled ? "#0891b2" : "rgba(15, 23, 42, 0.72)",
+        background: filled ? "#078cad" : "rgba(15, 23, 42, 0.72)",
         color: filled ? "#f8fafc" : "#dbeafe",
         textDecoration: "none",
         fontWeight: 700,
@@ -100,7 +101,7 @@ function fieldBlock(
       </div>
       <span
         style={{
-          color: "#64748b",
+          color: "#475569",
           lineHeight: 1.6,
           fontSize: 13,
           fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -115,6 +116,8 @@ function fieldBlock(
 
 export default function BacktestsPage() {
   const router = useRouter();
+  const { locale } = useI18n();
+  const isZh = locale === "zh-CN";
   const preselectedStrategyId = Array.isArray(router.query.strategyId)
     ? router.query.strategyId[0]
     : router.query.strategyId;
@@ -160,7 +163,7 @@ export default function BacktestsPage() {
       })
       .catch((err: Error) => {
         if (!cancelled) {
-          setError(err.message || "加载回测页面失败");
+          setError(err.message || (isZh ? "加载回测页面失败" : "Failed to load the backtest page"));
         }
       })
       .finally(() => {
@@ -172,7 +175,7 @@ export default function BacktestsPage() {
     return () => {
       cancelled = true;
     };
-  }, [preselectedStrategyId]);
+  }, [isZh, preselectedStrategyId]);
 
   useEffect(() => {
     if (loading || !runs.some((run) => run.status === "queued" || run.status === "running")) {
@@ -239,7 +242,7 @@ export default function BacktestsPage() {
     setSubmitSuccessRun(null);
 
     if (!strategyId) {
-      setSubmitError("请选择一个策略");
+      setSubmitError(isZh ? "请选择一个策略" : "Please select a strategy");
       return;
     }
 
@@ -261,7 +264,7 @@ export default function BacktestsPage() {
       setRuns((prev) => [run, ...prev.filter((item) => item.id !== run.id)]);
       setSubmitSuccessRun(run);
     } catch (err: any) {
-      setSubmitError(err?.message || "发起回测失败");
+      setSubmitError(err?.message || (isZh ? "发起回测失败" : "Failed to start the backtest"));
     } finally {
       setSubmitting(false);
     }
@@ -269,18 +272,22 @@ export default function BacktestsPage() {
 
   return (
     <AppShell
-      title="回测工作台"
-      subtitle="从策略库直接挑选 engine-ready 策略，提交一次完整回测，并把 run、交易、净值快照持续沉淀到后端。"
+      title={isZh ? "回测工作台" : "Backtest Workspace"}
+      subtitle={
+        isZh
+          ? "从策略库直接挑选 engine-ready 策略，提交一次完整回测，并把 run、交易、净值快照沉淀到后端"
+          : "Select an engine-ready strategy from the library, submit a full backtest, and persist runs, transactions, and equity snapshots to the backend."
+      }
       actions={
         <>
-          {actionLink("/stock-baskets", "管理股票库")}
-          {actionLink("/strategies", "查看策略库")}
-          {actionLink("/strategies/new", "创建策略")}
-          {actionLink("/backtests", "刷新回测页", true)}
+          {actionLink("/stock-baskets", isZh ? "管理股票库" : "Manage Baskets")}
+          {actionLink("/strategies", isZh ? "查看策略库" : "View Strategies")}
+          {actionLink("/strategies/new", isZh ? "创建策略" : "Create Strategy")}
+          {actionLink("/backtests", isZh ? "刷新回测页" : "Refresh Backtests", true)}
         </>
       }
     >
-      {loading ? <p>加载中...</p> : null}
+      {loading ? <p>{isZh ? "加载中..." : "Loading..."}</p> : null}
       {error ? <p style={{ color: "crimson" }}>{error}</p> : null}
 
       {!loading && !error ? (
@@ -294,27 +301,43 @@ export default function BacktestsPage() {
             }}
           >
             <MetricCard
-              label="可回测策略"
+              label={isZh ? "可回测策略" : "Backtestable Strategies"}
               value={String(eligibleStrategies.length)}
-              hint={`当前共有 ${summarizeStrategies(strategies).engineReady} 个 engine-ready 策略。回测页默认只建议你挑这部分策略。`}
+              hint={
+                isZh
+                  ? `当前共有 ${summarizeStrategies(strategies).engineReady} 个 engine-ready 策略。回测页默认只建议你挑这部分策略`
+                  : `${summarizeStrategies(strategies).engineReady} engine-ready strategies are currently available. The backtest page prioritizes this set by default.`
+              }
               accent="#0f766e"
             />
             <MetricCard
-              label="累计 Runs"
+              label={isZh ? "累计 Runs" : "Total Runs"}
               value={String(runStats.total)}
-              hint="每次回测都会生成一条 strategy_run，并把交易与净值快照挂在这条运行记录下。"
+              hint={
+                isZh
+                  ? "每次回测都会生成一条 strategy_run，并把交易与净值快照挂在这条运行记录下"
+                  : "Every backtest generates one strategy_run and attaches transactions and equity snapshots to it."
+              }
               accent="#2563eb"
             />
             <MetricCard
               label="Completed"
               value={String(runStats.completed)}
-              hint="完成态的回测数量。下一步很适合接详情页和权益曲线图。"
+              hint={
+                isZh
+                  ? "完成态的回测数量。下一步很适合接详情页和权益曲线图"
+                  : "Number of completed backtests. A strong top-line indicator before drilling into detail pages and equity curves."
+              }
               accent="#ca8a04"
             />
             <MetricCard
-              label="最近收益"
+              label={isZh ? "最近收益" : "Latest Return"}
               value={formatPercent(runStats.latestReturn, 2)}
-              hint="最近一次已完成回测的总收益率，方便快速判断最近策略迭代有没有明显改善。"
+              hint={
+                isZh
+                  ? "最近一次已完成回测的总收益率，方便快速判断最近策略迭代有没有明显改善"
+                  : "Total return of the most recent completed backtest, useful for quickly checking whether recent strategy iterations improved."
+              }
               accent="#b45309"
             />
           </section>
@@ -333,6 +356,7 @@ export default function BacktestsPage() {
                 borderRadius: 24,
                 border: "1px solid rgba(148, 163, 184, 0.18)",
                 background: "rgba(255,255,255,0.82)",
+                color: "#0f172a",
                 boxShadow: "0 18px 44px rgba(15, 23, 42, 0.06)",
               }}
             >
@@ -346,16 +370,20 @@ export default function BacktestsPage() {
                   border: "1px solid rgba(15, 118, 110, 0.12)",
                 }}
               >
-                <h2 style={{ margin: "0 0 10px", fontSize: 24 }}>发起回测窗口</h2>
+                <h2 style={{ margin: "0 0 10px", fontSize: 24 }}>
+                  {isZh ? "发起回测" : "Start Backtest"}
+                </h2>
                 <p
                   style={{
                     margin: "0 0 12px",
-                    color: "#64748b",
+                    color: "#475569",
                     lineHeight: 1.6,
                     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                   }}
                 >
-                  这一步会先创建一条 queued run，再由后端在后台继续执行回测。提交后你可以切到别的页面，稍后再回来查看状态。
+                  {isZh
+                    ? "这一步会先创建一条 queued run，再由后端在后台继续执行回测"
+                    : "This step first creates a queued run, then the backend continues executing the backtest in the background."}
                 </p>
                 <div
                   style={{
@@ -367,9 +395,9 @@ export default function BacktestsPage() {
                     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                   }}
                 >
-                  <div>1. 先选择一个 `engine-ready` 的策略。</div>
-                  <div>2. 设定回测区间、初始资金和对标基准。</div>
-                  <div>3. 提交后后端会在后台把 run 从 queued/running 推进到 completed 或 failed。</div>
+                  <div>{isZh ? "1. 选择一个 `engine-ready` 的策略" : "1. Choose an `engine-ready` strategy"}</div>
+                  <div>{isZh ? "2. 设定回测区间、初始资金和对标基准" : "2. Set the backtest window, starting cash, and benchmark"}</div>
+                  <div>{isZh ? "3. 提交后在后台继续运行" : "3. Submit and let it continue in the background"}</div>
                 </div>
               </div>
 
@@ -379,70 +407,73 @@ export default function BacktestsPage() {
               >
                 <section style={formGroupStyle}>
                   <div>
-                    <div style={formGroupTitleStyle}>策略与时间窗口</div>
-                    <div style={formGroupTextStyle}>
-                      这组参数决定“拿哪一个策略”以及“在什么历史区间里回放它”。
-                    </div>
+                    <div style={formGroupTitleStyle}>{isZh ? "策略与时间窗口" : "Strategy & Time Window"}</div>
                   </div>
                   <div style={{ display: "grid", gap: 12 }}>
                     {fieldBlock(
-                      "策略",
-                      "选择本次要回测的策略定义。这里建议优先选择 active 且 engine-ready 的策略，因为它们已经能被后端引擎直接消费。",
+                      isZh ? "策略" : "Strategy",
+                      isZh
+                        ? "选择本次要回测的策略定义。优先选择 active 且 engine-ready 的策略，因为它们已经能被后端引擎直接消费"
+                        : "Choose the strategy definition for this run. Prefer active, engine-ready strategies because the backend engine can consume them directly.",
                       <select
                         value={strategyId}
                         onChange={(e) => setStrategyId(e.target.value)}
                         style={inputStyle}
                       >
-                        <option value="">请选择策略</option>
+                        <option value="">{isZh ? "请选择策略" : "Select a strategy"}</option>
                         {eligibleStrategies.map((item) => (
                           <option key={item.id} value={item.id}>
                             {item.name} ({item.strategy_type} v{item.version})
                           </option>
                         ))}
-                      </select>,
-                      "决定用哪套信号逻辑"
+                      </select>
                     )}
 
                     {fieldBlock(
-                      "股票组合",
-                      "可选。如果你选了股票库里的某个组合，本次回测会用这个组合覆盖策略原本的手动股票池，这样就不用每次重新输入 symbols。",
+                      isZh ? "股票组合" : "Basket",
+                      isZh
+                        ? "可选。选择已创建的股票池或使用默认组合"
+                        : "Optional. Choose an existing basket or keep the strategy's default universe.",
                       <select
                         value={basketId}
                         onChange={(e) => setBasketId(e.target.value)}
                         style={inputStyle}
                       >
-                        <option value="">不覆盖，沿用策略自带股票池</option>
+                        <option value="">{isZh ? "不覆盖，沿用策略自带股票池" : "Do not override, use the strategy universe"}</option>
                         {activeBaskets.map((item) => (
                           <option key={item.id} value={item.id}>
                             {item.name} ({item.symbol_count} symbols)
                           </option>
                         ))}
-                      </select>,
-                      "回测时绑定股票组合"
+                      </select>
                     )}
 
                     <div style={responsiveTwoColGridStyle}>
                       {fieldBlock(
-                        "开始日期",
-                        "回测窗口左边界。策略会从这一天开始读取特征和行情，日期越早，样本越长。",
+                        isZh ? "开始日期" : "Start Date",
+                        isZh
+                          ? "回测窗口左边界。策略会从这一天开始读取特征和行情，日期越早，样本越长"
+                          : "Left boundary of the backtest window. The strategy starts reading features and market data from this date.",
                         <input
                           type="date"
                           value={startDate}
                           onChange={(e) => setStartDate(e.target.value)}
                           style={inputStyle}
                         />,
-                        "样本起点"
+                        isZh ? "样本起点" : "Sample Start"
                       )}
                       {fieldBlock(
-                        "结束日期",
-                        "回测窗口右边界。建议覆盖一个完整市场阶段，这样更容易看清策略在上涨、震荡和回撤时的表现。",
+                        isZh ? "结束日期" : "End Date",
+                        isZh
+                          ? "回测窗口右边界。建议覆盖一个完整市场阶段，这样更容易看清策略在上涨、震荡和回撤时的表现"
+                          : "Right boundary of the backtest window. Covering a full market phase usually gives a clearer picture across rallies, ranges, and drawdowns.",
                         <input
                           type="date"
                           value={endDate}
                           onChange={(e) => setEndDate(e.target.value)}
                           style={inputStyle}
                         />,
-                        "样本终点"
+                        isZh ? "样本终点" : "Sample End"
                       )}
                     </div>
                   </div>
@@ -450,15 +481,19 @@ export default function BacktestsPage() {
 
                 <section style={formGroupStyle}>
                   <div>
-                    <div style={formGroupTitleStyle}>资金与对标</div>
+                    <div style={formGroupTitleStyle}>{isZh ? "资金与对标" : "Capital & Benchmark"}</div>
                     <div style={formGroupTextStyle}>
-                      这组参数决定你的账户规模，以及回测结果拿谁做参考。
+                      {isZh
+                        ? "这组参数决定你的账户规模，以及回测结果拿谁做参考"
+                        : "These parameters define account size and what benchmark the results are compared against."}
                     </div>
                   </div>
                   <div style={responsiveTwoColGridStyle}>
                     {fieldBlock(
-                      "初始资金",
-                      "模拟账户在回测开始时拥有的现金。它会直接影响仓位规模、能不能买得起标的，以及最终收益的绝对值。",
+                      isZh ? "初始资金" : "Initial Cash",
+                      isZh
+                        ? "模拟账户在回测开始时拥有的现金。它会直接影响仓位规模、能不能买得起标的，以及最终收益的绝对值"
+                        : "Cash available at the start of the simulation. It directly affects position sizing, affordability, and absolute PnL.",
                       <input
                         type="number"
                         min={1}
@@ -466,35 +501,41 @@ export default function BacktestsPage() {
                         value={initialCash}
                         onChange={(e) => setInitialCash(Number(e.target.value))}
                         style={inputStyle}
-                        placeholder="初始资金"
+                        placeholder={isZh ? "初始资金" : "Initial cash"}
                       />,
-                      "账户本金"
+                      isZh ? "账户本金" : "Account Capital"
                     )}
                     {fieldBlock(
-                      "基准标的",
-                      "用于做横向比较的 benchmark，例如 `SPY`。当前它主要是被记录在 run 配置里，后续很适合继续接基准收益曲线。",
+                      isZh ? "基准标的" : "Benchmark Symbol",
+                      isZh
+                        ? "用于做横向比较的 benchmark，例如 `SPY`。当前它主要是被记录在 run 配置里，后续很适合继续接基准收益曲线"
+                        : "Benchmark used for comparison, for example `SPY`. Right now it is mainly recorded into the run config and is ready for future benchmark curve work.",
                       <input
                         value={benchmarkSymbol}
                         onChange={(e) => setBenchmarkSymbol(e.target.value.toUpperCase())}
                         style={inputStyle}
-                        placeholder="基准，如 SPY"
+                        placeholder={isZh ? "基准，如 SPY" : "Benchmark, for example SPY"}
                       />,
-                      "表现参照物"
+                      isZh ? "表现参照物" : "Reference"
                     )}
                   </div>
                 </section>
 
                 <section style={formGroupStyle}>
                   <div>
-                    <div style={formGroupTitleStyle}>交易成本假设</div>
+                    <div style={formGroupTitleStyle}>{isZh ? "交易成本假设" : "Trading Cost Assumptions"}</div>
                     <div style={formGroupTextStyle}>
-                      这组参数不会改变信号逻辑，但会直接影响成交结果和最终净值。设得越保守，结果通常越接近真实交易。
+                      {isZh
+                        ? "这组参数不会改变信号逻辑，但会直接影响成交结果和最终净值。设得越保守，结果通常越接近真实交易"
+                        : "These settings do not change signal logic, but they directly affect fills and final equity. More conservative values usually get you closer to live trading."}
                     </div>
                   </div>
                   <div style={responsiveThreeColGridStyle}>
                     {fieldBlock(
-                      "手续费 bps",
-                      "按成交金额收取的比例费用，单位是基点，1 bps = 0.01%。如果你希望模拟更便宜或更昂贵的交易环境，就调这个值。",
+                      isZh ? "手续费 bps" : "Commission Bps",
+                      isZh
+                        ? "按成交金额收取的比例费用，单位是基点，1 bps = 0.01%。如果你希望模拟更便宜或更昂贵的交易环境，就调这个值"
+                        : "Proportional fee charged on filled notional, measured in basis points where 1 bps = 0.01%.",
                       <input
                         type="number"
                         min={0}
@@ -504,11 +545,13 @@ export default function BacktestsPage() {
                         style={inputStyle}
                         placeholder="commission bps"
                       />,
-                      "比例手续费"
+                      isZh ? "比例手续费" : "Proportional Fee"
                     )}
                     {fieldBlock(
-                      "最低手续费",
-                      "即使按比例算出来很低，也至少收取这一笔固定费用。它对小资金、小单量交易的影响会更明显。",
+                      isZh ? "最低手续费" : "Minimum Commission",
+                      isZh
+                        ? "即使按比例算出来很低，也至少收取这一笔固定费用。它对小资金、小单量交易的影响会更明显"
+                        : "A fixed minimum fee per trade even when the proportional fee is tiny. It matters more for small accounts and small order sizes.",
                       <input
                         type="number"
                         min={0}
@@ -518,11 +561,13 @@ export default function BacktestsPage() {
                         style={inputStyle}
                         placeholder="commission min"
                       />,
-                      "单笔最低收费"
+                      isZh ? "单笔最低收费" : "Per-Trade Minimum"
                     )}
                     {fieldBlock(
-                      "滑点 bps",
-                      "模拟成交价偏离理论价格的幅度。数值越高，表示你越难按理想价格成交，适合用来给回测结果降一点乐观偏差。",
+                      isZh ? "滑点 bps" : "Slippage Bps",
+                      isZh
+                        ? "模拟成交价偏离理论价格的幅度。数值越高，表示你越难按理想价格成交，适合用来给回测结果降一点乐观偏差"
+                        : "Simulated distance between ideal and actual execution price. Higher values make the backtest less optimistic.",
                       <input
                         type="number"
                         min={0}
@@ -532,7 +577,7 @@ export default function BacktestsPage() {
                         style={inputStyle}
                         placeholder="slippage bps"
                       />,
-                      "成交摩擦"
+                      isZh ? "成交摩擦" : "Execution Friction"
                     )}
                   </div>
                 </section>
@@ -549,7 +594,9 @@ export default function BacktestsPage() {
                     fontSize: 13,
                   }}
                 >
-                  当前回测引擎按“当日收盘生成信号，下一交易日收盘成交”的规则执行，所以这组参数更适合先验证策略方向和结果落库，而不是做超精细撮合。
+                  {isZh
+                    ? "当前回测引擎按“当日收盘生成信号，下一交易日收盘成交”的规则执行，所以这组参数更适合先验证策略方向和结果落库，而不是做超精细撮合"
+                    : "The current backtest engine generates signals at today's close and fills at the next trading day's close, so these settings are better for validating strategy direction and persistence than ultra-fine execution modeling."}
                 </div>
 
                 {selectedStrategy ? (
@@ -582,10 +629,13 @@ export default function BacktestsPage() {
                     }}
                   >
                     <div style={{ marginBottom: 6, fontWeight: 700, color: "#0f172a" }}>
-                      已绑定股票组合: {selectedBasket.name}
+                      {isZh ? "已绑定股票组合" : "Selected basket"}: {selectedBasket.name}
                     </div>
                     <div style={{ marginBottom: 6 }}>
-                      {selectedBasket.description?.trim() || "这次回测会使用该组合覆盖策略原有的股票池。"}
+                      {selectedBasket.description?.trim() ||
+                        (isZh
+                          ? "这次回测会使用该组合覆盖策略原有的股票池"
+                          : "This backtest will override the strategy's original universe with this basket.")}
                     </div>
                     <div style={{ color: "#1d4ed8", fontSize: 13 }}>
                       {selectedBasket.symbol_count} 只股票: {selectedBasket.symbols.slice(0, 8).join(", ")}
@@ -608,7 +658,7 @@ export default function BacktestsPage() {
                     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                   }}
                 >
-                  {submitting ? "提交中..." : "开始回测"}
+                      {submitting ? (isZh ? "提交中..." : "Submitting...") : isZh ? "开始回测" : "Start Backtest"}
                 </button>
               </form>
 
@@ -626,8 +676,11 @@ export default function BacktestsPage() {
                   }}
                 >
                   <div>
-                    回测任务已提交到后台，当前状态是 <strong>{submitSuccessRun.status}</strong>。
-                    你现在切到别的页面也不会影响这次 run 继续执行。
+                    {isZh ? "回测任务已提交到后台，当前状态是 " : "The backtest has been submitted. Current status: "}
+                    <strong>{submitSuccessRun.status}</strong>
+                    {isZh
+                      ? ""
+                      : ". You can leave this page and the run will continue in the background."}
                   </div>
                   <Link
                     href={`/backtests/${encodeURIComponent(submitSuccessRun.id)}`}
@@ -637,7 +690,7 @@ export default function BacktestsPage() {
                       fontWeight: 700,
                     }}
                   >
-                    查看本次回测结果
+                    {isZh ? "查看本次回测结果" : "View This Backtest"}
                   </Link>
                 </div>
               ) : null}
@@ -649,6 +702,7 @@ export default function BacktestsPage() {
                 borderRadius: 24,
                 border: "1px solid rgba(148, 163, 184, 0.18)",
                 background: "rgba(255,255,255,0.82)",
+                color: "#0f172a",
                 boxShadow: "0 18px 44px rgba(15, 23, 42, 0.06)",
               }}
             >
@@ -663,16 +717,20 @@ export default function BacktestsPage() {
                 }}
               >
                 <div>
-                  <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>最近回测</h2>
+                  <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>
+                    {isZh ? "最近回测" : "Recent Backtests"}
+                  </h2>
                   <p
                     style={{
                       margin: 0,
-                      color: "#64748b",
+                      color: "#475569",
                       lineHeight: 1.6,
                       fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                     }}
                   >
-                    先用 run 列表确认回测是否真的落库完成，后面再补详细图表和单次 run 详情。
+                    {isZh
+                      ? "先用 run 列表确认回测是否真的落库完成，后面再补详细图表和单次 run 详情"
+                      : "Use the run list first to confirm that backtests completed and were persisted, then drill into charts and single-run details."}
                   </p>
                 </div>
               </div>
@@ -687,7 +745,9 @@ export default function BacktestsPage() {
                     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                   }}
                 >
-                  还没有回测记录。先从一个 active 且 engine-ready 的策略开始。
+                  {isZh
+                    ? "还没有回测记录。先从一个 active 且 engine-ready 的策略开始"
+                    : "No backtests yet. Start with one active, engine-ready strategy."}
                 </div>
               ) : (
                 <div style={{ display: "grid", gap: 14 }}>
@@ -710,6 +770,7 @@ export default function BacktestsPage() {
                             border: "1px solid rgba(226, 232, 240, 0.9)",
                             background:
                               "linear-gradient(135deg, rgba(255,250,240,0.92), rgba(255,255,255,0.96))",
+                            color: "#0f172a",
                           }}
                         >
                           <div
@@ -755,11 +816,11 @@ export default function BacktestsPage() {
                               style={{
                                 fontFamily:
                                   "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-                                color: "#64748b",
+                                color: "#475569",
                                 fontSize: 13,
                               }}
                             >
-                              {formatDateTime(run.finished_at || run.requested_at)}
+                              {formatDateTime(run.finished_at || run.requested_at, locale)}
                             </div>
                           </div>
 
@@ -774,24 +835,32 @@ export default function BacktestsPage() {
                             }}
                           >
                             <div>
-                              <div style={{ color: "#94a3b8", fontSize: 12 }}>窗口</div>
+                              <div style={{ color: "#64748b", fontSize: 12, fontWeight: 700 }}>
+                                {isZh ? "窗口" : "Window"}
+                              </div>
                               <div>
                                 {run.window_start} {"->"} {run.window_end}
                               </div>
                             </div>
                             <div>
-                              <div style={{ color: "#94a3b8", fontSize: 12 }}>总收益</div>
+                              <div style={{ color: "#64748b", fontSize: 12, fontWeight: 700 }}>
+                                {isZh ? "总收益" : "Total Return"}
+                              </div>
                               <div>{formatPercent(totalReturn, 2)}</div>
                             </div>
                             <div>
-                              <div style={{ color: "#94a3b8", fontSize: 12 }}>最大回撤</div>
+                              <div style={{ color: "#64748b", fontSize: 12, fontWeight: 700 }}>
+                                {isZh ? "最大回撤" : "Max Drawdown"}
+                              </div>
                               <div>{formatPercent(maxDrawdown, 2)}</div>
                             </div>
                             <div>
-                              <div style={{ color: "#94a3b8", fontSize: 12 }}>期末权益</div>
+                              <div style={{ color: "#64748b", fontSize: 12, fontWeight: 700 }}>
+                                {isZh ? "期末权益" : "Final Equity"}
+                              </div>
                               <div>
                                 {typeof run.final_equity === "number"
-                                  ? run.final_equity.toLocaleString("en-US", {
+                                  ? run.final_equity.toLocaleString(locale, {
                                       maximumFractionDigits: 2,
                                     })
                                   : "-"}
@@ -818,7 +887,7 @@ export default function BacktestsPage() {
                                   "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                               }}
                             >
-                              查看详情
+                              {isZh ? "查看详情" : "View Details"}
                             </div>
                           )}
                         </article>
@@ -861,7 +930,7 @@ const formGroupTitleStyle: CSSProperties = {
 };
 
 const formGroupTextStyle: CSSProperties = {
-  color: "#64748b",
+  color: "#475569",
   lineHeight: 1.6,
   fontSize: 13,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",

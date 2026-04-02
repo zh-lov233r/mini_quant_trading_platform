@@ -6,6 +6,7 @@ import { getStrategyCatalog, listStrategies } from "@/api/strategies";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
+import { useI18n } from "@/i18n/provider";
 import type { StrategyCatalogItem, StrategyOut } from "@/types/strategy";
 import {
   formatDateTime,
@@ -19,6 +20,8 @@ import {
 
 export default function StrategiesPage() {
   const router = useRouter();
+  const { locale } = useI18n();
+  const isZh = locale === "zh-CN";
   const [items, setItems] = useState<StrategyOut[]>([]);
   const [catalog, setCatalog] = useState<StrategyCatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,7 +44,7 @@ export default function StrategiesPage() {
       })
       .catch((err: Error) => {
         if (!cancelled) {
-          setError(err.message || "加载策略失败");
+          setError(err.message || (isZh ? "加载策略失败" : "Failed to load strategies"));
         }
       })
       .finally(() => {
@@ -53,12 +56,16 @@ export default function StrategiesPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isZh]);
 
   return (
     <AppShell
-      title="策略库"
-      subtitle="把策略当成长期资产来管理。先过滤、比较、确认哪些定义已经真正具备进入回测和执行链路的条件。"
+      title={isZh ? "策略库" : "Strategy Library"}
+      subtitle={
+        isZh
+          ? "把策略当成长期资产来管理。先过滤、比较、确认哪些定义已经真正具备进入回测和执行链路的条件"
+          : "Manage strategies as long-lived assets. Filter, compare, and confirm which definitions are truly ready to enter the backtest and execution pipeline."
+      }
       actions={
         <Link
           href="/strategies/new"
@@ -72,11 +79,11 @@ export default function StrategiesPage() {
             fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
           }}
         >
-          新建策略
+          {isZh ? "新建策略" : "New Strategy"}
         </Link>
       }
     >
-      {loading && <p>加载中...</p>}
+      {loading && <p>{isZh ? "加载中..." : "Loading..."}</p>}
       {error && <p style={{ color: "crimson" }}>{error}</p>}
 
       {!loading && !error ? (
@@ -90,27 +97,43 @@ export default function StrategiesPage() {
             }}
           >
             <MetricCard
-              label="全部策略"
+              label={isZh ? "全部策略" : "All Strategies"}
               value={String(summarizeStrategies(items).total)}
-              hint="策略对象总量。这个数越大，策略库页面越需要强筛选和强比较能力。"
+              hint={
+                isZh
+                  ? "策略对象总量。这个数越大，策略库页面越需要强筛选和强比较能力"
+                  : "Total number of strategy objects. As this grows, strong filtering and comparison become more important."
+              }
               accent="#0f766e"
             />
             <MetricCard
               label="Draft"
               value={String(summarizeStrategies(items).drafts)}
-              hint="还在定义和试错阶段的策略数量，适合继续打磨参数表单与预览能力。"
+              hint={
+                isZh
+                  ? "还在定义和试错阶段的策略数量，适合继续打磨参数表单与预览能力"
+                  : "Strategies still in definition and experimentation. A good signal for where forms and previews still need polish."
+              }
               accent="#6b7280"
             />
             <MetricCard
               label="Active"
               value={String(summarizeStrategies(items).active)}
-              hint="已经进入主要观察范围的策略。后面接回测与 run 列表时，它们会是主入口。"
+              hint={
+                isZh
+                  ? "已经进入主要观察范围的策略。后面接回测与 run 列表时，它们会是主入口"
+                  : "Strategies already in the main observation set. They will become the main entry points once backtests and run lists are wired in."
+              }
               accent="#2563eb"
             />
             <MetricCard
               label="Engine Ready"
               value={String(summarizeStrategies(items).engineReady)}
-              hint="真正能被引擎直接消费的策略数量，这个数字很适合放在策略库页顶上盯住。"
+              hint={
+                isZh
+                  ? "真正能被引擎直接消费的策略数量，这个数字很适合放在策略库页顶上盯住"
+                  : "Strategies that can be consumed directly by the engine. This is a great top-line number to monitor."
+              }
               accent="#ca8a04"
             />
           </section>
@@ -122,6 +145,7 @@ export default function StrategiesPage() {
               borderRadius: 24,
               border: "1px solid rgba(148, 163, 184, 0.18)",
               background: "rgba(255,255,255,0.82)",
+              color: "#0f172a",
               boxShadow: "0 18px 44px rgba(15, 23, 42, 0.06)",
             }}
           >
@@ -145,7 +169,11 @@ export default function StrategiesPage() {
                 }}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="搜索策略名、描述或股票池"
+                placeholder={
+                  isZh
+                    ? "搜索策略名、描述或股票池"
+                    : "Search strategy name, description, or universe"
+                }
               />
 
               <select
@@ -162,7 +190,7 @@ export default function StrategiesPage() {
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
               >
-                <option value="all">全部状态</option>
+                <option value="all">{isZh ? "全部状态" : "All Statuses"}</option>
                 <option value="draft">draft</option>
                 <option value="active">active</option>
                 <option value="archived">archived</option>
@@ -182,7 +210,7 @@ export default function StrategiesPage() {
                 value={typeFilter}
                 onChange={(e) => setTypeFilter(e.target.value)}
               >
-                <option value="all">全部类型</option>
+                <option value="all">{isZh ? "全部类型" : "All Types"}</option>
                 {catalog.map((item) => (
                   <option key={item.strategy_type} value={item.strategy_type}>
                     {item.label}
@@ -204,9 +232,9 @@ export default function StrategiesPage() {
                 value={engineFilter}
                 onChange={(e) => setEngineFilter(e.target.value)}
               >
-                <option value="all">全部可执行状态</option>
-                <option value="ready">仅 engine-ready</option>
-                <option value="stored">仅 stored-only</option>
+                <option value="all">{isZh ? "全部可执行状态" : "All Execution States"}</option>
+                <option value="ready">{isZh ? "仅 engine-ready" : "Engine-ready Only"}</option>
+                <option value="stored">{isZh ? "仅 stored-only" : "Stored-only Only"}</option>
               </select>
             </div>
           </section>
@@ -251,9 +279,10 @@ export default function StrategiesPage() {
                     borderRadius: 20,
                     border: "1px solid rgba(148, 163, 184, 0.18)",
                     background: "rgba(255,255,255,0.82)",
+                    color: "#0f172a",
                   }}
                 >
-                  暂无策略，先去创建一个吧。
+                  {isZh ? "暂无策略，先去创建一个吧。" : "No strategies yet. Create one first."}
                 </div>
               );
             }
@@ -268,19 +297,24 @@ export default function StrategiesPage() {
                       "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                   }}
                 >
-                  当前显示 <strong>{filtered.length}</strong> / {items.length} 个策略
+                  {isZh ? "当前显示 " : "Showing "}
+                  <strong>{filtered.length}</strong> / {items.length}
+                  {isZh ? " 个策略" : " strategies"}
                 </div>
 
                 {filtered.length === 0 ? (
                   <div
-                    style={{
-                      padding: 24,
-                      borderRadius: 20,
-                      border: "1px solid rgba(148, 163, 184, 0.18)",
-                      background: "rgba(255,255,255,0.82)",
-                    }}
-                  >
-                    没有符合当前筛选条件的策略，可以放宽一下状态、类型或搜索词。
+                  style={{
+                    padding: 24,
+                    borderRadius: 20,
+                    border: "1px solid rgba(148, 163, 184, 0.18)",
+                    background: "rgba(255,255,255,0.82)",
+                    color: "#0f172a",
+                  }}
+                >
+                    {isZh
+                      ? "没有符合当前筛选条件的策略，可以放宽一下状态、类型或搜索词。"
+                      : "No strategies match the current filters. Try relaxing status, type, or the search term."}
                   </div>
                 ) : (
                   <div
@@ -317,6 +351,7 @@ export default function StrategiesPage() {
                             border: "1px solid rgba(148, 163, 184, 0.16)",
                             background:
                               "linear-gradient(140deg, rgba(255,248,237,0.96), rgba(255,255,255,0.98))",
+                            color: "#0f172a",
                             boxShadow: "0 14px 36px rgba(15, 23, 42, 0.06)",
                             cursor: "pointer",
                           }}
@@ -343,8 +378,8 @@ export default function StrategiesPage() {
                             <div>
                               <h2 style={{ margin: "0 0 6px", fontSize: 22 }}>{item.name}</h2>
                               <div
-                                style={{
-                                  color: "#64748b",
+                              style={{
+                                  color: "#475569",
                                   fontSize: 14,
                                   fontFamily:
                                     "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -355,13 +390,13 @@ export default function StrategiesPage() {
                             </div>
                             <div
                               style={{
-                                color: "#64748b",
+                                color: "#475569",
                                 fontSize: 13,
                                 fontFamily:
                                   "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                               }}
                             >
-                              {formatDateTime(item.created_at)}
+                              {formatDateTime(item.created_at, locale)}
                             </div>
                           </div>
 
@@ -398,16 +433,16 @@ export default function StrategiesPage() {
                                 "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                             }}
                           >
-                            <div>股票池: {getUniverseSummary(item)}</div>
-                            <div>最大持仓: {maxPositions ?? "-"}</div>
+                            <div>{isZh ? "股票池" : "Universe"}: {getUniverseSummary(item)}</div>
+                            <div>{isZh ? "最大持仓" : "Max Positions"}: {maxPositions ?? "-"}</div>
                             <div>
-                              单票仓位:
+                              {isZh ? "单票仓位" : "Position Size"}:
                               {typeof positionSizePct === "number"
                                 ? ` ${(positionSizePct * 100).toFixed(0)}%`
                                 : " -"}
                             </div>
-                            <div>调仓频率: {rebalance || "-"}</div>
-                            <div>运行时机: {runAt || "-"}</div>
+                            <div>{isZh ? "调仓频率" : "Rebalance"}: {rebalance || "-"}</div>
+                            <div>{isZh ? "运行时机" : "Run Timing"}: {runAt || "-"}</div>
                             <div>ID: {item.id.slice(0, 8)}...</div>
                           </div>
 
@@ -424,13 +459,13 @@ export default function StrategiesPage() {
                             >
                               <span
                                 style={{
-                                  color: "#64748b",
+                                  color: "#475569",
                                 fontSize: 13,
                                 fontFamily:
                                   "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                               }}
                             >
-                              更新时间 {formatDateTime(item.updated_at)}
+                              {isZh ? "更新时间" : "Updated"} {formatDateTime(item.updated_at, locale)}
                             </span>
                               <span
                                 style={{
@@ -441,7 +476,7 @@ export default function StrategiesPage() {
                                   "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                               }}
                               >
-                                下一步建议：补策略详情页
+                                {isZh ? "下一步建议：补策略详情页" : "Suggested next step: expand the strategy detail page"}
                               </span>
                               <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
                                 <Link
@@ -456,7 +491,7 @@ export default function StrategiesPage() {
                                       "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                                   }}
                                 >
-                                  改名
+                                  {isZh ? "改名" : "Rename"}
                                 </Link>
                               </div>
                             </div>

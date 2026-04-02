@@ -13,6 +13,8 @@ URL = os.getenv("DATABASE_URL")
 BASE = "https://api.massive.com/v3/reference/tickers"
 UNKNOWN_VALID_FROM = "1900-01-01"
 SUPPORTED_ASSET_TYPES = {"CS"}
+BENCHMARK_PROXY_ASSET_TYPES = {"ETF"}
+BENCHMARK_PROXY_SYMBOLS = {"SPY", "QQQ"}
 
 UPSERT_INSTR = """
 INSERT INTO instruments (
@@ -134,6 +136,16 @@ def is_supported_common_stock(row: dict) -> bool:
         and row["locale"] == "us"
     )
 
+
+def is_supported_benchmark_proxy(row: dict) -> bool:
+    return (
+        bool(row["share_class_figi"])
+        and row["ticker"] in BENCHMARK_PROXY_SYMBOLS
+        and row["type"] in BENCHMARK_PROXY_ASSET_TYPES
+        and row["market"] == "stocks"
+        and row["locale"] == "us"
+    )
+
 async def backfill():
     if not API or not URL:
         raise SystemExit("Got empty MASSIVE_API_KEY or DATABASE_URL")
@@ -176,7 +188,10 @@ async def backfill():
                                 row = norm_item(raw)
                                 row["is_common_stock"] = is_supported_common_stock(row)
                                 cur.execute(UPSERT_SYMBOL_REFERENCE, row)
-                                if not row["is_common_stock"]:
+                                if not (
+                                    row["is_common_stock"]
+                                    or is_supported_benchmark_proxy(row)
+                                ):
                                     continue
 
                                 # 1. instruments UPSERT
@@ -200,7 +215,11 @@ async def backfill():
                         n = len(results); total += n; pbar.update(n)
                         next_url = js.get("next_url")   # 翻页用 next_url（无需再带 params）
 
-            print(f"Done. Processed ~{total} tickers, kept {kept} common stocks.")
+            print(
+                "Done. "
+                f"Processed ~{total} tickers, kept {kept} supported securities "
+                f"(common stocks + benchmark proxies {sorted(BENCHMARK_PROXY_SYMBOLS)})."
+            )
 
 if __name__ == "__main__":
     asyncio.run(backfill())

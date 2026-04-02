@@ -23,6 +23,7 @@ from src.services.paper_account_service import (
     list_paper_accounts,
     list_strategy_portfolios,
     normalize_account_name,
+    rename_strategy_portfolio,
 )
 from src.services.strategy_allocation_service import validate_portfolio_allocations
 
@@ -60,6 +61,10 @@ class StrategyPortfolioCreate(BaseModel):
     description: str | None = Field(default=None, max_length=500)
     strategy_ids: list[UUID] = Field(default_factory=list)
     status: str = Field(default="active")
+
+
+class StrategyPortfolioRename(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64)
 
 
 class StrategyPortfolioOut(BaseModel):
@@ -281,3 +286,24 @@ def create_strategy_portfolio(payload: StrategyPortfolioCreate, db: Session = De
     db.commit()
     db.refresh(portfolio)
     return _to_portfolio_out(portfolio, paper_account_name=account.name)
+
+
+@router.patch("/strategy-portfolios/{portfolio_id}", response_model=StrategyPortfolioOut)
+def update_strategy_portfolio(
+    portfolio_id: UUID,
+    payload: StrategyPortfolioRename,
+    db: Session = Depends(get_db),
+):
+    try:
+        portfolio = rename_strategy_portfolio(db, portfolio_id, name=payload.name)
+    except ValueError as exc:
+        message = str(exc)
+        if message == "strategy portfolio not found":
+            raise HTTPException(status_code=404, detail=message) from exc
+        raise HTTPException(status_code=409, detail=message) from exc
+
+    account = db.get(PaperTradingAccount, portfolio.paper_account_id)
+    return _to_portfolio_out(
+        portfolio,
+        paper_account_name=account.name if account is not None else None,
+    )

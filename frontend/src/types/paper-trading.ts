@@ -38,3 +38,7 @@ export interface MultiStrategyPaperTradingRunOut {
   failed_runs: number;
   results: PaperTradingRunOut[];
 }
+
+export interface LatestPaperTradingTradeDateOut {
+  latest_trade_date?: string | null;
+}

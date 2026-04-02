@@ -40,6 +40,11 @@ export interface BacktestSnapshotPoint {
   gross_exposure?: number | null;
   net_exposure?: number | null;
   drawdown?: number | null;
+  benchmark_symbol?: string | null;
+  benchmark_close?: number | null;
+  benchmark_equity?: number | null;
+  benchmark_return?: number | null;
+  benchmark_excess_return?: number | null;
   positions?: Record<string, unknown>;
   metrics?: Record<string, unknown>;
 }
@@ -66,10 +71,19 @@ export interface BacktestSignalOut {
   features?: Record<string, unknown>;
 }
 
+export interface BacktestComparisonCurvePoint {
+  ts?: string | null;
+  symbol?: string | null;
+  close?: number | null;
+  equity?: number | null;
+  return?: number | null;
+}
+
 export interface BacktestDetailOut extends BacktestRunOut {
   latest_snapshot?: BacktestSnapshotPoint | null;
   transaction_count: number;
   equity_curve: BacktestSnapshotPoint[];
+  comparison_curves?: Record<string, BacktestComparisonCurvePoint[]>;
   signals: BacktestSignalOut[];
   transactions: BacktestTransactionOut[];
 }

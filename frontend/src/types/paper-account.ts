@@ -33,6 +33,10 @@ export interface StrategyPortfolioCreate {
   status?: string;
 }
 
+export interface StrategyPortfolioRename {
+  name: string;
+}
+
 export interface StrategyPortfolioOut {
   id: string;
   paper_account_id: string;

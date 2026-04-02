@@ -6,6 +6,7 @@ import {
   getStrategyCatalog,
   getStrategyFeatureSupport,
 } from "@/api/strategies";
+import { useI18n } from "@/i18n/provider";
 import type {
   StrategyCatalogItem,
   StrategyCreate,
@@ -17,12 +18,16 @@ import type {
 
 export default function StrategyForm() {
   const router = useRouter();
+  const { locale } = useI18n();
+  const isZh = locale === "zh-CN";
   const [catalog, setCatalog] = useState<StrategyCatalogItem[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [featureSupport, setFeatureSupport] = useState<StrategyFeatureSupport | null>(null);
   const [featureSupportError, setFeatureSupportError] = useState<string | null>(null);
   const [name, setName] = useState("Trend_EMA15_SMA200");
-  const [description, setDescription] = useState("双均线趋势策略");
+  const [description, setDescription] = useState(
+    isZh ? "双均线趋势策略" : "Dual moving average trend strategy"
+  );
   const [strategyType, setStrategyType] = useState<StrategyType>("trend");
   const [status, setStatus] = useState<StrategyStatus>("draft");
   const [fastKind, setFastKind] = useState<"ema" | "sma">("ema");
@@ -52,14 +57,16 @@ export default function StrategyForm() {
       })
       .catch((error: Error) => {
         if (!cancelled) {
-          setCatalogError(error.message || "无法加载策略模板");
-          setFeatureSupportError(error.message || "无法加载数据库支持的指标配置");
+          setCatalogError(error.message || (isZh ? "无法加载策略模板" : "Unable to load strategy templates"));
+          setFeatureSupportError(
+            error.message || (isZh ? "无法加载数据库支持的指标配置" : "Unable to load supported indicator settings from the database")
+          );
         }
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isZh]);
 
   useEffect(() => {
     if (strategyType === "trend" || catalog.length === 0) {
@@ -201,28 +208,32 @@ export default function StrategyForm() {
 
     try {
       if (!name.trim()) {
-        throw new Error("策略名不能为空");
+        throw new Error(isZh ? "策略名不能为空" : "Strategy name cannot be empty");
       }
 
       let payload: StrategyCreate;
       if (strategyType === "trend") {
-        if (!(Number(fastWindow) > 0)) throw new Error("短周期必须 > 0");
-        if (!(Number(slowWindow) > 0)) throw new Error("长周期必须 > 0");
+        if (!(Number(fastWindow) > 0)) throw new Error(isZh ? "短周期必须 > 0" : "Fast window must be > 0");
+        if (!(Number(slowWindow) > 0)) throw new Error(isZh ? "长周期必须 > 0" : "Slow window must be > 0");
         if (fastWindowOptions.length > 0 && !fastWindowOptions.includes(Number(fastWindow))) {
           throw new Error(
-            `当前数据库不支持快线 ${fastKind.toUpperCase()}${fastWindow}，可用周期: ${fastWindowOptions.join(", ")}`
+            isZh
+              ? `当前数据库不支持快线 ${fastKind.toUpperCase()}${fastWindow}，可用周期: ${fastWindowOptions.join(", ")}`
+              : `The database does not support fast line ${fastKind.toUpperCase()}${fastWindow}. Supported windows: ${fastWindowOptions.join(", ")}`
           );
         }
         if (slowWindowOptions.length > 0 && !slowWindowOptions.includes(Number(slowWindow))) {
           throw new Error(
-            `当前数据库不支持慢线 ${slowKind.toUpperCase()}${slowWindow}，可用周期: ${slowWindowOptions.join(", ")}`
+            isZh
+              ? `当前数据库不支持慢线 ${slowKind.toUpperCase()}${slowWindow}，可用周期: ${slowWindowOptions.join(", ")}`
+              : `The database does not support slow line ${slowKind.toUpperCase()}${slowWindow}. Supported windows: ${slowWindowOptions.join(", ")}`
           );
         }
-        if (!(Number(volMul) > 0)) throw new Error("成交量过滤倍数必须 > 0");
-        if (!(Number(atrMul) > 0)) throw new Error("ATR 乘数必须 > 0");
-        if (!(Number(maxPositions) > 0)) throw new Error("最大持仓数必须 > 0");
+        if (!(Number(volMul) > 0)) throw new Error(isZh ? "成交量过滤倍数必须 > 0" : "Volume multiplier must be > 0");
+        if (!(Number(atrMul) > 0)) throw new Error(isZh ? "ATR 乘数必须 > 0" : "ATR multiplier must be > 0");
+        if (!(Number(maxPositions) > 0)) throw new Error(isZh ? "最大持仓数必须 > 0" : "Max positions must be > 0");
         if (!(Number(positionSizePct) > 0 && Number(positionSizePct) <= 1)) {
-          throw new Error("单票仓位比例必须在 (0, 1] 之间");
+          throw new Error(isZh ? "单票仓位比例必须在 (0, 1] 之间" : "Position size percentage must be within (0, 1]");
         }
         payload = {
           name: name.trim(),
@@ -250,7 +261,7 @@ export default function StrategyForm() {
         await router.push("/strategies");
       }
     } catch (error: any) {
-      setErr(error?.message || "提交失败");
+      setErr(error?.message || (isZh ? "提交失败" : "Submit failed"));
     } finally {
       setLoading(false);
     }
@@ -276,11 +287,13 @@ export default function StrategyForm() {
     border: "1px solid rgba(148, 163, 184, 0.18)",
     borderRadius: 24,
     background: "rgba(255,255,255,0.82)",
+    color: "#0f172a",
     boxShadow: "0 18px 44px rgba(15, 23, 42, 0.06)",
   };
 
   return (
     <form
+      id="strategy-create-form"
       onSubmit={submit}
       style={{
         margin: 0,
@@ -289,7 +302,16 @@ export default function StrategyForm() {
         color: "#111827",
       }}
     >
-      <div style={{ marginBottom: 16 }}>
+      <div
+        style={{
+          marginBottom: 16,
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}
+      >
         <button
           type="button"
           onClick={() => {
@@ -310,7 +332,25 @@ export default function StrategyForm() {
             fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
           }}
         >
-          返回上一页
+          {isZh ? "返回上一页" : "Back"}
+        </button>
+
+        <button
+          type="submit"
+          disabled={loading}
+          style={{
+            padding: "10px 14px",
+            borderRadius: 14,
+            border: "none",
+            background: "#0891b2",
+            color: "#f8fafc",
+            fontWeight: 700,
+            cursor: loading ? "progress" : "pointer",
+            fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+            opacity: loading ? 0.72 : 1,
+          }}
+        >
+          {loading ? (isZh ? "提交中…" : "Submitting...") : isZh ? "保存策略" : "Save Strategy"}
         </button>
       </div>
 
@@ -334,7 +374,7 @@ export default function StrategyForm() {
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <section style={cardStyle}>
             <div style={boxStyle}>
-              <label>策略名</label>
+              <label>{isZh ? "策略名" : "Strategy Name"}</label>
               <input
                 style={inputStyle}
                 value={name}
@@ -344,18 +384,22 @@ export default function StrategyForm() {
             </div>
 
             <div style={boxStyle}>
-              <label>策略说明</label>
+              <label>{isZh ? "策略说明" : "Description"}</label>
               <textarea
                 style={{ ...inputStyle, minHeight: 90, resize: "vertical" }}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="例如：收盘后扫描趋势股，第二天开盘前生成调仓建议"
+                placeholder={
+                  isZh
+                    ? "例如：收盘后扫描趋势股，第二天开盘前生成调仓建议"
+                    : "For example: scan trend candidates after close and generate rebalance suggestions before next open"
+                }
               />
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div style={boxStyle}>
-                <label>策略类型</label>
+                <label>{isZh ? "策略类型" : "Strategy Type"}</label>
                 <select
                   style={inputStyle}
                   value={strategyType}
@@ -371,7 +415,7 @@ export default function StrategyForm() {
               </div>
 
               <div style={boxStyle}>
-                <label>状态</label>
+                <label>{isZh ? "状态" : "Status"}</label>
                 <select
                   style={inputStyle}
                   value={status}
@@ -387,18 +431,18 @@ export default function StrategyForm() {
 
           {strategyType === "trend" ? (
             <section style={cardStyle}>
-              <h3 style={{ marginTop: 0 }}>趋势参数</h3>
-              <div style={{ marginBottom: 14, color: "#64748b", fontSize: 13, lineHeight: 1.6 }}>
-                当前数据库支持的趋势均线周期:
+              <h3 style={{ marginTop: 0 }}>{isZh ? "趋势参数" : "Trend Parameters"}</h3>
+              <div style={{ marginBottom: 14, color: "#475569", fontSize: 13, lineHeight: 1.6 }}>
+                {isZh ? "当前数据库支持的趋势均线周期:" : "Trend moving-average windows supported by the database:"}
                 {" "}
-                EMA {featureSupport?.trend.ema_windows.join(", ") || "加载中"}
+                EMA {featureSupport?.trend.ema_windows.join(", ") || (isZh ? "加载中" : "Loading")}
                 {" "}
-                | SMA {featureSupport?.trend.sma_windows.join(", ") || "加载中"}
+                | SMA {featureSupport?.trend.sma_windows.join(", ") || (isZh ? "加载中" : "Loading")}
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <div style={boxStyle}>
-                  <label>快线类型</label>
+                  <label>{isZh ? "快线类型" : "Fast Line Type"}</label>
                   <select
                     style={inputStyle}
                     value={fastKind}
@@ -409,7 +453,7 @@ export default function StrategyForm() {
                   </select>
                 </div>
                 <div style={boxStyle}>
-                  <label>快线周期</label>
+                  <label>{isZh ? "快线周期" : "Fast Window"}</label>
                   <select
                     style={inputStyle}
                     value={fastWindow}
@@ -427,7 +471,7 @@ export default function StrategyForm() {
                   </select>
                 </div>
                 <div style={boxStyle}>
-                  <label>慢线类型</label>
+                  <label>{isZh ? "慢线类型" : "Slow Line Type"}</label>
                   <select
                     style={inputStyle}
                     value={slowKind}
@@ -438,7 +482,7 @@ export default function StrategyForm() {
                   </select>
                 </div>
                 <div style={boxStyle}>
-                  <label>慢线周期</label>
+                  <label>{isZh ? "慢线周期" : "Slow Window"}</label>
                   <select
                     style={inputStyle}
                     value={slowWindow}
@@ -456,7 +500,7 @@ export default function StrategyForm() {
                   </select>
                 </div>
                 <div style={boxStyle}>
-                  <label>成交量过滤倍数</label>
+                  <label>{isZh ? "成交量过滤倍数" : "Volume Multiplier"}</label>
                   <input
                     type="number"
                     min={0.1}
@@ -467,7 +511,7 @@ export default function StrategyForm() {
                   />
                 </div>
                 <div style={boxStyle}>
-                  <label>ATR 乘数</label>
+                  <label>{isZh ? "ATR 乘数" : "ATR Multiplier"}</label>
                   <input
                     type="number"
                     min={0.1}
@@ -480,21 +524,27 @@ export default function StrategyForm() {
               </div>
 
                 <div style={boxStyle}>
-                  <label>股票池</label>
+                  <label>{isZh ? "股票池" : "Universe"}</label>
                   <input
                     style={inputStyle}
                     value={symbols}
                     onChange={(e) => setSymbols(e.target.value)}
-                    placeholder="留空则默认绑定全部 common stock；也可以手动输入 AAPL,MSFT,NVDA"
+                    placeholder={
+                      isZh
+                        ? "留空则默认绑定全部 common stock；也可以手动输入 AAPL,MSFT,NVDA"
+                        : "Leave empty to use all common stocks by default, or enter symbols like AAPL,MSFT,NVDA"
+                    }
                   />
                 </div>
-                <div style={{ color: "#64748b", fontSize: 13, lineHeight: 1.6 }}>
-                  当前默认行为：如果股票池留空，策略会把 universe 解释为全部 active US common stock。
+                <div style={{ color: "#475569", fontSize: 13, lineHeight: 1.6 }}>
+                  {isZh
+                    ? "当前默认行为：如果股票池留空，策略会把 universe 解释为全部 active US common stock。"
+                    : "Current default behavior: if universe is left empty, the strategy interprets it as all active US common stocks."}
                 </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
                 <div style={boxStyle}>
-                  <label>最大持仓数</label>
+                  <label>{isZh ? "最大持仓数" : "Max Positions"}</label>
                   <input
                     type="number"
                     min={1}
@@ -504,7 +554,7 @@ export default function StrategyForm() {
                   />
                 </div>
                 <div style={boxStyle}>
-                  <label>单票仓位比例</label>
+                  <label>{isZh ? "单票仓位比例" : "Position Size Pct"}</label>
                   <input
                     type="number"
                     min={0.01}
@@ -516,7 +566,7 @@ export default function StrategyForm() {
                   />
                 </div>
                 <div style={boxStyle}>
-                  <label>调仓频率</label>
+                  <label>{isZh ? "调仓频率" : "Rebalance Frequency"}</label>
                   <select
                     style={inputStyle}
                     value={rebalance}
@@ -530,7 +580,7 @@ export default function StrategyForm() {
               </div>
 
               <div style={boxStyle}>
-                <label>运行时机</label>
+                <label>{isZh ? "运行时机" : "Run Timing"}</label>
                 <select
                   style={inputStyle}
                   value={runAt}
@@ -543,10 +593,11 @@ export default function StrategyForm() {
             </section>
           ) : (
             <section style={cardStyle}>
-              <h3 style={{ marginTop: 0 }}>高级 JSON 配置</h3>
-              <p style={{ marginTop: 0, color: "#6b7280", lineHeight: 1.6 }}>
-                非趋势策略先以 JSON/DSL 形式落库，当前后端支持存储和查询，等专门 evaluator
-                接好后即可执行。
+              <h3 style={{ marginTop: 0 }}>{isZh ? "高级 JSON 配置" : "Advanced JSON Config"}</h3>
+              <p style={{ marginTop: 0, color: "#475569", lineHeight: 1.6 }}>
+                {isZh
+                  ? "非趋势策略先以 JSON/DSL 形式落库，当前后端支持存储和查询，等专门 evaluator 接好后即可执行。"
+                  : "Non-trend strategies are currently stored as JSON/DSL. The backend already supports persistence and retrieval, and they can execute once a dedicated evaluator is wired in."}
               </p>
               <textarea
                 style={{
@@ -574,13 +625,13 @@ export default function StrategyForm() {
               cursor: "pointer",
             }}
           >
-            {loading ? "提交中…" : "保存策略"}
+            {loading ? (isZh ? "提交中…" : "Submitting...") : isZh ? "保存策略" : "Save Strategy"}
           </button>
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <section style={cardStyle}>
-            <h3 style={{ marginTop: 0 }}>提交预览</h3>
+            <h3 style={{ marginTop: 0 }}>{isZh ? "提交预览" : "Submit Preview"}</h3>
             <pre
               style={{
                 margin: 0,
@@ -598,7 +649,7 @@ export default function StrategyForm() {
 
           {resp && (
             <section style={cardStyle}>
-              <h3 style={{ marginTop: 0 }}>后端响应</h3>
+              <h3 style={{ marginTop: 0 }}>{isZh ? "后端响应" : "Backend Response"}</h3>
               <pre
                 style={{
                   margin: 0,

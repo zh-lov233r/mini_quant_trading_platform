@@ -32,9 +32,9 @@ export default function Badge({ children, tone = "neutral" }: BadgeProps) {
       style={{
         display: "inline-flex",
         alignItems: "center",
-        padding: "5px 10px",
+        padding: "6px 11px",
         borderRadius: 999,
-        fontSize: 12,
+        fontSize: 13,
         fontWeight: 700,
         lineHeight: 1,
         fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",

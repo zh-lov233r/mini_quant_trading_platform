@@ -5,6 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from src.core.db import get_db
@@ -58,6 +59,10 @@ class MultiStrategyPaperTradingRunOut(BaseModel):
     results: list[PaperTradingRunOut]
 
 
+class LatestPaperTradingTradeDateOut(BaseModel):
+    latest_trade_date: date | None = None
+
+
 router = APIRouter(prefix="/api/paper-trading", tags=["paper-trading"])
 
 
@@ -89,6 +94,12 @@ def _to_multi_run_out(result: MultiStrategyPaperTradingResult) -> MultiStrategyP
         failed_runs=result.failed_runs,
         results=[_to_run_out(item) for item in result.results],
     )
+
+
+@router.get("/latest-trade-date", response_model=LatestPaperTradingTradeDateOut)
+def get_latest_paper_trading_trade_date(db: Session = Depends(get_db)):
+    latest_trade_date = db.execute(text("SELECT max(dt_ny) FROM daily_features")).scalar()
+    return LatestPaperTradingTradeDateOut(latest_trade_date=latest_trade_date)
 
 
 @router.post("/run", response_model=PaperTradingRunOut, status_code=status.HTTP_201_CREATED)

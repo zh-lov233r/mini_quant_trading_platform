@@ -1,10 +1,17 @@
 import http from "@/api/client";
 import type {
+  LatestPaperTradingTradeDateOut,
   MultiStrategyPaperTradingRunOut,
   MultiStrategyPaperTradingRunRequest,
   PaperTradingRunOut,
   PaperTradingRunRequest,
 } from "@/types/paper-trading";
+
+export function getLatestPaperTradingTradeDate(): Promise<LatestPaperTradingTradeDateOut> {
+  return http<LatestPaperTradingTradeDateOut>("/api/paper-trading/latest-trade-date", {
+    method: "GET",
+  });
+}
 
 export function createPaperTradingRun(
   payload: PaperTradingRunRequest

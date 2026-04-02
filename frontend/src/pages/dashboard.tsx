@@ -8,6 +8,7 @@ import { getStrategyCatalog, listStrategies } from "@/api/strategies";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
+import { useI18n } from "@/i18n/provider";
 import type { BacktestRunOut } from "@/types/backtest";
 import type { PaperTradingAccountOverviewOut } from "@/types/paper-account";
 import type { StrategyAllocationOut } from "@/types/strategy-allocation";
@@ -16,6 +17,7 @@ import {
   formatDateTime,
   formatPercent,
   getStrategyDescription,
+  getStrategyTemplateCopy,
   getTypeLabel,
   getUniverseSummary,
   summarizeStrategies,
@@ -60,6 +62,7 @@ function cardStyle(accent?: string) {
     borderRadius: 24,
     border: `1px solid ${accent || "rgba(148, 163, 184, 0.18)"}`,
     background: "rgba(255,255,255,0.82)",
+    color: "#0f172a",
     boxShadow: "0 18px 44px rgba(15, 23, 42, 0.06)",
   } as const;
 }
@@ -107,6 +110,8 @@ function sectionTitle(title: string, subtitle: string, href?: string, linkLabel?
 }
 
 export default function DashboardPage() {
+  const { locale } = useI18n();
+  const isZh = locale === "zh-CN";
   const [items, setItems] = useState<StrategyOut[]>([]);
   const [catalog, setCatalog] = useState<StrategyCatalogItem[]>([]);
   const [runs, setRuns] = useState<BacktestRunOut[]>([]);
@@ -140,7 +145,7 @@ export default function DashboardPage() {
       })
       .catch((err: Error) => {
         if (!cancelled) {
-          setError(err.message || "加载 dashboard 失败");
+          setError(err.message || (isZh ? "加载 dashboard 失败" : "Failed to load dashboard"));
         }
       })
       .finally(() => {
@@ -152,7 +157,7 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isZh]);
 
   const stats = summarizeStrategies(items);
 
@@ -250,16 +255,20 @@ export default function DashboardPage() {
   return (
     <AppShell
       title="Dashboard"
-      subtitle="把策略、回测和 paper trading 放到同一个总览里，先看系统现在运行得怎么样，再决定今天要优化哪一段链路。"
+      subtitle={
+        isZh
+          ? "把策略、回测和 paper trading 放到同一个总览里，先看系统现在运行得怎么样，再决定今天要优化哪一段链路"
+          : "Bring strategies, backtests, and paper trading into one overview so you can see how the system is doing before deciding what to improve today."
+      }
       actions={
         <>
-          {actionLink("/strategies/new", "创建策略", true)}
-          {actionLink("/backtests", "开始回测")}
-          {actionLink("/paper-trading", "打开 Paper Trading")}
+          {actionLink("/strategies/new", isZh ? "创建策略" : "Create Strategy", true)}
+          {actionLink("/backtests", isZh ? "开始回测" : "Start Backtests")}
+          {actionLink("/paper-trading", isZh ? "打开 Paper Trading" : "Open Paper Trading")}
         </>
       }
     >
-      {loading ? <p>加载中...</p> : null}
+      {loading ? <p>{isZh ? "加载中..." : "Loading..."}</p> : null}
       {error ? <p style={{ color: "crimson" }}>{error}</p> : null}
 
       {!loading && !error ? (
@@ -273,27 +282,43 @@ export default function DashboardPage() {
             }}
           >
             <MetricCard
-              label="Active 策略"
+              label={isZh ? "Active 策略" : "Active Strategies"}
               value={String(stats.active)}
-              hint={`其中 ${stats.engineReady} 个已经 engine-ready，${storedOnlyActive.length} 个 active 策略还只是 stored-only。`}
+              hint={
+                isZh
+                  ? `其中 ${stats.engineReady} 个已经 engine-ready，${storedOnlyActive.length} 个 active 策略还只是 stored-only`
+                  : `${stats.engineReady} are engine-ready, and ${storedOnlyActive.length} active strategies are still stored-only`
+              }
               accent="#0f766e"
             />
             <MetricCard
-              label="已完成回测"
+              label={isZh ? "已完成回测" : "Completed Backtests"}
               value={String(completedRuns.length)}
-              hint={`失败 ${failedRuns.length} 次。这个数字最能反映最近回测链路是否稳定。`}
+              hint={
+                isZh
+                  ? `失败 ${failedRuns.length} 次。这个数字最能反映最近回测链路是否稳定`
+                  : `${failedRuns.length} failed. This is a strong signal for recent backtest pipeline stability.`
+              }
               accent="#2563eb"
             />
             <MetricCard
               label="Paper Portfolios"
               value={String(paperStats.activePortfolioCount)}
-              hint={`覆盖 ${paperStats.accountCount} 个 paper accounts、${paperStats.activeAllocationCount} 条 active allocations。`}
+              hint={
+                isZh
+                  ? `覆盖 ${paperStats.accountCount} 个 paper accounts、${paperStats.activeAllocationCount} 条 active allocations`
+                  : `Covers ${paperStats.accountCount} paper accounts and ${paperStats.activeAllocationCount} active allocations`
+              }
               accent="#ca8a04"
             />
             <MetricCard
-              label="最近完成收益"
+              label={isZh ? "最近完成收益" : "Latest Completed Return"}
               value={formatPercent(getMetric(latestCompletedRun?.summary_metrics || {}, "total_return"), 2)}
-              hint="最近一次 completed backtest 的总收益率，适合用来快速判断最近策略迭代是否变好。"
+              hint={
+                isZh
+                  ? "最近一次 completed backtest 的总收益率，适合用来快速判断最近策略迭代是否变好"
+                  : "Total return of the latest completed backtest, useful for checking whether recent strategy iterations improved."
+              }
               accent="#b45309"
             />
           </section>
@@ -309,10 +334,12 @@ export default function DashboardPage() {
           >
             <article style={cardStyle()}>
               {sectionTitle(
-                "最近回测",
-                "先看最近的 run 有没有顺利完成，以及收益、回撤和期末权益有没有明显异常。",
+                isZh ? "最近回测" : "Recent Backtests",
+                isZh
+                  ? "先看最近的 run 有没有顺利完成，以及收益、回撤和期末权益有没有明显异常"
+                  : "Start by checking whether recent runs completed cleanly and whether return, drawdown, and final equity look reasonable.",
                 "/backtests",
-                "查看全部"
+                isZh ? "查看全部" : "View All"
               )}
 
               {recentRuns.length === 0 ? (
@@ -325,7 +352,9 @@ export default function DashboardPage() {
                     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                   }}
                 >
-                  还没有回测记录。建议先从一个 active 且 engine-ready 的策略开始。
+                  {isZh
+                    ? "还没有回测记录。建议先从一个 active 且 engine-ready 的策略开始。"
+                    : "No backtest records yet. Start with one active, engine-ready strategy."}
                 </div>
               ) : (
                 <div style={{ display: "grid", gap: 14 }}>
@@ -388,13 +417,13 @@ export default function DashboardPage() {
                             </div>
                             <div
                               style={{
-                                color: "#64748b",
+                                color: "#475569",
                                 fontSize: 13,
                                 fontFamily:
                                   "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                               }}
                             >
-                              {formatDateTime(run.finished_at || run.requested_at)}
+                              {formatDateTime(run.finished_at || run.requested_at, locale)}
                             </div>
                           </div>
 
@@ -408,24 +437,32 @@ export default function DashboardPage() {
                             }}
                           >
                             <div>
-                              <div style={{ color: "#94a3b8", fontSize: 12 }}>窗口</div>
+                              <div style={{ color: "#64748b", fontSize: 12, fontWeight: 700 }}>
+                                {isZh ? "窗口" : "Window"}
+                              </div>
                               <div>
                                 {run.window_start} {"->"} {run.window_end}
                               </div>
                             </div>
                             <div>
-                              <div style={{ color: "#94a3b8", fontSize: 12 }}>总收益</div>
+                              <div style={{ color: "#64748b", fontSize: 12, fontWeight: 700 }}>
+                                {isZh ? "总收益" : "Total Return"}
+                              </div>
                               <div>{formatPercent(totalReturn, 2)}</div>
                             </div>
                             <div>
-                              <div style={{ color: "#94a3b8", fontSize: 12 }}>最大回撤</div>
+                              <div style={{ color: "#64748b", fontSize: 12, fontWeight: 700 }}>
+                                {isZh ? "最大回撤" : "Max Drawdown"}
+                              </div>
                               <div>{formatPercent(maxDrawdown, 2)}</div>
                             </div>
                             <div>
-                              <div style={{ color: "#94a3b8", fontSize: 12 }}>期末权益</div>
+                              <div style={{ color: "#64748b", fontSize: 12, fontWeight: 700 }}>
+                                {isZh ? "期末权益" : "Final Equity"}
+                              </div>
                               <div>
                                 {typeof run.final_equity === "number"
-                                  ? run.final_equity.toLocaleString("en-US", {
+                                  ? run.final_equity.toLocaleString(locale, {
                                       maximumFractionDigits: 2,
                                     })
                                   : "-"}
@@ -443,10 +480,12 @@ export default function DashboardPage() {
             <div style={{ display: "grid", gap: 18 }}>
               <article style={cardStyle("rgba(15, 118, 110, 0.12)")}>
                 {sectionTitle(
-                  "Paper Trading 状态",
-                  "这里看每个 paper account 下的 portfolio 最近有没有运行、是否有活跃 allocations，以及哪些组合还没开始跑。",
+                  isZh ? "Paper Trading 状态" : "Paper Trading Status",
+                  isZh
+                    ? "这里看每个 paper account 下的 portfolio 最近有没有运行、是否有活跃 allocations，以及哪些组合还没开始跑"
+                    : "Review whether portfolios under each paper account have run recently, whether active allocations exist, and which sleeves still have not started.",
                   "/paper-trading",
-                  "打开工作台"
+                  isZh ? "打开工作台" : "Open Workspace"
                 )}
 
                 <div
@@ -458,21 +497,25 @@ export default function DashboardPage() {
                   }}
                 >
                   <div style={miniPanelStyle}>
-                    <div style={miniPanelLabelStyle}>Paper Accounts</div>
+                    <div style={miniPanelLabelStyle}>{isZh ? "Paper 账户" : "Paper Accounts"}</div>
                     <div style={miniPanelValueStyle}>{paperStats.accountCount}</div>
                   </div>
                   <div style={miniPanelStyle}>
-                    <div style={miniPanelLabelStyle}>Active Portfolios</div>
+                    <div style={miniPanelLabelStyle}>{isZh ? "活跃组合" : "Active Portfolios"}</div>
                     <div style={miniPanelValueStyle}>{paperStats.activePortfolioCount}</div>
                   </div>
                   <div style={miniPanelStyle}>
-                    <div style={miniPanelLabelStyle}>Active Strategies</div>
+                    <div style={miniPanelLabelStyle}>{isZh ? "活跃策略" : "Active Strategies"}</div>
                     <div style={miniPanelValueStyle}>{paperStats.activeStrategyCount}</div>
                   </div>
                 </div>
 
                 {paperPortfolios.length === 0 ? (
-                  <div style={emptyStateStyle}>还没有 paper trading 账户或 portfolio。先去配置虚拟子组合。</div>
+                  <div style={emptyStateStyle}>
+                    {isZh
+                      ? "还没有 paper trading 账户或 portfolio。先去配置虚拟子组合。"
+                      : "There are no paper trading accounts or portfolios yet. Set up a virtual sleeve first."}
+                  </div>
                 ) : (
                   <div style={{ display: "grid", gap: 12 }}>
                     {paperPortfolios.slice(0, 4).map((portfolio) => (
@@ -499,7 +542,7 @@ export default function DashboardPage() {
                           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                             <Badge>{portfolio.accountName}</Badge>
                             <Badge tone={portfolio.latest_run_status === "completed" ? "success" : "warning"}>
-                              {portfolio.latest_run_status || "未运行"}
+                              {portfolio.latest_run_status || (isZh ? "未运行" : "Not Run")}
                             </Badge>
                           </div>
                         </div>
@@ -513,9 +556,17 @@ export default function DashboardPage() {
                               "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                           }}
                         >
-                          <div>active allocations: {portfolio.active_allocation_count}</div>
-                          <div>资金占比合计: {(portfolio.active_allocation_pct_total * 100).toFixed(1)}%</div>
-                          <div>最近运行: {formatDateTime(portfolio.latest_run_requested_at)}</div>
+                          <div>
+                            {isZh ? "活跃分配" : "Active Allocations"}: {portfolio.active_allocation_count}
+                          </div>
+                          <div>
+                            {isZh ? "资金占比合计" : "Allocation Total"}:{" "}
+                            {(portfolio.active_allocation_pct_total * 100).toFixed(1)}%
+                          </div>
+                          <div>
+                            {isZh ? "最近运行" : "Latest Run"}:{" "}
+                            {formatDateTime(portfolio.latest_run_requested_at, locale)}
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -524,52 +575,77 @@ export default function DashboardPage() {
               </article>
 
               <article style={cardStyle("rgba(234, 88, 12, 0.14)")}>
-                {sectionTitle("风险与待办", "把当前最值得先处理的异常集中到一块，避免每天还要翻各个页面找问题。")}
+                {sectionTitle(
+                  isZh ? "风险与待办" : "Risks & Next Actions",
+                  isZh
+                    ? "把当前最值得先处理的异常集中到一块，避免每天还要翻各个页面找问题"
+                    : "Concentrate the most important issues into one place so you do not need to hunt through multiple pages every day."
+                )}
 
                 <div style={{ display: "grid", gap: 12 }}>
                   <div style={riskItemStyle}>
-                    <div style={riskTitleStyle}>active 但未 engine-ready</div>
-                    <div style={riskValueStyle}>{storedOnlyActive.length} 个</div>
+                    <div style={riskTitleStyle}>
+                      {isZh ? "已激活但未就绪" : "Active But Not Engine-Ready"}
+                    </div>
+                    <div style={riskValueStyle}>
+                      {storedOnlyActive.length} {isZh ? "个" : ""}
+                    </div>
                     <div style={riskBodyStyle}>
                       {storedOnlyActive.length > 0
                         ? storedOnlyActive
                             .slice(0, 3)
                             .map((item) => item.name)
                             .join(", ")
-                        : "当前没有这类策略。"}
+                        : isZh
+                          ? "当前没有这类策略"
+                          : "There are no strategies in this category right now"}
                     </div>
                   </div>
 
                   <div style={riskItemStyle}>
-                    <div style={riskTitleStyle}>失败回测</div>
-                    <div style={riskValueStyle}>{failedRuns.length} 次</div>
+                    <div style={riskTitleStyle}>{isZh ? "失败回测" : "Failed Backtests"}</div>
+                    <div style={riskValueStyle}>
+                      {failedRuns.length} {isZh ? "次" : ""}
+                    </div>
                     <div style={riskBodyStyle}>
                       {failedRuns.length > 0
-                        ? "建议优先打开最近失败 run 查看 error_message。"
-                        : "最近没有失败回测。"}
+                        ? isZh
+                          ? "建议优先打开最近失败 run 查看 error_message"
+                          : "Open the most recent failed run first and inspect its error_message"
+                        : isZh
+                          ? "最近没有失败回测"
+                          : "There have been no failed backtests recently"}
                     </div>
                   </div>
 
                   <div style={riskItemStyle}>
-                    <div style={riskTitleStyle}>超配 portfolio</div>
-                    <div style={riskValueStyle}>{allocationRiskItems.length} 个</div>
+                    <div style={riskTitleStyle}>{isZh ? "超配 portfolio" : "Overallocated Portfolios"}</div>
+                    <div style={riskValueStyle}>
+                      {allocationRiskItems.length} {isZh ? "个" : ""}
+                    </div>
                     <div style={riskBodyStyle}>
                       {allocationRiskItems.length > 0
                         ? allocationRiskItems
                             .slice(0, 2)
                             .map((item) => `${item.portfolioName} ${(item.total * 100).toFixed(1)}%`)
                             .join(" / ")
-                        : "所有 active allocation 总和都在 100% 以内。"}
+                        : isZh
+                          ? "所有 active allocation 总和都在 100% 以内"
+                          : "All active allocation totals are within 100%"}
                     </div>
                   </div>
 
                   <div style={riskItemStyle}>
-                    <div style={riskTitleStyle}>尚未运行的组合</div>
-                    <div style={riskValueStyle}>{quietPortfolios.length} 个</div>
+                    <div style={riskTitleStyle}>{isZh ? "尚未运行的组合" : "Portfolios Not Yet Run"}</div>
+                    <div style={riskValueStyle}>
+                      {quietPortfolios.length} {isZh ? "个" : ""}
+                    </div>
                     <div style={riskBodyStyle}>
                       {quietPortfolios.length > 0
                         ? quietPortfolios.map((item) => item.name).join(", ")
-                        : "最近所有 portfolio 都已经有运行记录。"}
+                        : isZh
+                          ? "最近所有 portfolio 都已经有运行记录"
+                          : "Every portfolio has recent run history"}
                     </div>
                   </div>
                 </div>
@@ -587,10 +663,12 @@ export default function DashboardPage() {
           >
             <article style={cardStyle()}>
               {sectionTitle(
-                "最近策略",
-                "用这块快速确认最近在调整哪些策略，以及哪些定义已经达到 engine-ready。",
+                isZh ? "最近策略" : "Recent Strategies",
+                isZh
+                  ? "用这块快速确认最近在调整哪些策略，以及哪些定义已经达到 engine-ready"
+                  : "Use this block to quickly see which strategies changed recently and which ones have already become engine-ready.",
                 "/strategies",
-                "全部查看"
+                isZh ? "全部查看" : "View All"
               )}
 
               {recentStrategies.length === 0 ? (
@@ -603,7 +681,9 @@ export default function DashboardPage() {
                     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                   }}
                 >
-                  还没有策略。建议先从一个 trend 策略开始，把创建、落库、展示链路跑通。
+                  {isZh
+                    ? "还没有策略。建议先从一个 trend 策略开始，把创建、落库、展示链路跑通。"
+                    : "There are no strategies yet. Start with one trend strategy and get the create, persist, and display flow working end to end."}
                 </div>
               ) : (
                 <div style={{ display: "grid", gap: 14 }}>
@@ -661,7 +741,7 @@ export default function DashboardPage() {
                               "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                           }}
                         >
-                          {formatDateTime(item.updated_at || item.created_at)}
+                          {formatDateTime(item.updated_at || item.created_at, locale)}
                         </div>
                       </div>
 
@@ -688,8 +768,8 @@ export default function DashboardPage() {
                             "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                         }}
                       >
-                        <div>版本: v{item.version}</div>
-                        <div>股票池: {getUniverseSummary(item)}</div>
+                        <div>{isZh ? "版本" : "Version"}: v{item.version}</div>
+                        <div>{isZh ? "股票池" : "Universe"}: {getUniverseSummary(item)}</div>
                       </div>
                     </Link>
                   ))}
@@ -699,13 +779,24 @@ export default function DashboardPage() {
 
             <div style={{ display: "grid", gap: 18 }}>
               <article style={cardStyle()}>
-                {sectionTitle("策略模板", "这里展示后端 registry 已经定义好的策略类型，方便你判断后面该重点打磨哪类配置表单。")}
+                {sectionTitle(
+                  isZh ? "策略模板" : "Strategy Templates",
+                  isZh
+                    ? "这里展示后端 registry 已经定义好的策略类型，方便你判断后面该重点打磨哪类配置表单"
+                    : "This shows strategy types already registered in the backend so you can decide which configuration forms deserve the most attention next."
+                )}
 
                 <div style={{ display: "grid", gap: 12 }}>
                   {catalog.map((item) => {
                     const count = items.filter(
                       (strategy) => strategy.strategy_type === item.strategy_type
                     ).length;
+                    const templateCopy = getStrategyTemplateCopy(
+                      item.strategy_type,
+                      locale,
+                      item.label,
+                      item.description
+                    );
 
                     return (
                       <div
@@ -726,9 +817,9 @@ export default function DashboardPage() {
                             marginBottom: 8,
                           }}
                         >
-                          <strong style={{ fontSize: 16 }}>{item.label}</strong>
+                          <strong style={{ fontSize: 16 }}>{templateCopy.label}</strong>
                           <Badge tone={item.engine_ready ? "success" : "warning"}>
-                            {count} 个策略
+                            {count} {isZh ? "个策略" : count === 1 ? "strategy" : "strategies"}
                           </Badge>
                         </div>
                         <p
@@ -741,7 +832,7 @@ export default function DashboardPage() {
                               "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                           }}
                         >
-                          {item.description}
+                          {templateCopy.description}
                         </p>
                       </div>
                     );
@@ -770,9 +861,11 @@ export default function DashboardPage() {
                       "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                   }}
                 >
-                  Today
+                  {isZh ? "今天" : "Today"}
                 </div>
-                <h2 style={{ margin: "0 0 10px", fontSize: 24 }}>今天最值得做的动作</h2>
+                <h2 style={{ margin: "0 0 10px", fontSize: 24 }}>
+                  {isZh ? "今日待办" : "Today TODO List"}
+                </h2>
                 <p
                   style={{
                     margin: "0 0 16px",
@@ -782,13 +875,14 @@ export default function DashboardPage() {
                       "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                   }}
                 >
-                  如果你今天只做三件事，最值钱的通常是：挑一个 engine-ready 策略做回测、检查 paper trading
-                  组合分配是否合理，再回到策略页调整参数或命名。
+                  {isZh
+                    ? "进行回测; 检查 paper trading组合分配是否合理; 调整策略"
+                    : "Run backtests; review paper trading allocations; adjust strategy configurations."}
                 </p>
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <Badge tone="info">先看最近回测</Badge>
-                  <Badge tone="info">再看 Paper Trading</Badge>
-                  <Badge tone="info">最后回到策略配置</Badge>
+                  <Badge tone="info">{isZh ? "先看最近回测" : "Check recent backtests first"}</Badge>
+                  <Badge tone="info">{isZh ? "再看 Paper Trading" : "Then review paper trading"}</Badge>
+                  <Badge tone="info">{isZh ? "最后回到策略配置" : "Finally return to strategy config"}</Badge>
                 </div>
               </article>
             </div>
@@ -808,7 +902,7 @@ const miniPanelStyle = {
 
 const miniPanelLabelStyle = {
   marginBottom: 6,
-  color: "#94a3b8",
+  color: "#64748b",
   fontSize: 12,
   fontWeight: 700,
   textTransform: "uppercase",

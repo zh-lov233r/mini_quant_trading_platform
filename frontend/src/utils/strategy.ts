@@ -54,7 +54,48 @@ export function getTypeLabel(
   return matched?.label || strategyType;
 }
 
-export function formatDateTime(value?: string | null): string {
+export function getStrategyTemplateCopy(
+  strategyType: string,
+  locale: string = "zh-CN",
+  fallbackLabel?: string,
+  fallbackDescription?: string
+): { label: string; description: string } {
+  const isZh = locale === "zh-CN";
+
+  switch (strategyType) {
+    case "trend":
+      return {
+        label: isZh ? "趋势跟随" : "Trend Following",
+        description: isZh
+          ? "双均线趋势策略，带成交量过滤、ATR 风控和调仓配置。"
+          : "Dual moving-average trend strategy with volume filter, ATR risk controls, and rebalance settings.",
+      };
+    case "mean_reversion":
+      return {
+        label: isZh ? "均值回归" : "Mean Reversion",
+        description: isZh
+          ? "均值回归配置模板，基于 z-score / ATR / 流动性特征做日线信号。"
+          : "Mean reversion template using z-score, ATR, and liquidity features to generate daily signals.",
+      };
+    case "custom":
+      return {
+        label: isZh ? "自定义配置" : "Custom Config",
+        description: isZh
+          ? "自定义 JSON/DSL 策略定义。建议存储规则，不要直接存储可执行代码。"
+          : "Custom JSON/DSL strategy definition. Prefer storing rules rather than executable code.",
+      };
+    default:
+      return {
+        label: fallbackLabel || strategyType,
+        description: fallbackDescription || (isZh ? "暂无模板说明" : "No template description yet"),
+      };
+  }
+}
+
+export function formatDateTime(
+  value?: string | null,
+  locale: string = "zh-CN"
+): string {
   if (!value) {
     return "-";
   }
@@ -64,7 +105,7 @@ export function formatDateTime(value?: string | null): string {
     return value;
   }
 
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(locale, {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",

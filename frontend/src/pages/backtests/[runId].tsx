@@ -6,7 +6,9 @@ import { getBacktest } from "@/api/backtests";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
+import { useI18n } from "@/i18n/provider";
 import type {
+  BacktestComparisonCurvePoint,
   BacktestDetailOut,
   BacktestSnapshotPoint,
   BacktestSignalOut,
@@ -40,10 +42,11 @@ function metricNumber(summary: Record<string, unknown>, key: string): number | n
 }
 
 const SUMMARY_SYMBOLS_LIMIT = 20;
+const BACKTEST_DETAIL_LOAD_FAILED = "__BACKTEST_DETAIL_LOAD_FAILED__";
 
-function renderValue(value: unknown): string {
+function renderValue(value: unknown, locale = "en-US"): string {
   if (typeof value === "number") {
-    return value.toLocaleString("en-US", { maximumFractionDigits: 4 });
+    return value.toLocaleString(locale, { maximumFractionDigits: 4 });
   }
   if (typeof value === "boolean") {
     return value ? "true" : "false";
@@ -52,7 +55,7 @@ function renderValue(value: unknown): string {
     return "-";
   }
   if (Array.isArray(value)) {
-    return value.map((item) => renderValue(item)).join(", ");
+    return value.map((item) => renderValue(item, locale)).join(", ");
   }
   if (typeof value === "object") {
     return JSON.stringify(value);
@@ -60,9 +63,25 @@ function renderValue(value: unknown): string {
   return String(value);
 }
 
-function renderSummaryValue(key: string, value: unknown): string {
+function renderSummaryValue(key: string, value: unknown, locale = "en-US"): string {
+  if (key === "comparison_curves") {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return renderValue(value, locale);
+    }
+
+    const curveSummary = Object.entries(value as Record<string, unknown>)
+      .map(([symbol, points]) => {
+        const count = Array.isArray(points) ? points.length : 0;
+        return `${String(symbol).toUpperCase()}(${count})`;
+      })
+      .filter(Boolean)
+      .join(", ");
+
+    return curveSummary || "-";
+  }
+
   if (key !== "symbols_loaded") {
-    return renderValue(value);
+    return renderValue(value, locale);
   }
 
   const symbols = Array.isArray(value)
@@ -72,7 +91,7 @@ function renderSummaryValue(key: string, value: unknown): string {
       : null;
 
   if (!symbols) {
-    return renderValue(value);
+    return renderValue(value, locale);
   }
 
   const visibleSymbols = symbols.slice(0, SUMMARY_SYMBOLS_LIMIT);
@@ -83,11 +102,11 @@ function renderSummaryValue(key: string, value: unknown): string {
   return `${visibleSymbols.join(", ")} +${remainingCount}`;
 }
 
-function formatCurrency(value?: number | null): string {
+function formatCurrency(value?: number | null, locale = "en-US"): string {
   if (typeof value !== "number" || Number.isNaN(value)) {
     return "-";
   }
-  return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  return value.toLocaleString(locale, { maximumFractionDigits: 2 });
 }
 
 function getMetaText(meta: Record<string, unknown> | undefined, key: string): string | null {
@@ -106,14 +125,16 @@ function buildLinePath(
   height: number,
   paddingX: number,
   paddingTop: number,
-  paddingBottom: number
+  paddingBottom: number,
+  minValue?: number,
+  maxValue?: number
 ): string {
   if (values.length === 0) {
     return "";
   }
 
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  const min = typeof minValue === "number" ? minValue : Math.min(...values);
+  const max = typeof maxValue === "number" ? maxValue : Math.max(...values);
   const xStep = values.length > 1 ? (width - paddingX * 2) / (values.length - 1) : 0;
   const yRange = max - min || 1;
   const usableHeight = height - paddingTop - paddingBottom;
@@ -133,13 +154,24 @@ function buildAreaPath(
   height: number,
   paddingX: number,
   paddingTop: number,
-  paddingBottom: number
+  paddingBottom: number,
+  minValue?: number,
+  maxValue?: number
 ): string {
   if (values.length === 0) {
     return "";
   }
 
-  const linePath = buildLinePath(values, width, height, paddingX, paddingTop, paddingBottom);
+  const linePath = buildLinePath(
+    values,
+    width,
+    height,
+    paddingX,
+    paddingTop,
+    paddingBottom,
+    minValue,
+    maxValue
+  );
   const xStep = values.length > 1 ? (width - paddingX * 2) / (values.length - 1) : 0;
   const lastX = paddingX + (values.length - 1) * xStep;
   const baseY = height - paddingBottom;
@@ -201,6 +233,12 @@ type SymbolPnlRow = {
   marketValue: number;
   lastPrice: number | null;
   tradeCount: number;
+};
+
+type CurveVisibility = {
+  strategy: boolean;
+  SPY: boolean;
+  QQQ: boolean;
 };
 
 function toTimeValue(value?: string | null): number | null {
@@ -305,7 +343,20 @@ function buildSymbolPnlRows(run: BacktestDetailOut): SymbolPnlRow[] {
     });
   });
 
-  return rows.sort((left, right) => Math.abs(right.totalPnl) - Math.abs(left.totalPnl));
+  return rows.sort((left, right) => {
+    const leftPositive = left.totalPnl >= 0;
+    const rightPositive = right.totalPnl >= 0;
+
+    if (leftPositive !== rightPositive) {
+      return leftPositive ? -1 : 1;
+    }
+
+    if (leftPositive && rightPositive) {
+      return right.totalPnl - left.totalPnl;
+    }
+
+    return left.totalPnl - right.totalPnl;
+  });
 }
 
 function buildEventMarkers(
@@ -316,7 +367,8 @@ function buildEventMarkers(
   paddingTop: number,
   paddingBottom: number,
   signals: BacktestSignalOut[],
-  transactions: BacktestTransactionOut[]
+  transactions: BacktestTransactionOut[],
+  locale: string
 ): ChartMarker[] {
   if (normalizedPoints.length === 0) {
     return [];
@@ -413,7 +465,10 @@ function buildEventMarkers(
         shape: "circle",
         stroke: isBuy ? "#2563eb" : "#d97706",
         fill: "#ffffff",
-        title: `${group.signal} 信号 ${group.items.length} 个`,
+        title:
+          locale === "zh-CN"
+            ? `${group.signal} 信号 ${group.items.length} 个`
+            : `${group.signal} Signals (${group.items.length})`,
         details: group.items.map((signal) =>
           signal.reason ? `${signal.symbol}: ${signal.reason}` : signal.symbol
         ),
@@ -465,10 +520,13 @@ function buildEventMarkers(
         shape: isBuy ? "triangle-up" : "triangle-down",
         stroke: isBuy ? "#16a34a" : "#dc2626",
         fill: isBuy ? "#16a34a" : "#dc2626",
-        title: `${group.side} 成交 ${group.items.length} 个`,
+        title:
+          locale === "zh-CN"
+            ? `${group.side} 成交 ${group.items.length} 个`
+            : `${group.side} Fills (${group.items.length})`,
         details: group.items.map(
           (txn) =>
-            `${txn.symbol} ${txn.qty.toLocaleString("en-US", { maximumFractionDigits: 4 })} @ ${txn.price.toLocaleString("en-US", {
+            `${txn.symbol} ${txn.qty.toLocaleString(locale, { maximumFractionDigits: 4 })} @ ${txn.price.toLocaleString(locale, {
               maximumFractionDigits: 2,
             })}`
         ),
@@ -479,6 +537,8 @@ function buildEventMarkers(
 }
 
 function RunOverviewPanel({ run }: { run: BacktestDetailOut }) {
+  const { locale } = useI18n();
+  const isZh = locale === "zh-CN";
   return (
     <div
       style={{
@@ -487,11 +547,13 @@ function RunOverviewPanel({ run }: { run: BacktestDetailOut }) {
         borderRadius: 18,
         background: "rgba(248,250,252,0.92)",
         border: "1px solid rgba(226, 232, 240, 0.9)",
+        color: "#0f172a",
       }}
     >
       <div style={{ marginBottom: 16 }}>
-        <h3 style={{ margin: "0 0 8px", fontSize: 22 }}>Run 概览</h3>
-        <p style={sectionSubtitleStyle}>先看运行状态、窗口和最终权益，判断这次回测是不是按预期结束。</p>
+        <h3 style={{ margin: "0 0 8px", fontSize: 22 }}>
+          {isZh ? "Run 概览" : "Run Overview"}
+        </h3>
       </div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
@@ -517,30 +579,32 @@ function RunOverviewPanel({ run }: { run: BacktestDetailOut }) {
           <div style={valueStyle}>{run.id}</div>
         </div>
         <div>
-          <div style={labelStyle}>策略</div>
+          <div style={labelStyle}>{isZh ? "策略" : "Strategy"}</div>
           <div style={valueStyle}>{run.strategy_name || run.strategy_id}</div>
         </div>
         <div>
-          <div style={labelStyle}>区间</div>
+          <div style={labelStyle}>{isZh ? "区间" : "Window"}</div>
           <div style={valueStyle}>
             {run.window_start} {"->"} {run.window_end}
           </div>
         </div>
         <div>
-          <div style={labelStyle}>股票组合</div>
-          <div style={valueStyle}>{run.basket_name || "沿用策略原始股票池"}</div>
+          <div style={labelStyle}>{isZh ? "股票组合" : "Basket"}</div>
+          <div style={valueStyle}>
+            {run.basket_name || (isZh ? "沿用策略原始股票池" : "Use the strategy's original universe")}
+          </div>
         </div>
         <div>
-          <div style={labelStyle}>初始资金</div>
-          <div style={valueStyle}>{formatCurrency(run.initial_cash)}</div>
+          <div style={labelStyle}>{isZh ? "初始资金" : "Initial Cash"}</div>
+          <div style={valueStyle}>{formatCurrency(run.initial_cash, locale)}</div>
         </div>
         <div>
-          <div style={labelStyle}>期末权益</div>
-          <div style={valueStyle}>{formatCurrency(run.final_equity)}</div>
+          <div style={labelStyle}>{isZh ? "期末权益" : "Final Equity"}</div>
+          <div style={valueStyle}>{formatCurrency(run.final_equity, locale)}</div>
         </div>
         <div>
-          <div style={labelStyle}>完成时间</div>
-          <div style={valueStyle}>{formatDateTime(run.finished_at || run.requested_at)}</div>
+          <div style={labelStyle}>{isZh ? "完成时间" : "Completed At"}</div>
+          <div style={valueStyle}>{formatDateTime(run.finished_at || run.requested_at, locale)}</div>
         </div>
       </div>
 
@@ -554,12 +618,14 @@ function RunOverviewPanel({ run }: { run: BacktestDetailOut }) {
             fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
           }}
         >
-          <div style={{ marginBottom: 10, fontWeight: 700, color: "#0f172a" }}>最新快照</div>
+          <div style={{ marginBottom: 10, fontWeight: 700, color: "#0f172a" }}>
+            {isZh ? "最新快照" : "Latest Snapshot"}
+          </div>
           <div style={{ display: "grid", gap: 8, color: "#475569" }}>
-            <div>时间: {formatDateTime(run.latest_snapshot.ts || null)}</div>
-            <div>现金: {formatCurrency(run.latest_snapshot.cash)}</div>
-            <div>权益: {formatCurrency(run.latest_snapshot.equity)}</div>
-            <div>回撤: {formatPercent(run.latest_snapshot.drawdown ?? null, 2)}</div>
+            <div>{isZh ? "时间" : "Time"}: {formatDateTime(run.latest_snapshot.ts || null, locale)}</div>
+            <div>{isZh ? "现金" : "Cash"}: {formatCurrency(run.latest_snapshot.cash, locale)}</div>
+            <div>{isZh ? "权益" : "Equity"}: {formatCurrency(run.latest_snapshot.equity, locale)}</div>
+            <div>{isZh ? "回撤" : "Drawdown"}: {formatPercent(run.latest_snapshot.drawdown ?? null, 2)}</div>
           </div>
         </div>
       ) : null}
@@ -583,6 +649,8 @@ function RunOverviewPanel({ run }: { run: BacktestDetailOut }) {
 }
 
 function SymbolPnlCard({ rows }: { rows: SymbolPnlRow[] }) {
+  const { locale } = useI18n();
+  const isZh = locale === "zh-CN";
   const [showAllSymbols, setShowAllSymbols] = useState(false);
   const visibleRows = showAllSymbols ? rows : rows.slice(0, 20);
 
@@ -599,8 +667,14 @@ function SymbolPnlCard({ rows }: { rows: SymbolPnlRow[] }) {
         }}
       >
         <div>
-          <h3 style={{ margin: "0 0 8px", fontSize: 22 }}>个股盈亏</h3>
-          <p style={sectionSubtitleStyle}>按单只股票汇总本次策略运行期间的已实现和未实现盈亏，未平仓按最后一天价格估值。</p>
+          <h3 style={{ margin: "0 0 8px", fontSize: 22 }}>
+            {isZh ? "个股盈亏" : "Per-Symbol PnL"}
+          </h3>
+          <p style={sectionSubtitleStyle}>
+            {isZh
+              ? "按单只股票汇总本次策略运行期间的已实现和未实现盈亏，未平仓按最后一天价格估值"
+              : "Summarize realized and unrealized PnL by symbol across this run, valuing open positions with the last available price."}
+          </p>
         </div>
         {rows.length > 20 ? (
           <button
@@ -608,17 +682,29 @@ function SymbolPnlCard({ rows }: { rows: SymbolPnlRow[] }) {
             onClick={() => setShowAllSymbols((current) => !current)}
             style={tableToggleButtonStyle}
           >
-            {showAllSymbols ? "收起到前 20 支" : "展开全部"}
+            {showAllSymbols
+              ? isZh
+                ? "收起到前 20 支"
+                : "Show Top 20"
+              : isZh
+                ? "展开全部"
+                : "Show All"}
           </button>
         ) : null}
       </div>
 
       {rows.length === 0 ? (
-        <div style={emptyStateStyle}>这次回测还没有可统计的个股盈亏。</div>
+        <div style={emptyStateStyle}>
+          {isZh
+            ? "这次回测还没有可统计的个股盈亏"
+            : "This backtest does not have symbol-level PnL to summarize yet"}
+        </div>
       ) : (
         <>
-          <div style={{ marginBottom: 10, color: "#64748b", fontSize: 13 }}>
-            当前显示 {visibleRows.length} / {rows.length} 支股票，按绝对盈亏排序。
+          <div style={{ marginBottom: 10, color: "#475569", fontSize: 13 }}>
+            {isZh
+              ? `当前显示 ${visibleRows.length} / ${rows.length} 支股票，先按盈利从大到小，再按亏损从小到大排序。`
+              : `Showing ${visibleRows.length} / ${rows.length} symbols, with winners first from highest gain to lowest, followed by losers from most negative to least negative.`}
           </div>
           <div
             style={{
@@ -638,7 +724,10 @@ function SymbolPnlCard({ rows }: { rows: SymbolPnlRow[] }) {
             >
               <thead>
                 <tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>
-                  {["标的", "总盈亏", "已实现", "未实现", "持仓数量", "最新价格", "持仓市值", "交易次数"].map((label) => (
+                  {(isZh
+                    ? ["标的", "总盈亏", "已实现", "未实现", "持仓数量", "最新价格", "持仓市值", "交易次数"]
+                    : ["Symbol", "Total PnL", "Realized", "Unrealized", "Net Qty", "Last Price", "Market Value", "Trades"]
+                  ).map((label) => (
                     <th
                       key={label}
                       style={{
@@ -661,12 +750,12 @@ function SymbolPnlCard({ rows }: { rows: SymbolPnlRow[] }) {
                   return (
                     <tr key={row.symbol} style={{ borderBottom: "1px solid rgba(241, 245, 249, 1)" }}>
                       <td style={cellStyle}>{row.symbol}</td>
-                      <td style={{ ...cellStyle, color: totalTone, fontWeight: 700 }}>{formatCurrency(row.totalPnl)}</td>
-                      <td style={cellStyle}>{formatCurrency(row.realizedPnl)}</td>
-                      <td style={cellStyle}>{formatCurrency(row.unrealizedPnl)}</td>
-                      <td style={cellStyle}>{row.netQty.toLocaleString("en-US", { maximumFractionDigits: 4 })}</td>
-                      <td style={cellStyle}>{formatCurrency(row.lastPrice)}</td>
-                      <td style={cellStyle}>{formatCurrency(row.marketValue)}</td>
+                      <td style={{ ...cellStyle, color: totalTone, fontWeight: 700 }}>{formatCurrency(row.totalPnl, locale)}</td>
+                      <td style={cellStyle}>{formatCurrency(row.realizedPnl, locale)}</td>
+                      <td style={cellStyle}>{formatCurrency(row.unrealizedPnl, locale)}</td>
+                      <td style={cellStyle}>{row.netQty.toLocaleString(locale, { maximumFractionDigits: 4 })}</td>
+                      <td style={cellStyle}>{formatCurrency(row.lastPrice, locale)}</td>
+                      <td style={cellStyle}>{formatCurrency(row.marketValue, locale)}</td>
                       <td style={cellStyle}>{row.tradeCount}</td>
                     </tr>
                   );
@@ -693,12 +782,19 @@ function EquityCurveCard({
   transactions: BacktestTransactionOut[];
   initialCash?: number | null;
 }) {
+  const { locale } = useI18n();
+  const isZh = locale === "zh-CN";
   const [hoveredMarkerKey, setHoveredMarkerKey] = useState<string | null>(null);
   const [chartZoom, setChartZoom] = useState(1);
   const [windowOffset, setWindowOffset] = useState(0);
+  const [curveVisibility, setCurveVisibility] = useState<CurveVisibility>({
+    strategy: true,
+    SPY: true,
+    QQQ: true,
+  });
   const [markerVisibility, setMarkerVisibility] = useState<MarkerVisibility>({
-    buy_signal: true,
-    sell_signal: true,
+    buy_signal: false,
+    sell_signal: false,
     buy_fill: true,
     sell_fill: true,
   });
@@ -709,6 +805,46 @@ function EquityCurveCard({
       Number.isFinite(point.equity)
   );
   const values = normalizedPoints.map((point) => point.equity);
+  const symbolPnlRows = useMemo(() => buildSymbolPnlRows(run), [run]);
+  const comparisonCurves = run.comparison_curves || {};
+  const normalizedComparisonCurves = useMemo(() => {
+    const buildMap = (pointsInput: BacktestComparisonCurvePoint[] | undefined) =>
+      new Map(
+        (pointsInput || [])
+          .filter(
+            (point): point is BacktestComparisonCurvePoint & { ts: string; equity: number } =>
+              typeof point.ts === "string" &&
+              typeof point.equity === "number" &&
+              Number.isFinite(point.equity)
+          )
+          .map((point) => [point.ts, point.equity])
+      );
+
+    return {
+      SPY: buildMap(comparisonCurves.SPY),
+      QQQ: buildMap(comparisonCurves.QQQ),
+    };
+  }, [comparisonCurves.QQQ, comparisonCurves.SPY]);
+  const spyTotalReturn = useMemo(() => {
+    const pointsInput = comparisonCurves.SPY || [];
+    const lastPoint = pointsInput[pointsInput.length - 1];
+    return typeof lastPoint?.return === "number" && Number.isFinite(lastPoint.return)
+      ? lastPoint.return
+      : null;
+  }, [comparisonCurves.SPY]);
+  const qqqTotalReturn = useMemo(() => {
+    const pointsInput = comparisonCurves.QQQ || [];
+    const lastPoint = pointsInput[pointsInput.length - 1];
+    return typeof lastPoint?.return === "number" && Number.isFinite(lastPoint.return)
+      ? lastPoint.return
+      : null;
+  }, [comparisonCurves.QQQ]);
+  const benchmarkSymbol =
+    run.benchmark_symbol ||
+    normalizedPoints.find((point) => typeof point.benchmark_symbol === "string")?.benchmark_symbol ||
+    null;
+  const benchmarkTotalReturn = metricNumber(run.summary_metrics || {}, "benchmark_total_return");
+  const excessReturn = metricNumber(run.summary_metrics || {}, "excess_return");
 
   const startValue = values[0] ?? initialCash ?? null;
   const endValue = values.length > 0 ? values[values.length - 1] : null;
@@ -719,16 +855,24 @@ function EquityCurveCard({
     return (
       <section style={sectionCardStyle}>
         <div style={{ marginBottom: 16 }}>
-          <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>权益曲线</h2>
-          <p style={sectionSubtitleStyle}>当前还没有足够的快照点来绘制曲线。</p>
+          <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>{isZh ? "权益曲线" : "Equity Curve"}</h2>
+          <p style={sectionSubtitleStyle}>
+            {isZh
+              ? "当前还没有足够的快照点来绘制曲线"
+              : "There are not enough snapshot points yet to draw the curve"}
+          </p>
         </div>
-        <div style={emptyStateStyle}>至少需要两条 portfolio snapshot 才能看到走势。</div>
+        <div style={emptyStateStyle}>
+          {isZh
+            ? "至少需要两条 portfolio snapshot 才能看到走势"
+            : "You need at least two portfolio snapshots to see the trend"}
+        </div>
       </section>
     );
   }
 
-  const width = 1340;
-  const height = 320;
+  const width = 1640;
+  const height = 380;
   const axisLeftPadding = 96;
   const axisRightPadding = 28;
   const chartTopPadding = 26;
@@ -739,13 +883,25 @@ function EquityCurveCard({
   const safeWindowOffset = Math.min(windowOffset, maxWindowOffset);
   const visiblePoints = normalizedPoints.slice(safeWindowOffset, safeWindowOffset + visiblePointCount);
   const visibleValues = visiblePoints.map((point) => point.equity);
+  const visibleSpyValues = visiblePoints
+    .map((point) => normalizedComparisonCurves.SPY.get(point.ts))
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const visibleQqqValues = visiblePoints
+    .map((point) => normalizedComparisonCurves.QQQ.get(point.ts))
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const combinedVisibleValues = [...visibleValues, ...visibleSpyValues, ...visibleQqqValues];
+  const min = Math.min(...combinedVisibleValues);
+  const max = Math.max(...combinedVisibleValues);
+  const yRange = max - min || 1;
   const linePath = buildLinePath(
     visibleValues,
     width,
     height,
     axisLeftPadding,
     chartTopPadding,
-    chartBottomPadding
+    chartBottomPadding,
+    min,
+    max
   );
   const areaPath = buildAreaPath(
     visibleValues,
@@ -753,11 +909,42 @@ function EquityCurveCard({
     height,
     axisLeftPadding,
     chartTopPadding,
-    chartBottomPadding
+    chartBottomPadding,
+    min,
+    max
   );
-  const min = Math.min(...visibleValues);
-  const max = Math.max(...visibleValues);
-  const yRange = max - min || 1;
+  const spyCurvePoints = visiblePoints.filter((point) =>
+    normalizedComparisonCurves.SPY.has(point.ts)
+  );
+  const qqqCurvePoints = visiblePoints.filter((point) =>
+    normalizedComparisonCurves.QQQ.has(point.ts)
+  );
+  const spyLinePath =
+    spyCurvePoints.length > 1
+      ? buildLinePath(
+          spyCurvePoints.map((point) => normalizedComparisonCurves.SPY.get(point.ts) as number),
+          width,
+          height,
+          axisLeftPadding,
+          chartTopPadding,
+          chartBottomPadding,
+          min,
+          max
+        )
+      : "";
+  const qqqLinePath =
+    qqqCurvePoints.length > 1
+      ? buildLinePath(
+          qqqCurvePoints.map((point) => normalizedComparisonCurves.QQQ.get(point.ts) as number),
+          width,
+          height,
+          axisLeftPadding,
+          chartTopPadding,
+          chartBottomPadding,
+          min,
+          max
+        )
+      : "";
   const referenceValue = typeof startValue === "number" ? startValue : null;
   const referenceLineY =
     referenceValue == null
@@ -777,8 +964,9 @@ function EquityCurveCard({
     chartBottomPadding,
     signals,
     transactions
+    ,
+    locale
   );
-  const symbolPnlRows = useMemo(() => buildSymbolPnlRows(run), [run]);
   const visibleMarkers = markers.filter((marker) => markerVisibility[marker.category]);
   const hoveredMarker = hoveredMarkerKey
     ? visibleMarkers.find((marker) => marker.key === hoveredMarkerKey) || null
@@ -823,19 +1011,12 @@ function EquityCurveCard({
       <div
         style={{
           display: "flex",
-          justifyContent: "space-between",
-          gap: 12,
-          flexWrap: "wrap",
+          justifyContent: "flex-start",
           marginBottom: 16,
         }}
       >
         <div>
-          <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>权益曲线</h2>
-          <p style={sectionSubtitleStyle}>直接用 portfolio snapshots 绘制，先确认回测收益曲线是否连续、合理。</p>
-        </div>
-        <div style={chartMetaStyle}>
-          <div>起点 {formatCurrency(startValue)}</div>
-          <div>终点 {formatCurrency(endValue)}</div>
+          <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>{isZh ? "权益曲线" : "Equity Curve"}</h2>
         </div>
       </div>
 
@@ -852,20 +1033,24 @@ function EquityCurveCard({
           fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
         }}
       >
-        <div style={{ color: "#64748b", fontSize: 13 }}>
-          放大后会只显示更短的一段时间窗口，便于看清局部走势和事件细节，虚线表示起始资金基准线。
+        <div style={{ color: "#475569", fontSize: 13 }}>
+          {isZh
+            ? "放大后会只显示更短的一段时间窗口; 虚线表示起始资金基准线"
+            : "Zooming in shows a shorter time window so you can inspect local moves and events more clearly; the dashed line marks the starting capital reference."}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button type="button" style={zoomButtonStyle} onClick={zoomOut}>
-            缩小
+            {isZh ? "缩小" : "Zoom Out"}
           </button>
           <button type="button" style={zoomButtonStyle} onClick={resetZoom}>
-            还原
+            {isZh ? "还原" : "Reset"}
           </button>
           <button type="button" style={zoomButtonStyle} onClick={zoomIn}>
-            放大
+            {isZh ? "放大" : "Zoom In"}
           </button>
-          <span style={{ color: "#475569", fontSize: 13 }}>缩放 {Math.round(chartZoom * 100)}%</span>
+          <span style={{ color: "#475569", fontSize: 13 }}>
+            {isZh ? "缩放" : "Zoom"} {Math.round(chartZoom * 100)}%
+          </span>
         </div>
       </div>
 
@@ -876,13 +1061,16 @@ function EquityCurveCard({
           gap: 8,
           fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
         }}
-      >
+        >
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", color: "#475569", fontSize: 13 }}>
           <span>
-            当前窗口: {formatDateTime(visibleWindowStart)} {"->"} {formatDateTime(visibleWindowEnd)}
+            {isZh ? "当前窗口" : "Current Window"}: {formatDateTime(visibleWindowStart, locale)} {"->"}{" "}
+            {formatDateTime(visibleWindowEnd, locale)}
           </span>
           <span>
-            显示 {visiblePoints.length} / {normalizedPoints.length} 个快照点
+            {isZh
+              ? `显示 ${visiblePoints.length} / ${normalizedPoints.length} 个快照点`
+              : `Showing ${visiblePoints.length} / ${normalizedPoints.length} snapshot points`}
           </span>
         </div>
         <input
@@ -909,39 +1097,62 @@ function EquityCurveCard({
           fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
         }}
       >
+        <button
+          type="button"
+          style={markerToggleChipStyle(curveVisibility.strategy, "#0f766e")}
+          onClick={() =>
+            setCurveVisibility((current) => ({ ...current, strategy: !current.strategy }))
+          }
+        >
+          {isZh ? "策略曲线" : "Strategy Curve"}
+        </button>
+        <button
+          type="button"
+          style={markerToggleChipStyle(curveVisibility.SPY, "#2563eb")}
+          onClick={() => setCurveVisibility((current) => ({ ...current, SPY: !current.SPY }))}
+        >
+          SPY
+        </button>
+        <button
+          type="button"
+          style={markerToggleChipStyle(curveVisibility.QQQ, "#f97316")}
+          onClick={() => setCurveVisibility((current) => ({ ...current, QQQ: !current.QQQ }))}
+        >
+          QQQ
+        </button>
         <button type="button" style={markerToggleButtonStyle(true)} onClick={() => setAllMarkers(true)}>
-          全部开启
+          {isZh ? "全部开启" : "Enable All"}
         </button>
         <button type="button" style={markerToggleButtonStyle(false)} onClick={() => setAllMarkers(false)}>
-          全部关闭
+          {isZh ? "全部关闭" : "Disable All"}
         </button>
         <button
           type="button"
           style={markerToggleChipStyle(markerVisibility.buy_signal, "#2563eb")}
           onClick={() => toggleMarkerCategory("buy_signal")}
         >
-          BUY 信号
+          {isZh ? "BUY 信号" : "BUY Signals"}
         </button>
         <button
           type="button"
           style={markerToggleChipStyle(markerVisibility.sell_signal, "#d97706")}
           onClick={() => toggleMarkerCategory("sell_signal")}
         >
-          SELL 信号
+          {isZh ? "SELL 信号" : "SELL Signals"}
         </button>
         <button
           type="button"
           style={markerToggleChipStyle(markerVisibility.buy_fill, "#16a34a")}
           onClick={() => toggleMarkerCategory("buy_fill")}
         >
-          BUY 成交
+          {isZh ? "BUY 成交" : "BUY Fills"}
         </button>
         <button
           type="button"
           style={markerToggleChipStyle(markerVisibility.sell_fill, "#dc2626")}
           onClick={() => toggleMarkerCategory("sell_fill")}
         >
-          SELL 成交
+          {isZh ? "SELL 成交" : "SELL Fills"}
         </button>
       </div>
 
@@ -954,7 +1165,7 @@ function EquityCurveCard({
           border: "1px solid rgba(94, 234, 212, 0.28)",
         }}
       >
-        <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: 320, display: "block" }}>
+        <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: 380, display: "block" }}>
           <defs>
             <linearGradient id="equityFill" x1="0" x2="0" y1="0" y2="1">
               <stop offset="0%" stopColor="rgba(15,118,110,0.28)" />
@@ -980,7 +1191,7 @@ function EquityCurveCard({
                 fontWeight="600"
                 fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
               >
-                {formatCurrency(tick.value)}
+                {formatCurrency(tick.value, locale)}
               </text>
             </g>
           ))}
@@ -1006,19 +1217,43 @@ function EquityCurveCard({
                 fontWeight="700"
                 fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
               >
-                起始资金 {formatCurrency(referenceValue)}
+                {isZh ? "起始资金" : "Starting Capital"} {formatCurrency(referenceValue, locale)}
               </text>
             </g>
           ) : null}
-          <path d={areaPath} fill="url(#equityFill)" />
-          <path
-            d={linePath}
-            fill="none"
-            stroke="#0f766e"
-            strokeWidth="4"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
+          {curveVisibility.strategy ? <path d={areaPath} fill="url(#equityFill)" /> : null}
+          {curveVisibility.SPY && spyLinePath ? (
+            <path
+              d={spyLinePath}
+              fill="none"
+              stroke="#2563eb"
+              strokeWidth="3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              opacity="0.9"
+            />
+          ) : null}
+          {curveVisibility.QQQ && qqqLinePath ? (
+            <path
+              d={qqqLinePath}
+              fill="none"
+              stroke="#f97316"
+              strokeWidth="3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              opacity="0.9"
+            />
+          ) : null}
+          {curveVisibility.strategy ? (
+            <path
+              d={linePath}
+              fill="none"
+              stroke="#0f766e"
+              strokeWidth="4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          ) : null}
           {visibleMarkers.map((marker) => {
             if (marker.shape === "circle") {
               return (
@@ -1113,21 +1348,39 @@ function EquityCurveCard({
           fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
         }}
       >
+        {curveVisibility.strategy ? (
+          <span style={legendItemStyle}>
+            <span style={legendLineStyle("#0f766e")} />
+            {isZh ? "策略曲线" : "Strategy Curve"}
+          </span>
+        ) : null}
+        {curveVisibility.SPY && spyLinePath ? (
+          <span style={legendItemStyle}>
+            <span style={legendLineStyle("#2563eb")} />
+            SPY
+          </span>
+        ) : null}
+        {curveVisibility.QQQ && qqqLinePath ? (
+          <span style={legendItemStyle}>
+            <span style={legendLineStyle("#f97316")} />
+            QQQ
+          </span>
+        ) : null}
         <span style={legendItemStyle}>
           <span style={{ ...legendDotStyle, border: "2px solid #2563eb", background: "#fff" }} />
-          BUY 信号 {buySignalCount}
+          {isZh ? "BUY 信号" : "BUY Signals"} {buySignalCount}
         </span>
         <span style={legendItemStyle}>
           <span style={{ ...legendDotStyle, border: "2px solid #d97706", background: "#fff" }} />
-          SELL 信号 {sellSignalCount}
+          {isZh ? "SELL 信号" : "SELL Signals"} {sellSignalCount}
         </span>
         <span style={legendItemStyle}>
           <span style={legendTriangleUpStyle} />
-          BUY 成交 {buyCount}
+          {isZh ? "BUY 成交" : "BUY Fills"} {buyCount}
         </span>
         <span style={legendItemStyle}>
           <span style={legendTriangleDownStyle} />
-          SELL 成交 {sellCount}
+          {isZh ? "SELL 成交" : "SELL Fills"} {sellCount}
         </span>
       </div>
 
@@ -1141,20 +1394,42 @@ function EquityCurveCard({
         }}
       >
         <div style={miniMetricStyle}>
-          <div style={labelStyle}>快照点数</div>
+          <div style={labelStyle}>{isZh ? "快照点数" : "Snapshots"}</div>
           <div style={miniMetricValueStyle}>{normalizedPoints.length}</div>
         </div>
         <div style={miniMetricStyle}>
-          <div style={labelStyle}>曲线峰值</div>
-          <div style={miniMetricValueStyle}>{formatCurrency(peakValue)}</div>
+          <div style={labelStyle}>{isZh ? "曲线峰值" : "Peak Equity"}</div>
+          <div style={miniMetricValueStyle}>{formatCurrency(peakValue, locale)}</div>
         </div>
         <div style={miniMetricStyle}>
-          <div style={labelStyle}>曲线谷值</div>
-          <div style={miniMetricValueStyle}>{formatCurrency(troughValue)}</div>
+          <div style={labelStyle}>{isZh ? "曲线谷值" : "Lowest Equity"}</div>
+          <div style={miniMetricValueStyle}>{formatCurrency(troughValue, locale)}</div>
         </div>
+        <div style={miniMetricStyle}>
+          <div style={labelStyle}>SPY {isZh ? "收益" : "Return"}</div>
+          <div style={miniMetricValueStyle}>{formatPercent(spyTotalReturn, 2)}</div>
+        </div>
+        <div style={miniMetricStyle}>
+          <div style={labelStyle}>QQQ {isZh ? "收益" : "Return"}</div>
+          <div style={miniMetricValueStyle}>{formatPercent(qqqTotalReturn, 2)}</div>
+        </div>
+        {benchmarkSymbol ? (
           <div style={miniMetricStyle}>
-            <div style={labelStyle}>最后快照</div>
-            <div style={miniMetricValueStyle}>{formatDateTime(latestPoint?.ts || null)}</div>
+            <div style={labelStyle}>
+              {isZh ? "基准收益" : "Benchmark Return"} {benchmarkSymbol ? `(${benchmarkSymbol})` : ""}
+            </div>
+            <div style={miniMetricValueStyle}>{formatPercent(benchmarkTotalReturn, 2)}</div>
+          </div>
+        ) : null}
+        {benchmarkSymbol ? (
+          <div style={miniMetricStyle}>
+            <div style={labelStyle}>{isZh ? "超额收益" : "Excess Return"}</div>
+            <div style={miniMetricValueStyle}>{formatPercent(excessReturn, 2)}</div>
+          </div>
+        ) : null}
+          <div style={miniMetricStyle}>
+            <div style={labelStyle}>{isZh ? "最后快照" : "Last Snapshot"}</div>
+            <div style={miniMetricValueStyle}>{formatDateTime(latestPoint?.ts || null, locale)}</div>
           </div>
         </div>
 
@@ -1212,8 +1487,10 @@ const tableToggleButtonStyle = {
 } as const;
 
 function TransactionsCard({ transactions }: { transactions: BacktestTransactionOut[] }) {
+  const { locale } = useI18n();
+  const isZh = locale === "zh-CN";
   const [showAllTransactions, setShowAllTransactions] = useState(false);
-  const visibleTransactions = showAllTransactions ? transactions : transactions.slice(0, 20);
+  const visibleTransactions = showAllTransactions ? transactions : transactions.slice(0, 10);
 
   return (
     <section style={sectionCardStyle}>
@@ -1228,30 +1505,43 @@ function TransactionsCard({ transactions }: { transactions: BacktestTransactionO
         }}
       >
         <div>
-          <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>交易明细</h2>
-          <p style={sectionSubtitleStyle}>这里直接读 transactions，方便核对成交方向、价格、费用和信号原因。</p>
+          <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>{isZh ? "交易明细" : "Transactions"}</h2>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <Badge tone="info">{transactions.length} trades</Badge>
-          {transactions.length > 20 ? (
+          <Badge tone="info">
+            {transactions.length} {isZh ? "笔交易" : transactions.length === 1 ? "trade" : "trades"}
+          </Badge>
+          {transactions.length > 10 ? (
             <button
               type="button"
               onClick={() => setShowAllTransactions((current) => !current)}
               style={tableToggleButtonStyle}
             >
-              {showAllTransactions ? "收起到前 20 条" : "展开全部"}
+              {showAllTransactions
+                ? isZh
+                  ? "收起到前 10 条"
+                  : "Show Top 10"
+                : isZh
+                  ? "展开全部"
+                  : "Show All"}
             </button>
           ) : null}
         </div>
       </div>
 
       {transactions.length === 0 ? (
-        <div style={emptyStateStyle}>这次 run 还没有写入任何交易记录。</div>
+        <div style={emptyStateStyle}>
+          {isZh
+            ? "这次 run 还没有写入任何交易记录"
+            : "This run has not written any transaction records yet"}
+        </div>
       ) : (
         <>
-          {transactions.length > 20 ? (
-            <div style={{ marginBottom: 10, color: "#64748b", fontSize: 13 }}>
-              当前显示 {visibleTransactions.length} / {transactions.length} 条交易记录。
+          {transactions.length > 10 ? (
+            <div style={{ marginBottom: 10, color: "#475569", fontSize: 13 }}>
+              {isZh
+                ? `当前显示 ${visibleTransactions.length} / ${transactions.length} 条交易记录。`
+                : `Showing ${visibleTransactions.length} / ${transactions.length} transactions.`}
             </div>
           ) : null}
           <div
@@ -1272,7 +1562,9 @@ function TransactionsCard({ transactions }: { transactions: BacktestTransactionO
           >
             <thead>
               <tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>
-                {["时间", "方向", "标的", "数量", "成交价", "费用", "现金流", "信号时间", "原因"].map(
+                {(isZh
+                  ? ["时间", "方向", "标的", "数量", "成交价", "费用", "现金流", "信号时间", "原因"]
+                  : ["Time", "Side", "Symbol", "Qty", "Price", "Fee", "Cash Flow", "Signal Time", "Reason"]).map(
                   (label) => (
                     <th
                       key={label}
@@ -1298,16 +1590,16 @@ function TransactionsCard({ transactions }: { transactions: BacktestTransactionO
                 const signalTs = getMetaText(txn.meta, "signal_ts");
                 return (
                   <tr key={txn.id} style={{ borderBottom: "1px solid rgba(241, 245, 249, 1)" }}>
-                    <td style={cellStyle}>{formatDateTime(txn.ts || null)}</td>
+                    <td style={cellStyle}>{formatDateTime(txn.ts || null, locale)}</td>
                     <td style={cellStyle}>
                       <Badge tone={txn.side === "BUY" ? "success" : "warning"}>{txn.side}</Badge>
                     </td>
                     <td style={cellStyle}>{txn.symbol}</td>
-                    <td style={cellStyle}>{txn.qty.toLocaleString("en-US", { maximumFractionDigits: 4 })}</td>
-                    <td style={cellStyle}>{formatCurrency(txn.price)}</td>
-                    <td style={cellStyle}>{formatCurrency(txn.fee ?? null)}</td>
-                    <td style={cellStyle}>{formatCurrency(netCashFlow)}</td>
-                    <td style={cellStyle}>{formatDateTime(signalTs)}</td>
+                    <td style={cellStyle}>{txn.qty.toLocaleString(locale, { maximumFractionDigits: 4 })}</td>
+                    <td style={cellStyle}>{formatCurrency(txn.price, locale)}</td>
+                    <td style={cellStyle}>{formatCurrency(txn.fee ?? null, locale)}</td>
+                    <td style={cellStyle}>{formatCurrency(netCashFlow, locale)}</td>
+                    <td style={cellStyle}>{formatDateTime(signalTs, locale)}</td>
                     <td style={cellStyle}>{reason || "-"}</td>
                   </tr>
                 );
@@ -1323,6 +1615,8 @@ function TransactionsCard({ transactions }: { transactions: BacktestTransactionO
 
 export default function BacktestDetailPage() {
   const router = useRouter();
+  const { locale } = useI18n();
+  const isZh = locale === "zh-CN";
   const runId = Array.isArray(router.query.runId) ? router.query.runId[0] : router.query.runId;
 
   const [run, setRun] = useState<BacktestDetailOut | null>(null);
@@ -1346,7 +1640,7 @@ export default function BacktestDetailPage() {
       })
       .catch((err: Error) => {
         if (!cancelled) {
-          setError(err.message || "加载回测详情失败");
+          setError(err.message || BACKTEST_DETAIL_LOAD_FAILED);
         }
       })
       .finally(() => {
@@ -1376,31 +1670,45 @@ export default function BacktestDetailPage() {
   if (!loading && !error && !run) {
     return (
       <AppShell
-        title="回测详情"
-        subtitle="当前没有找到目标回测记录，可能 run id 不存在，或者后端尚未完成落库。"
-        actions={actionLink("/backtests", "返回回测列表")}
+        title={isZh ? "回测详情" : "Backtest Detail"}
+        subtitle={
+          isZh
+            ? "当前没有找到目标回测记录，可能 run id 不存在，或者后端尚未完成落库"
+            : "The target backtest record could not be found. The run ID may not exist or the backend may not have finished persisting it yet."
+        }
+        actions={actionLink("/backtests", isZh ? "返回回测列表" : "Back To Backtests")}
       >
-        <p>未找到回测记录。</p>
+        <p>{isZh ? "未找到回测记录。" : "Backtest not found."}</p>
       </AppShell>
     );
   }
 
   return (
     <AppShell
-      title={run?.strategy_name ? `${run.strategy_name} 回测结果` : "回测详情"}
-      subtitle="本页把单次回测的状态、权益曲线、摘要指标、交易明细和最新持仓放在一起，方便快速复盘。"
+      title={run?.strategy_name ? (isZh ? `${run.strategy_name} 回测结果` : `${run.strategy_name} Backtest Result`) : isZh ? "回测详情" : "Backtest Detail"}
+      subtitle={
+        isZh
+          ? "本页把单次回测的状态、权益曲线、摘要指标、交易明细和最新持仓放在一起，方便快速复盘"
+          : "This page brings together run status, the equity curve, summary metrics, transactions, and latest positions for a quick review."
+      }
       actions={
         <>
-          {actionLink("/backtests", "返回回测列表")}
+          {actionLink("/backtests", isZh ? "返回回测列表" : "Back To Backtests")}
           {actionLink(
             run ? `/strategies/${encodeURIComponent(run.strategy_id)}` : "/strategies",
-            "查看策略"
+            isZh ? "查看策略" : "View Strategy"
           )}
         </>
       }
     >
-      {loading ? <p>加载中...</p> : null}
-      {error ? <p style={{ color: "crimson" }}>{error}</p> : null}
+      {loading ? <p>{isZh ? "加载中..." : "Loading..."}</p> : null}
+      {error ? (
+        <p style={{ color: "crimson" }}>
+          {error === BACKTEST_DETAIL_LOAD_FAILED
+            ? (isZh ? "加载回测详情失败" : "Failed to load backtest detail")
+            : error}
+        </p>
+      ) : null}
 
       {!loading && !error && run ? (
         <>
@@ -1413,27 +1721,27 @@ export default function BacktestDetailPage() {
             }}
           >
             <MetricCard
-              label="总收益"
+              label={isZh ? "总收益" : "Total Return"}
               value={formatPercent(totalReturn, 2)}
-              hint="来自 strategy_run.summary_metrics.total_return。"
+              hint={isZh ? "来自 strategy_run.summary_metrics.total_return" : "From strategy_run.summary_metrics.total_return"}
               accent="#0f766e"
             />
             <MetricCard
-              label="最大回撤"
+              label={isZh ? "最大回撤" : "Max Drawdown"}
               value={formatPercent(maxDrawdown, 2)}
-              hint="用来快速判断这次曲线是否过于激进。"
+              hint={isZh ? "用来快速判断这次曲线是否过于激进" : "Used to quickly judge whether the curve was overly aggressive"}
               accent="#b45309"
             />
             <MetricCard
               label="Signals"
               value={signalCount != null ? String(signalCount) : "-"}
-              hint="这次 run 中生成的信号数量。"
+              hint={isZh ? "这次 run 中生成的信号数量" : "Number of signals generated in this run"}
               accent="#2563eb"
             />
             <MetricCard
               label="Transactions"
               value={String(run.transaction_count ?? tradeCount ?? "-")}
-              hint="已经写入 transactions 的成交记录数量。"
+              hint={isZh ? "已经写入 transactions 的成交记录数量" : "Number of filled transactions written into the transactions table"}
               accent="#ca8a04"
             />
           </section>
@@ -1465,18 +1773,17 @@ export default function BacktestDetailPage() {
           >
             <section style={sectionCardStyle}>
               <div style={{ marginBottom: 16 }}>
-                <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>摘要指标</h2>
-                <p style={sectionSubtitleStyle}>当前直接展示后端 summary_metrics，便于检查指标是否正确落库。</p>
+                <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>{isZh ? "摘要指标" : "Summary Metrics"}</h2>
               </div>
 
               {summaryEntries.length === 0 ? (
-                <div style={emptyStateStyle}>这次 run 还没有 summary metrics。</div>
+                <div style={emptyStateStyle}>{isZh ? "这次 run 还没有 summary metrics" : "This run does not have summary metrics yet"}</div>
               ) : (
                 <div style={{ display: "grid", gap: 10 }}>
                   {summaryEntries.map(([key, value]) => (
                     <div key={key} style={infoRowStyle}>
                       <div style={{ color: "#64748b", fontWeight: 600 }}>{key}</div>
-                      <div style={{ color: "#0f172a", wordBreak: "break-word" }}>{renderSummaryValue(key, value)}</div>
+                      <div style={{ color: "#0f172a", wordBreak: "break-word" }}>{renderSummaryValue(key, value, locale)}</div>
                     </div>
                   ))}
                 </div>
@@ -1485,18 +1792,17 @@ export default function BacktestDetailPage() {
 
             <section style={sectionCardStyle}>
               <div style={{ marginBottom: 16 }}>
-                <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>最新持仓</h2>
-                <p style={sectionSubtitleStyle}>这里展示最新 snapshot 的 positions，方便确认回测结束时还持有哪些仓位。</p>
+                <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>{isZh ? "最新持仓" : "Latest Positions"}</h2>
               </div>
 
               {positionEntries.length === 0 ? (
-                <div style={emptyStateStyle}>当前没有持仓，或回测结束时已经全部平仓。</div>
+                <div style={emptyStateStyle}>{isZh ? "当前没有持仓，或回测结束时已经全部平仓" : "There are no positions, or all positions were closed by the end of the backtest"}</div>
               ) : (
                 <div style={{ display: "grid", gap: 10 }}>
                   {positionEntries.map(([symbol, value]) => (
                     <div key={symbol} style={infoRowStyle}>
                       <div style={{ color: "#64748b", fontWeight: 700 }}>{symbol}</div>
-                      <div style={{ color: "#0f172a", wordBreak: "break-word" }}>{renderValue(value)}</div>
+                      <div style={{ color: "#0f172a", wordBreak: "break-word" }}>{renderValue(value, locale)}</div>
                     </div>
                   ))}
                 </div>
@@ -1514,12 +1820,13 @@ const sectionCardStyle = {
   borderRadius: 24,
   border: "1px solid rgba(148, 163, 184, 0.18)",
   background: "rgba(255,255,255,0.82)",
+  color: "#0f172a",
   boxShadow: "0 18px 44px rgba(15, 23, 42, 0.06)",
 } as const;
 
 const sectionSubtitleStyle = {
   margin: 0,
-  color: "#64748b",
+  color: "#475569",
   lineHeight: 1.6,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 } as const;
@@ -1540,8 +1847,9 @@ const infoGridStyle = {
 
 const labelStyle = {
   marginBottom: 6,
-  color: "#94a3b8",
+  color: "#64748b",
   fontSize: 12,
+  fontWeight: 700,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 } as const;
 
@@ -1556,18 +1864,13 @@ const miniMetricStyle = {
   padding: 14,
   borderRadius: 16,
   background: "#f8fafc",
+  color: "#0f172a",
 } as const;
 
 const miniMetricValueStyle = {
   color: "#0f172a",
   fontWeight: 700,
   lineHeight: 1.6,
-  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-} as const;
-
-const chartMetaStyle = {
-  color: "#475569",
-  lineHeight: 1.7,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 } as const;
 
@@ -1583,6 +1886,16 @@ const legendDotStyle = {
   height: 10,
   borderRadius: "999px",
 } as const;
+
+function legendLineStyle(color: string) {
+  return {
+    display: "inline-block",
+    width: 18,
+    height: 0,
+    borderTop: `3px solid ${color}`,
+    borderRadius: 999,
+  } as const;
+}
 
 const legendTriangleUpStyle = {
   width: 0,

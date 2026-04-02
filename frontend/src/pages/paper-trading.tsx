@@ -1,6 +1,5 @@
-import type { CSSProperties, FormEvent } from "react";
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import type { CSSProperties, FormEvent, MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   createPaperAccount,
@@ -8,10 +7,12 @@ import {
   getPaperAccountOverview,
   listPaperAccounts,
   listStrategyPortfolios,
+  renameStrategyPortfolio,
 } from "@/api/paper-accounts";
 import {
   createMultiStrategyPaperTradingRun,
   createPaperTradingRun,
+  getLatestPaperTradingTradeDate,
 } from "@/api/paper-trading";
 import { listStockBaskets } from "@/api/stock-baskets";
 import {
@@ -28,6 +29,7 @@ import type {
   PaperTradingAccountOverviewOut,
   StrategyPortfolioCreate,
   StrategyPortfolioOut,
+  StrategyPortfolioRename,
 } from "@/types/paper-account";
 import type {
   MultiStrategyPaperTradingRunOut,
@@ -46,30 +48,13 @@ import {
   formatPercent,
   getStrategyDescription,
 } from "@/utils/strategy";
-
-function actionLink(href: string, label: string, filled = false) {
-  return (
-    <Link
-      href={href}
-      style={{
-        padding: "11px 16px",
-        borderRadius: 14,
-        border: filled ? "none" : "1px solid rgba(148, 163, 184, 0.16)",
-        background: filled ? "#0891b2" : "rgba(15, 23, 42, 0.72)",
-        color: filled ? "#f8fafc" : "#dbeafe",
-        textDecoration: "none",
-        fontWeight: 700,
-        fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-      }}
-    >
-      {label}
-    </Link>
-  );
-}
+import { useI18n } from "@/i18n/provider";
 
 function toDateInputValue(dt: Date): string {
   return dt.toISOString().slice(0, 10);
 }
+
+const TODAY_INPUT_VALUE = toDateInputValue(new Date());
 
 function fieldBlock(
   label: string,
@@ -89,29 +74,10 @@ function fieldBlock(
 
 type WorkspaceTab = "accounts" | "allocations" | "execution";
 
-const WORKSPACE_TABS: Array<{
-  key: WorkspaceTab;
-  label: string;
-  description: string;
-}> = [
-  {
-    key: "accounts",
-    label: "账户与子组合",
-    description: "创建和查看 paper account 与 strategy portfolio。",
-  },
-  {
-    key: "allocations",
-    label: "策略组合调整",
-    description: "给子组合配置策略、资金占比和虚拟本金。",
-  },
-  {
-    key: "execution",
-    label: "Paper Trading 执行",
-    description: "运行单策略或多策略调度，并查看最新结果。",
-  },
-];
-
 export default function PaperTradingPage() {
+  const { locale, messages, t } = useI18n();
+  const copy = messages.paperTrading;
+  const isZh = locale === "zh-CN";
   const [strategies, setStrategies] = useState<StrategyOut[]>([]);
   const [baskets, setBaskets] = useState<StockBasketOut[]>([]);
   const [allocations, setAllocations] = useState<StrategyAllocationOut[]>([]);
@@ -134,6 +100,7 @@ export default function PaperTradingPage() {
 
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [creatingPortfolio, setCreatingPortfolio] = useState(false);
+  const [renamingPortfolio, setRenamingPortfolio] = useState(false);
   const [submittingAllocation, setSubmittingAllocation] = useState(false);
   const [submittingSingle, setSubmittingSingle] = useState(false);
   const [submittingMulti, setSubmittingMulti] = useState(false);
@@ -152,6 +119,13 @@ export default function PaperTradingPage() {
   const [portfolioName, setPortfolioName] = useState("default");
   const [portfolioDescription, setPortfolioDescription] = useState("");
   const [portfolioStrategyIds, setPortfolioStrategyIds] = useState<string[]>([]);
+  const [editingPortfolioId, setEditingPortfolioId] = useState<string | null>(null);
+  const [editingPortfolioName, setEditingPortfolioName] = useState("");
+  const [editingPortfolioError, setEditingPortfolioError] = useState<string | null>(null);
+  const [portfolioRenameSuccess, setPortfolioRenameSuccess] = useState<{
+    id: string;
+    message: string;
+  } | null>(null);
 
   const [allocationStrategyId, setAllocationStrategyId] = useState("");
   const [allocationPortfolioName, setAllocationPortfolioName] = useState("default");
@@ -160,42 +134,96 @@ export default function PaperTradingPage() {
   const [allowFractional, setAllowFractional] = useState(true);
   const [allocationStatus, setAllocationStatus] = useState("active");
   const [notes, setNotes] = useState("");
+  const [expandedAllocationPortfolioName, setExpandedAllocationPortfolioName] =
+    useState<string | null>(null);
+  const [editingAllocationId, setEditingAllocationId] = useState<string | null>(null);
 
   const [strategyId, setStrategyId] = useState("");
   const [singlePortfolioName, setSinglePortfolioName] = useState("default");
-  const [singleTradeDate, setSingleTradeDate] = useState(toDateInputValue(new Date()));
+  const [singleTradeDate, setSingleTradeDate] = useState(TODAY_INPUT_VALUE);
   const [basketId, setBasketId] = useState("");
   const [singleSubmitOrders, setSingleSubmitOrders] = useState(false);
 
   const [multiPortfolioName, setMultiPortfolioName] = useState("default");
-  const [multiTradeDate, setMultiTradeDate] = useState(toDateInputValue(new Date()));
+  const [multiTradeDate, setMultiTradeDate] = useState(TODAY_INPUT_VALUE);
   const [multiSubmitOrders, setMultiSubmitOrders] = useState(false);
   const [continueOnError, setContinueOnError] = useState(false);
+  const [latestAvailableTradeDate, setLatestAvailableTradeDate] = useState<string | null>(null);
 
-  const refreshOverview = async (accountId: string) => {
-    if (!accountId) {
-      setAccountOverview(null);
-      return;
-    }
-    try {
-      setOverviewLoading(true);
-      const payload = await getPaperAccountOverview(accountId);
-      setAccountOverview(payload);
-    } catch (err: any) {
-      setError(err?.message || "加载账户概览失败");
-    } finally {
-      setOverviewLoading(false);
-    }
-  };
+  const workspaceTabs: Array<{
+    key: WorkspaceTab;
+    label: string;
+    description: string;
+  }> = [
+    {
+      key: "accounts",
+      label: copy.tabs.accounts.label,
+      description: copy.tabs.accounts.description,
+    },
+    {
+      key: "allocations",
+      label: copy.tabs.allocations.label,
+      description: copy.tabs.allocations.description,
+    },
+    {
+      key: "execution",
+      label: copy.tabs.execution.label,
+      description: copy.tabs.execution.description,
+    },
+  ];
+
+  const formatNumber = (value: number) => value.toLocaleString(locale);
+  const allocationCountLabel = (count: number) =>
+    isZh ? `${count} ${copy.allocations.countAllocations}` : `${count} ${count === 1 ? "allocation" : copy.allocations.countAllocations}`;
+  const activeAllocationCountLabel = (count: number) =>
+    isZh ? `${count} ${copy.allocations.countActive}` : `${count} ${copy.allocations.countActive}`;
+  const strategyCountLabel = (count: number) =>
+    isZh ? `${count} ${copy.accounts.summary.strategiesCount}` : `${count} ${count === 1 ? "strategy" : copy.accounts.summary.strategiesCount}`;
+  const singleTradeDateDescription = latestAvailableTradeDate
+    ? `${copy.execution.singleTradeDateDescription} ${t(
+        "paperTrading.execution.latestTradeDateSuffix",
+        {
+          date: latestAvailableTradeDate,
+        }
+      )}`
+    : copy.execution.singleTradeDateDescription;
+  const multiTradeDateDescription = latestAvailableTradeDate
+    ? `${copy.execution.multiTradeDateDescription} ${t(
+        "paperTrading.execution.latestTradeDateSuffix",
+        {
+          date: latestAvailableTradeDate,
+        }
+      )}`
+    : copy.execution.multiTradeDateDescription;
+
+  const refreshOverview = useCallback(
+    async (accountId: string) => {
+      if (!accountId) {
+        setAccountOverview(null);
+        return;
+      }
+      try {
+        setOverviewLoading(true);
+        const payload = await getPaperAccountOverview(accountId);
+        setAccountOverview(payload);
+      } catch (err: any) {
+        setError(err?.message || copy.loadOverviewFailed);
+      } finally {
+        setOverviewLoading(false);
+      }
+    },
+    [copy.loadOverviewFailed]
+  );
 
   const refreshWorkspace = async (preferredAccountId?: string) => {
-    const [strategyItems, basketItems, allocationItems, accountItems, portfolioItems] =
+    const [strategyItems, basketItems, allocationItems, accountItems, portfolioItems, latestTradeDatePayload] =
       await Promise.all([
         listStrategies(),
         listStockBaskets(),
         listStrategyAllocations(),
         listPaperAccounts(),
         listStrategyPortfolios(),
+        getLatestPaperTradingTradeDate(),
       ]);
 
     const preferredStrategy = strategyItems.find(
@@ -212,11 +240,20 @@ export default function PaperTradingPage() {
     setAllocations(allocationItems);
     setAccounts(accountItems);
     setPortfolios(portfolioItems);
+    setLatestAvailableTradeDate(latestTradeDatePayload.latest_trade_date || null);
     setStrategyId((current) => current || preferredStrategy?.id || strategyItems[0]?.id || "");
     setAllocationStrategyId(
       (current) => current || preferredStrategy?.id || strategyItems[0]?.id || ""
     );
     setSelectedAccountId(nextAccountId);
+    if (latestTradeDatePayload.latest_trade_date) {
+      setSingleTradeDate((current) =>
+        current === TODAY_INPUT_VALUE ? latestTradeDatePayload.latest_trade_date || current : current
+      );
+      setMultiTradeDate((current) =>
+        current === TODAY_INPUT_VALUE ? latestTradeDatePayload.latest_trade_date || current : current
+      );
+    }
   };
 
   useEffect(() => {
@@ -228,8 +265,17 @@ export default function PaperTradingPage() {
       listStrategyAllocations(),
       listPaperAccounts(),
       listStrategyPortfolios(),
+      getLatestPaperTradingTradeDate(),
     ])
-      .then(([strategyItems, basketItems, allocationItems, accountItems, portfolioItems]) => {
+      .then(
+        ([
+          strategyItems,
+          basketItems,
+          allocationItems,
+          accountItems,
+          portfolioItems,
+          latestTradeDatePayload,
+        ]) => {
         if (cancelled) {
           return;
         }
@@ -244,13 +290,18 @@ export default function PaperTradingPage() {
         setAllocations(allocationItems);
         setAccounts(accountItems);
         setPortfolios(portfolioItems);
+        setLatestAvailableTradeDate(latestTradeDatePayload.latest_trade_date || null);
         setStrategyId(preferredStrategy?.id || strategyItems[0]?.id || "");
         setAllocationStrategyId(preferredStrategy?.id || strategyItems[0]?.id || "");
         setSelectedAccountId(nextAccountId);
+        if (latestTradeDatePayload.latest_trade_date) {
+          setSingleTradeDate(latestTradeDatePayload.latest_trade_date);
+          setMultiTradeDate(latestTradeDatePayload.latest_trade_date);
+        }
       })
       .catch((err: any) => {
         if (!cancelled) {
-          setError(err?.message || "加载 Paper Trading 工作台失败");
+          setError(err?.message || copy.loadWorkspaceFailed);
         }
       })
       .finally(() => {
@@ -262,14 +313,14 @@ export default function PaperTradingPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [copy.loadWorkspaceFailed]);
 
   useEffect(() => {
     if (!selectedAccountId) {
       return;
     }
     void refreshOverview(selectedAccountId);
-  }, [selectedAccountId]);
+  }, [refreshOverview, selectedAccountId]);
 
   const activeStrategies = useMemo(
     () => strategies.filter((item) => item.status === "active"),
@@ -290,9 +341,23 @@ export default function PaperTradingPage() {
   const portfoliosForSelectedAccount = useMemo(() => {
     return activePortfolios.filter((item) => item.paper_account_id === selectedAccountId);
   }, [activePortfolios, selectedAccountId]);
+  const activeAllocationPortfolioNamesForSelectedAccount = useMemo(() => {
+    return new Set(
+      allocations
+        .filter(
+          (item) => item.paper_account_id === selectedAccountId && item.status === "active"
+        )
+        .map((item) => item.portfolio_name)
+    );
+  }, [allocations, selectedAccountId]);
 
   useEffect(() => {
-    const nextPortfolioName = portfoliosForSelectedAccount[0]?.name || "default";
+    const nextPortfolioName =
+      portfoliosForSelectedAccount.find((item) =>
+        activeAllocationPortfolioNamesForSelectedAccount.has(item.name)
+      )?.name ||
+      portfoliosForSelectedAccount[0]?.name ||
+      "default";
     setAllocationPortfolioName((current) =>
       portfoliosForSelectedAccount.some((item) => item.name === current)
         ? current
@@ -308,7 +373,7 @@ export default function PaperTradingPage() {
         ? current
         : nextPortfolioName
     );
-  }, [portfoliosForSelectedAccount]);
+  }, [activeAllocationPortfolioNamesForSelectedAccount, portfoliosForSelectedAccount]);
 
   const stats = useMemo(() => {
     const activeAllocations = allocations.filter((item) => item.status === "active");
@@ -323,38 +388,36 @@ export default function PaperTradingPage() {
     };
   }, [accounts.length, allocations, eligibleStrategies.length, portfoliosForSelectedAccount.length, selectedAccountId]);
 
-  const groupedAllocationsForSelectedAccount = useMemo(() => {
-    const accountAllocations = allocations
-      .filter((item) => item.paper_account_id === selectedAccountId)
-      .sort((a, b) => {
-        const portfolioCompare = a.portfolio_name.localeCompare(b.portfolio_name);
-        if (portfolioCompare !== 0) {
-          return portfolioCompare;
-        }
-        return (a.strategy_name || a.strategy_id).localeCompare(
-          b.strategy_name || b.strategy_id
-        );
-      });
+  const allocationGroupsForSelectedAccount = useMemo(() => {
+    return portfoliosForSelectedAccount
+      .map((portfolio) => {
+        const items = allocations
+          .filter(
+            (item) =>
+              item.paper_account_id === selectedAccountId &&
+              item.portfolio_name === portfolio.name
+          )
+          .sort((a, b) => {
+            return (a.strategy_name || a.strategy_id).localeCompare(
+              b.strategy_name || b.strategy_id
+            );
+          });
 
-    const grouped = new Map<string, StrategyAllocationOut[]>();
-    accountAllocations.forEach((item) => {
-      const bucket = grouped.get(item.portfolio_name);
-      if (bucket) {
-        bucket.push(item);
-        return;
-      }
-      grouped.set(item.portfolio_name, [item]);
-    });
-
-    return Array.from(grouped.entries()).map(([portfolioName, items]) => ({
-      portfolioName,
-      items,
-      activeCount: items.filter((item) => item.status === "active").length,
-      allocationPctTotal: items
-        .filter((item) => item.status === "active")
-        .reduce((sum, item) => sum + item.allocation_pct, 0),
-    }));
-  }, [allocations, selectedAccountId]);
+        return {
+          portfolio,
+          items,
+          activeCount: items.filter((item) => item.status === "active").length,
+          allocationPctTotal: items
+            .filter((item) => item.status === "active")
+            .reduce((sum, item) => sum + item.allocation_pct, 0),
+        };
+      })
+      .sort((a, b) => a.portfolio.name.localeCompare(b.portfolio.name));
+  }, [allocations, portfoliosForSelectedAccount, selectedAccountId]);
+  const editingAllocation = useMemo(
+    () => allocations.find((item) => item.id === editingAllocationId) || null,
+    [allocations, editingAllocationId]
+  );
 
   const handleAccountSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -373,7 +436,7 @@ export default function PaperTradingPage() {
     };
 
     if (!payload.name) {
-      setAccountError("请输入账户名称");
+      setAccountError(copy.validation.accountNameRequired);
       return;
     }
 
@@ -385,7 +448,7 @@ export default function PaperTradingPage() {
       setAccountName("");
       setAccountNotes("");
     } catch (err: any) {
-      setAccountError(err?.message || "创建 paper account 失败");
+      setAccountError(err?.message || copy.errors.createAccountFailed);
     } finally {
       setCreatingAccount(false);
     }
@@ -396,7 +459,7 @@ export default function PaperTradingPage() {
     setPortfolioError(null);
 
     if (!selectedAccountId) {
-      setPortfolioError("请先选择一个 paper account");
+      setPortfolioError(copy.validation.accountRequired);
       return;
     }
 
@@ -409,11 +472,11 @@ export default function PaperTradingPage() {
     };
 
     if (!payload.name) {
-      setPortfolioError("请输入子组合名称");
+      setPortfolioError(copy.validation.portfolioNameRequired);
       return;
     }
     if (payload.strategy_ids.length === 0) {
-      setPortfolioError("请至少选择一个要初始化到子组合里的策略");
+      setPortfolioError(copy.validation.portfolioStrategiesRequired);
       return;
     }
 
@@ -429,26 +492,113 @@ export default function PaperTradingPage() {
       setSinglePortfolioName(saved.name);
       setMultiPortfolioName(saved.name);
     } catch (err: any) {
-      setPortfolioError(err?.message || "创建策略子组合失败");
+      setPortfolioError(err?.message || copy.errors.createPortfolioFailed);
     } finally {
       setCreatingPortfolio(false);
     }
   };
 
-  const seedAllocationPct = portfolioStrategyIds.length > 0 ? 1 / portfolioStrategyIds.length : 0;
+  const handlePortfolioRenameStart = (portfolio: StrategyPortfolioOut) => {
+    setEditingPortfolioId(portfolio.id);
+    setEditingPortfolioName(portfolio.name);
+    setEditingPortfolioError(null);
+    setPortfolioRenameSuccess(null);
+  };
 
-  const handleAllocationSubmit = async (event: FormEvent) => {
+  const handlePortfolioRenameCancel = () => {
+    setEditingPortfolioId(null);
+    setEditingPortfolioName("");
+    setEditingPortfolioError(null);
+  };
+
+  const handlePortfolioRenameSubmit = async (
+    event: FormEvent,
+    portfolio: StrategyPortfolioOut
+  ) => {
+    event.preventDefault();
+    const nextName = editingPortfolioName.trim();
+    if (!nextName) {
+      setEditingPortfolioError(isZh ? "portfolio 名称不能为空" : "Portfolio name cannot be empty");
+      return;
+    }
+    if (nextName === portfolio.name) {
+      handlePortfolioRenameCancel();
+      return;
+    }
+
+    try {
+      setRenamingPortfolio(true);
+      setEditingPortfolioError(null);
+      setPortfolioRenameSuccess(null);
+      const payload: StrategyPortfolioRename = { name: nextName };
+      const saved = await renameStrategyPortfolio(portfolio.id, payload);
+      await refreshWorkspace(selectedAccountId || saved.paper_account_id);
+      await refreshOverview(saved.paper_account_id);
+      setEditingPortfolioId(null);
+      setEditingPortfolioName("");
+      setPortfolioRenameSuccess({
+        id: saved.id,
+        message: isZh ? "portfolio 改名成功" : "Portfolio renamed successfully",
+      });
+      setSinglePortfolioName((current) => (current === portfolio.name ? saved.name : current));
+      setMultiPortfolioName((current) => (current === portfolio.name ? saved.name : current));
+      setAllocationPortfolioName((current) => (current === portfolio.name ? saved.name : current));
+      setExpandedAllocationPortfolioName((current) => (current === portfolio.name ? saved.name : current));
+    } catch (err: any) {
+      setEditingPortfolioError(err?.message || (isZh ? "portfolio 改名失败" : "Failed to rename portfolio"));
+    } finally {
+      setRenamingPortfolio(false);
+    }
+  };
+
+  const seedAllocationPct = portfolioStrategyIds.length > 0 ? 1 / portfolioStrategyIds.length : 0;
+  const selectedStrategySummary =
+    portfolioStrategyIds.length > 0
+      ? isZh
+        ? `已选 ${portfolioStrategyIds.length} 个策略，初始等权约为 ${formatPercent(seedAllocationPct, 0)} / strategy`
+        : `${portfolioStrategyIds.length} strategies selected, starting near ${formatPercent(seedAllocationPct, 0)} per strategy`
+      : isZh
+        ? "已选 0 个策略"
+        : "0 strategies selected";
+
+  const resetAllocationEditor = (portfolioName?: string) => {
+    setEditingAllocationId(null);
+    setAllocationPortfolioName(portfolioName || portfoliosForSelectedAccount[0]?.name || "default");
+    setAllocationPct(0.25);
+    setCapitalBase("");
+    setAllowFractional(true);
+    setAllocationStatus("active");
+    setNotes("");
+  };
+
+  const loadAllocationIntoEditor = (item: StrategyAllocationOut) => {
+    setEditingAllocationId(item.id);
+    setAllocationStrategyId(item.strategy_id);
+    setAllocationPortfolioName(item.portfolio_name);
+    setAllocationPct(item.allocation_pct);
+    setCapitalBase(
+      typeof item.capital_base === "number" ? String(item.capital_base) : ""
+    );
+    setAllowFractional(item.allow_fractional);
+    setAllocationStatus(item.status);
+    setNotes(item.notes || "");
+  };
+
+  const handleAllocationSubmit = async (
+    event: FormEvent,
+    portfolioNameOverride?: string
+  ) => {
     event.preventDefault();
     setAllocationError(null);
 
     if (!allocationStrategyId) {
-      setAllocationError("请选择一个策略");
+      setAllocationError(copy.validation.strategyRequired);
       return;
     }
 
     const payload: StrategyAllocationUpsert = {
       strategy_id: allocationStrategyId,
-      portfolio_name: allocationPortfolioName.trim() || "default",
+      portfolio_name: portfolioNameOverride || allocationPortfolioName.trim() || "default",
       allocation_pct: Number(allocationPct),
       capital_base: capitalBase.trim() ? Number(capitalBase) : null,
       allow_fractional: allowFractional,
@@ -461,14 +611,74 @@ export default function PaperTradingPage() {
       await upsertStrategyAllocation(payload);
       await refreshWorkspace(selectedAccountId);
       await refreshOverview(selectedAccountId);
-      setNotes("");
+      resetAllocationEditor(payload.portfolio_name);
+      setAllocationStrategyId((current) => current || eligibleStrategies[0]?.id || "");
+      setExpandedAllocationPortfolioName(payload.portfolio_name);
       setSinglePortfolioName(payload.portfolio_name);
       setMultiPortfolioName(payload.portfolio_name);
     } catch (err: any) {
-      setAllocationError(err?.message || "保存策略分配失败");
+      setAllocationError(err?.message || copy.errors.saveAllocationFailed);
     } finally {
       setSubmittingAllocation(false);
     }
+  };
+
+  const handleAllocationEditorToggle = (portfolioName: string) => {
+    setAllocationError(null);
+    setExpandedAllocationPortfolioName((current) => {
+      if (current === portfolioName) {
+        setEditingAllocationId(null);
+        return null;
+      }
+      resetAllocationEditor(portfolioName);
+      setAllocationStrategyId((currentStrategyId) => currentStrategyId || eligibleStrategies[0]?.id || "");
+      return portfolioName;
+    });
+  };
+
+  const handleAllocationItemClick = (item: StrategyAllocationOut) => {
+    setAllocationError(null);
+    if (editingAllocationId === item.id) {
+      setEditingAllocationId(null);
+      setExpandedAllocationPortfolioName(null);
+      return;
+    }
+    setExpandedAllocationPortfolioName(item.portfolio_name);
+    loadAllocationIntoEditor(item);
+  };
+
+  const handleAllocationPortfolioOpen = (portfolioName: string) => {
+    if (
+      expandedAllocationPortfolioName === portfolioName &&
+      editingAllocationId === null
+    ) {
+      setExpandedAllocationPortfolioName(null);
+      return;
+    }
+    handleNewAllocationClick(portfolioName);
+  };
+
+  const handleAllocationPortfolioCardClick = (
+    event: MouseEvent<HTMLElement>,
+    portfolioName: string
+  ) => {
+    const target = event.target;
+    if (
+      target instanceof Element &&
+      target.closest(
+        "button, input, select, textarea, a, label, [data-allocation-editor='true']"
+      )
+    ) {
+      return;
+    }
+    handleAllocationPortfolioOpen(portfolioName);
+  };
+
+  const handleNewAllocationClick = (portfolioName: string) => {
+    setAllocationError(null);
+    setExpandedAllocationPortfolioName(portfolioName);
+    resetAllocationEditor(portfolioName);
+    setAllocationStrategyId(eligibleStrategies[0]?.id || "");
   };
 
   const handleSingleSubmit = async (event: FormEvent) => {
@@ -476,7 +686,7 @@ export default function PaperTradingPage() {
     setSingleError(null);
 
     if (!strategyId) {
-      setSingleError("请选择一个策略");
+      setSingleError(copy.validation.strategyRequired);
       return;
     }
 
@@ -494,7 +704,7 @@ export default function PaperTradingPage() {
       setLatestSingleRun(run);
       await refreshOverview(selectedAccountId);
     } catch (err: any) {
-      setSingleError(err?.message || "发起单策略 paper trading 失败");
+      setSingleError(err?.message || copy.errors.singleRunFailed);
     } finally {
       setSubmittingSingle(false);
     }
@@ -517,7 +727,7 @@ export default function PaperTradingPage() {
       setLatestMultiRun(run);
       await refreshOverview(selectedAccountId);
     } catch (err: any) {
-      setMultiError(err?.message || "发起多策略 paper trading 失败");
+      setMultiError(err?.message || copy.errors.multiRunFailed);
     } finally {
       setSubmittingMulti(false);
     }
@@ -525,8 +735,8 @@ export default function PaperTradingPage() {
 
   return (
     <AppShell
-      title="Paper Trading 工作台"
-      subtitle="第一版已经把 paper account、策略子组合、allocation 和执行工作台串起来了。你现在可以按账户管理多个虚拟子组合，并直接查看每个子组合下的策略情况。"
+      title={copy.title}
+      subtitle=""
       actions={
         <>
           <button
@@ -534,26 +744,26 @@ export default function PaperTradingPage() {
             onClick={() => setActiveTab("accounts")}
             style={actionButtonStyle(activeTab === "accounts")}
           >
-            账户与子组合
+            {copy.actions.accounts}
           </button>
           <button
             type="button"
             onClick={() => setActiveTab("allocations")}
             style={actionButtonStyle(activeTab === "allocations")}
           >
-            策略组合调整
+            {copy.actions.allocations}
           </button>
           <button
             type="button"
             onClick={() => setActiveTab("execution")}
             style={actionButtonStyle(activeTab === "execution")}
           >
-            Paper Trading 执行
+            {copy.actions.execution}
           </button>
         </>
       }
     >
-      {loading ? <p>加载中...</p> : null}
+      {loading ? <p>{copy.loading}</p> : null}
       {error ? <p style={{ color: "crimson" }}>{error}</p> : null}
 
       {!loading && !error ? (
@@ -567,34 +777,34 @@ export default function PaperTradingPage() {
             }}
           >
             <MetricCard
-              label="Paper Accounts"
+              label={copy.metrics.paperAccounts.label}
               value={String(stats.accounts)}
-              hint="每个 account 对应一套 Alpaca paper 凭证和一个独立的执行通道。"
+              hint={copy.metrics.paperAccounts.hint}
               accent="#0f766e"
             />
             <MetricCard
-              label="当前账户子组合"
+              label={copy.metrics.portfolios.label}
               value={String(stats.portfolios)}
-              hint="这里统计当前选中 paper account 下的 active strategy portfolios。"
+              hint={copy.metrics.portfolios.hint}
               accent="#2563eb"
             />
             <MetricCard
-              label="当前账户 Active Allocations"
+              label={copy.metrics.activeAllocations.label}
               value={String(stats.activeAllocations)}
-              hint="只有这些 active allocation 会真正参与多策略调度。"
+              hint={copy.metrics.activeAllocations.hint}
               accent="#ca8a04"
             />
             <MetricCard
-              label="可运行策略"
+              label={copy.metrics.runnableStrategies.label}
               value={String(stats.activeStrategies)}
-              hint="active 且 engine-ready 的策略数量，是当前能被 paper trading 直接消费的策略池。"
+              hint={copy.metrics.runnableStrategies.hint}
               accent="#b45309"
             />
           </section>
 
           <section style={tabPanelShellStyle}>
             <div style={tabListStyle}>
-              {WORKSPACE_TABS.map((tab) => (
+              {workspaceTabs.map((tab) => (
                 <button
                   key={tab.key}
                   type="button"
@@ -612,12 +822,8 @@ export default function PaperTradingPage() {
           <section id="accounts" style={sectionStyle}>
             <div style={sectionHeaderStyle}>
               <div>
-                <h2 style={sectionTitleStyle}>账户与子组合</h2>
-                <p style={subtitleStyle}>
-                  先创建 paper trading account，再在账户下面创建 strategy portfolio。第一版里
-                  portfolio 名称需要全局唯一，后面如果你要支持同名子组合，我们再升级成
-                  `portfolio_id` 驱动。
-                </p>
+                <h2 style={sectionTitleStyle}>{copy.accounts.title}</h2>
+                <p style={subtitleStyle}>{copy.accounts.subtitle}</p>
               </div>
             </div>
 
@@ -631,26 +837,26 @@ export default function PaperTradingPage() {
             >
               <section style={cardStyle}>
                 <div style={{ marginBottom: 14 }}>
-                  <h3 style={{ margin: "0 0 8px", fontSize: 24 }}>创建 Paper Account</h3>
-                  <p style={subtitleStyle}>
-                    用环境变量名来绑定 Alpaca 凭证，这样前端不用直接保存明文 key。
-                  </p>
+                  <h3 style={{ margin: "0 0 8px", fontSize: 24 }}>
+                    {copy.accounts.createAccountTitle}
+                  </h3>
+                  <p style={subtitleStyle}>{copy.accounts.createAccountSubtitle}</p>
                 </div>
 
                 <form onSubmit={handleAccountSubmit} style={{ display: "grid", gap: 12 }}>
                   {fieldBlock(
-                    "账户名",
-                    "给这套 paper trading 凭证一个容易识别的名字，例如 us-paper-main。",
+                    copy.accounts.form.accountName,
+                    copy.accounts.form.accountNameDescription,
                     <input
                       value={accountName}
                       onChange={(e) => setAccountName(e.target.value)}
-                      placeholder="例如 us-paper-main"
+                      placeholder={copy.accounts.form.accountNamePlaceholder}
                       style={inputStyle}
                     />
                   )}
                   {fieldBlock(
-                    "API Key 环境变量",
-                    "后端会从这个环境变量里读取 Alpaca API key，比如 ALPACA_API_KEY_MAIN。",
+                    copy.accounts.form.apiKeyEnv,
+                    copy.accounts.form.apiKeyEnvDescription,
                     <input
                       value={apiKeyEnv}
                       onChange={(e) => setApiKeyEnv(e.target.value)}
@@ -658,8 +864,8 @@ export default function PaperTradingPage() {
                     />
                   )}
                   {fieldBlock(
-                    "Secret Key 环境变量",
-                    "后端会从这个环境变量里读取 Alpaca secret key，比如 ALPACA_SECRET_KEY_MAIN。",
+                    copy.accounts.form.secretKeyEnv,
+                    copy.accounts.form.secretKeyEnvDescription,
                     <input
                       value={secretKeyEnv}
                       onChange={(e) => setSecretKeyEnv(e.target.value)}
@@ -667,8 +873,8 @@ export default function PaperTradingPage() {
                     />
                   )}
                   {fieldBlock(
-                    "Base URL",
-                    "默认是 Alpaca paper endpoint；只有接别的环境时才需要改。",
+                    copy.accounts.form.baseUrl,
+                    copy.accounts.form.baseUrlDescription,
                     <input
                       value={baseUrl}
                       onChange={(e) => setBaseUrl(e.target.value)}
@@ -676,8 +882,8 @@ export default function PaperTradingPage() {
                     />
                   )}
                   {fieldBlock(
-                    "请求超时",
-                    "单位是秒，用来控制账户查询和下单请求的超时时间。",
+                    copy.accounts.form.timeout,
+                    copy.accounts.form.timeoutDescription,
                     <input
                       value={timeoutSeconds}
                       onChange={(e) => setTimeoutSeconds(Number(e.target.value))}
@@ -688,8 +894,8 @@ export default function PaperTradingPage() {
                     />
                   )}
                   {fieldBlock(
-                    "备注",
-                    "可选。建议写清楚这套账户是测试用、演示用，还是某一组策略专用。",
+                    copy.accounts.form.notes,
+                    copy.accounts.form.notesDescription,
                     <textarea
                       value={accountNotes}
                       onChange={(e) => setAccountNotes(e.target.value)}
@@ -699,22 +905,24 @@ export default function PaperTradingPage() {
                   )}
                   {accountError ? <div style={errorTextStyle}>{accountError}</div> : null}
                   <button type="submit" disabled={creatingAccount} style={buttonStyle}>
-                    {creatingAccount ? "创建中..." : "创建 Paper Account"}
+                    {creatingAccount
+                      ? copy.accounts.buttons.creatingAccount
+                      : copy.accounts.buttons.createAccount}
                   </button>
                 </form>
               </section>
 
               <section style={cardStyle}>
                 <div style={{ marginBottom: 14 }}>
-                  <h3 style={{ margin: "0 0 8px", fontSize: 24 }}>创建策略子组合</h3>
-                  <p style={subtitleStyle}>
-                    子组合是挂在某个 paper account 下的虚拟 sleeve。后续 allocation 和运行都会按它来组织。
-                  </p>
+                  <h3 style={{ margin: "0 0 8px", fontSize: 24 }}>
+                    {copy.accounts.createPortfolioTitle}
+                  </h3>
+                  <p style={subtitleStyle}>{copy.accounts.createPortfolioSubtitle}</p>
                 </div>
 
                 {fieldBlock(
-                  "当前账户",
-                  "先选一个 paper account，再往这个账户下创建 strategy portfolio。",
+                  copy.accounts.form.currentAccount,
+                  copy.accounts.form.currentAccountDescription,
                   <select
                     value={selectedAccountId}
                     onChange={(e) => setSelectedAccountId(e.target.value)}
@@ -730,18 +938,18 @@ export default function PaperTradingPage() {
 
                 <form onSubmit={handlePortfolioSubmit} style={{ display: "grid", gap: 12, marginTop: 12 }}>
                   {fieldBlock(
-                    "子组合名",
-                    "第一版要求全局唯一。建议带上账户前缀，例如 us-main-growth、us-main-default。",
+                    copy.accounts.form.portfolioName,
+                    copy.accounts.form.portfolioNameDescription,
                     <input
                       value={portfolioName}
                       onChange={(e) => setPortfolioName(e.target.value)}
-                      placeholder="例如 us-main-growth"
+                      placeholder={copy.accounts.form.portfolioNamePlaceholder}
                       style={inputStyle}
                     />
                   )}
                   {fieldBlock(
-                    "说明",
-                    "写明这个子组合主要承载哪类策略或风险风格，比如 rotation、growth、mean-reversion。",
+                    copy.accounts.form.portfolioDescription,
+                    copy.accounts.form.portfolioDescriptionDescription,
                     <textarea
                       value={portfolioDescription}
                       onChange={(e) => setPortfolioDescription(e.target.value)}
@@ -750,15 +958,10 @@ export default function PaperTradingPage() {
                     />
                   )}
                   {fieldBlock(
-                    "初始化策略",
-                    "创建 portfolio 时就把这些策略放进去。当前会按等权自动生成 active allocations，后面你仍然可以在下方继续调整。",
+                    copy.accounts.form.initialStrategies,
+                    copy.accounts.form.initialStrategiesDescription,
                     <div style={selectionPanelStyle}>
-                      <div style={selectionHintStyle}>
-                        已选 {portfolioStrategyIds.length} 个策略
-                        {portfolioStrategyIds.length > 0
-                          ? `，初始等权约为 ${formatPercent(seedAllocationPct, 0)} / strategy`
-                          : ""}
-                      </div>
+                      <div style={selectionHintStyle}>{selectedStrategySummary}</div>
                       <div style={selectionListStyle}>
                         {activeStrategies.map((item) => {
                           const checked = portfolioStrategyIds.includes(item.id);
@@ -776,7 +979,12 @@ export default function PaperTradingPage() {
                                 }
                               />
                               <span>
-                                {item.name} {item.engine_ready ? "" : "(stored-only)"}
+                                {item.name}{" "}
+                                {item.engine_ready
+                                  ? ""
+                                  : isZh
+                                    ? "(仅存档)"
+                                    : "(stored-only)"}
                               </span>
                             </label>
                           );
@@ -786,20 +994,22 @@ export default function PaperTradingPage() {
                   )}
                   {portfolioError ? <div style={errorTextStyle}>{portfolioError}</div> : null}
                   <button type="submit" disabled={creatingPortfolio} style={buttonStyle}>
-                    {creatingPortfolio ? "创建中..." : "创建策略子组合"}
+                    {creatingPortfolio
+                      ? copy.accounts.buttons.creatingPortfolio
+                      : copy.accounts.buttons.createPortfolio}
                   </button>
                 </form>
               </section>
 
               <section style={cardStyle}>
                 <div style={{ marginBottom: 14 }}>
-                  <h3 style={{ margin: "0 0 8px", fontSize: 24 }}>账户概览</h3>
-                  <p style={subtitleStyle}>
-                    这里会显示当前账户下有几个子组合、每个子组合里有多少策略，以及最近一次运行情况。
-                  </p>
+                  <h3 style={{ margin: "0 0 8px", fontSize: 24 }}>
+                    {copy.accounts.overviewTitle}
+                  </h3>
+                  <p style={subtitleStyle}>{copy.accounts.overviewSubtitle}</p>
                 </div>
 
-                {overviewLoading ? <p>加载账户概览中...</p> : null}
+                {overviewLoading ? <p>{copy.accounts.loadingOverview}</p> : null}
                 {accountOverview ? (
                   <div style={{ display: "grid", gap: 14 }}>
                     <div style={nestedResultStyle}>
@@ -812,57 +1022,147 @@ export default function PaperTradingPage() {
                       </div>
                       <div style={detailGridStyle}>
                         <div>
-                          <strong>base url:</strong> {accountOverview.account.base_url}
+                          <strong>{copy.accounts.summary.baseUrl}:</strong>{" "}
+                          {accountOverview.account.base_url}
                         </div>
                         <div>
-                          <strong>credentials:</strong> {accountOverview.account.api_key_env} /{" "}
+                          <strong>{copy.accounts.summary.credentials}:</strong>{" "}
+                          {accountOverview.account.api_key_env} /{" "}
                           {accountOverview.account.secret_key_env}
                         </div>
                         <div>
-                          <strong>子组合数:</strong> {accountOverview.portfolio_count}
+                          <strong>{copy.accounts.summary.portfolioCount}:</strong>{" "}
+                          {accountOverview.portfolio_count}
                         </div>
                         <div>
-                          <strong>active 策略数:</strong> {accountOverview.active_strategy_count}
+                          <strong>{copy.accounts.summary.activeStrategyCount}:</strong>{" "}
+                          {accountOverview.active_strategy_count}
                         </div>
                       </div>
                     </div>
 
                     {accountOverview.portfolios.length === 0 ? (
-                      <div style={emptyStyle}>这个账户下还没有子组合。先创建一个 strategy portfolio。</div>
+                      <div style={emptyStyle}>{copy.accounts.noPortfolioYet}</div>
                     ) : (
                       <div style={{ display: "grid", gap: 12, maxHeight: 720, overflowY: "auto", paddingRight: 4 }}>
                         {accountOverview.portfolios.map((portfolio) => (
                           <article key={portfolio.id} style={listCardStyle}>
                             <div style={listHeaderStyle}>
                               <div>
-                                <h3 style={{ margin: "0 0 6px", fontSize: 20 }}>{portfolio.name}</h3>
+                                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
+                                  <h3 style={{ margin: 0, fontSize: 20 }}>{portfolio.name}</h3>
+                                  {portfolio.name !== "default" ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handlePortfolioRenameStart(portfolio)}
+                                      style={secondaryInlineButtonStyle}
+                                    >
+                                      {isZh ? "改名" : "Rename"}
+                                    </button>
+                                  ) : (
+                                    <span style={mutedInlineHintStyle}>
+                                      {isZh ? "默认组合不可改名" : "Default portfolio cannot be renamed"}
+                                    </span>
+                                  )}
+                                </div>
                                 <div style={badgeRowStyle}>
                                   <Badge tone={portfolio.status === "active" ? "success" : "warning"}>
                                     {portfolio.status}
                                   </Badge>
-                                  <Badge>{portfolio.allocated_strategy_count} 个策略</Badge>
+                                  <Badge>
+                                    {strategyCountLabel(portfolio.allocated_strategy_count)}
+                                  </Badge>
                                   <Badge>{formatPercent(portfolio.active_allocation_pct_total, 0)}</Badge>
                                 </div>
                               </div>
                               <div style={metaTextStyle}>
                                 {portfolio.latest_run_requested_at
-                                  ? formatDateTime(portfolio.latest_run_requested_at)
-                                  : "还没有运行"}
+                                  ? formatDateTime(portfolio.latest_run_requested_at, locale)
+                                  : copy.accounts.summary.noRunYet}
                               </div>
                             </div>
-                            <p style={bodyTextStyle}>{portfolio.description || "暂无子组合描述"}</p>
+                            <p style={bodyTextStyle}>
+                              {portfolio.description || copy.accounts.summary.noDescription}
+                            </p>
+                            {editingPortfolioId === portfolio.id ? (
+                              <form
+                                onSubmit={(event) => handlePortfolioRenameSubmit(event, portfolio)}
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns: "minmax(220px, 1fr) auto auto",
+                                  gap: 10,
+                                  alignItems: "end",
+                                  marginBottom: 12,
+                                }}
+                              >
+                                <label style={{ display: "grid", gap: 6 }}>
+                                  <span style={fieldLabelStyle}>
+                                    {isZh ? "新的 portfolio 名称" : "New Portfolio Name"}
+                                  </span>
+                                  <input
+                                    value={editingPortfolioName}
+                                    onChange={(event) => {
+                                      setEditingPortfolioName(event.target.value);
+                                      setEditingPortfolioError(null);
+                                      setPortfolioRenameSuccess(null);
+                                    }}
+                                    placeholder={isZh ? "输入新的 portfolio 名称" : "Enter a new portfolio name"}
+                                    style={inputStyle}
+                                  />
+                                </label>
+                                <button
+                                  type="submit"
+                                  disabled={renamingPortfolio}
+                                  style={buttonStyle}
+                                >
+                                  {renamingPortfolio
+                                    ? isZh
+                                      ? "保存中..."
+                                      : "Saving..."
+                                    : isZh
+                                      ? "保存改名"
+                                      : "Save"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handlePortfolioRenameCancel}
+                                  disabled={renamingPortfolio}
+                                  style={secondaryButtonStyle(false)}
+                                >
+                                  {isZh ? "取消" : "Cancel"}
+                                </button>
+                                {editingPortfolioError ? (
+                                  <div style={{ gridColumn: "1 / -1", ...errorTextStyle }}>
+                                    {editingPortfolioError}
+                                  </div>
+                                ) : null}
+                              </form>
+                            ) : null}
+                            {portfolioRenameSuccess?.id === portfolio.id ? (
+                              <div
+                                style={{
+                                  marginBottom: 12,
+                                  color: "#15803d",
+                                  fontWeight: 600,
+                                }}
+                              >
+                                {portfolioRenameSuccess.message}
+                              </div>
+                            ) : null}
                             <div style={detailGridStyle}>
                               <div>
-                                <strong>allocations:</strong> {portfolio.active_allocation_count}/
+                                <strong>{copy.accounts.summary.allocations}:</strong>{" "}
+                                {portfolio.active_allocation_count}/
                                 {portfolio.allocation_count}
                               </div>
                               <div>
-                                <strong>latest run:</strong> {portfolio.latest_run_status || "-"}
+                                <strong>{copy.accounts.summary.latestRun}:</strong>{" "}
+                                {portfolio.latest_run_status || "-"}
                               </div>
                               <div>
-                                <strong>latest equity:</strong>{" "}
+                                <strong>{copy.accounts.summary.latestEquity}:</strong>{" "}
                                 {typeof portfolio.latest_run_equity === "number"
-                                  ? portfolio.latest_run_equity.toLocaleString()
+                                  ? formatNumber(portfolio.latest_run_equity)
                                   : "-"}
                               </div>
                             </div>
@@ -876,10 +1176,12 @@ export default function PaperTradingPage() {
                                   </div>
                                   <div style={detailGridStyle}>
                                     <div>
-                                      <strong>strategy status:</strong> {item.strategy_status}
+                                      <strong>{copy.accounts.summary.strategyStatus}:</strong>{" "}
+                                      {item.strategy_status}
                                     </div>
                                     <div>
-                                      <strong>latest run:</strong> {item.latest_run_status || "-"}
+                                      <strong>{copy.accounts.summary.latestRun}:</strong>{" "}
+                                      {item.latest_run_status || "-"}
                                     </div>
                                   </div>
                                 </div>
@@ -891,7 +1193,7 @@ export default function PaperTradingPage() {
                     )}
                   </div>
                 ) : (
-                  <div style={emptyStyle}>先选择一个 paper account，系统会在这里展示该账户的子组合和策略概览。</div>
+                  <div style={emptyStyle}>{copy.accounts.emptyOverview}</div>
                 )}
               </section>
             </div>
@@ -902,162 +1204,75 @@ export default function PaperTradingPage() {
           <section id="allocations" style={sectionStyle}>
             <div style={sectionHeaderStyle}>
               <div>
-                <h2 style={sectionTitleStyle}>策略分配</h2>
-                <p style={subtitleStyle}>
-                  现在 allocation 不再只是一个字符串标签，而是明确挂到某个账户下的 strategy portfolio。
-                </p>
+                <h2 style={sectionTitleStyle}>{copy.allocations.title}</h2>
+                <p style={subtitleStyle}>{copy.allocations.subtitle}</p>
               </div>
             </div>
 
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "minmax(320px, 0.95fr) minmax(0, 1.15fr)",
-                gap: 18,
-                alignItems: "start",
-              }}
-            >
-              <section style={cardStyle}>
-                <div style={{ marginBottom: 14 }}>
-                  <h3 style={{ margin: "0 0 8px", fontSize: 24 }}>配置策略分配</h3>
-                  <p style={subtitleStyle}>
-                    选中某个子组合后，把 active 策略按比例分进去。后面运行单策略或多策略时都会按这个 sleeve 来算账。
-                  </p>
-                </div>
+            <section style={cardStyle}>
+              <div style={{ marginBottom: 14 }}>
+                <h3 style={{ margin: "0 0 8px", fontSize: 24 }}>
+                  {copy.allocations.currentAccountTitle}
+                </h3>
+              </div>
 
-                <form onSubmit={handleAllocationSubmit} style={{ display: "grid", gap: 12 }}>
-                  {fieldBlock(
-                    "策略",
-                    "选择要放进虚拟子组合里的策略。一般建议优先给 active 且 engine-ready 的策略配置 allocation。",
-                    <select
-                      value={allocationStrategyId}
-                      onChange={(e) => setAllocationStrategyId(e.target.value)}
-                      style={inputStyle}
+              {allocationGroupsForSelectedAccount.length === 0 ? (
+                <div style={emptyStyle}>{copy.allocations.empty}</div>
+              ) : (
+                <div style={{ display: "grid", gap: 14 }}>
+                  {allocationGroupsForSelectedAccount.map((group) => (
+                    <article
+                      key={group.portfolio.name}
+                      style={{ ...listCardStyle, cursor: "pointer" }}
+                      onClick={(event) =>
+                        handleAllocationPortfolioCardClick(event, group.portfolio.name)
+                      }
                     >
-                      <option value="">选择策略</option>
-                      {activeStrategies.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.name} {item.engine_ready ? "" : "(stored-only)"}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  {fieldBlock(
-                    "子组合 / Portfolio",
-                    "这里只显示当前账户下的 active strategy portfolios。allocation 会直接绑定到你选中的子组合。",
-                    <select
-                      value={allocationPortfolioName}
-                      onChange={(e) => setAllocationPortfolioName(e.target.value)}
-                      style={inputStyle}
-                    >
-                      {portfoliosForSelectedAccount.map((item) => (
-                        <option key={item.id} value={item.name}>
-                          {item.name}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  {fieldBlock(
-                    "资金占比 / allocation_pct",
-                    "表示这个策略在该子组合下可以使用多少虚拟资金，范围 0 到 1。比如 0.25 表示 25%。",
-                    <input
-                      value={allocationPct}
-                      onChange={(e) => setAllocationPct(Number(e.target.value))}
-                      type="number"
-                      min="0"
-                      max="1"
-                      step="0.01"
-                      style={inputStyle}
-                    />
-                  )}
-                  {fieldBlock(
-                    "固定本金 / capital_base",
-                    "可选。留空时系统会按账户净值乘以 allocation_pct 计算虚拟本金；填写后则优先用这个固定金额。",
-                    <input
-                      value={capitalBase}
-                      onChange={(e) => setCapitalBase(e.target.value)}
-                      type="number"
-                      min="0"
-                      step="1000"
-                      placeholder="可选固定 capital_base，例如 50000"
-                      style={inputStyle}
-                    />
-                  )}
-                  {fieldBlock(
-                    "状态",
-                    "只有 active 的 allocation 会被多策略调度器真正读取；draft 和 archived 适合预配置或暂时停用。",
-                    <select
-                      value={allocationStatus}
-                      onChange={(e) => setAllocationStatus(e.target.value)}
-                      style={inputStyle}
-                    >
-                      <option value="active">active</option>
-                      <option value="draft">draft</option>
-                      <option value="archived">archived</option>
-                    </select>
-                  )}
-                  {fieldBlock(
-                    "允许 fractional shares",
-                    "打开后仓位计算允许小数股；关闭后会把下单数量向下取整，更接近只支持整股的执行方式。",
-                    <label style={checkboxRowStyle}>
-                      <input
-                        type="checkbox"
-                        checked={allowFractional}
-                        onChange={(e) => setAllowFractional(e.target.checked)}
-                      />
-                      允许 fractional shares
-                    </label>
-                  )}
-                  {fieldBlock(
-                    "备注",
-                    "可选。建议写清楚这个 allocation 的用途，例如属于哪个子资金池、目标风险暴露，或者是否为临时实验配置。",
-                    <textarea
-                      value={notes}
-                      onChange={(e) => setNotes(e.target.value)}
-                      rows={4}
-                      style={{ ...inputStyle, resize: "vertical" }}
-                    />
-                  )}
-                  {allocationError ? <div style={errorTextStyle}>{allocationError}</div> : null}
-                  <button type="submit" disabled={submittingAllocation} style={buttonStyle}>
-                    {submittingAllocation ? "保存中..." : "保存分配"}
-                  </button>
-                </form>
-              </section>
-
-              <section style={cardStyle}>
-                <div style={{ marginBottom: 14 }}>
-                  <h3 style={{ margin: "0 0 8px", fontSize: 24 }}>当前账户分配</h3>
-                  <p style={subtitleStyle}>
-                    这里展示当前选中 account 下的所有 allocation。你可以用它来确认某个 portfolio 里有哪些策略、每个策略占多少资金。
-                  </p>
-                </div>
-
-                {groupedAllocationsForSelectedAccount.length === 0 ? (
-                  <div style={emptyStyle}>当前账户还没有策略分配。先创建一个 allocation，再往下跑 paper trading。</div>
-                ) : (
-                  <div style={{ display: "grid", gap: 14 }}>
-                    {groupedAllocationsForSelectedAccount.map((group) => (
-                      <article key={group.portfolioName} style={listCardStyle}>
-                        <div style={listHeaderStyle}>
-                          <div>
-                            <h3 style={{ margin: "0 0 6px", fontSize: 20 }}>
-                              {group.portfolioName}
-                            </h3>
-                            <div style={badgeRowStyle}>
-                              <Badge tone="info">{group.items[0]?.paper_account_name || "-"}</Badge>
-                              <Badge>{group.items.length} 条分配</Badge>
-                              <Badge>{group.activeCount} 条 active</Badge>
-                              <Badge>{formatPercent(group.allocationPctTotal, 0)}</Badge>
-                            </div>
+                      <div style={listHeaderStyle}>
+                        <button
+                          type="button"
+                          onClick={() => handleAllocationPortfolioOpen(group.portfolio.name)}
+                          style={portfolioCardButtonStyle()}
+                        >
+                          <h3 style={{ margin: "0 0 6px", fontSize: 20 }}>
+                            {group.portfolio.name}
+                          </h3>
+                          <div style={badgeRowStyle}>
+                            <Badge tone="info">{group.portfolio.paper_account_name || "-"}</Badge>
+                            <Badge>{allocationCountLabel(group.items.length)}</Badge>
+                            <Badge>{activeAllocationCountLabel(group.activeCount)}</Badge>
+                            <Badge>{formatPercent(group.allocationPctTotal, 0)}</Badge>
                           </div>
-                        </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleAllocationEditorToggle(group.portfolio.name)}
+                          style={secondaryButtonStyle(
+                            expandedAllocationPortfolioName === group.portfolio.name
+                          )}
+                        >
+                          {expandedAllocationPortfolioName === group.portfolio.name
+                            ? copy.allocations.collapse
+                            : copy.allocations.expand}
+                        </button>
+                      </div>
+
+                      {group.items.length === 0 ? (
+                        <div style={emptyStyle}>{copy.allocations.noAllocationYet}</div>
+                      ) : (
                         <div style={{ display: "grid", gap: 12 }}>
                           {group.items.map((item) => {
                             const strategy =
                               strategies.find((entry) => entry.id === item.strategy_id) || null;
                             return (
-                              <div key={item.id} style={miniStrategyCardStyle}>
+                              <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => handleAllocationItemClick(item)}
+                                style={allocationCardButtonStyle(
+                                  editingAllocationId === item.id
+                                )}
+                              >
                                 <div style={listHeaderStyle}>
                                   <div>
                                     <h4 style={{ margin: "0 0 6px", fontSize: 17 }}>
@@ -1076,33 +1291,169 @@ export default function PaperTradingPage() {
                                     </div>
                                   </div>
                                   <div style={metaTextStyle}>
-                                    {formatDateTime(item.updated_at || item.created_at)}
+                                    {formatDateTime(item.updated_at || item.created_at, locale)}
                                   </div>
                                 </div>
                                 <p style={bodyTextStyle}>
-                                  {strategy ? getStrategyDescription(strategy) : "暂无策略描述"}
+                                  {strategy
+                                    ? getStrategyDescription(strategy)
+                                    : copy.allocations.noStrategyDescription}
                                 </p>
                                 <div style={detailGridStyle}>
                                   <div>
-                                    <strong>capital base:</strong>{" "}
+                                    <strong>{copy.allocations.capitalBaseLabel}:</strong>{" "}
                                     {typeof item.capital_base === "number"
-                                      ? item.capital_base.toLocaleString()
-                                      : "跟随账户净值 * allocation_pct"}
+                                      ? formatNumber(item.capital_base)
+                                      : copy.allocations.defaultCapitalBase}
                                   </div>
                                   <div>
-                                    <strong>notes:</strong> {item.notes || "-"}
+                                    <strong>{copy.allocations.notesLabel}:</strong>{" "}
+                                    {item.notes || "-"}
                                   </div>
                                 </div>
-                              </div>
+                              </button>
                             );
                           })}
                         </div>
-                      </article>
-                    ))}
-                  </div>
-                )}
-              </section>
-            </div>
+                      )}
+
+                      {expandedAllocationPortfolioName === group.portfolio.name ? (
+                        <div data-allocation-editor="true" style={inlineEditorStyle}>
+                          <div style={listHeaderStyle}>
+                            <div>
+                              <h4 style={{ margin: "0 0 6px", fontSize: 18 }}>
+                                {editingAllocation?.portfolio_name === group.portfolio.name
+                                  ? isZh
+                                    ? `调整 ${editingAllocation.strategy_name || editingAllocation.strategy_id}`
+                                    : `Edit ${editingAllocation.strategy_name || editingAllocation.strategy_id}`
+                                  : isZh
+                                    ? `配置 ${group.portfolio.name} 的策略分配`
+                                    : `Configure strategy allocations for ${group.portfolio.name}`}
+                              </h4>
+                              <p style={subtitleStyle}>
+                                {editingAllocation?.portfolio_name === group.portfolio.name
+                                  ? copy.editor.editModeDescription
+                                  : copy.editor.createModeDescription}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleNewAllocationClick(group.portfolio.name)}
+                              style={secondaryButtonStyle(false)}
+                            >
+                              {copy.allocations.newAllocation}
+                            </button>
+                          </div>
+
+                          <form
+                            onSubmit={(event) => handleAllocationSubmit(event, group.portfolio.name)}
+                            style={{ display: "grid", gap: 12 }}
+                          >
+                            {fieldBlock(
+                              copy.allocations.strategy,
+                              editingAllocation?.portfolio_name === group.portfolio.name
+                                ? copy.allocations.strategyEditingDescription
+                                : copy.allocations.strategyDescription,
+                              <select
+                                value={allocationStrategyId}
+                                onChange={(e) => setAllocationStrategyId(e.target.value)}
+                                disabled={editingAllocation?.portfolio_name === group.portfolio.name}
+                                style={inputStyle}
+                              >
+                                <option value="">{copy.allocations.strategyPlaceholder}</option>
+                                {activeStrategies.map((item) => (
+                                  <option key={item.id} value={item.id}>
+                                    {item.name}{" "}
+                                    {item.engine_ready
+                                      ? ""
+                                      : isZh
+                                        ? "(仅存档)"
+                                        : "(stored-only)"}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                            {fieldBlock(
+                              copy.allocations.allocationPct,
+                              copy.allocations.allocationPctDescription,
+                              <input
+                                value={allocationPct}
+                                onChange={(e) => setAllocationPct(Number(e.target.value))}
+                                type="number"
+                                min="0"
+                                max="1"
+                                step="0.01"
+                                style={inputStyle}
+                              />
+                            )}
+                            {fieldBlock(
+                              copy.allocations.capitalBase,
+                              copy.allocations.capitalBaseDescription,
+                              <input
+                                value={capitalBase}
+                                onChange={(e) => setCapitalBase(e.target.value)}
+                                type="number"
+                                min="0"
+                                step="1000"
+                                placeholder={copy.allocations.capitalBasePlaceholder}
+                                style={inputStyle}
+                              />
+                            )}
+                            {fieldBlock(
+                              copy.allocations.status,
+                              copy.allocations.statusDescription,
+                              <select
+                                value={allocationStatus}
+                                onChange={(e) => setAllocationStatus(e.target.value)}
+                                style={inputStyle}
+                              >
+                                <option value="active">active</option>
+                                <option value="draft">draft</option>
+                                <option value="archived">archived</option>
+                              </select>
+                            )}
+                            {fieldBlock(
+                              copy.allocations.allowFractional,
+                              copy.allocations.allowFractionalDescription,
+                              <label style={checkboxRowStyle}>
+                                <input
+                                  type="checkbox"
+                                  checked={allowFractional}
+                                  onChange={(e) => setAllowFractional(e.target.checked)}
+                                />
+                                {copy.allocations.allowFractional}
+                              </label>
+                            )}
+                            {fieldBlock(
+                              copy.allocations.notes,
+                              copy.allocations.notesDescription,
+                              <textarea
+                                value={notes}
+                                onChange={(e) => setNotes(e.target.value)}
+                                rows={4}
+                                style={{ ...inputStyle, resize: "vertical" }}
+                              />
+                            )}
+                            {allocationError ? (
+                              <div style={errorTextStyle}>{allocationError}</div>
+                            ) : null}
+                            <button
+                              type="submit"
+                              disabled={submittingAllocation}
+                              style={buttonStyle}
+                            >
+                              {submittingAllocation
+                                ? copy.allocations.saving
+                                : copy.allocations.save}
+                            </button>
+                          </form>
+                        </div>
+                      ) : null}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
           </section>
           ) : null}
 
@@ -1110,10 +1461,8 @@ export default function PaperTradingPage() {
           <section id="execution" style={sectionStyle}>
             <div style={sectionHeaderStyle}>
               <div>
-                <h2 style={sectionTitleStyle}>Paper Trading 执行</h2>
-                <p style={subtitleStyle}>
-                  执行时只需要选子组合。系统会自动根据子组合找到对应的 paper account，再用那套 Alpaca 凭证去查询账户和发单。
-                </p>
+                <h2 style={sectionTitleStyle}>{copy.execution.title}</h2>
+                <p style={subtitleStyle}>{copy.execution.subtitle}</p>
               </div>
             </div>
 
@@ -1127,22 +1476,22 @@ export default function PaperTradingPage() {
             >
               <section style={cardStyle}>
                 <div style={{ marginBottom: 14 }}>
-                  <h3 style={{ margin: "0 0 8px", fontSize: 24 }}>单策略运行</h3>
-                  <p style={subtitleStyle}>
-                    适合先验证某个策略在某个 portfolio 下的 sleeve 账本、风控和下单逻辑。
-                  </p>
+                  <h3 style={{ margin: "0 0 8px", fontSize: 24 }}>
+                    {copy.execution.singleTitle}
+                  </h3>
+                  <p style={subtitleStyle}>{copy.execution.singleSubtitle}</p>
                 </div>
 
                 <form onSubmit={handleSingleSubmit} style={{ display: "grid", gap: 12 }}>
                   {fieldBlock(
-                    "策略",
-                    "选择一个 active 且 engine-ready 的策略。",
+                    copy.execution.strategy,
+                    copy.execution.strategyDescription,
                     <select
                       value={strategyId}
                       onChange={(e) => setStrategyId(e.target.value)}
                       style={inputStyle}
                     >
-                      <option value="">选择策略</option>
+                      <option value="">{copy.execution.strategyPlaceholder}</option>
                       {eligibleStrategies.map((item) => (
                         <option key={item.id} value={item.id}>
                           {item.name}
@@ -1151,8 +1500,8 @@ export default function PaperTradingPage() {
                     </select>
                   )}
                   {fieldBlock(
-                    "交易日期",
-                    "使用这一天的日线特征数据生成信号。当前系统是日频策略，所以这里填的是交易日，不是分钟级时间戳。",
+                    copy.execution.tradeDate,
+                    singleTradeDateDescription,
                     <input
                       value={singleTradeDate}
                       onChange={(e) => setSingleTradeDate(e.target.value)}
@@ -1161,8 +1510,8 @@ export default function PaperTradingPage() {
                     />
                   )}
                   {fieldBlock(
-                    "子组合 / Portfolio",
-                    "决定这个策略要挂到哪个虚拟子组合下运行。系统会先根据这个 portfolio 找到对应的 paper account，再去 Alpaca 查询和发单。",
+                    copy.execution.portfolio,
+                    copy.execution.singlePortfolioDescription,
                     <select
                       value={singlePortfolioName}
                       onChange={(e) => setSinglePortfolioName(e.target.value)}
@@ -1176,14 +1525,14 @@ export default function PaperTradingPage() {
                     </select>
                   )}
                   {fieldBlock(
-                    "股票池覆盖",
-                    "可选。留空时使用策略自身配置的 universe；选了 basket 后，会临时用这个股票池覆盖本次运行的 universe。",
+                    copy.execution.basketOverride,
+                    copy.execution.basketOverrideDescription,
                     <select
                       value={basketId}
                       onChange={(e) => setBasketId(e.target.value)}
                       style={inputStyle}
                     >
-                      <option value="">使用策略原始 universe</option>
+                      <option value="">{copy.execution.basketDefaultOption}</option>
                       {activeBaskets.map((item) => (
                         <option key={item.id} value={item.id}>
                           {item.name} ({item.symbol_count})
@@ -1192,20 +1541,22 @@ export default function PaperTradingPage() {
                     </select>
                   )}
                   {fieldBlock(
-                    "提交真实 paper 订单",
-                    "关闭时只做 dry run，验证信号、sleeve 账本和风控；打开后会真正向 Alpaca paper account 发单。",
+                    copy.execution.submitOrders,
+                    copy.execution.singleSubmitOrdersDescription,
                     <label style={checkboxRowStyle}>
                       <input
                         type="checkbox"
                         checked={singleSubmitOrders}
                         onChange={(e) => setSingleSubmitOrders(e.target.checked)}
                       />
-                      真正提交到 Alpaca paper account
+                      {copy.execution.submitOrdersLabel}
                     </label>
                   )}
                   {singleError ? <div style={errorTextStyle}>{singleError}</div> : null}
                   <button type="submit" disabled={submittingSingle} style={buttonStyle}>
-                    {submittingSingle ? "执行中..." : "运行单策略 Paper Trading"}
+                    {submittingSingle
+                      ? copy.execution.runningSingle
+                      : copy.execution.runSingle}
                   </button>
                 </form>
 
@@ -1220,17 +1571,20 @@ export default function PaperTradingPage() {
                     </div>
                     <div style={resultGridStyle}>
                       <div>
-                        <strong>signals:</strong> {latestSingleRun.signal_count}
+                        <strong>{copy.execution.results.signals}:</strong>{" "}
+                        {latestSingleRun.signal_count}
                       </div>
                       <div>
-                        <strong>orders:</strong> {latestSingleRun.order_count}
+                        <strong>{copy.execution.results.orders}:</strong>{" "}
+                        {latestSingleRun.order_count}
                       </div>
                       <div>
-                        <strong>submitted:</strong> {latestSingleRun.submitted_order_count}
+                        <strong>{copy.execution.results.submitted}:</strong>{" "}
+                        {latestSingleRun.submitted_order_count}
                       </div>
                       <div>
-                        <strong>final equity:</strong>{" "}
-                        {latestSingleRun.final_equity.toLocaleString()}
+                        <strong>{copy.execution.results.finalEquity}:</strong>{" "}
+                        {formatNumber(latestSingleRun.final_equity)}
                       </div>
                     </div>
                   </div>
@@ -1239,16 +1593,16 @@ export default function PaperTradingPage() {
 
               <section style={cardStyle}>
                 <div style={{ marginBottom: 14 }}>
-                  <h3 style={{ margin: "0 0 8px", fontSize: 24 }}>多策略调度</h3>
-                  <p style={subtitleStyle}>
-                    这个入口会按 portfolio 下的 active allocation 顺序，把多个策略跑在同一个 Alpaca account 上。
-                  </p>
+                  <h3 style={{ margin: "0 0 8px", fontSize: 24 }}>
+                    {copy.execution.multiTitle}
+                  </h3>
+                  <p style={subtitleStyle}>{copy.execution.multiSubtitle}</p>
                 </div>
 
                 <form onSubmit={handleMultiSubmit} style={{ display: "grid", gap: 12 }}>
                   {fieldBlock(
-                    "子组合 / Portfolio",
-                    "多策略调度会读取这个 portfolio 下所有 active allocation，并自动找到它所属的 paper account 后执行。",
+                    copy.execution.portfolio,
+                    copy.execution.multiPortfolioDescription,
                     <select
                       value={multiPortfolioName}
                       onChange={(e) => setMultiPortfolioName(e.target.value)}
@@ -1262,8 +1616,8 @@ export default function PaperTradingPage() {
                     </select>
                   )}
                   {fieldBlock(
-                    "交易日期",
-                    "所有被调度的策略都会使用同一天的日线特征快照来生成信号和执行本轮 paper trading。",
+                    copy.execution.tradeDate,
+                    multiTradeDateDescription,
                     <input
                       value={multiTradeDate}
                       onChange={(e) => setMultiTradeDate(e.target.value)}
@@ -1272,32 +1626,34 @@ export default function PaperTradingPage() {
                     />
                   )}
                   {fieldBlock(
-                    "提交真实 paper 订单",
-                    "关闭时只跑模拟调度，不真正下单；打开后会把每个策略的订单都提交到该子组合所属的 Alpaca paper account。",
+                    copy.execution.submitOrders,
+                    copy.execution.multiSubmitOrdersDescription,
                     <label style={checkboxRowStyle}>
                       <input
                         type="checkbox"
                         checked={multiSubmitOrders}
                         onChange={(e) => setMultiSubmitOrders(e.target.checked)}
                       />
-                      真正提交到 Alpaca paper account
+                      {copy.execution.submitOrdersLabel}
                     </label>
                   )}
                   {fieldBlock(
-                    "失败后的处理方式",
-                    "打开后即使某个策略执行失败，调度器也会继续跑 portfolio 里剩下的策略；关闭则遇到首个错误就停止。",
+                    copy.execution.continueOnError,
+                    copy.execution.continueOnErrorDescription,
                     <label style={checkboxRowStyle}>
                       <input
                         type="checkbox"
                         checked={continueOnError}
                         onChange={(e) => setContinueOnError(e.target.checked)}
                       />
-                      某个策略失败后继续跑后续策略
+                      {copy.execution.continueOnErrorLabel}
                     </label>
                   )}
                   {multiError ? <div style={errorTextStyle}>{multiError}</div> : null}
                   <button type="submit" disabled={submittingMulti} style={buttonStyle}>
-                    {submittingMulti ? "调度中..." : "运行多策略 Paper Trading"}
+                    {submittingMulti
+                      ? copy.execution.runningMulti
+                      : copy.execution.runMulti}
                   </button>
                 </form>
 
@@ -1306,7 +1662,8 @@ export default function PaperTradingPage() {
                     <div style={badgeRowStyle}>
                       <Badge tone="info">{latestMultiRun.portfolio_name}</Badge>
                       <Badge tone={latestMultiRun.failed_runs > 0 ? "warning" : "success"}>
-                        {latestMultiRun.completed_runs}/{latestMultiRun.total_runs} completed
+                        {latestMultiRun.completed_runs}/{latestMultiRun.total_runs}{" "}
+                        {copy.execution.results.completed}
                       </Badge>
                     </div>
                     <div style={{ display: "grid", gap: 10 }}>
@@ -1320,16 +1677,20 @@ export default function PaperTradingPage() {
                           </div>
                           <div style={resultGridStyle}>
                             <div>
-                              <strong>strategy:</strong> {item.strategy_id}
+                              <strong>{copy.execution.results.strategy}:</strong>{" "}
+                              {item.strategy_id}
                             </div>
                             <div>
-                              <strong>orders:</strong> {item.order_count}
+                              <strong>{copy.execution.results.orders}:</strong>{" "}
+                              {item.order_count}
                             </div>
                             <div>
-                              <strong>submitted:</strong> {item.submitted_order_count}
+                              <strong>{copy.execution.results.submitted}:</strong>{" "}
+                              {item.submitted_order_count}
                             </div>
                             <div>
-                              <strong>equity:</strong> {item.final_equity.toLocaleString()}
+                              <strong>{copy.execution.results.equity}:</strong>{" "}
+                              {formatNumber(item.final_equity)}
                             </div>
                           </div>
                         </div>
@@ -1358,6 +1719,69 @@ function actionButtonStyle(active: boolean): CSSProperties {
     fontWeight: 700,
     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
     cursor: "pointer",
+  };
+}
+
+function secondaryButtonStyle(active: boolean): CSSProperties {
+  return {
+    padding: "10px 14px",
+    borderRadius: 12,
+    border: active ? "1px solid rgba(15, 118, 110, 0.35)" : "1px solid rgba(148, 163, 184, 0.28)",
+    background: active ? "rgba(15, 118, 110, 0.12)" : "rgba(255,255,255,0.9)",
+    color: "#0f172a",
+    fontWeight: 700,
+    cursor: "pointer",
+    fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+  };
+}
+
+const secondaryInlineButtonStyle: CSSProperties = {
+  padding: "6px 10px",
+  borderRadius: 999,
+  border: "1px solid rgba(148, 163, 184, 0.28)",
+  background: "rgba(255,255,255,0.92)",
+  color: "#0f172a",
+  fontWeight: 700,
+  cursor: "pointer",
+  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+};
+
+const mutedInlineHintStyle: CSSProperties = {
+  color: "#64748b",
+  fontSize: 13,
+  fontWeight: 600,
+  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+};
+
+function allocationCardButtonStyle(active: boolean): CSSProperties {
+  return {
+    ...miniStrategyCardStyle,
+    width: "100%",
+    textAlign: "left",
+    cursor: "pointer",
+    boxShadow: active ? "0 0 0 2px rgba(15, 118, 110, 0.18)" : "none",
+    border: active
+      ? "1px solid rgba(15, 118, 110, 0.35)"
+      : miniStrategyCardStyle.border,
+  };
+}
+
+function portfolioCardButtonStyle(): CSSProperties {
+  return {
+    display: "grid",
+    gap: 6,
+    flex: 1,
+    width: "100%",
+    padding: 0,
+    border: "none",
+    background: "transparent",
+    color: "#0f172a",
+    textAlign: "left",
+    cursor: "pointer",
+    boxShadow: "none",
+    outline: "none",
+    borderRadius: 12,
+    fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
   };
 }
 
@@ -1432,6 +1856,7 @@ const cardStyle: CSSProperties = {
   borderRadius: 24,
   border: "1px solid rgba(148, 163, 184, 0.18)",
   background: "rgba(255,255,255,0.82)",
+  color: "#0f172a",
   boxShadow: "0 18px 44px rgba(15, 23, 42, 0.06)",
 };
 
@@ -1443,6 +1868,8 @@ const inputStyle: CSSProperties = {
   borderRadius: 14,
   fontSize: 14,
   background: "#fff",
+  color: "#0f172a",
+  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
 
 const buttonStyle: CSSProperties = {
@@ -1463,6 +1890,7 @@ const fieldBlockStyle: CSSProperties = {
   borderRadius: 18,
   border: "1px solid rgba(226, 232, 240, 0.95)",
   background: "rgba(248, 250, 252, 0.9)",
+  color: "#0f172a",
 };
 
 const fieldLabelStyle: CSSProperties = {
@@ -1473,7 +1901,7 @@ const fieldLabelStyle: CSSProperties = {
 };
 
 const fieldDescriptionStyle: CSSProperties = {
-  color: "#64748b",
+  color: "#475569",
   lineHeight: 1.6,
   fontSize: 13,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -1481,7 +1909,7 @@ const fieldDescriptionStyle: CSSProperties = {
 
 const subtitleStyle: CSSProperties = {
   margin: 0,
-  color: "#64748b",
+  color: "#475569",
   lineHeight: 1.6,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
@@ -1541,6 +1969,7 @@ const listCardStyle: CSSProperties = {
   borderRadius: 18,
   background: "linear-gradient(135deg, rgba(245,250,255,0.95), rgba(255,255,255,0.96))",
   border: "1px solid rgba(226, 232, 240, 0.9)",
+  color: "#0f172a",
 };
 
 const miniStrategyCardStyle: CSSProperties = {
@@ -1548,6 +1977,7 @@ const miniStrategyCardStyle: CSSProperties = {
   borderRadius: 14,
   background: "rgba(255,255,255,0.9)",
   border: "1px solid rgba(226, 232, 240, 0.85)",
+  color: "#0f172a",
   display: "grid",
   gap: 8,
 };
@@ -1568,7 +1998,7 @@ const badgeRowStyle: CSSProperties = {
 };
 
 const metaTextStyle: CSSProperties = {
-  color: "#64748b",
+  color: "#475569",
   fontSize: 13,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
@@ -1601,6 +2031,7 @@ const resultCardStyle: CSSProperties = {
   borderRadius: 18,
   background: "rgba(240,253,250,0.92)",
   border: "1px solid rgba(94, 234, 212, 0.45)",
+  color: "#0f172a",
   display: "grid",
   gap: 10,
 };
@@ -1610,8 +2041,19 @@ const nestedResultStyle: CSSProperties = {
   borderRadius: 14,
   background: "rgba(255,255,255,0.88)",
   border: "1px solid rgba(226, 232, 240, 0.9)",
+  color: "#0f172a",
   display: "grid",
   gap: 8,
+};
+
+const inlineEditorStyle: CSSProperties = {
+  marginTop: 16,
+  padding: 16,
+  borderRadius: 18,
+  border: "1px solid rgba(148, 163, 184, 0.2)",
+  background: "rgba(248, 250, 252, 0.92)",
+  display: "grid",
+  gap: 12,
 };
 
 const resultGridStyle: CSSProperties = {

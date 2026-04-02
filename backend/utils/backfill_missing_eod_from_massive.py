@@ -32,6 +32,8 @@ if TYPE_CHECKING:
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GROUPED_DAILY_URL = "https://api.massive.com/v2/aggs/grouped/locale/us/market/stocks/{trade_date}"
 NEW_YORK = ZoneInfo("America/New_York")
+BENCHMARK_PROXY_SYMBOLS = ("SPY", "QQQ")
+BENCHMARK_PROXY_SYMBOLS_SQL = ", ".join(f"'{symbol}'" for symbol in BENCHMARK_PROXY_SYMBOLS)
 
 MISSING_SYMBOLS_SQL = """
 WITH symbol_map AS (
@@ -44,7 +46,13 @@ WITH symbol_map AS (
       ON instr.id = sh.instrument_id
     WHERE sh.valid_from <= %(trade_date)s::date
       AND (sh.valid_to IS NULL OR sh.valid_to >= %(trade_date)s::date)
-      AND instr.asset_type = 'CS'
+      AND (
+        instr.asset_type = 'CS'
+        OR (
+          instr.asset_type = 'ETF'
+          AND instr.ticker_canonical IN (""" + BENCHMARK_PROXY_SYMBOLS_SQL + """)
+        )
+      )
       AND (instr.listed_at IS NULL OR instr.listed_at <= %(trade_date)s::date)
       AND (instr.delisted_at IS NULL OR instr.delisted_at >= %(trade_date)s::date)
     GROUP BY sh.symbol

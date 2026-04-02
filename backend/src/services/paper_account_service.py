@@ -11,10 +11,12 @@ from sqlalchemy.orm import Session
 
 from src.models.tables import (
     PaperTradingAccount,
+    PortfolioSnapshot,
     Strategy,
     StrategyAllocation,
     StrategyPortfolio,
     StrategyRun,
+    Transaction,
 )
 from src.services.alpaca_services import AlpacaClient, get_alpaca_client
 from src.services.strategy_allocation_service import (
@@ -24,6 +26,10 @@ from src.services.strategy_allocation_service import (
 
 
 DEFAULT_ACCOUNT_NAME = "default-paper-account"
+ENV_FALLBACKS: dict[str, tuple[str, ...]] = {
+    "ALPACA_API_KEY": ("ALPACA_KEY",),
+    "ALPACA_SECRET_KEY": ("ALPACA_SECRET",),
+}
 
 
 @dataclass(slots=True)
@@ -134,6 +140,97 @@ def list_strategy_portfolios(
     if status is not None:
         stmt = stmt.where(StrategyPortfolio.status == status)
     return db.execute(stmt).scalars().all()
+
+
+def rename_strategy_portfolio(
+    db: Session,
+    portfolio_id: UUID | str,
+    *,
+    name: str | None,
+) -> StrategyPortfolio:
+    portfolio = db.get(StrategyPortfolio, portfolio_id)
+    if portfolio is None:
+        raise ValueError("strategy portfolio not found")
+
+    if portfolio.name == DEFAULT_PORTFOLIO_NAME:
+        raise ValueError("default strategy portfolio cannot be renamed")
+
+    normalized_name = normalize_portfolio_name(name)
+    if normalized_name == portfolio.name:
+        return portfolio
+
+    existing = db.execute(
+        select(StrategyPortfolio)
+        .where(StrategyPortfolio.id != portfolio.id)
+        .where(StrategyPortfolio.name == normalized_name)
+    ).scalars().first()
+    if existing is not None:
+        raise ValueError(
+            "strategy portfolio name already exists; first version requires globally unique portfolio names"
+        )
+
+    old_name = portfolio.name
+    portfolio.name = normalized_name
+
+    allocations = db.execute(
+        select(StrategyAllocation).where(StrategyAllocation.portfolio_name == old_name)
+    ).scalars().all()
+    for allocation in allocations:
+        allocation.portfolio_name = normalized_name
+
+    runs = db.execute(
+        select(StrategyRun).where(StrategyRun.mode == "paper")
+    ).scalars().all()
+    affected_run_ids: list[UUID] = []
+    for run in runs:
+        changed = False
+
+        config_snapshot = dict(run.config_snapshot or {})
+        paper_cfg = config_snapshot.get("paper_trading")
+        if isinstance(paper_cfg, dict):
+            run_portfolio_name = normalize_portfolio_name(paper_cfg.get("portfolio_name"))
+            if run_portfolio_name == old_name:
+                config_snapshot["paper_trading"] = {
+                    **paper_cfg,
+                    "portfolio_name": normalized_name,
+                }
+                run.config_snapshot = config_snapshot
+                changed = True
+
+        summary_metrics = dict(run.summary_metrics or {})
+        summary_portfolio_name = normalize_portfolio_name(summary_metrics.get("portfolio_name"))
+        if summary_portfolio_name == old_name:
+            summary_metrics["portfolio_name"] = normalized_name
+            run.summary_metrics = summary_metrics
+            changed = True
+
+        if changed:
+            affected_run_ids.append(run.id)
+
+    if affected_run_ids:
+        snapshots = db.execute(
+            select(PortfolioSnapshot).where(PortfolioSnapshot.run_id.in_(affected_run_ids))
+        ).scalars().all()
+        for snapshot in snapshots:
+            metrics = dict(snapshot.metrics or {})
+            snapshot_portfolio_name = normalize_portfolio_name(metrics.get("portfolio_name"))
+            if snapshot_portfolio_name == old_name:
+                metrics["portfolio_name"] = normalized_name
+                snapshot.metrics = metrics
+
+        transactions = db.execute(
+            select(Transaction).where(Transaction.run_id.in_(affected_run_ids))
+        ).scalars().all()
+        for txn in transactions:
+            meta = dict(txn.meta or {})
+            txn_portfolio_name = normalize_portfolio_name(meta.get("portfolio_name"))
+            if txn_portfolio_name == old_name:
+                meta["portfolio_name"] = normalized_name
+                txn.meta = meta
+
+    db.commit()
+    db.refresh(portfolio)
+    return portfolio
 
 
 def get_strategy_portfolio_by_name(
@@ -317,6 +414,10 @@ def build_paper_account_overview(
 def _required_env_value(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value:
+        for fallback_name in ENV_FALLBACKS.get(name, ()):
+            fallback_value = os.getenv(fallback_name, "").strip()
+            if fallback_value:
+                return fallback_value
         raise ValueError(f"missing environment variable for paper account credential: {name}")
     return value
 

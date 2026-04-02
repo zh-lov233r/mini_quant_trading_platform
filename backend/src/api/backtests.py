@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Optional
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -12,7 +13,11 @@ from sqlalchemy.orm import Session
 from src.core.db import SessionLocal, get_db
 from src.models.tables import PortfolioSnapshot, Signal, StockBasket, Strategy, StrategyRun, Transaction
 from src.services.backtest_engine import BacktestResult, run_backtest
+from src.services.data_service import get_historical_data
 from src.services.stock_basket_service import DEFAULT_COMMON_STOCK_BASKET_NAME
+
+NEW_YORK = ZoneInfo("America/New_York")
+DISPLAY_COMPARISON_SYMBOLS = ("SPY", "QQQ")
 
 
 class BacktestCreate(BaseModel):
@@ -54,11 +59,13 @@ class BacktestDetailOut(BacktestRunOut):
     latest_snapshot: Optional[dict[str, Any]] = None
     transaction_count: int
     equity_curve: list[dict[str, Any]] = Field(default_factory=list)
+    comparison_curves: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     signals: list[dict[str, Any]] = Field(default_factory=list)
     transactions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def _serialize_snapshot(snapshot: PortfolioSnapshot) -> dict[str, Any]:
+    metrics = snapshot.metrics or {}
     return {
         "ts": snapshot.ts.isoformat() if snapshot.ts else None,
         "cash": float(snapshot.cash),
@@ -67,8 +74,306 @@ def _serialize_snapshot(snapshot: PortfolioSnapshot) -> dict[str, Any]:
         "net_exposure": float(snapshot.net_exposure or 0),
         "drawdown": float(snapshot.drawdown) if snapshot.drawdown is not None else None,
         "positions": snapshot.positions or {},
-        "metrics": snapshot.metrics or {},
+        "metrics": metrics,
+        "benchmark_symbol": metrics.get("benchmark_symbol"),
+        "benchmark_close": (
+            float(metrics["benchmark_close"])
+            if metrics.get("benchmark_close") is not None
+            else None
+        ),
+        "benchmark_equity": (
+            float(metrics["benchmark_equity"])
+            if metrics.get("benchmark_equity") is not None
+            else None
+        ),
+        "benchmark_return": (
+            float(metrics["benchmark_return"])
+            if metrics.get("benchmark_return") is not None
+            else None
+        ),
+        "benchmark_excess_return": (
+            float(metrics["benchmark_excess_return"])
+            if metrics.get("benchmark_excess_return") is not None
+            else None
+        ),
     }
+
+
+def _normalize_symbols(symbols: list[str | None]) -> list[str]:
+    normalized_symbols: list[str] = []
+    seen: set[str] = set()
+    for symbol in symbols:
+        normalized_symbol = str(symbol or "").strip().upper()
+        if not normalized_symbol or normalized_symbol in seen:
+            continue
+        seen.add(normalized_symbol)
+        normalized_symbols.append(normalized_symbol)
+    return normalized_symbols
+
+
+def _extract_cached_comparison_curves(summary_metrics: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    raw_curves = summary_metrics.get("comparison_curves")
+    if not isinstance(raw_curves, dict):
+        return {}
+
+    cached_curves: dict[str, list[dict[str, Any]]] = {}
+    for symbol, points in raw_curves.items():
+        normalized_symbol = str(symbol or "").strip().upper()
+        if not normalized_symbol or not isinstance(points, list):
+            continue
+
+        normalized_points: list[dict[str, Any]] = []
+        for point in points:
+            if not isinstance(point, dict):
+                continue
+            ts = point.get("ts")
+            close = point.get("close")
+            equity = point.get("equity")
+            curve_return = point.get("return")
+            if not isinstance(ts, str):
+                continue
+            normalized_points.append(
+                {
+                    "ts": ts,
+                    "symbol": normalized_symbol,
+                    "close": float(close) if close is not None else None,
+                    "equity": float(equity) if equity is not None else None,
+                    "return": float(curve_return) if curve_return is not None else None,
+                }
+            )
+
+        if normalized_points:
+            cached_curves[normalized_symbol] = normalized_points
+
+    return cached_curves
+
+
+def _build_comparison_curves_from_bars(
+    initial_cash: float | None,
+    snapshots: list[PortfolioSnapshot],
+    bars_by_symbol: dict[str, Any],
+    symbols: list[str],
+) -> dict[str, list[dict[str, Any]]]:
+    if not initial_cash or initial_cash <= 0:
+        return {}
+
+    ordered_snapshots = [snapshot for snapshot in snapshots if snapshot.ts is not None]
+    if not ordered_snapshots:
+        return {}
+
+    normalized_symbols = _normalize_symbols(symbols)
+    if not normalized_symbols:
+        return {}
+
+    curves: dict[str, list[dict[str, Any]]] = {}
+    for symbol in normalized_symbols:
+        bars = bars_by_symbol.get(symbol, [])
+        close_by_date = {
+            bar.trade_date: float(bar.close_px)
+            for bar in bars
+            if bar.close_px is not None
+        }
+        if not close_by_date:
+            continue
+
+        base_close: float | None = None
+        last_close: float | None = None
+        points: list[dict[str, Any]] = []
+        for snapshot in ordered_snapshots:
+            trade_date = snapshot.ts.astimezone(NEW_YORK).date()
+            close = close_by_date.get(trade_date, last_close)
+            if close is None:
+                continue
+            last_close = close
+            if base_close is None:
+                base_close = close
+            if base_close <= 0:
+                continue
+
+            equity = float(initial_cash) * (close / base_close)
+            points.append(
+                {
+                    "ts": snapshot.ts.isoformat(),
+                    "symbol": symbol,
+                    "close": close,
+                    "equity": equity,
+                    "return": (equity / float(initial_cash)) - 1,
+                }
+            )
+
+        if points:
+            curves[symbol] = points
+
+    return curves
+
+
+def _build_benchmark_snapshot_overrides(
+    benchmark_symbol: str | None,
+    initial_cash: float | None,
+    snapshots: list[PortfolioSnapshot],
+    curve_points: list[dict[str, Any]] | None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    if not benchmark_symbol or not initial_cash or initial_cash <= 0 or not snapshots or not curve_points:
+        return {}, {}
+
+    normalized_symbol = str(benchmark_symbol).strip().upper()
+    if not normalized_symbol:
+        return {}, {}
+
+    ordered_snapshots = [snapshot for snapshot in snapshots if snapshot.ts is not None]
+    if not ordered_snapshots:
+        return {}, {}
+
+    point_by_ts = {
+        str(point["ts"]): point
+        for point in curve_points
+        if isinstance(point, dict) and isinstance(point.get("ts"), str)
+    }
+    if not point_by_ts:
+        return {}, {}
+
+    overrides: dict[str, dict[str, Any]] = {}
+    benchmark_base_close = next(
+        (
+            float(point["close"])
+            for point in curve_points
+            if point.get("close") is not None
+        ),
+        None,
+    )
+    benchmark_last_close: float | None = None
+    benchmark_last_equity: float | None = None
+    benchmark_last_return: float | None = None
+    benchmark_points = 0
+
+    for snapshot in ordered_snapshots:
+        snapshot_ts = snapshot.ts.isoformat()
+        point = point_by_ts.get(snapshot_ts)
+        if point is None:
+            continue
+
+        benchmark_close = float(point["close"]) if point.get("close") is not None else None
+        benchmark_equity = float(point["equity"]) if point.get("equity") is not None else None
+        benchmark_return = float(point["return"]) if point.get("return") is not None else None
+        if benchmark_close is None or benchmark_equity is None or benchmark_return is None:
+            continue
+
+        strategy_return = (float(snapshot.equity) / float(initial_cash)) - 1
+        overrides[snapshot_ts] = {
+            "benchmark_symbol": normalized_symbol,
+            "benchmark_close": benchmark_close,
+            "benchmark_equity": benchmark_equity,
+            "benchmark_return": benchmark_return,
+            "benchmark_excess_return": strategy_return - benchmark_return,
+        }
+        benchmark_last_close = benchmark_close
+        benchmark_last_equity = benchmark_equity
+        benchmark_last_return = benchmark_return
+        benchmark_points += 1
+
+    summary = {
+        "benchmark_symbol": normalized_symbol,
+        "benchmark_points": benchmark_points,
+        "benchmark_initial_close": benchmark_base_close,
+        "benchmark_final_close": benchmark_last_close,
+        "benchmark_final_equity": benchmark_last_equity,
+        "benchmark_total_return": benchmark_last_return,
+    }
+    return overrides, summary
+
+
+def _resolve_comparison_curves_and_summary(
+    db: Session,
+    run: StrategyRun,
+    equity_curve: list[PortfolioSnapshot],
+    summary_metrics: dict[str, Any],
+    has_stored_benchmark: bool,
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any], dict[str, dict[str, Any]], bool]:
+    initial_cash = float(run.initial_cash) if run.initial_cash is not None else None
+    updated_summary_metrics = dict(summary_metrics)
+    benchmark_overrides: dict[str, dict[str, Any]] = {}
+    cache_updated = False
+
+    cached_comparison_curves = _extract_cached_comparison_curves(updated_summary_metrics)
+    benchmark_symbol_normalized = _normalize_symbols([run.benchmark_symbol])[0] if run.benchmark_symbol else None
+    display_symbols = list(DISPLAY_COMPARISON_SYMBOLS)
+    required_symbols = _normalize_symbols([*display_symbols, benchmark_symbol_normalized])
+    missing_symbols = [symbol for symbol in required_symbols if symbol not in cached_comparison_curves]
+
+    computed_comparison_curves: dict[str, list[dict[str, Any]]] = {}
+    ordered_snapshots = [snapshot for snapshot in equity_curve if snapshot.ts is not None]
+    if missing_symbols and initial_cash and ordered_snapshots:
+        start_date = ordered_snapshots[0].ts.astimezone(NEW_YORK).date()
+        end_date = ordered_snapshots[-1].ts.astimezone(NEW_YORK).date()
+        bars_by_symbol = get_historical_data(
+            db,
+            missing_symbols,
+            start_date,
+            end_date,
+            adjusted=True,
+        )
+        computed_comparison_curves = _build_comparison_curves_from_bars(
+            initial_cash,
+            equity_curve,
+            bars_by_symbol,
+            missing_symbols,
+        )
+        if computed_comparison_curves:
+            updated_summary_metrics["comparison_curves"] = {
+                **cached_comparison_curves,
+                **computed_comparison_curves,
+            }
+            cache_updated = True
+
+    all_comparison_curves = {
+        **cached_comparison_curves,
+        **computed_comparison_curves,
+    }
+    comparison_curves = {
+        symbol: all_comparison_curves[symbol]
+        for symbol in display_symbols
+        if symbol in all_comparison_curves
+    }
+
+    if run.benchmark_symbol and not has_stored_benchmark:
+        benchmark_overrides, benchmark_summary = _build_benchmark_snapshot_overrides(
+            run.benchmark_symbol,
+            initial_cash,
+            equity_curve,
+            all_comparison_curves.get(benchmark_symbol_normalized),
+        )
+        for key, value in benchmark_summary.items():
+            if updated_summary_metrics.get(key) != value:
+                updated_summary_metrics[key] = value
+                cache_updated = True
+        if (
+            updated_summary_metrics.get("benchmark_total_return") is not None
+            and updated_summary_metrics.get("total_return") is not None
+            and updated_summary_metrics.get("excess_return") is None
+        ):
+            updated_summary_metrics["excess_return"] = (
+                float(updated_summary_metrics["total_return"])
+                - float(updated_summary_metrics["benchmark_total_return"])
+            )
+            cache_updated = True
+
+    return comparison_curves, updated_summary_metrics, benchmark_overrides, cache_updated
+
+
+def _merge_benchmark_fields(
+    serialized_snapshot: dict[str, Any],
+    benchmark_fields: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not benchmark_fields:
+        return serialized_snapshot
+
+    metrics = dict(serialized_snapshot.get("metrics") or {})
+    merged = dict(serialized_snapshot)
+    for key, value in benchmark_fields.items():
+        merged[key] = value
+        metrics[key] = value
+    merged["metrics"] = metrics
+    return merged
 
 
 def _serialize_transaction(txn: Transaction) -> dict[str, Any]:
@@ -174,6 +479,7 @@ def _to_backtest_run_out(run: StrategyRun, strategy_name: str | None = None) -> 
 
 
 def _to_backtest_detail_out(
+    db: Session,
     run: StrategyRun,
     strategy_name: str | None,
     latest_snapshot: PortfolioSnapshot | None,
@@ -184,11 +490,44 @@ def _to_backtest_detail_out(
 ) -> BacktestDetailOut:
     base = _to_backtest_run_out(run, strategy_name)
     dump = base.model_dump() if hasattr(base, "model_dump") else base.dict()
+    summary_metrics = dict(dump.get("summary_metrics") or {})
+    has_stored_benchmark = any(
+        (snapshot.metrics or {}).get("benchmark_equity") is not None
+        for snapshot in equity_curve
+    )
+    comparison_curves, summary_metrics, benchmark_overrides, cache_updated = _resolve_comparison_curves_and_summary(
+        db,
+        run,
+        equity_curve,
+        summary_metrics,
+        has_stored_benchmark,
+    )
+    if cache_updated:
+        run.summary_metrics = summary_metrics
+        db.add(run)
+        db.commit()
+
+    serialized_equity_curve = [
+        _merge_benchmark_fields(
+            _serialize_snapshot(snapshot),
+            benchmark_overrides.get(snapshot.ts.isoformat()) if snapshot.ts else None,
+        )
+        for snapshot in equity_curve
+    ]
+    serialized_latest_snapshot = (
+        _merge_benchmark_fields(
+            _serialize_snapshot(latest_snapshot),
+            benchmark_overrides.get(latest_snapshot.ts.isoformat()) if latest_snapshot and latest_snapshot.ts else None,
+        )
+        if latest_snapshot is not None
+        else None
+    )
     return BacktestDetailOut(
-        **dump,
-        latest_snapshot=_serialize_snapshot(latest_snapshot) if latest_snapshot is not None else None,
+        **{**dump, "summary_metrics": summary_metrics},
+        latest_snapshot=serialized_latest_snapshot,
         transaction_count=transaction_count,
-        equity_curve=[_serialize_snapshot(snapshot) for snapshot in equity_curve],
+        equity_curve=serialized_equity_curve,
+        comparison_curves=comparison_curves,
         signals=[_serialize_signal(signal) for signal in signals],
         transactions=[_serialize_transaction(txn) for txn in transactions],
     )
@@ -326,6 +665,7 @@ def get_backtest(run_id: UUID, db: Session = Depends(get_db)):
     ).scalar_one()
 
     return _to_backtest_detail_out(
+        db=db,
         run=run,
         strategy_name=strategy_name,
         latest_snapshot=latest_snapshot,
