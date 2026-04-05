@@ -233,6 +233,33 @@ def rename_strategy_portfolio(
     return portfolio
 
 
+def archive_strategy_portfolio(
+    db: Session,
+    portfolio_id: UUID | str,
+) -> StrategyPortfolio:
+    portfolio = db.get(StrategyPortfolio, portfolio_id)
+    if portfolio is None:
+        raise ValueError("strategy portfolio not found")
+
+    if portfolio.name == DEFAULT_PORTFOLIO_NAME:
+        raise ValueError("default strategy portfolio cannot be archived")
+
+    if portfolio.status == "archived":
+        return portfolio
+
+    portfolio.status = "archived"
+
+    allocations = db.execute(
+        select(StrategyAllocation).where(StrategyAllocation.portfolio_name == portfolio.name)
+    ).scalars().all()
+    for allocation in allocations:
+        allocation.status = "archived"
+
+    db.commit()
+    db.refresh(portfolio)
+    return portfolio
+
+
 def get_strategy_portfolio_by_name(
     db: Session,
     portfolio_name: str | None,

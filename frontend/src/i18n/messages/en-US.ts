@@ -6,6 +6,7 @@ export const enUSMessages: typeof zhCNMessages = {
     language: "Language",
     chinese: "中文",
     english: "English",
+    backToTop: "Back to top",
   },
   nav: {
     dashboard: "Dashboard",
@@ -111,6 +112,8 @@ export const enUSMessages: typeof zhCNMessages = {
         creatingAccount: "Creating...",
         createPortfolio: "Create Strategy Portfolio",
         creatingPortfolio: "Creating...",
+        archivePortfolio: "Archive",
+        archivingPortfolio: "Archiving...",
       },
       summary: {
         baseUrl: "base url",
@@ -235,6 +238,7 @@ export const enUSMessages: typeof zhCNMessages = {
     errors: {
       createAccountFailed: "Failed to create the paper account",
       createPortfolioFailed: "Failed to create the strategy portfolio",
+      archivePortfolioFailed: "Failed to archive the strategy portfolio",
       saveAllocationFailed: "Failed to save the strategy allocation",
       singleRunFailed: "Failed to start the single-strategy paper trading run",
       multiRunFailed: "Failed to start the multi-strategy paper trading run",

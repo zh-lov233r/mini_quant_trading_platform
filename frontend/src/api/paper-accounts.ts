@@ -75,3 +75,14 @@ export function renameStrategyPortfolio(
     body: JSON.stringify(payload),
   });
 }
+
+export function archiveStrategyPortfolio(
+  portfolioId: string
+): Promise<StrategyPortfolioOut> {
+  return http<StrategyPortfolioOut>(
+    `/api/strategy-portfolios/${portfolioId}/archive`,
+    {
+      method: "PATCH",
+    }
+  );
+}

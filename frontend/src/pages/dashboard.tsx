@@ -255,11 +255,6 @@ export default function DashboardPage() {
   return (
     <AppShell
       title="Dashboard"
-      subtitle={
-        isZh
-          ? "把策略、回测和 paper trading 放到同一个总览里，先看系统现在运行得怎么样，再决定今天要优化哪一段链路"
-          : "Bring strategies, backtests, and paper trading into one overview so you can see how the system is doing before deciding what to improve today."
-      }
       actions={
         <>
           {actionLink("/strategies/new", isZh ? "创建策略" : "Create Strategy", true)}
@@ -286,7 +281,7 @@ export default function DashboardPage() {
               value={String(stats.active)}
               hint={
                 isZh
-                  ? `其中 ${stats.engineReady} 个已经 engine-ready，${storedOnlyActive.length} 个 active 策略还只是 stored-only`
+                  ? `其中 ${stats.engineReady} 个 engine-ready，${storedOnlyActive.length} 个 active 策略 stored-only`
                   : `${stats.engineReady} are engine-ready, and ${storedOnlyActive.length} active strategies are still stored-only`
               }
               accent="#0f766e"
@@ -296,8 +291,8 @@ export default function DashboardPage() {
               value={String(completedRuns.length)}
               hint={
                 isZh
-                  ? `失败 ${failedRuns.length} 次。这个数字最能反映最近回测链路是否稳定`
-                  : `${failedRuns.length} failed. This is a strong signal for recent backtest pipeline stability.`
+                  ? `其中成功 ${completedRuns.length - failedRuns.length} 次; 失败 ${failedRuns.length} 次`
+                  : `${completedRuns.length - failedRuns.length} succeeded; ${failedRuns.length} failed`
               }
               accent="#2563eb"
             />
@@ -316,8 +311,8 @@ export default function DashboardPage() {
               value={formatPercent(getMetric(latestCompletedRun?.summary_metrics || {}, "total_return"), 2)}
               hint={
                 isZh
-                  ? "最近一次 completed backtest 的总收益率，适合用来快速判断最近策略迭代是否变好"
-                  : "Total return of the latest completed backtest, useful for checking whether recent strategy iterations improved."
+                  ? "最近一次 completed backtest 的总收益率"
+                  : "Total return of the latest completed backtest"
               }
               accent="#b45309"
             />

@@ -2,6 +2,7 @@ import type { CSSProperties, FormEvent, MouseEvent } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  archiveStrategyPortfolio,
   createPaperAccount,
   createStrategyPortfolio,
   getPaperAccountOverview,
@@ -101,6 +102,7 @@ export default function PaperTradingPage() {
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [creatingPortfolio, setCreatingPortfolio] = useState(false);
   const [renamingPortfolio, setRenamingPortfolio] = useState(false);
+  const [archivingPortfolioId, setArchivingPortfolioId] = useState<string | null>(null);
   const [submittingAllocation, setSubmittingAllocation] = useState(false);
   const [submittingSingle, setSubmittingSingle] = useState(false);
   const [submittingMulti, setSubmittingMulti] = useState(false);
@@ -124,6 +126,11 @@ export default function PaperTradingPage() {
   const [editingPortfolioError, setEditingPortfolioError] = useState<string | null>(null);
   const [portfolioRenameSuccess, setPortfolioRenameSuccess] = useState<{
     id: string;
+    message: string;
+  } | null>(null);
+  const [portfolioArchiveFeedback, setPortfolioArchiveFeedback] = useState<{
+    id: string;
+    tone: "success" | "error";
     message: string;
   } | null>(null);
 
@@ -503,6 +510,7 @@ export default function PaperTradingPage() {
     setEditingPortfolioName(portfolio.name);
     setEditingPortfolioError(null);
     setPortfolioRenameSuccess(null);
+    setPortfolioArchiveFeedback(null);
   };
 
   const handlePortfolioRenameCancel = () => {
@@ -540,6 +548,7 @@ export default function PaperTradingPage() {
         id: saved.id,
         message: isZh ? "portfolio 改名成功" : "Portfolio renamed successfully",
       });
+      setPortfolioArchiveFeedback(null);
       setSinglePortfolioName((current) => (current === portfolio.name ? saved.name : current));
       setMultiPortfolioName((current) => (current === portfolio.name ? saved.name : current));
       setAllocationPortfolioName((current) => (current === portfolio.name ? saved.name : current));
@@ -548,6 +557,46 @@ export default function PaperTradingPage() {
       setEditingPortfolioError(err?.message || (isZh ? "portfolio 改名失败" : "Failed to rename portfolio"));
     } finally {
       setRenamingPortfolio(false);
+    }
+  };
+
+  const handlePortfolioArchive = async (portfolio: StrategyPortfolioOut) => {
+    const confirmed = window.confirm(
+      isZh
+        ? `确认归档 portfolio "${portfolio.name}" 吗？归档后它和其下的 allocations 会从 active 工作区隐藏。`
+        : `Archive portfolio "${portfolio.name}"? It and its allocations will be hidden from the active workspace.`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setArchivingPortfolioId(portfolio.id);
+      setPortfolioRenameSuccess(null);
+      setPortfolioArchiveFeedback(null);
+      if (editingPortfolioId === portfolio.id) {
+        handlePortfolioRenameCancel();
+      }
+
+      const saved = await archiveStrategyPortfolio(portfolio.id);
+      await refreshWorkspace(selectedAccountId || saved.paper_account_id);
+      await refreshOverview(saved.paper_account_id);
+      setPortfolioArchiveFeedback({
+        id: saved.id,
+        tone: "success",
+        message: isZh ? "portfolio 已归档" : "Portfolio archived",
+      });
+      setExpandedAllocationPortfolioName((current) =>
+        current === portfolio.name ? null : current
+      );
+    } catch (err: any) {
+      setPortfolioArchiveFeedback({
+        id: portfolio.id,
+        tone: "error",
+        message: err?.message || copy.errors.archivePortfolioFailed,
+      });
+    } finally {
+      setArchivingPortfolioId(null);
     }
   };
 
@@ -1051,17 +1100,41 @@ export default function PaperTradingPage() {
                               <div>
                                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
                                   <h3 style={{ margin: 0, fontSize: 20 }}>{portfolio.name}</h3>
-                                  {portfolio.name !== "default" ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => handlePortfolioRenameStart(portfolio)}
-                                      style={secondaryInlineButtonStyle}
-                                    >
-                                      {isZh ? "改名" : "Rename"}
-                                    </button>
+                                  {portfolio.name !== "default" && portfolio.status === "active" ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => handlePortfolioRenameStart(portfolio)}
+                                        disabled={archivingPortfolioId === portfolio.id}
+                                        style={secondaryInlineButtonStyle}
+                                      >
+                                        {isZh ? "改名" : "Rename"}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => void handlePortfolioArchive(portfolio)}
+                                        disabled={
+                                          archivingPortfolioId === portfolio.id ||
+                                          renamingPortfolio
+                                        }
+                                        style={dangerInlineButtonStyle(
+                                          archivingPortfolioId === portfolio.id
+                                        )}
+                                      >
+                                        {archivingPortfolioId === portfolio.id
+                                          ? copy.accounts.buttons.archivingPortfolio
+                                          : copy.accounts.buttons.archivePortfolio}
+                                      </button>
+                                    </>
                                   ) : (
                                     <span style={mutedInlineHintStyle}>
-                                      {isZh ? "默认组合不可改名" : "Default portfolio cannot be renamed"}
+                                      {portfolio.name === "default"
+                                        ? isZh
+                                          ? "默认组合不可改名或归档"
+                                          : "Default portfolio cannot be renamed or archived"
+                                        : isZh
+                                          ? "该组合已归档"
+                                          : "This portfolio is archived"}
                                     </span>
                                   )}
                                 </div>
@@ -1147,6 +1220,20 @@ export default function PaperTradingPage() {
                                 }}
                               >
                                 {portfolioRenameSuccess.message}
+                              </div>
+                            ) : null}
+                            {portfolioArchiveFeedback?.id === portfolio.id ? (
+                              <div
+                                style={{
+                                  marginBottom: 12,
+                                  color:
+                                    portfolioArchiveFeedback.tone === "success"
+                                      ? "#15803d"
+                                      : "crimson",
+                                  fontWeight: 600,
+                                }}
+                              >
+                                {portfolioArchiveFeedback.message}
                               </div>
                             ) : null}
                             <div style={detailGridStyle}>
@@ -1745,6 +1832,16 @@ const secondaryInlineButtonStyle: CSSProperties = {
   cursor: "pointer",
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
+
+function dangerInlineButtonStyle(disabled: boolean): CSSProperties {
+  return {
+    ...secondaryInlineButtonStyle,
+    border: "1px solid rgba(220, 38, 38, 0.28)",
+    background: disabled ? "rgba(254,242,242,0.72)" : "rgba(254,242,242,0.94)",
+    color: disabled ? "#b91c1c" : "#991b1b",
+    cursor: disabled ? "not-allowed" : "pointer",
+  };
+}
 
 const mutedInlineHintStyle: CSSProperties = {
   color: "#64748b",

@@ -5,7 +5,7 @@ import { useI18n } from "@/i18n/provider";
 
 interface AppShellProps {
   title: string;
-  subtitle: string;
+  subtitle?: string;
   actions?: ReactNode;
   children: ReactNode;
 }
@@ -187,18 +187,20 @@ export default function AppShell({
               >
                 {title}
               </h1>
-              <p
-                style={{
-                  margin: 0,
-                  color: "rgba(226, 232, 240, 0.78)",
-                  fontSize: 17,
-                  lineHeight: 1.7,
-                  fontFamily:
-                    "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-                }}
-              >
-                {subtitle}
-              </p>
+              {subtitle ? (
+                <p
+                  style={{
+                    margin: 0,
+                    color: "rgba(226, 232, 240, 0.78)",
+                    fontSize: 17,
+                    lineHeight: 1.7,
+                    fontFamily:
+                      "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+                  }}
+                >
+                  {subtitle}
+                </p>
+              ) : null}
             </div>
 
             {actions ? (

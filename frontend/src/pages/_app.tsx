@@ -1,5 +1,6 @@
 import type { AppProps } from "next/app";
 
+import BackToTopButton from "@/components/BackToTopButton";
 import { I18nProvider } from "@/i18n/provider";
 
 export default function App({ Component, pageProps }: AppProps) {
@@ -30,6 +31,7 @@ export default function App({ Component, pageProps }: AppProps) {
           }
         `}</style>
         <Component {...pageProps} />
+        <BackToTopButton />
       </>
     </I18nProvider>
   );

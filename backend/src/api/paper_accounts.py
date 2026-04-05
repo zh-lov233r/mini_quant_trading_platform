@@ -17,6 +17,7 @@ from src.models.tables import (
     StrategyPortfolio,
 )
 from src.services.paper_account_service import (
+    archive_strategy_portfolio,
     build_paper_account_overview,
     ensure_default_paper_account,
     ensure_default_strategy_portfolio,
@@ -296,6 +297,26 @@ def update_strategy_portfolio(
 ):
     try:
         portfolio = rename_strategy_portfolio(db, portfolio_id, name=payload.name)
+    except ValueError as exc:
+        message = str(exc)
+        if message == "strategy portfolio not found":
+            raise HTTPException(status_code=404, detail=message) from exc
+        raise HTTPException(status_code=409, detail=message) from exc
+
+    account = db.get(PaperTradingAccount, portfolio.paper_account_id)
+    return _to_portfolio_out(
+        portfolio,
+        paper_account_name=account.name if account is not None else None,
+    )
+
+
+@router.patch("/strategy-portfolios/{portfolio_id}/archive", response_model=StrategyPortfolioOut)
+def archive_portfolio(
+    portfolio_id: UUID,
+    db: Session = Depends(get_db),
+):
+    try:
+        portfolio = archive_strategy_portfolio(db, portfolio_id)
     except ValueError as exc:
         message = str(exc)
         if message == "strategy portfolio not found":

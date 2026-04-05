@@ -4,6 +4,7 @@ export const zhCNMessages = {
     language: "语言",
     chinese: "中文",
     english: "English",
+    backToTop: "返回顶部",
   },
   nav: {
     dashboard: "总览",
@@ -106,6 +107,8 @@ export const zhCNMessages = {
         creatingAccount: "创建中...",
         createPortfolio: "创建策略子组合",
         creatingPortfolio: "创建中...",
+        archivePortfolio: "归档",
+        archivingPortfolio: "归档中...",
       },
       summary: {
         baseUrl: "base url",
@@ -229,6 +232,7 @@ export const zhCNMessages = {
     errors: {
       createAccountFailed: "创建 paper account 失败",
       createPortfolioFailed: "创建策略子组合失败",
+      archivePortfolioFailed: "归档策略子组合失败",
       saveAllocationFailed: "保存策略分配失败",
       singleRunFailed: "发起单策略 paper trading 失败",
       multiRunFailed: "发起多策略 paper trading 失败",
