@@ -281,8 +281,8 @@ export default function DashboardPage() {
               value={String(stats.active)}
               hint={
                 isZh
-                  ? `其中 ${stats.engineReady} 个 engine-ready，${storedOnlyActive.length} 个 active 策略 stored-only`
-                  : `${stats.engineReady} are engine-ready, and ${storedOnlyActive.length} active strategies are still stored-only`
+                  ? `${stats.engineReady} 个 engine-ready，${storedOnlyActive.length} 个 active 策略 stored-only`
+                  : `${stats.engineReady} engine-ready, and ${storedOnlyActive.length} active strategies are still stored-only`
               }
               accent="#0f766e"
             />
