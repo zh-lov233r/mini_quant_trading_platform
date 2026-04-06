@@ -1,8 +1,11 @@
 import http from "@/api/client";
 import type {
+  DeleteResultOut,
   PaperTradingAccountCreate,
   PaperTradingAccountOut,
   PaperTradingAccountOverviewOut,
+  PaperTradingAccountUpdate,
+  PaperTradingWorkspaceOut,
   StrategyPortfolioCreate,
   StrategyPortfolioOut,
   StrategyPortfolioRename,
@@ -26,6 +29,16 @@ export function createPaperAccount(
   });
 }
 
+export function updatePaperAccount(
+  accountId: string,
+  payload: PaperTradingAccountUpdate
+): Promise<PaperTradingAccountOut> {
+  return http<PaperTradingAccountOut>(`/api/paper-accounts/${accountId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getPaperAccountOverview(
   accountId: string
 ): Promise<PaperTradingAccountOverviewOut> {
@@ -35,6 +48,25 @@ export function getPaperAccountOverview(
       method: "GET",
     }
   );
+}
+
+export function getPaperAccountWorkspace(
+  accountId: string
+): Promise<PaperTradingWorkspaceOut> {
+  return http<PaperTradingWorkspaceOut>(
+    `/api/paper-accounts/${accountId}/workspace`,
+    {
+      method: "GET",
+    }
+  );
+}
+
+export function deletePaperAccount(
+  accountId: string
+): Promise<DeleteResultOut> {
+  return http<DeleteResultOut>(`/api/paper-accounts/${accountId}`, {
+    method: "DELETE",
+  });
 }
 
 export function listStrategyPortfolios(
@@ -85,4 +117,12 @@ export function archiveStrategyPortfolio(
       method: "PATCH",
     }
   );
+}
+
+export function deleteStrategyPortfolio(
+  portfolioId: string
+): Promise<DeleteResultOut> {
+  return http<DeleteResultOut>(`/api/strategy-portfolios/${portfolioId}`, {
+    method: "DELETE",
+  });
 }

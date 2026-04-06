@@ -27,6 +27,7 @@ SELECT
 FROM eod_bars
 WHERE (%(start_date)s::date IS NULL OR dt_ny >= (%(start_date)s::date - 400))
   AND (%(end_date)s::date IS NULL OR dt_ny <= %(end_date)s::date)
+  {instrument_filter}
 ORDER BY instrument_id, dt_ny;
 """
 
@@ -350,6 +351,13 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional number of instruments for smoke testing.",
     )
+    parser.add_argument(
+        "--instrument-id",
+        type=int,
+        action="append",
+        default=None,
+        help="Optional instrument_id filter. Repeat the flag to target multiple instruments.",
+    )
     return parser.parse_args()
 
 
@@ -529,10 +537,23 @@ def _iter_bars(
     conn: psycopg.Connection,
     start_date: str | None,
     end_date: str | None,
+    instrument_ids: list[int] | None,
 ) -> Iterator[Bar]:
     with conn.cursor(name="bars_cursor") as cur:
         cur.itersize = 50_000
-        cur.execute(BARS_SQL, {"start_date": start_date, "end_date": end_date})
+        instrument_filter = ""
+        params: dict[str, object] = {
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+        if instrument_ids:
+            instrument_filter = "AND instrument_id = ANY(%(instrument_ids)s)"
+            params["instrument_ids"] = instrument_ids
+
+        cur.execute(
+            BARS_SQL.format(instrument_filter=instrument_filter),
+            params,
+        )
         for row in cur:
             yield Bar(*row)
 
@@ -583,7 +604,14 @@ def main() -> None:
         processed_instruments = 0
         upserted_rows = 0
 
-        bar_groups = _group_by_instrument(_iter_bars(read_conn, args.start_date, args.end_date))
+        bar_groups = _group_by_instrument(
+            _iter_bars(
+                read_conn,
+                args.start_date,
+                args.end_date,
+                args.instrument_id,
+            )
+        )
         for bars in bar_groups:
             if args.instrument_limit is not None and processed_instruments >= args.instrument_limit:
                 break

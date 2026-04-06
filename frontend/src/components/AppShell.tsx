@@ -32,7 +32,7 @@ export default function AppShell({
         minHeight: "100vh",
         padding: "28px 6px 56px",
         background:
-          "radial-gradient(circle at top left, rgba(34,211,238,0.18), transparent 28%), radial-gradient(circle at top right, rgba(245,158,11,0.14), transparent 24%), radial-gradient(circle at bottom left, rgba(59,130,246,0.12), transparent 30%), linear-gradient(180deg, #06131a 0%, #0b1723 45%, #0f172a 100%)",
+          "radial-gradient(circle at top left, rgba(45,212,191,0.18), transparent 28%), radial-gradient(circle at top right, rgba(251,191,36,0.12), transparent 22%), radial-gradient(circle at bottom left, rgba(59,130,246,0.14), transparent 30%), linear-gradient(180deg, #030712 0%, #07111c 42%, #0b1523 100%)",
         color: "#e2e8f0",
         fontFamily:
           "\"Iowan Old Style\", \"Palatino Linotype\", \"Book Antiqua\", Georgia, serif",
@@ -44,9 +44,9 @@ export default function AppShell({
             marginBottom: 20,
             padding: 18,
             borderRadius: 24,
-            border: "1px solid rgba(148, 163, 184, 0.16)",
-            background: "rgba(8, 15, 24, 0.68)",
-            boxShadow: "0 22px 60px rgba(2, 6, 23, 0.42)",
+            border: "1px solid rgba(71, 85, 105, 0.32)",
+            background: "rgba(5, 10, 18, 0.78)",
+            boxShadow: "0 22px 60px rgba(2, 6, 23, 0.52)",
             backdropFilter: "blur(8px)",
           }}
         >
@@ -92,9 +92,9 @@ export default function AppShell({
                     style={{
                       padding: "9px 14px",
                       borderRadius: 999,
-                      border: "1px solid rgba(148, 163, 184, 0.16)",
-                      background: "rgba(15, 23, 42, 0.72)",
-                      color: "#dbeafe",
+                      border: "1px solid rgba(71, 85, 105, 0.34)",
+                      background: "rgba(8, 15, 24, 0.82)",
+                      color: "#cbd5e1",
                       textDecoration: "none",
                       fontSize: 14,
                       fontWeight: 600,
@@ -113,8 +113,8 @@ export default function AppShell({
                   gap: 6,
                   padding: 4,
                   borderRadius: 999,
-                  border: "1px solid rgba(148, 163, 184, 0.16)",
-                  background: "rgba(15, 23, 42, 0.72)",
+                  border: "1px solid rgba(71, 85, 105, 0.34)",
+                  background: "rgba(8, 15, 24, 0.82)",
                   fontFamily:
                     "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                 }}

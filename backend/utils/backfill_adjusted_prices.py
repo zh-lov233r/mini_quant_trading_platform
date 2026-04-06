@@ -332,7 +332,10 @@ def main() -> None:
 
         instrument_ids = _load_action_instruments(conn)
         if args.instrument_id is not None:
-            instrument_ids = [instrument_id for instrument_id in instrument_ids if instrument_id == args.instrument_id]
+            # Targeted rebuilds should also work for instruments without any
+            # corporate actions so repaired raw OHLC values can refresh the
+            # identity-adjusted columns.
+            instrument_ids = [args.instrument_id]
         elif args.instrument_limit is not None:
             instrument_ids = instrument_ids[: args.instrument_limit]
 

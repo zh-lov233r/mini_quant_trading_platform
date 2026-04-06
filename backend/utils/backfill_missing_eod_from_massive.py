@@ -387,7 +387,10 @@ def _fetch_grouped_daily(
             return {}
 
         for item in payload.get("results") or []:
-            symbol = (item.get("T") or item.get("ticker") or "").upper().strip()
+            raw_symbol = str(item.get("T") or item.get("ticker") or "").strip()
+            if not raw_symbol or raw_symbol != raw_symbol.upper():
+                continue
+            symbol = raw_symbol.upper()
             timestamp_ms = item.get("t")
             if not symbol or timestamp_ms in (None, ""):
                 continue

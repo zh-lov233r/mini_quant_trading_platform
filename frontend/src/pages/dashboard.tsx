@@ -60,10 +60,10 @@ function cardStyle(accent?: string) {
   return {
     padding: 22,
     borderRadius: 24,
-    border: `1px solid ${accent || "rgba(148, 163, 184, 0.18)"}`,
-    background: "rgba(255,255,255,0.82)",
-    color: "#0f172a",
-    boxShadow: "0 18px 44px rgba(15, 23, 42, 0.06)",
+    border: `1px solid ${accent || "rgba(71, 85, 105, 0.3)"}`,
+    background: "linear-gradient(180deg, rgba(8,15,24,0.92), rgba(15,23,42,0.88))",
+    color: "#e2e8f0",
+    boxShadow: "0 18px 44px rgba(2, 6, 23, 0.22)",
   } as const;
 }
 
@@ -84,7 +84,7 @@ function sectionTitle(title: string, subtitle: string, href?: string, linkLabel?
         <p
           style={{
             margin: 0,
-            color: "#64748b",
+            color: "rgba(148, 163, 184, 0.88)",
             lineHeight: 1.6,
             fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
           }}
@@ -96,7 +96,7 @@ function sectionTitle(title: string, subtitle: string, href?: string, linkLabel?
         <Link
           href={href}
           style={{
-            color: "#0f766e",
+            color: "#5eead4",
             textDecoration: "none",
             fontWeight: 700,
             fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -264,7 +264,7 @@ export default function DashboardPage() {
       }
     >
       {loading ? <p>{isZh ? "加载中..." : "Loading..."}</p> : null}
-      {error ? <p style={{ color: "crimson" }}>{error}</p> : null}
+      {error ? <p style={{ color: "#fda4af" }}>{error}</p> : null}
 
       {!loading && !error ? (
         <>
@@ -282,7 +282,7 @@ export default function DashboardPage() {
               hint={
                 isZh
                   ? `${stats.engineReady} 个 engine-ready，${storedOnlyActive.length} 个 active 策略 stored-only`
-                  : `${stats.engineReady} engine-ready, and ${storedOnlyActive.length} active strategies are still stored-only`
+                  : `${stats.engineReady} engine-ready, ${storedOnlyActive.length} active strategies are still stored-only`
               }
               accent="#0f766e"
             />
@@ -342,8 +342,8 @@ export default function DashboardPage() {
                   style={{
                     padding: 18,
                     borderRadius: 18,
-                    background: "#f8fafc",
-                    color: "#475569",
+                    background: "rgba(15, 23, 42, 0.76)",
+                    color: "rgba(148, 163, 184, 0.88)",
                     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                   }}
                 >
@@ -366,9 +366,9 @@ export default function DashboardPage() {
                           style={{
                             padding: 18,
                             borderRadius: 18,
-                            border: "1px solid rgba(226, 232, 240, 0.9)",
+                            border: "1px solid rgba(71, 85, 105, 0.28)",
                             background:
-                              "linear-gradient(135deg, rgba(255,250,240,0.92), rgba(255,255,255,0.96))",
+                              "radial-gradient(circle at top right, rgba(45,212,191,0.08), transparent 24%), rgba(8, 15, 24, 0.88)",
                           }}
                         >
                           <div
@@ -412,7 +412,7 @@ export default function DashboardPage() {
                             </div>
                             <div
                               style={{
-                                color: "#475569",
+                                color: "rgba(148, 163, 184, 0.88)",
                                 fontSize: 13,
                                 fontFamily:
                                   "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -432,7 +432,7 @@ export default function DashboardPage() {
                             }}
                           >
                             <div>
-                              <div style={{ color: "#64748b", fontSize: 12, fontWeight: 700 }}>
+                              <div style={{ color: "rgba(148, 163, 184, 0.88)", fontSize: 12, fontWeight: 700 }}>
                                 {isZh ? "窗口" : "Window"}
                               </div>
                               <div>
@@ -440,19 +440,19 @@ export default function DashboardPage() {
                               </div>
                             </div>
                             <div>
-                              <div style={{ color: "#64748b", fontSize: 12, fontWeight: 700 }}>
+                              <div style={{ color: "rgba(148, 163, 184, 0.88)", fontSize: 12, fontWeight: 700 }}>
                                 {isZh ? "总收益" : "Total Return"}
                               </div>
                               <div>{formatPercent(totalReturn, 2)}</div>
                             </div>
                             <div>
-                              <div style={{ color: "#64748b", fontSize: 12, fontWeight: 700 }}>
+                              <div style={{ color: "rgba(148, 163, 184, 0.88)", fontSize: 12, fontWeight: 700 }}>
                                 {isZh ? "最大回撤" : "Max Drawdown"}
                               </div>
                               <div>{formatPercent(maxDrawdown, 2)}</div>
                             </div>
                             <div>
-                              <div style={{ color: "#64748b", fontSize: 12, fontWeight: 700 }}>
+                              <div style={{ color: "rgba(148, 163, 184, 0.88)", fontSize: 12, fontWeight: 700 }}>
                                 {isZh ? "期末权益" : "Final Equity"}
                               </div>
                               <div>
@@ -519,8 +519,8 @@ export default function DashboardPage() {
                         style={{
                           padding: 14,
                           borderRadius: 18,
-                          background: "#f8fafc",
-                          border: "1px solid rgba(226, 232, 240, 0.95)",
+                          background: "rgba(15, 23, 42, 0.76)",
+                          border: "1px solid rgba(71, 85, 105, 0.28)",
                         }}
                       >
                         <div
@@ -545,7 +545,7 @@ export default function DashboardPage() {
                           style={{
                             display: "grid",
                             gap: 6,
-                            color: "#475569",
+                            color: "rgba(148, 163, 184, 0.88)",
                             fontSize: 14,
                             fontFamily:
                               "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -671,8 +671,8 @@ export default function DashboardPage() {
                   style={{
                     padding: 20,
                     borderRadius: 18,
-                    background: "#f8fafc",
-                    color: "#475569",
+                    background: "rgba(15, 23, 42, 0.76)",
+                    color: "rgba(148, 163, 184, 0.88)",
                     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                   }}
                 >
@@ -693,10 +693,10 @@ export default function DashboardPage() {
                         padding: 18,
                         borderRadius: 18,
                         background:
-                          "linear-gradient(135deg, rgba(255,250,240,0.95), rgba(255,255,255,0.95))",
-                        border: "1px solid rgba(226, 232, 240, 0.9)",
+                          "radial-gradient(circle at top right, rgba(59,130,246,0.08), transparent 24%), rgba(8, 15, 24, 0.88)",
+                        border: "1px solid rgba(71, 85, 105, 0.28)",
                         transition: "transform 160ms ease, box-shadow 160ms ease",
-                        boxShadow: "0 10px 24px rgba(15, 23, 42, 0.04)",
+                        boxShadow: "0 10px 24px rgba(2, 6, 23, 0.18)",
                         cursor: "pointer",
                       }}
                     >
@@ -730,7 +730,7 @@ export default function DashboardPage() {
                         </div>
                         <div
                           style={{
-                            color: "#64748b",
+                            color: "rgba(148, 163, 184, 0.88)",
                             fontSize: 13,
                             fontFamily:
                               "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -743,7 +743,7 @@ export default function DashboardPage() {
                       <p
                         style={{
                           margin: "0 0 12px",
-                          color: "#475569",
+                          color: "rgba(148, 163, 184, 0.88)",
                           lineHeight: 1.7,
                           fontFamily:
                             "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -757,7 +757,7 @@ export default function DashboardPage() {
                           display: "grid",
                           gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
                           gap: 10,
-                          color: "#334155",
+                          color: "#cbd5e1",
                           fontSize: 14,
                           fontFamily:
                             "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -799,8 +799,8 @@ export default function DashboardPage() {
                         style={{
                           padding: 14,
                           borderRadius: 18,
-                          background: "#f8fafc",
-                          border: "1px solid rgba(226, 232, 240, 0.95)",
+                          background: "rgba(15, 23, 42, 0.76)",
+                          border: "1px solid rgba(71, 85, 105, 0.28)",
                         }}
                       >
                         <div
@@ -820,7 +820,7 @@ export default function DashboardPage() {
                         <p
                           style={{
                             margin: 0,
-                            color: "#64748b",
+                            color: "rgba(148, 163, 184, 0.88)",
                             lineHeight: 1.6,
                             fontSize: 14,
                             fontFamily:
@@ -891,13 +891,13 @@ export default function DashboardPage() {
 const miniPanelStyle = {
   padding: 14,
   borderRadius: 18,
-  background: "#f8fafc",
-  border: "1px solid rgba(226, 232, 240, 0.95)",
+  background: "rgba(15, 23, 42, 0.76)",
+  border: "1px solid rgba(71, 85, 105, 0.28)",
 } as const;
 
 const miniPanelLabelStyle = {
   marginBottom: 6,
-  color: "#64748b",
+  color: "rgba(148, 163, 184, 0.88)",
   fontSize: 12,
   fontWeight: 700,
   textTransform: "uppercase",
@@ -906,7 +906,7 @@ const miniPanelLabelStyle = {
 } as const;
 
 const miniPanelValueStyle = {
-  color: "#0f172a",
+  color: "#f8fafc",
   fontSize: 28,
   fontWeight: 700,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -915,13 +915,13 @@ const miniPanelValueStyle = {
 const riskItemStyle = {
   padding: 14,
   borderRadius: 18,
-  background: "#fff7ed",
-  border: "1px solid rgba(251, 146, 60, 0.16)",
+  background: "rgba(120, 53, 15, 0.18)",
+  border: "1px solid rgba(251, 146, 60, 0.18)",
 } as const;
 
 const riskTitleStyle = {
   marginBottom: 4,
-  color: "#9a3412",
+  color: "#fdba74",
   fontSize: 13,
   fontWeight: 700,
   textTransform: "uppercase",
@@ -931,14 +931,14 @@ const riskTitleStyle = {
 
 const riskValueStyle = {
   marginBottom: 6,
-  color: "#7c2d12",
+  color: "#ffedd5",
   fontSize: 26,
   fontWeight: 700,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 } as const;
 
 const riskBodyStyle = {
-  color: "#7c2d12",
+  color: "#fed7aa",
   lineHeight: 1.6,
   fontSize: 14,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -947,7 +947,7 @@ const riskBodyStyle = {
 const emptyStateStyle = {
   padding: 18,
   borderRadius: 18,
-  background: "#f8fafc",
-  color: "#475569",
+  background: "rgba(15, 23, 42, 0.76)",
+  color: "rgba(148, 163, 184, 0.88)",
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 } as const;

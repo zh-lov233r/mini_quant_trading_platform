@@ -464,7 +464,7 @@ function buildEventMarkers(
         category: isBuy ? "buy_signal" : "sell_signal",
         shape: "circle",
         stroke: isBuy ? "#2563eb" : "#d97706",
-        fill: "#ffffff",
+        fill: "rgba(15, 23, 42, 0.96)",
         title:
           locale === "zh-CN"
             ? `${group.signal} 信号 ${group.items.length} 个`
@@ -545,9 +545,9 @@ function RunOverviewPanel({ run }: { run: BacktestDetailOut }) {
         marginBottom: 18,
         padding: 18,
         borderRadius: 18,
-        background: "rgba(248,250,252,0.92)",
-        border: "1px solid rgba(226, 232, 240, 0.9)",
-        color: "#0f172a",
+        background: "linear-gradient(180deg, rgba(8,15,24,0.92), rgba(15,23,42,0.88))",
+        border: "1px solid rgba(71, 85, 105, 0.3)",
+        color: "#e2e8f0",
       }}
     >
       <div style={{ marginBottom: 16 }}>
@@ -614,14 +614,15 @@ function RunOverviewPanel({ run }: { run: BacktestDetailOut }) {
             marginTop: 16,
             padding: 16,
             borderRadius: 16,
-            background: "#ffffff",
+            background: "rgba(15, 23, 42, 0.72)",
+            border: "1px solid rgba(71, 85, 105, 0.28)",
             fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
           }}
         >
-          <div style={{ marginBottom: 10, fontWeight: 700, color: "#0f172a" }}>
+          <div style={{ marginBottom: 10, fontWeight: 700, color: "#f8fafc" }}>
             {isZh ? "最新快照" : "Latest Snapshot"}
           </div>
-          <div style={{ display: "grid", gap: 8, color: "#475569" }}>
+          <div style={{ display: "grid", gap: 8, color: "rgba(148, 163, 184, 0.9)" }}>
             <div>{isZh ? "时间" : "Time"}: {formatDateTime(run.latest_snapshot.ts || null, locale)}</div>
             <div>{isZh ? "现金" : "Cash"}: {formatCurrency(run.latest_snapshot.cash, locale)}</div>
             <div>{isZh ? "权益" : "Equity"}: {formatCurrency(run.latest_snapshot.equity, locale)}</div>
@@ -636,8 +637,9 @@ function RunOverviewPanel({ run }: { run: BacktestDetailOut }) {
             marginTop: 16,
             padding: 14,
             borderRadius: 14,
-            background: "#fef2f2",
-            color: "#b91c1c",
+            background: "rgba(127, 29, 29, 0.28)",
+            border: "1px solid rgba(248, 113, 113, 0.18)",
+            color: "#fecaca",
             fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
           }}
         >
@@ -701,7 +703,7 @@ function SymbolPnlCard({ rows }: { rows: SymbolPnlRow[] }) {
         </div>
       ) : (
         <>
-          <div style={{ marginBottom: 10, color: "#475569", fontSize: 13 }}>
+          <div style={{ marginBottom: 10, color: "rgba(148, 163, 184, 0.88)", fontSize: 13 }}>
             {isZh
               ? `当前显示 ${visibleRows.length} / ${rows.length} 支股票，先按盈利从大到小，再按亏损从小到大排序。`
               : `Showing ${visibleRows.length} / ${rows.length} symbols, with winners first from highest gain to lowest, followed by losers from most negative to least negative.`}
@@ -710,8 +712,8 @@ function SymbolPnlCard({ rows }: { rows: SymbolPnlRow[] }) {
             style={{
               overflowX: "auto",
               borderRadius: 18,
-              border: "1px solid rgba(226, 232, 240, 0.9)",
-              background: "#fff",
+              border: "1px solid rgba(71, 85, 105, 0.28)",
+              background: "rgba(15, 23, 42, 0.74)",
             }}
           >
             <table
@@ -723,7 +725,13 @@ function SymbolPnlCard({ rows }: { rows: SymbolPnlRow[] }) {
               }}
             >
               <thead>
-                <tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>
+                <tr
+                  style={{
+                    background: "rgba(30, 41, 59, 0.9)",
+                    color: "rgba(148, 163, 184, 0.88)",
+                    textAlign: "left",
+                  }}
+                >
                   {(isZh
                     ? ["标的", "总盈亏", "已实现", "未实现", "持仓数量", "最新价格", "持仓市值", "交易次数"]
                     : ["Symbol", "Total PnL", "Realized", "Unrealized", "Net Qty", "Last Price", "Market Value", "Trades"]
@@ -736,7 +744,6 @@ function SymbolPnlCard({ rows }: { rows: SymbolPnlRow[] }) {
                         fontWeight: 700,
                         letterSpacing: "0.03em",
                         textTransform: "uppercase",
-                        borderBottom: "1px solid rgba(226, 232, 240, 0.9)",
                       }}
                     >
                       {label}
@@ -1033,7 +1040,7 @@ function EquityCurveCard({
           fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
         }}
       >
-        <div style={{ color: "#475569", fontSize: 13 }}>
+        <div style={{ color: "rgba(148, 163, 184, 0.88)", fontSize: 13 }}>
           {isZh
             ? "放大后会只显示更短的一段时间窗口; 虚线表示起始资金基准线"
             : "Zooming in shows a shorter time window so you can inspect local moves and events more clearly; the dashed line marks the starting capital reference."}
@@ -1048,7 +1055,7 @@ function EquityCurveCard({
           <button type="button" style={zoomButtonStyle} onClick={zoomIn}>
             {isZh ? "放大" : "Zoom In"}
           </button>
-          <span style={{ color: "#475569", fontSize: 13 }}>
+          <span style={{ color: "rgba(148, 163, 184, 0.88)", fontSize: 13 }}>
             {isZh ? "缩放" : "Zoom"} {Math.round(chartZoom * 100)}%
           </span>
         </div>
@@ -1062,7 +1069,16 @@ function EquityCurveCard({
           fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
         }}
         >
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", color: "#475569", fontSize: 13 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 12,
+            flexWrap: "wrap",
+            color: "rgba(148, 163, 184, 0.88)",
+            fontSize: 13,
+          }}
+        >
           <span>
             {isZh ? "当前窗口" : "Current Window"}: {formatDateTime(visibleWindowStart, locale)} {"->"}{" "}
             {formatDateTime(visibleWindowEnd, locale)}
@@ -1161,8 +1177,8 @@ function EquityCurveCard({
           position: "relative",
           padding: 18,
           borderRadius: 18,
-          background: "linear-gradient(180deg, rgba(240,253,250,0.9), rgba(255,255,255,0.95))",
-          border: "1px solid rgba(94, 234, 212, 0.28)",
+          background: "linear-gradient(180deg, rgba(8,15,24,0.95), rgba(15,23,42,0.9))",
+          border: "1px solid rgba(94, 234, 212, 0.18)",
         }}
       >
         <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: 380, display: "block" }}>
@@ -1343,7 +1359,7 @@ function EquityCurveCard({
           display: "flex",
           gap: 16,
           flexWrap: "wrap",
-          color: "#475569",
+          color: "rgba(148, 163, 184, 0.88)",
           fontSize: 13,
           fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
         }}
@@ -1367,11 +1383,11 @@ function EquityCurveCard({
           </span>
         ) : null}
         <span style={legendItemStyle}>
-          <span style={{ ...legendDotStyle, border: "2px solid #2563eb", background: "#fff" }} />
+          <span style={{ ...legendDotStyle, border: "2px solid #2563eb", background: "rgba(15, 23, 42, 0.92)" }} />
           {isZh ? "BUY 信号" : "BUY Signals"} {buySignalCount}
         </span>
         <span style={legendItemStyle}>
-          <span style={{ ...legendDotStyle, border: "2px solid #d97706", background: "#fff" }} />
+          <span style={{ ...legendDotStyle, border: "2px solid #d97706", background: "rgba(15, 23, 42, 0.92)" }} />
           {isZh ? "SELL 信号" : "SELL Signals"} {sellSignalCount}
         </span>
         <span style={legendItemStyle}>
@@ -1443,8 +1459,8 @@ function markerToggleButtonStyle(isPrimary: boolean) {
     border: "none",
     borderRadius: 999,
     padding: "8px 14px",
-    background: isPrimary ? "#0f766e" : "#e2e8f0",
-    color: isPrimary ? "#ffffff" : "#0f172a",
+    background: isPrimary ? "#0f766e" : "rgba(15, 23, 42, 0.76)",
+    color: isPrimary ? "#ffffff" : "#e2e8f0",
     fontWeight: 700,
     cursor: "pointer",
     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -1456,8 +1472,8 @@ function markerToggleChipStyle(active: boolean, accent: string) {
     borderRadius: 999,
     padding: "8px 14px",
     border: `1px solid ${active ? accent : "rgba(148, 163, 184, 0.24)"}`,
-    background: active ? `${accent}14` : "rgba(255,255,255,0.85)",
-    color: active ? accent : "#475569",
+    background: active ? `${accent}14` : "rgba(15, 23, 42, 0.76)",
+    color: active ? accent : "#cbd5e1",
     fontWeight: 700,
     cursor: "pointer",
     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -1468,8 +1484,8 @@ const zoomButtonStyle = {
   borderRadius: 999,
   padding: "8px 14px",
   border: "1px solid rgba(148, 163, 184, 0.28)",
-  background: "rgba(255,255,255,0.92)",
-  color: "#0f172a",
+  background: "rgba(15, 23, 42, 0.76)",
+  color: "#e2e8f0",
   fontWeight: 700,
   cursor: "pointer",
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -1478,9 +1494,9 @@ const zoomButtonStyle = {
 const tableToggleButtonStyle = {
   borderRadius: 999,
   padding: "8px 14px",
-  border: "1px solid rgba(37, 99, 235, 0.24)",
-  background: "rgba(239, 246, 255, 0.9)",
-  color: "#1d4ed8",
+  border: "1px solid rgba(59, 130, 246, 0.24)",
+  background: "rgba(30, 64, 175, 0.18)",
+  color: "#bfdbfe",
   fontWeight: 700,
   cursor: "pointer",
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -1538,7 +1554,7 @@ function TransactionsCard({ transactions }: { transactions: BacktestTransactionO
       ) : (
         <>
           {transactions.length > 10 ? (
-            <div style={{ marginBottom: 10, color: "#475569", fontSize: 13 }}>
+            <div style={{ marginBottom: 10, color: "rgba(148, 163, 184, 0.88)", fontSize: 13 }}>
               {isZh
                 ? `当前显示 ${visibleTransactions.length} / ${transactions.length} 条交易记录。`
                 : `Showing ${visibleTransactions.length} / ${transactions.length} transactions.`}
@@ -1546,10 +1562,11 @@ function TransactionsCard({ transactions }: { transactions: BacktestTransactionO
           ) : null}
           <div
             style={{
+              position: "relative",
               overflowX: "auto",
               borderRadius: 18,
-              border: "1px solid rgba(226, 232, 240, 0.9)",
-              background: "#fff",
+              border: "1px solid rgba(71, 85, 105, 0.28)",
+              background: "rgba(15, 23, 42, 0.74)",
             }}
           >
           <table
@@ -1561,20 +1578,26 @@ function TransactionsCard({ transactions }: { transactions: BacktestTransactionO
             }}
           >
             <thead>
-              <tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>
+              <tr
+                style={{
+                  background: "rgba(30, 41, 59, 0.9)",
+                  color: "rgba(148, 163, 184, 0.88)",
+                  textAlign: "left",
+                }}
+              >
                 {(isZh
-                  ? ["时间", "方向", "标的", "数量", "成交价", "费用", "现金流", "信号时间", "原因"]
-                  : ["Time", "Side", "Symbol", "Qty", "Price", "Fee", "Cash Flow", "Signal Time", "Reason"]).map(
+                  ? ["时间", "方向", "标的", "成交股数", "成交价", "费用", "现金流", "信号时间", "原因"]
+                  : ["Time", "Side", "Symbol", "Shares Filled", "Price", "Fee", "Cash Flow", "Signal Time", "Reason"]).map(
                   (label) => (
                     <th
                       key={label}
                       style={{
+                        ...stickyTableHeaderCellStyle,
                         padding: "12px 14px",
                         fontSize: 12,
                         fontWeight: 700,
                         letterSpacing: "0.03em",
                         textTransform: "uppercase",
-                        borderBottom: "1px solid rgba(226, 232, 240, 0.9)",
                       }}
                     >
                       {label}
@@ -1595,7 +1618,10 @@ function TransactionsCard({ transactions }: { transactions: BacktestTransactionO
                       <Badge tone={txn.side === "BUY" ? "success" : "warning"}>{txn.side}</Badge>
                     </td>
                     <td style={cellStyle}>{txn.symbol}</td>
-                    <td style={cellStyle}>{txn.qty.toLocaleString(locale, { maximumFractionDigits: 4 })}</td>
+                    <td style={cellStyle}>
+                      {txn.qty.toLocaleString(locale, { maximumFractionDigits: 4 })}
+                      {isZh ? " 股" : " shares"}
+                    </td>
                     <td style={cellStyle}>{formatCurrency(txn.price, locale)}</td>
                     <td style={cellStyle}>{formatCurrency(txn.fee ?? null, locale)}</td>
                     <td style={cellStyle}>{formatCurrency(netCashFlow, locale)}</td>
@@ -1703,7 +1729,7 @@ export default function BacktestDetailPage() {
     >
       {loading ? <p>{isZh ? "加载中..." : "Loading..."}</p> : null}
       {error ? (
-        <p style={{ color: "crimson" }}>
+        <p style={{ color: "#fda4af" }}>
           {error === BACKTEST_DETAIL_LOAD_FAILED
             ? (isZh ? "加载回测详情失败" : "Failed to load backtest detail")
             : error}
@@ -1783,7 +1809,7 @@ export default function BacktestDetailPage() {
                   {summaryEntries.map(([key, value]) => (
                     <div key={key} style={infoRowStyle}>
                       <div style={{ color: "#64748b", fontWeight: 600 }}>{key}</div>
-                      <div style={{ color: "#0f172a", wordBreak: "break-word" }}>{renderSummaryValue(key, value, locale)}</div>
+                      <div style={{ color: "#e2e8f0", wordBreak: "break-word" }}>{renderSummaryValue(key, value, locale)}</div>
                     </div>
                   ))}
                 </div>
@@ -1802,7 +1828,7 @@ export default function BacktestDetailPage() {
                   {positionEntries.map(([symbol, value]) => (
                     <div key={symbol} style={infoRowStyle}>
                       <div style={{ color: "#64748b", fontWeight: 700 }}>{symbol}</div>
-                      <div style={{ color: "#0f172a", wordBreak: "break-word" }}>{renderValue(value, locale)}</div>
+                      <div style={{ color: "#e2e8f0", wordBreak: "break-word" }}>{renderValue(value, locale)}</div>
                     </div>
                   ))}
                 </div>
@@ -1818,15 +1844,15 @@ export default function BacktestDetailPage() {
 const sectionCardStyle = {
   padding: 22,
   borderRadius: 24,
-  border: "1px solid rgba(148, 163, 184, 0.18)",
-  background: "rgba(255,255,255,0.82)",
-  color: "#0f172a",
-  boxShadow: "0 18px 44px rgba(15, 23, 42, 0.06)",
+  border: "1px solid rgba(71, 85, 105, 0.28)",
+  background: "linear-gradient(180deg, rgba(8,15,24,0.92), rgba(15,23,42,0.88))",
+  color: "#e2e8f0",
+  boxShadow: "0 18px 44px rgba(2, 6, 23, 0.22)",
 } as const;
 
 const sectionSubtitleStyle = {
   margin: 0,
-  color: "#475569",
+  color: "rgba(148, 163, 184, 0.88)",
   lineHeight: 1.6,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 } as const;
@@ -1834,8 +1860,9 @@ const sectionSubtitleStyle = {
 const emptyStateStyle = {
   padding: 16,
   borderRadius: 16,
-  background: "#f8fafc",
-  color: "#475569",
+  background: "rgba(15, 23, 42, 0.7)",
+  border: "1px solid rgba(71, 85, 105, 0.28)",
+  color: "rgba(148, 163, 184, 0.88)",
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 } as const;
 
@@ -1854,7 +1881,7 @@ const labelStyle = {
 } as const;
 
 const valueStyle = {
-  color: "#0f172a",
+  color: "#e2e8f0",
   lineHeight: 1.6,
   wordBreak: "break-word" as const,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -1863,12 +1890,13 @@ const valueStyle = {
 const miniMetricStyle = {
   padding: 14,
   borderRadius: 16,
-  background: "#f8fafc",
-  color: "#0f172a",
+  background: "rgba(15, 23, 42, 0.72)",
+  border: "1px solid rgba(71, 85, 105, 0.28)",
+  color: "#e2e8f0",
 } as const;
 
 const miniMetricValueStyle = {
-  color: "#0f172a",
+  color: "#f8fafc",
   fontWeight: 700,
   lineHeight: 1.6,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -1915,9 +1943,19 @@ const legendTriangleDownStyle = {
 
 const cellStyle = {
   padding: "12px 14px",
-  color: "#0f172a",
+  color: "#e2e8f0",
   fontSize: 14,
   lineHeight: 1.5,
+} as const;
+
+const stickyTableHeaderCellStyle = {
+  position: "sticky" as const,
+  top: 0,
+  zIndex: 2,
+  background: "rgba(30, 41, 59, 0.96)",
+  backdropFilter: "blur(10px)",
+  borderBottom: "1px solid rgba(71, 85, 105, 0.32)",
+  boxShadow: "0 10px 24px rgba(2, 6, 23, 0.18)",
 } as const;
 
 const infoRowStyle = {
@@ -1925,6 +1963,6 @@ const infoRowStyle = {
   gridTemplateColumns: "180px minmax(0, 1fr)",
   gap: 12,
   padding: "10px 0",
-  borderBottom: "1px solid rgba(226, 232, 240, 0.9)",
+  borderBottom: "1px solid rgba(71, 85, 105, 0.28)",
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 } as const;

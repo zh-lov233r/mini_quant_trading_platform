@@ -58,12 +58,12 @@ function infoRow(label: string, value: string) {
         gridTemplateColumns: "110px minmax(0, 1fr)",
         gap: 12,
         padding: "10px 0",
-        borderBottom: "1px solid rgba(226, 232, 240, 0.9)",
+        borderBottom: "1px solid rgba(71, 85, 105, 0.28)",
         fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
       }}
     >
-      <div style={{ color: "#475569", fontWeight: 600 }}>{label}</div>
-      <div style={{ color: "#0f172a", wordBreak: "break-word" }}>{value}</div>
+      <div style={{ color: "rgba(148, 163, 184, 0.88)", fontWeight: 600 }}>{label}</div>
+      <div style={{ color: "#e2e8f0", wordBreak: "break-word" }}>{value}</div>
     </div>
   );
 }
@@ -133,10 +133,10 @@ function sectionCard(title: string, subtitle: string, children: React.ReactNode)
       style={{
         padding: 22,
         borderRadius: 24,
-        border: "1px solid rgba(148, 163, 184, 0.18)",
-        background: "rgba(255,255,255,0.82)",
-        color: "#0f172a",
-        boxShadow: "0 18px 44px rgba(15, 23, 42, 0.06)",
+        border: "1px solid rgba(71, 85, 105, 0.3)",
+        background: "linear-gradient(180deg, rgba(8,15,24,0.92), rgba(15,23,42,0.88))",
+        color: "#e2e8f0",
+        boxShadow: "0 18px 44px rgba(2, 6, 23, 0.22)",
       }}
     >
       <div style={{ marginBottom: 16 }}>
@@ -144,7 +144,7 @@ function sectionCard(title: string, subtitle: string, children: React.ReactNode)
         <p
           style={{
             margin: 0,
-            color: "#475569",
+            color: "rgba(148, 163, 184, 0.88)",
             lineHeight: 1.6,
             fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
           }}
@@ -339,6 +339,10 @@ export default function StrategyDetailPage() {
         <>
           {actionLink("/strategies", isZh ? "返回策略库" : "Back To Strategies")}
           {actionLink(
+            strategy ? `/strategies/${encodeURIComponent(strategy.id)}/edit` : "/strategies",
+            isZh ? "编辑参数" : "Edit Params"
+          )}
+          {actionLink(
             strategy ? `/backtests?strategyId=${encodeURIComponent(strategy.id)}` : "/backtests",
             isZh ? "用它回测" : "Backtest It"
           )}
@@ -347,7 +351,7 @@ export default function StrategyDetailPage() {
       }
     >
       {loading ? <p>{isZh ? "加载中..." : "Loading..."}</p> : null}
-      {error ? <p style={{ color: "crimson" }}>{error}</p> : null}
+      {error ? <p style={{ color: "#fda4af" }}>{error}</p> : null}
 
       {!loading && !error && strategy ? (
         <>
@@ -430,7 +434,7 @@ export default function StrategyDetailPage() {
                   <div
                     style={{
                       marginBottom: 16,
-                      color: "#475569",
+                      color: "rgba(148, 163, 184, 0.88)",
                       lineHeight: 1.7,
                       fontFamily:
                         "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -471,10 +475,10 @@ export default function StrategyDetailPage() {
                   }}
                 >
                   <div style={{ display: "grid", gap: 6 }}>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: "#f8fafc" }}>
                       {isZh ? "执行检查" : "Execution Checks"}
                     </div>
-                    <div style={{ color: "#475569", lineHeight: 1.6 }}>
+                    <div style={{ color: "rgba(148, 163, 184, 0.88)", lineHeight: 1.6 }}>
                       {isZh
                         ? "这块不是后端校验的替代，而是让你在前端一眼看懂这个策略是否已具备进入引擎的条件。"
                         : "This is not a replacement for backend validation. It is a fast read on whether the strategy is ready for the engine."}
@@ -484,8 +488,13 @@ export default function StrategyDetailPage() {
                     style={{
                       padding: 14,
                       borderRadius: 18,
-                      background: strategy.engine_ready ? "#f0fdf4" : "#fffbeb",
-                      color: strategy.engine_ready ? "#166534" : "#92400e",
+                      background: strategy.engine_ready
+                        ? "rgba(20, 83, 45, 0.28)"
+                        : "rgba(120, 53, 15, 0.28)",
+                      border: strategy.engine_ready
+                        ? "1px solid rgba(74, 222, 128, 0.22)"
+                        : "1px solid rgba(251, 191, 36, 0.2)",
+                      color: strategy.engine_ready ? "#bbf7d0" : "#fde68a",
                     }}
                   >
                     {isZh ? "引擎可执行" : "Engine Ready"}: {strategy.engine_ready ? (isZh ? "是" : "Yes") : isZh ? "否" : "No"}
@@ -496,12 +505,16 @@ export default function StrategyDetailPage() {
                       borderRadius: 18,
                       background:
                         getStrategyFieldText(strategy, "execution", "timeframe") === "1d"
-                          ? "#eff6ff"
-                          : "#fff7ed",
+                          ? "rgba(30, 64, 175, 0.24)"
+                          : "rgba(120, 53, 15, 0.24)",
+                      border:
+                        getStrategyFieldText(strategy, "execution", "timeframe") === "1d"
+                          ? "1px solid rgba(96, 165, 250, 0.22)"
+                          : "1px solid rgba(251, 191, 36, 0.18)",
                       color:
                         getStrategyFieldText(strategy, "execution", "timeframe") === "1d"
-                          ? "#1d4ed8"
-                          : "#9a3412",
+                          ? "#bfdbfe"
+                          : "#fdba74",
                     }}
                   >
                     {isZh ? "时间框架检查" : "Timeframe Check"}:{" "}
@@ -511,8 +524,13 @@ export default function StrategyDetailPage() {
                     style={{
                       padding: 14,
                       borderRadius: 18,
-                      background: universeSymbols.length > 0 ? "#f8fafc" : "#fff7ed",
-                      color: universeSymbols.length > 0 ? "#334155" : "#9a3412",
+                      background: universeSymbols.length > 0
+                        ? "rgba(15, 23, 42, 0.76)"
+                        : "rgba(120, 53, 15, 0.24)",
+                      border: universeSymbols.length > 0
+                        ? "1px solid rgba(71, 85, 105, 0.3)"
+                        : "1px solid rgba(251, 191, 36, 0.18)",
+                      color: universeSymbols.length > 0 ? "#cbd5e1" : "#fdba74",
                     }}
                   >
                     {isZh ? "股票池检查" : "Universe Check"}:{" "}
@@ -547,7 +565,7 @@ export default function StrategyDetailPage() {
                 }}
               >
                 <label style={{ display: "grid", gap: 8 }}>
-                  <span style={{ color: "#0f172a", fontWeight: 700 }}>
+                  <span style={{ color: "#f8fafc", fontWeight: 700 }}>
                     {isZh ? "新的策略名" : "New Strategy Name"}
                   </span>
                   <input
@@ -560,10 +578,10 @@ export default function StrategyDetailPage() {
                     style={{
                       padding: 12,
                       borderRadius: 14,
-                      border: "1px solid #dbe4ee",
-                      background: "#fff",
+                      border: "1px solid rgba(71, 85, 105, 0.28)",
+                      background: "rgba(8, 15, 24, 0.82)",
                       fontSize: 14,
-                      color: "#0f172a",
+                      color: "#e2e8f0",
                     }}
                   />
                 </label>
@@ -599,7 +617,7 @@ export default function StrategyDetailPage() {
                   <div
                     style={{
                       gridColumn: "1 / -1",
-                      color: "crimson",
+                      color: "#fda4af",
                       fontSize: 14,
                     }}
                   >
@@ -609,7 +627,7 @@ export default function StrategyDetailPage() {
                 <div
                   style={{
                     gridColumn: "1 / -1",
-                    color: "#475569",
+                    color: "rgba(148, 163, 184, 0.88)",
                     lineHeight: 1.6,
                     fontSize: 14,
                   }}
@@ -638,8 +656,8 @@ export default function StrategyDetailPage() {
                   style={{
                     padding: 16,
                     borderRadius: 18,
-                    background: "#f8fafc",
-                    color: "#475569",
+                    background: "rgba(15, 23, 42, 0.76)",
+                    color: "rgba(148, 163, 184, 0.88)",
                     lineHeight: 1.7,
                   }}
                 >
@@ -655,8 +673,9 @@ export default function StrategyDetailPage() {
                     style={{
                       padding: 16,
                       borderRadius: 20,
-                      background: "linear-gradient(135deg, rgba(240,253,250,0.95), rgba(255,255,255,0.96))",
-                      border: "1px solid rgba(94, 234, 212, 0.28)",
+                      background:
+                        "linear-gradient(135deg, rgba(8,15,24,0.95), rgba(15,23,42,0.9))",
+                      border: "1px solid rgba(94, 234, 212, 0.18)",
                       display: "grid",
                       gap: 12,
                     }}
@@ -671,10 +690,10 @@ export default function StrategyDetailPage() {
                       }}
                     >
                       <div style={{ display: "grid", gap: 6 }}>
-                        <div style={{ fontSize: 18, fontWeight: 500, color: "#0f172a" }}>
+                        <div style={{ fontSize: 18, fontWeight: 500, color: "#f8fafc" }}>
                           {isZh ? "最近一次运行" : "Latest Run"}
                         </div>
-                        <div style={{ color: "#475569", lineHeight: 1.6, fontWeight: 400 }}>
+                        <div style={{ color: "rgba(148, 163, 184, 0.88)", lineHeight: 1.6, fontWeight: 400 }}>
                           {formatDateTime(recentRuns[0].finished_at || recentRuns[0].updated_at, locale)}
                         </div>
                       </div>
@@ -719,7 +738,7 @@ export default function StrategyDetailPage() {
                       style={{
                         display: "grid",
                         gap: 8,
-                        color: "#475569",
+                        color: "rgba(148, 163, 184, 0.88)",
                         lineHeight: 1.6,
                       }}
                     >
@@ -744,7 +763,7 @@ export default function StrategyDetailPage() {
                   </div>
 
                   <div style={{ display: "grid", gap: 10 }}>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: "#f8fafc" }}>
                       {isZh ? "最近运行记录" : "Recent Runs"}
                     </div>
                     {recentRuns.map((run) => (
@@ -756,8 +775,8 @@ export default function StrategyDetailPage() {
                           color: "inherit",
                           padding: 14,
                           borderRadius: 18,
-                          border: "1px solid rgba(226, 232, 240, 0.9)",
-                          background: "rgba(248,250,252,0.82)",
+                          border: "1px solid rgba(71, 85, 105, 0.28)",
+                          background: "rgba(15, 23, 42, 0.74)",
                           display: "grid",
                           gap: 8,
                         }}
@@ -773,11 +792,11 @@ export default function StrategyDetailPage() {
                         >
                           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                             <Badge tone={getRunTone(run.status)}>{run.status}</Badge>
-                            <span style={{ fontWeight: 700, color: "#0f172a" }}>
+                            <span style={{ fontWeight: 700, color: "#f8fafc" }}>
                               {run.window_start || "-"} {"->"} {run.window_end || "-"}
                             </span>
                           </div>
-                          <span style={{ color: "#475569", fontSize: 13 }}>
+                          <span style={{ color: "rgba(148, 163, 184, 0.88)", fontSize: 13 }}>
                             {formatDateTime(run.finished_at || run.updated_at, locale)}
                           </span>
                         </div>
@@ -786,7 +805,7 @@ export default function StrategyDetailPage() {
                             display: "grid",
                             gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
                             gap: 8,
-                            color: "#475569",
+                            color: "rgba(148, 163, 184, 0.88)",
                             fontSize: 14,
                           }}
                         >
@@ -808,7 +827,7 @@ export default function StrategyDetailPage() {
                         flexWrap: "wrap",
                       }}
                     >
-                      <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: "#f8fafc" }}>
                         {isZh ? "最近信号与成交" : "Recent Signals & Transactions"}
                       </div>
                       <button
@@ -818,8 +837,8 @@ export default function StrategyDetailPage() {
                           padding: "10px 14px",
                           borderRadius: 14,
                           border: "1px solid rgba(15, 118, 110, 0.2)",
-                          background: showLatestEvents ? "rgba(240,253,250,0.95)" : "#0f766e",
-                          color: showLatestEvents ? "#0f766e" : "#ffffff",
+                          background: showLatestEvents ? "rgba(15, 118, 110, 0.14)" : "#0f766e",
+                          color: showLatestEvents ? "#99f6e4" : "#ffffff",
                           fontWeight: 700,
                           cursor: "pointer",
                         }}
@@ -863,7 +882,7 @@ export default function StrategyDetailPage() {
                                   <Badge tone={signal.signal === "BUY" ? "info" : "warning"}>
                                     {signal.signal}
                                   </Badge>
-                                  <strong style={{ color: "#0f172a" }}>{signal.symbol}</strong>
+                                  <strong style={{ color: "#f8fafc" }}>{signal.symbol}</strong>
                                 </div>
                                 <div style={eventMetaStyle}>
                                   {formatDateTime(signal.ts, locale)}{signal.reason ? ` · ${signal.reason}` : ""}
@@ -884,7 +903,7 @@ export default function StrategyDetailPage() {
                                   <Badge tone={txn.side === "BUY" ? "success" : "warning"}>
                                     {txn.side}
                                   </Badge>
-                                  <strong style={{ color: "#0f172a" }}>{txn.symbol}</strong>
+                                  <strong style={{ color: "#f8fafc" }}>{txn.symbol}</strong>
                                 </div>
                                 <div style={eventMetaStyle}>
                                   {formatDateTime(txn.ts, locale)} · {txn.qty} @ {formatCurrency(txn.price, locale)}
@@ -993,20 +1012,20 @@ export default function StrategyDetailPage() {
 const miniCardStyle: CSSProperties = {
   padding: 12,
   borderRadius: 16,
-  background: "rgba(255,255,255,0.78)",
-  border: "1px solid rgba(226, 232, 240, 0.8)",
-  color: "#0f172a",
+  background: "rgba(15, 23, 42, 0.7)",
+  border: "1px solid rgba(71, 85, 105, 0.28)",
+  color: "#e2e8f0",
 };
 
 const miniLabelStyle: CSSProperties = {
-  color: "#475569",
+  color: "rgba(148, 163, 184, 0.88)",
   fontSize: 12,
   fontWeight: 700,
   marginBottom: 6,
 };
 
 const miniValueStyle: CSSProperties = {
-  color: "#0f172a",
+  color: "#f8fafc",
   fontSize: 20,
   fontWeight: 600,
   lineHeight: 1.2,
@@ -1015,37 +1034,38 @@ const miniValueStyle: CSSProperties = {
 const emptyRunBlockStyle: CSSProperties = {
   padding: 14,
   borderRadius: 18,
-  background: "#f8fafc",
-  color: "#475569",
+  background: "rgba(15, 23, 42, 0.76)",
+  color: "rgba(148, 163, 184, 0.88)",
   lineHeight: 1.7,
 };
 
 const errorBlockStyle: CSSProperties = {
   padding: 14,
   borderRadius: 18,
-  background: "#fff1f2",
-  color: "#b91c1c",
+  background: "rgba(127, 29, 29, 0.28)",
+  border: "1px solid rgba(248, 113, 113, 0.18)",
+  color: "#fecaca",
   lineHeight: 1.7,
 };
 
 const eventPanelStyle: CSSProperties = {
   padding: 14,
   borderRadius: 18,
-  background: "rgba(248,250,252,0.82)",
-  border: "1px solid rgba(226, 232, 240, 0.9)",
-  color: "#0f172a",
+  background: "rgba(15, 23, 42, 0.74)",
+  border: "1px solid rgba(71, 85, 105, 0.28)",
+  color: "#e2e8f0",
   display: "grid",
   gap: 10,
 };
 
 const eventPanelTitleStyle: CSSProperties = {
-  color: "#0f172a",
+  color: "#f8fafc",
   fontSize: 15,
   fontWeight: 800,
 };
 
 const eventEmptyStyle: CSSProperties = {
-  color: "#475569",
+  color: "rgba(148, 163, 184, 0.88)",
   lineHeight: 1.7,
 };
 
@@ -1053,11 +1073,11 @@ const eventRowStyle: CSSProperties = {
   display: "grid",
   gap: 6,
   paddingTop: 10,
-  borderTop: "1px solid rgba(226, 232, 240, 0.8)",
+  borderTop: "1px solid rgba(71, 85, 105, 0.28)",
 };
 
 const eventMetaStyle: CSSProperties = {
-  color: "#475569",
+  color: "rgba(148, 163, 184, 0.88)",
   fontSize: 13,
   lineHeight: 1.6,
 };
@@ -1065,9 +1085,9 @@ const eventMetaStyle: CSSProperties = {
 const collapsedSummaryStyle: CSSProperties = {
   padding: 16,
   borderRadius: 18,
-  border: "1px solid rgba(226, 232, 240, 0.9)",
-  background: "rgba(248,250,252,0.82)",
-  color: "#0f172a",
+  border: "1px solid rgba(71, 85, 105, 0.28)",
+  background: "rgba(15, 23, 42, 0.74)",
+  color: "#e2e8f0",
   display: "flex",
   justifyContent: "space-between",
   alignItems: "center",
@@ -1076,7 +1096,7 @@ const collapsedSummaryStyle: CSSProperties = {
 };
 
 const collapsedSummaryTextStyle: CSSProperties = {
-  color: "#475569",
+  color: "rgba(148, 163, 184, 0.88)",
   lineHeight: 1.7,
   flex: "1 1 280px",
 };

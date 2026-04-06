@@ -18,13 +18,16 @@ from src.models.tables import (
 )
 from src.services.paper_account_service import (
     archive_strategy_portfolio,
+    build_paper_account_workspace,
     build_paper_account_overview,
-    ensure_default_paper_account,
-    ensure_default_strategy_portfolio,
+    delete_paper_account,
+    delete_strategy_portfolio,
     list_paper_accounts,
     list_strategy_portfolios,
+    normalize_alpaca_base_url,
     normalize_account_name,
     rename_strategy_portfolio,
+    update_paper_account,
 )
 from src.services.strategy_allocation_service import validate_portfolio_allocations
 
@@ -54,6 +57,16 @@ class PaperTradingAccountOut(BaseModel):
     status: str
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+class PaperTradingAccountUpdate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    api_key_env: str = Field(..., min_length=1, max_length=128)
+    secret_key_env: str = Field(..., min_length=1, max_length=128)
+    base_url: str = Field(..., min_length=1, max_length=255)
+    timeout_seconds: float = Field(default=20, gt=0)
+    notes: str | None = Field(default=None, max_length=500)
+    status: str = Field(default="active")
 
 
 class StrategyPortfolioCreate(BaseModel):
@@ -121,6 +134,141 @@ class PaperTradingAccountOverviewOut(BaseModel):
     portfolios: list[StrategyPortfolioOverviewOut]
 
 
+class BrokerSyncOut(BaseModel):
+    status: str
+    fetched_at: datetime | None = None
+    error: str | None = None
+
+
+class BrokerAccountSummaryOut(BaseModel):
+    broker_account_id: str | None = None
+    account_number: str | None = None
+    status: str | None = None
+    currency: str | None = None
+    cash: float | None = None
+    equity: float | None = None
+    buying_power: float | None = None
+    portfolio_value: float | None = None
+    long_market_value: float | None = None
+    short_market_value: float | None = None
+    last_equity: float | None = None
+    daytrade_count: int | None = None
+    pattern_day_trader: bool | None = None
+    trading_blocked: bool | None = None
+    transfers_blocked: bool | None = None
+    account_blocked: bool | None = None
+
+
+class BrokerClockOut(BaseModel):
+    timestamp: str | None = None
+    is_open: bool | None = None
+    next_open: str | None = None
+    next_close: str | None = None
+
+
+class BrokerPortfolioHistoryPointOut(BaseModel):
+    ts: datetime
+    equity: float
+    profit_loss: float | None = None
+    profit_loss_pct: float | None = None
+
+
+class BrokerPortfolioHistoryOut(BaseModel):
+    range_label: str
+    start_at: datetime
+    end_at: datetime
+    base_value: float | None = None
+    start_value: float
+    end_value: float
+    absolute_change: float
+    percent_change: float | None = None
+    points: list[BrokerPortfolioHistoryPointOut]
+
+
+class BrokerPositionOut(BaseModel):
+    symbol: str
+    side: str | None = None
+    qty: float | None = None
+    market_value: float | None = None
+    cost_basis: float | None = None
+    avg_entry_price: float | None = None
+    unrealized_pl: float | None = None
+    unrealized_plpc: float | None = None
+    current_price: float | None = None
+    change_today: float | None = None
+
+
+class BrokerOrderOut(BaseModel):
+    id: str | None = None
+    client_order_id: str | None = None
+    symbol: str | None = None
+    side: str | None = None
+    type: str | None = None
+    time_in_force: str | None = None
+    status: str | None = None
+    qty: float | None = None
+    filled_qty: float | None = None
+    filled_avg_price: float | None = None
+    limit_price: float | None = None
+    stop_price: float | None = None
+    submitted_at: str | None = None
+    filled_at: str | None = None
+    canceled_at: str | None = None
+
+
+class PaperAccountTransactionOut(BaseModel):
+    id: str
+    run_id: str | None = None
+    ts: datetime | None = None
+    portfolio_name: str | None = None
+    strategy_id: str
+    strategy_name: str | None = None
+    symbol: str
+    side: str
+    qty: float
+    price: float
+    fee: float
+    order_id: str | None = None
+    source: str | None = None
+    broker_status: str | None = None
+    net_cash_flow: float
+
+
+class StrategyPortfolioWorkspaceOut(StrategyPortfolioOverviewOut):
+    transaction_count: int
+    net_cash_flow: float
+    latest_transaction_at: datetime | None = None
+    latest_run_return_pct: float | None = None
+
+
+class PaperTradingWorkspaceStatsOut(BaseModel):
+    portfolio_count: int
+    active_portfolio_count: int
+    active_allocation_count: int
+    active_strategy_count: int
+    position_count: int
+    order_count: int
+    transaction_count: int
+
+
+class PaperTradingWorkspaceOut(BaseModel):
+    account: PaperTradingAccountOut
+    broker_sync: BrokerSyncOut
+    broker_account: BrokerAccountSummaryOut | None = None
+    broker_clock: BrokerClockOut | None = None
+    portfolio_history: BrokerPortfolioHistoryOut | None = None
+    positions: list[BrokerPositionOut]
+    recent_orders: list[BrokerOrderOut]
+    recent_transactions: list[PaperAccountTransactionOut]
+    portfolios: list[StrategyPortfolioWorkspaceOut]
+    stats: PaperTradingWorkspaceStatsOut
+
+
+class DeleteResultOut(BaseModel):
+    id: str
+    deleted: bool = True
+
+
 router = APIRouter(prefix="/api", tags=["paper-accounts"])
 
 
@@ -163,8 +311,6 @@ def get_paper_accounts(
     db: Session = Depends(get_db),
     status_filter: Optional[str] = Query(default=None, alias="status"),
 ):
-    ensure_default_paper_account(db)
-    ensure_default_strategy_portfolio(db)
     return [_to_account_out(item) for item in list_paper_accounts(db, status=status_filter)]
 
 
@@ -183,7 +329,7 @@ def create_paper_account(payload: PaperTradingAccountCreate, db: Session = Depen
         mode=payload.mode,
         api_key_env=payload.api_key_env.strip(),
         secret_key_env=payload.secret_key_env.strip(),
-        base_url=payload.base_url.strip(),
+        base_url=normalize_alpaca_base_url(payload.base_url),
         timeout_seconds=payload.timeout_seconds,
         notes=(payload.notes or "").strip() or None,
         status=payload.status,
@@ -191,6 +337,33 @@ def create_paper_account(payload: PaperTradingAccountCreate, db: Session = Depen
     db.add(account)
     db.commit()
     db.refresh(account)
+    return _to_account_out(account)
+
+
+@router.patch("/paper-accounts/{account_id}", response_model=PaperTradingAccountOut)
+def patch_paper_account(
+    account_id: UUID,
+    payload: PaperTradingAccountUpdate,
+    db: Session = Depends(get_db),
+):
+    try:
+        account = update_paper_account(
+            db,
+            account_id,
+            name=payload.name,
+            api_key_env=payload.api_key_env,
+            secret_key_env=payload.secret_key_env,
+            base_url=payload.base_url,
+            timeout_seconds=payload.timeout_seconds,
+            notes=(payload.notes or "").strip() or None,
+            status=payload.status,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        raise HTTPException(
+            status_code=409 if "already exists" in detail else 404,
+            detail=detail,
+        ) from exc
     return _to_account_out(account)
 
 
@@ -203,14 +376,30 @@ def get_paper_account_overview(account_id: UUID, db: Session = Depends(get_db)):
     return PaperTradingAccountOverviewOut.model_validate(payload)
 
 
+@router.get("/paper-accounts/{account_id}/workspace", response_model=PaperTradingWorkspaceOut)
+def get_paper_account_workspace(account_id: UUID, db: Session = Depends(get_db)):
+    try:
+        payload = build_paper_account_workspace(db, account_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return PaperTradingWorkspaceOut.model_validate(payload)
+
+
+@router.delete("/paper-accounts/{account_id}", response_model=DeleteResultOut)
+def remove_paper_account(account_id: UUID, db: Session = Depends(get_db)):
+    try:
+        account = delete_paper_account(db, account_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return DeleteResultOut(id=str(account.id), deleted=True)
+
+
 @router.get("/strategy-portfolios", response_model=list[StrategyPortfolioOut])
 def get_strategy_portfolios(
     db: Session = Depends(get_db),
     paper_account_id: UUID | None = Query(default=None),
     status_filter: Optional[str] = Query(default=None, alias="status"),
 ):
-    ensure_default_paper_account(db)
-    ensure_default_strategy_portfolio(db)
     rows = db.execute(
         select(StrategyPortfolio, PaperTradingAccount.name)
         .join(PaperTradingAccount, PaperTradingAccount.id == StrategyPortfolio.paper_account_id)
@@ -328,3 +517,15 @@ def archive_portfolio(
         portfolio,
         paper_account_name=account.name if account is not None else None,
     )
+
+
+@router.delete("/strategy-portfolios/{portfolio_id}", response_model=DeleteResultOut)
+def remove_strategy_portfolio(
+    portfolio_id: UUID,
+    db: Session = Depends(get_db),
+):
+    try:
+        portfolio = delete_strategy_portfolio(db, portfolio_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return DeleteResultOut(id=str(portfolio.id), deleted=True)

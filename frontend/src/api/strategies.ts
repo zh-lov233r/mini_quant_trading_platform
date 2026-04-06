@@ -1,6 +1,7 @@
 import http, { API_BASE, readApiError } from "@/api/client";
 import type {
   StrategyCatalogItem,
+  StrategyConfigUpdate,
   StrategyCreate,
   StrategyFeatureSupport,
   StrategyRename,
@@ -58,6 +59,16 @@ export function renameStrategy(
   payload: StrategyRename
 ): Promise<StrategyOut> {
   return http<StrategyOut>(`/api/strategies/${strategyId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateStrategyConfig(
+  strategyId: string,
+  payload: StrategyConfigUpdate
+): Promise<StrategyOut> {
+  return http<StrategyOut>(`/api/strategies/${strategyId}/config`, {
     method: "PATCH",
     body: JSON.stringify(payload),
   });

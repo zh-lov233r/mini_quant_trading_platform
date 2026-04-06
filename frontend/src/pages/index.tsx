@@ -31,7 +31,7 @@ export default function Home() {
         margin: "48px auto",
         padding: "0 16px",
         fontFamily: "ui-sans-serif, -apple-system, BlinkMacSystemFont, sans-serif",
-        color: "#111827",
+        color: "#e2e8f0",
       }}
     >
       <section
@@ -39,11 +39,13 @@ export default function Home() {
           padding: 28,
           borderRadius: 24,
           background:
-            "linear-gradient(140deg, rgba(15,118,110,0.14), rgba(59,130,246,0.10))",
+            "radial-gradient(circle at top right, rgba(45,212,191,0.14), transparent 30%), linear-gradient(140deg, rgba(8,15,24,0.94), rgba(15,23,42,0.9))",
+          border: "1px solid rgba(71, 85, 105, 0.32)",
+          boxShadow: "0 24px 56px rgba(2, 6, 23, 0.42)",
         }}
       >
         <h1 style={{ margin: "0 0 12px", fontSize: 34 }}>{copy.title}</h1>
-        <p style={{ margin: "0 0 20px", color: "#4b5563", lineHeight: 1.7 }}>
+        <p style={{ margin: "0 0 20px", color: "rgba(203, 213, 225, 0.82)", lineHeight: 1.7 }}>
           {copy.subtitle}
         </p>
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -78,11 +80,11 @@ export default function Home() {
             style={{
               padding: "10px 14px",
               borderRadius: 12,
-              background: "#fff",
-              color: "#0f172a",
+              background: "rgba(15, 23, 42, 0.82)",
+              color: "#e2e8f0",
               textDecoration: "none",
               fontWeight: 600,
-              border: "1px solid #cbd5e1",
+              border: "1px solid rgba(71, 85, 105, 0.34)",
             }}
           >
             {copy.viewStrategies}
@@ -92,8 +94,8 @@ export default function Home() {
             style={{
               padding: "10px 14px",
               borderRadius: 12,
-              background: "#f59e0b",
-              color: "#111827",
+              background: "#d97706",
+              color: "#fff7ed",
               textDecoration: "none",
               fontWeight: 600,
             }}

@@ -1,4 +1,4 @@
-export type StrategyType = "trend" | "mean_reversion" | "custom";
+export type StrategyType = "trend" | "mean_reversion" | "island_reversal" | "custom";
 export type StrategyStatus = "draft" | "active" | "archived";
 
 export interface IndicatorSpec {
@@ -35,7 +35,44 @@ export interface TrendStrategyParams {
   };
 }
 
-export type StrategyParams = TrendStrategyParams | Record<string, unknown>;
+export interface IslandReversalStrategyParams {
+  signal: {
+    downtrend_lookback: number;
+    downtrend_min_drop_pct: number;
+    left_gap_min_pct: number;
+    right_gap_min_pct: number;
+    min_island_bars: number;
+    max_island_bars: number;
+    left_volume_ratio_max: number;
+    right_volume_ratio_min: number;
+    retest_window: number;
+    retest_volume_ratio_max: number;
+    support_tolerance_pct: number;
+  };
+  universe: {
+    symbols: string[];
+    selection_mode: string;
+  };
+  risk: {
+    max_positions: number;
+    position_size_pct: number;
+    stop_loss_atr: number;
+  };
+  execution: {
+    timeframe: string;
+    rebalance: string;
+    run_at: string;
+  };
+  metadata: {
+    description: string;
+    schema_version: number;
+  };
+}
+
+export type StrategyParams =
+  | TrendStrategyParams
+  | IslandReversalStrategyParams
+  | Record<string, unknown>;
 
 export interface StrategyCreate {
   name: string;
@@ -47,6 +84,12 @@ export interface StrategyCreate {
 
 export interface StrategyRename {
   name: string;
+}
+
+export interface StrategyConfigUpdate {
+  description?: string | null;
+  status?: StrategyStatus;
+  params: Record<string, unknown>;
 }
 
 export interface StrategyOut {

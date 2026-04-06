@@ -370,10 +370,16 @@ def iter_massive_day_agg_rows(file_path: Path) -> Iterator[tuple]:
             raise ValueError(f"Flat file has no header: {file_path}")
 
         for row in reader:
-            symbol = _read_text_value(row, "ticker", "symbol", required=True)
+            raw_symbol = _read_text_value(row, "ticker", "symbol", required=True)
+            symbol = raw_symbol.strip()
+            # Massive flat files can contain mixed-case shadow symbols like `BCpC`
+            # alongside the real uppercase ticker `BCPC`. Keep only canonical
+            # uppercase rows so we do not collapse two source rows into one symbol.
+            if not symbol or symbol != symbol.upper():
+                continue
             window_start = _read_text_value(row, "window_start", required=True)
             yield (
-                symbol.upper(),
+                symbol,
                 _ns_to_utc_datetime(window_start),
                 _to_float(_read_text_value(row, "open", "o")),
                 _to_float(_read_text_value(row, "high", "h")),

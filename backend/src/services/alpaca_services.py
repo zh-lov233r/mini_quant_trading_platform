@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Literal
 
 import requests
@@ -97,6 +98,33 @@ class AlpacaClient:
 
     def get_clock(self) -> dict[str, Any]:
         return self._request("GET", "/v2/clock")
+
+    def get_portfolio_history(
+        self,
+        *,
+        timeframe: str | None = None,
+        period: str | None = None,
+        date_start: date | str | None = None,
+        date_end: date | str | None = None,
+        extended_hours: bool | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {}
+        if timeframe:
+            params["timeframe"] = timeframe
+        if period:
+            params["period"] = period
+        if date_start:
+            params["date_start"] = (
+                date_start.isoformat() if isinstance(date_start, date) else str(date_start)
+            )
+        if date_end:
+            params["date_end"] = (
+                date_end.isoformat() if isinstance(date_end, date) else str(date_end)
+            )
+        if extended_hours is not None:
+            params["extended_hours"] = str(extended_hours).lower()
+        response = self._request("GET", "/v2/account/portfolio/history", params=params or None)
+        return response if isinstance(response, dict) else {}
 
     def list_positions(self) -> list[dict[str, Any]]:
         response = self._request("GET", "/v2/positions")

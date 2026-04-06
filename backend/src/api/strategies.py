@@ -26,13 +26,22 @@ from src.services.strategy_registry import (
 class StrategyCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128, description="策略名称")
     description: Optional[str] = Field(default=None, max_length=500, description="策略说明")
-    strategy_type: Literal["trend", "mean_reversion", "custom"] = Field(..., description="策略类型")
+    strategy_type: Literal["trend", "mean_reversion", "island_reversal", "custom"] = Field(..., description="策略类型")
     params: Dict[str, Any] = Field(..., description="策略参数 (JSON 对象)")
     status: Literal["draft", "active", "archived"] = "draft"
 
 
 class StrategyRename(BaseModel):
     name: str = Field(..., min_length=1, max_length=128, description="新的策略名称")
+
+
+class StrategyConfigUpdate(BaseModel):
+    description: Optional[str] = Field(default=None, max_length=500, description="策略说明")
+    params: Dict[str, Any] = Field(..., description="策略参数 (JSON 对象)")
+    status: Optional[Literal["draft", "active", "archived"]] = Field(
+        default=None,
+        description="策略状态",
+    )
 
 
 class StrategyCatalogItem(BaseModel):
@@ -343,6 +352,53 @@ def rename_strategy(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"rename strategy failed: {str(exc)}",
+        ) from exc
+
+    db.refresh(obj)
+    return _to_strategy_out(obj)
+
+
+@router.patch("/{strategy_id}/config", response_model=StrategyOut)
+def update_strategy_config(
+    strategy_id: UUID,
+    payload: StrategyConfigUpdate,
+    db: Session = Depends(get_db),
+):
+    obj = db.get(Strategy, strategy_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+    next_description = (
+        payload.description.strip()
+        if isinstance(payload.description, str)
+        else extract_description(obj.params)
+    )
+    next_status = payload.status or obj.status
+
+    try:
+        normalized_params = normalize_strategy_params(
+            obj.strategy_type,
+            payload.params,
+            next_description,
+        )
+        _validate_feature_support(
+            db,
+            strategy_type=obj.strategy_type,
+            params=normalized_params,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    obj.params = normalized_params
+    obj.status = next_status
+
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"update strategy config failed: {str(exc)}",
         ) from exc
 
     db.refresh(obj)

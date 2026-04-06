@@ -24,6 +24,23 @@ export default function App({ Component, pageProps }: AppProps) {
           body {
             background: #06131a;
             color: #e2e8f0;
+            font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+          }
+
+          a {
+            color: inherit;
+          }
+
+          input,
+          select,
+          textarea,
+          button {
+            font: inherit;
+          }
+
+          input::placeholder,
+          textarea::placeholder {
+            color: rgba(148, 163, 184, 0.9);
           }
 
           * {

@@ -19,7 +19,6 @@ from src.models.tables import (
 from src.services.alpaca_services import AlpacaAPIError, AlpacaClient
 from src.services.paper_account_service import (
     build_alpaca_client_for_portfolio,
-    ensure_default_strategy_portfolio,
 )
 from src.services.stock_basket_service import (
     DEFAULT_COMMON_STOCK_BASKET_NAME,
@@ -37,6 +36,8 @@ from src.services.strategy_registry import build_runtime_payload
 
 
 PAPER_TRANSACTION_SOURCES = {"alpaca_paper", "alpaca_live", "manual_virtual"}
+PAPER_TRADING_TRIGGER_MANUAL = "manual"
+PAPER_TRADING_TRIGGER_SCHEDULER = "scheduler"
 
 
 @dataclass(slots=True)
@@ -126,12 +127,12 @@ def run_paper_trading(
     universe_symbols: list[str] | None = None,
     universe_metadata: dict[str, Any] | None = None,
     portfolio_name: str | None = None,
+    trigger: str = PAPER_TRADING_TRIGGER_MANUAL,
 ) -> PaperTradingResult:
     strategy = db.get(Strategy, strategy_id)
     if strategy is None:
         raise ValueError("strategy not found")
 
-    ensure_default_strategy_portfolio(db)
     normalized_portfolio = normalize_portfolio_name(portfolio_name)
     runtime = build_runtime_payload(strategy)
     runtime = _resolve_runtime_universe(
@@ -165,6 +166,7 @@ def run_paper_trading(
             "paper_trading": {
                 "submit_orders": submit_orders,
                 "portfolio_name": normalized_portfolio,
+                "trigger": trigger,
             },
         },
     )
@@ -186,6 +188,7 @@ def run_paper_trading(
             "paper_trading": {
                 "submit_orders": submit_orders,
                 "portfolio_name": allocation_cfg.portfolio_name,
+                "trigger": trigger,
                 "allocation": {
                     "allocation_id": allocation_cfg.allocation_id,
                     "allocation_pct": allocation_cfg.allocation_pct,
@@ -291,6 +294,7 @@ def run_paper_trading(
             "skipped_order_count": skipped_count,
             "failed_order_count": failed_count,
             "submit_orders": submit_orders,
+            "trigger": trigger,
             "universe_size": len(symbols),
             "symbols_loaded": sorted(snapshots.keys()),
             "symbols_signaled": sorted({event.symbol for event in signals}),
@@ -359,8 +363,8 @@ def run_multi_strategy_paper_trading(
     portfolio_name: str | None = None,
     submit_orders: bool = True,
     continue_on_error: bool = False,
+    trigger: str = PAPER_TRADING_TRIGGER_MANUAL,
 ) -> MultiStrategyPaperTradingResult:
-    ensure_default_strategy_portfolio(db)
     normalized_portfolio = normalize_portfolio_name(portfolio_name)
     allocated = list_allocated_strategies(db, portfolio_name=normalized_portfolio)
     if not allocated:
@@ -380,6 +384,7 @@ def run_multi_strategy_paper_trading(
                 alpaca_client=client,
                 submit_orders=submit_orders,
                 portfolio_name=allocation.portfolio_name,
+                trigger=trigger,
             )
             results.append(result)
         except Exception:

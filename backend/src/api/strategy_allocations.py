@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 from src.core.db import get_db
 from src.models.tables import Strategy, StrategyAllocation, StrategyPortfolio
 from src.services.paper_account_service import (
-    ensure_default_strategy_portfolio,
     get_strategy_portfolio_by_name,
 )
 from src.services.strategy_allocation_service import (
@@ -83,7 +82,6 @@ def list_strategy_allocations(
     portfolio_name: Optional[str] = Query(default=None),
     status_filter: Optional[str] = Query(default=None, alias="status"),
 ):
-    ensure_default_strategy_portfolio(db)
     stmt = (
         select(StrategyAllocation, Strategy.name, StrategyPortfolio)
         .join(Strategy, Strategy.id == StrategyAllocation.strategy_id)
@@ -103,7 +101,6 @@ def list_strategy_allocations(
 
 @router.post("", response_model=StrategyAllocationOut, status_code=status.HTTP_200_OK)
 def upsert_strategy_allocation(payload: StrategyAllocationUpsert, db: Session = Depends(get_db)):
-    ensure_default_strategy_portfolio(db)
     strategy = db.get(Strategy, payload.strategy_id)
     if strategy is None:
         raise HTTPException(status_code=404, detail="strategy not found")

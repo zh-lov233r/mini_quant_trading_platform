@@ -145,7 +145,7 @@ export default function StockBasketsPage() {
       }
     >
       {loading ? <p>{isZh ? "加载中..." : "Loading..."}</p> : null}
-      {error ? <p style={{ color: "crimson" }}>{error}</p> : null}
+      {error ? <p style={{ color: "#fda4af" }}>{error}</p> : null}
 
       {!loading && !error ? (
         <>
@@ -242,8 +242,9 @@ export default function StockBasketsPage() {
                   style={{
                     padding: 14,
                     borderRadius: 16,
-                    background: "#f8fafc",
-                    color: "#475569",
+                    background: "rgba(15, 23, 42, 0.72)",
+                    border: "1px solid rgba(71, 85, 105, 0.3)",
+                    color: "rgba(148, 163, 184, 0.9)",
                     lineHeight: 1.6,
                     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                     fontSize: 13,
@@ -260,7 +261,7 @@ export default function StockBasketsPage() {
                 </button>
               </form>
 
-              {submitError ? <p style={{ color: "crimson", marginTop: 12 }}>{submitError}</p> : null}
+              {submitError ? <p style={{ color: "#fda4af", marginTop: 12 }}>{submitError}</p> : null}
             </section>
 
             <section style={cardStyle}>
@@ -316,14 +317,14 @@ export default function StockBasketsPage() {
                             </Badge>
                           </div>
                         </div>
-                        <div style={{ color: "#475569", fontSize: 13, fontFamily: bodyFont }}>
+                        <div style={{ color: "rgba(148, 163, 184, 0.88)", fontSize: 13, fontFamily: bodyFont }}>
                           {formatDateTime(item.updated_at || item.created_at, locale)}
                         </div>
                       </div>
-                      <div style={{ color: "#475569", lineHeight: 1.6, marginBottom: 10, fontFamily: bodyFont }}>
+                      <div style={{ color: "rgba(148, 163, 184, 0.88)", lineHeight: 1.6, marginBottom: 10, fontFamily: bodyFont }}>
                         {item.description?.trim() || (isZh ? "暂无说明" : "No description yet")}
                       </div>
-                      <div style={{ color: "#0f172a", lineHeight: 1.7, fontFamily: bodyFont }}>
+                      <div style={{ color: "#e2e8f0", lineHeight: 1.7, fontFamily: bodyFont }}>
                         {formatSymbolPreview(item.symbols, 20)}
                       </div>
                     </article>
@@ -343,15 +344,15 @@ const bodyFont = "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif"
 const cardStyle: CSSProperties = {
   padding: 22,
   borderRadius: 24,
-  border: "1px solid rgba(148, 163, 184, 0.18)",
-  background: "rgba(255,255,255,0.82)",
-  color: "#0f172a",
-  boxShadow: "0 18px 44px rgba(15, 23, 42, 0.06)",
+  border: "1px solid rgba(71, 85, 105, 0.3)",
+  background: "linear-gradient(180deg, rgba(8,15,24,0.92), rgba(15,23,42,0.88))",
+  color: "#e2e8f0",
+  boxShadow: "0 18px 44px rgba(2, 6, 23, 0.22)",
 };
 
 const subtitleStyle: CSSProperties = {
   margin: 0,
-  color: "#475569",
+  color: "rgba(148, 163, 184, 0.88)",
   lineHeight: 1.6,
   fontFamily: bodyFont,
 };
@@ -361,10 +362,10 @@ const inputStyle: CSSProperties = {
   boxSizing: "border-box",
   padding: 12,
   borderRadius: 14,
-  border: "1px solid #dbe4ee",
-  background: "#fff",
+  border: "1px solid rgba(71, 85, 105, 0.34)",
+  background: "rgba(8, 15, 24, 0.82)",
   fontSize: 14,
-  color: "#0f172a",
+  color: "#e2e8f0",
   fontFamily: bodyFont,
 };
 
@@ -382,15 +383,15 @@ const buttonStyle: CSSProperties = {
 const emptyStateStyle: CSSProperties = {
   padding: 18,
   borderRadius: 18,
-  background: "#f8fafc",
-  color: "#475569",
+  background: "rgba(15, 23, 42, 0.76)",
+  color: "rgba(148, 163, 184, 0.88)",
   fontFamily: bodyFont,
 };
 
 const listItemStyle: CSSProperties = {
   padding: 18,
   borderRadius: 18,
-  border: "1px solid rgba(226, 232, 240, 0.9)",
-  background: "linear-gradient(135deg, rgba(255,250,240,0.92), rgba(255,255,255,0.96))",
-  color: "#0f172a",
+  border: "1px solid rgba(71, 85, 105, 0.28)",
+  background: "radial-gradient(circle at top right, rgba(45,212,191,0.08), transparent 24%), rgba(8, 15, 24, 0.88)",
+  color: "#e2e8f0",
 };

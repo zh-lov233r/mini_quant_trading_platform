@@ -753,7 +753,7 @@ components:
 
     StrategyType:
       type: string
-      enum: [trend, mean_reversion, custom]
+      enum: [trend, mean_reversion, island_reversal, custom]
 
     StrategyStatus:
       type: string
@@ -878,6 +878,75 @@ components:
         metadata:
           $ref: "#/components/schemas/MetadataConfig"
 
+    IslandReversalStrategyParams:
+      type: object
+      required: [signal, universe, risk, execution, metadata]
+      properties:
+        signal:
+          type: object
+          required:
+            [downtrend_lookback, downtrend_min_drop_pct, left_gap_min_pct, right_gap_min_pct,
+             min_island_bars, max_island_bars, left_volume_ratio_max, right_volume_ratio_min,
+             retest_window, retest_volume_ratio_max, support_tolerance_pct]
+          properties:
+            downtrend_lookback:
+              type: integer
+              minimum: 1
+            downtrend_min_drop_pct:
+              type: number
+              exclusiveMinimum: 0
+              maximum: 1
+            left_gap_min_pct:
+              type: number
+              exclusiveMinimum: 0
+              maximum: 1
+            right_gap_min_pct:
+              type: number
+              exclusiveMinimum: 0
+              maximum: 1
+            min_island_bars:
+              type: integer
+              minimum: 1
+            max_island_bars:
+              type: integer
+              minimum: 1
+            left_volume_ratio_max:
+              type: number
+              exclusiveMinimum: 0
+            right_volume_ratio_min:
+              type: number
+              exclusiveMinimum: 0
+            retest_window:
+              type: integer
+              minimum: 1
+            retest_volume_ratio_max:
+              type: number
+              exclusiveMinimum: 0
+            support_tolerance_pct:
+              type: number
+              exclusiveMinimum: 0
+              maximum: 1
+        universe:
+          $ref: "#/components/schemas/UniverseConfig"
+        risk:
+          type: object
+          required: [max_positions, position_size_pct, stop_loss_atr]
+          properties:
+            max_positions:
+              type: integer
+              minimum: 1
+            position_size_pct:
+              type: number
+              exclusiveMinimum: 0
+              maximum: 1
+            stop_loss_atr:
+              type: number
+              exclusiveMinimum: 0
+        execution:
+          $ref: "#/components/schemas/ExecutionConfig"
+        metadata:
+          $ref: "#/components/schemas/MetadataConfig"
+
     UniverseConfig:
       type: object
       required: [symbols, selection_mode]
@@ -940,6 +1009,7 @@ components:
           oneOf:
             - $ref: "#/components/schemas/TrendStrategyParams"
             - $ref: "#/components/schemas/MeanReversionStrategyParams"
+            - $ref: "#/components/schemas/IslandReversalStrategyParams"
             - $ref: "#/components/schemas/FreeFormObject"
 
     StrategyCreate:
@@ -960,6 +1030,7 @@ components:
           oneOf:
             - $ref: "#/components/schemas/TrendStrategyParams"
             - $ref: "#/components/schemas/MeanReversionStrategyParams"
+            - $ref: "#/components/schemas/IslandReversalStrategyParams"
             - $ref: "#/components/schemas/FreeFormObject"
         status:
           $ref: "#/components/schemas/StrategyStatus"

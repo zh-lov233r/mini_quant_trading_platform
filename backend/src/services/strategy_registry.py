@@ -6,7 +6,7 @@ import re
 from typing import Any, Dict, Iterable
 
 
-ENGINE_SUPPORTED_TYPES = {"trend", "mean_reversion"}
+ENGINE_SUPPORTED_TYPES = {"trend", "mean_reversion", "island_reversal"}
 _INDICATOR_PATTERN = re.compile(r"^(EMA|SMA)(\d+)$", re.IGNORECASE)
 
 TREND_DEFAULTS: Dict[str, Any] = {
@@ -64,6 +64,40 @@ MEAN_REVERSION_DEFAULTS: Dict[str, Any] = {
     },
 }
 
+ISLAND_REVERSAL_DEFAULTS: Dict[str, Any] = {
+    "signal": {
+        "downtrend_lookback": 60,
+        "downtrend_min_drop_pct": 0.15,
+        "left_gap_min_pct": 0.02,
+        "right_gap_min_pct": 0.02,
+        "min_island_bars": 1,
+        "max_island_bars": 8,
+        "left_volume_ratio_max": 0.8,
+        "right_volume_ratio_min": 1.5,
+        "retest_window": 10,
+        "retest_volume_ratio_max": 0.7,
+        "support_tolerance_pct": 0.01,
+    },
+    "universe": {
+        "symbols": [],
+        "selection_mode": "all_common_stock",
+    },
+    "risk": {
+        "max_positions": 6,
+        "position_size_pct": 0.15,
+        "stop_loss_atr": 1.5,
+    },
+    "execution": {
+        "timeframe": "1d",
+        "rebalance": "daily",
+        "run_at": "close",
+    },
+    "metadata": {
+        "description": "",
+        "schema_version": 1,
+    },
+}
+
 CUSTOM_DEFAULTS: Dict[str, Any] = {
     "rules": [],
     "universe": {
@@ -108,6 +142,13 @@ def build_strategy_catalog() -> list[Dict[str, Any]]:
             "defaults": copy.deepcopy(MEAN_REVERSION_DEFAULTS),
         },
         {
+            "strategy_type": "island_reversal",
+            "label": "Island Reversal Bottom",
+            "description": "底部岛形反转策略，识别缩量向下衰竭缺口、放量向上突破缺口和缩量回踩缺口。",
+            "engine_ready": True,
+            "defaults": copy.deepcopy(ISLAND_REVERSAL_DEFAULTS),
+        },
+        {
             "strategy_type": "custom",
             "label": "Custom Config",
             "description": "自定义 JSON/DSL 策略定义。建议存储规则，不要直接存储可执行代码。",
@@ -135,6 +176,8 @@ def normalize_strategy_params(
         normalized = _normalize_trend_params(raw)
     elif strategy_type == "mean_reversion":
         normalized = _normalize_mean_reversion_params(raw)
+    elif strategy_type == "island_reversal":
+        normalized = _normalize_island_reversal_params(raw)
     elif strategy_type == "custom":
         normalized = _normalize_custom_params(raw)
     else:
@@ -172,6 +215,14 @@ def is_engine_ready(strategy_type: str, params: Dict[str, Any]) -> bool:
             signal.get("lookback_window")
             and signal.get("zscore_entry")
             and signal.get("zscore_exit")
+        )
+    if strategy_type == "island_reversal":
+        return bool(
+            signal.get("downtrend_lookback")
+            and signal.get("left_gap_min_pct")
+            and signal.get("right_gap_min_pct")
+            and signal.get("max_island_bars")
+            and signal.get("retest_window")
         )
     return False
 
@@ -223,6 +274,19 @@ def required_feature_keys(strategy_type: str, params: Dict[str, Any]) -> list[st
             "rsi_14",
             "atr_14",
             "volume_sma_20",
+        ]
+    if strategy_type == "island_reversal":
+        return [
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "volume_sma_20",
+            "atr_14",
+            "ret_20d",
+            "ret_60d",
+            "sma_50",
         ]
     return []
 
@@ -379,6 +443,130 @@ def _normalize_mean_reversion_params(raw: Dict[str, Any]) -> Dict[str, Any]:
     normalized["risk"]["position_size_pct"] = _fraction(
         normalized["risk"].get("position_size_pct", 0.1),
         "risk.position_size_pct",
+    )
+    normalized["metadata"]["description"] = str(normalized["metadata"].get("description", "")).strip()
+    normalized["metadata"]["schema_version"] = _positive_int(
+        normalized["metadata"].get("schema_version", 1),
+        "metadata.schema_version",
+    )
+    return normalized
+
+
+def _normalize_island_reversal_params(raw: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = copy.deepcopy(ISLAND_REVERSAL_DEFAULTS)
+    normalized["signal"] = _merge_nested_section(normalized["signal"], raw.get("signal"))
+    normalized["universe"] = _merge_nested_section(
+        normalized["universe"],
+        raw.get("universe"),
+        symbols=raw.get("symbols") or raw.get("universe_symbols"),
+    )
+    normalized["risk"] = _merge_nested_section(normalized["risk"], raw.get("risk"))
+    normalized["execution"] = _merge_nested_section(normalized["execution"], raw.get("execution"))
+    normalized["metadata"] = _merge_nested_section(normalized["metadata"], raw.get("metadata"))
+
+    for field in (
+        "downtrend_lookback",
+        "downtrend_min_drop_pct",
+        "left_gap_min_pct",
+        "right_gap_min_pct",
+        "min_island_bars",
+        "max_island_bars",
+        "left_volume_ratio_max",
+        "right_volume_ratio_min",
+        "retest_window",
+        "retest_volume_ratio_max",
+        "support_tolerance_pct",
+    ):
+        if field in raw:
+            normalized["signal"][field] = raw[field]
+
+    if "max_positions" in raw:
+        normalized["risk"]["max_positions"] = raw["max_positions"]
+    if "position_size_pct" in raw:
+        normalized["risk"]["position_size_pct"] = raw["position_size_pct"]
+    if "stop_loss_atr" in raw:
+        normalized["risk"]["stop_loss_atr"] = raw["stop_loss_atr"]
+    if "rebalance" in raw:
+        normalized["execution"]["rebalance"] = raw["rebalance"]
+    if "timeframe" in raw:
+        normalized["execution"]["timeframe"] = raw["timeframe"]
+    if "run_at" in raw:
+        normalized["execution"]["run_at"] = raw["run_at"]
+    if "description" in raw:
+        normalized["metadata"]["description"] = raw["description"]
+
+    normalized["signal"]["downtrend_lookback"] = _positive_int(
+        normalized["signal"].get("downtrend_lookback"),
+        "signal.downtrend_lookback",
+    )
+    normalized["signal"]["downtrend_min_drop_pct"] = _fraction(
+        normalized["signal"].get("downtrend_min_drop_pct"),
+        "signal.downtrend_min_drop_pct",
+    )
+    normalized["signal"]["left_gap_min_pct"] = _fraction(
+        normalized["signal"].get("left_gap_min_pct"),
+        "signal.left_gap_min_pct",
+    )
+    normalized["signal"]["right_gap_min_pct"] = _fraction(
+        normalized["signal"].get("right_gap_min_pct"),
+        "signal.right_gap_min_pct",
+    )
+    normalized["signal"]["min_island_bars"] = _positive_int(
+        normalized["signal"].get("min_island_bars"),
+        "signal.min_island_bars",
+    )
+    normalized["signal"]["max_island_bars"] = _positive_int(
+        normalized["signal"].get("max_island_bars"),
+        "signal.max_island_bars",
+    )
+    if normalized["signal"]["min_island_bars"] > normalized["signal"]["max_island_bars"]:
+        raise ValueError("signal.min_island_bars cannot exceed signal.max_island_bars")
+    normalized["signal"]["left_volume_ratio_max"] = _positive_float(
+        normalized["signal"].get("left_volume_ratio_max"),
+        "signal.left_volume_ratio_max",
+    )
+    normalized["signal"]["right_volume_ratio_min"] = _positive_float(
+        normalized["signal"].get("right_volume_ratio_min"),
+        "signal.right_volume_ratio_min",
+    )
+    normalized["signal"]["retest_window"] = _positive_int(
+        normalized["signal"].get("retest_window"),
+        "signal.retest_window",
+    )
+    normalized["signal"]["retest_volume_ratio_max"] = _positive_float(
+        normalized["signal"].get("retest_volume_ratio_max"),
+        "signal.retest_volume_ratio_max",
+    )
+    normalized["signal"]["support_tolerance_pct"] = _fraction(
+        normalized["signal"].get("support_tolerance_pct"),
+        "signal.support_tolerance_pct",
+    )
+
+    normalized["universe"]["symbols"] = _normalize_symbols(normalized["universe"].get("symbols", []))
+    normalized["universe"]["selection_mode"] = _normalize_selection_mode(
+        normalized["universe"].get("selection_mode"),
+        normalized["universe"]["symbols"],
+    )
+    normalized["risk"]["max_positions"] = _positive_int(
+        normalized["risk"].get("max_positions", ISLAND_REVERSAL_DEFAULTS["risk"]["max_positions"]),
+        "risk.max_positions",
+    )
+    normalized["risk"]["position_size_pct"] = _fraction(
+        normalized["risk"].get("position_size_pct", ISLAND_REVERSAL_DEFAULTS["risk"]["position_size_pct"]),
+        "risk.position_size_pct",
+    )
+    normalized["risk"]["stop_loss_atr"] = _positive_float(
+        normalized["risk"].get("stop_loss_atr", ISLAND_REVERSAL_DEFAULTS["risk"]["stop_loss_atr"]),
+        "risk.stop_loss_atr",
+    )
+    normalized["execution"]["timeframe"] = str(
+        normalized["execution"].get("timeframe", ISLAND_REVERSAL_DEFAULTS["execution"]["timeframe"])
+    )
+    normalized["execution"]["rebalance"] = str(
+        normalized["execution"].get("rebalance", ISLAND_REVERSAL_DEFAULTS["execution"]["rebalance"])
+    )
+    normalized["execution"]["run_at"] = str(
+        normalized["execution"].get("run_at", ISLAND_REVERSAL_DEFAULTS["execution"]["run_at"])
     )
     normalized["metadata"]["description"] = str(normalized["metadata"].get("description", "")).strip()
     normalized["metadata"]["schema_version"] = _positive_int(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, Literal
@@ -14,7 +15,7 @@ from src.services.stock_basket_service import (
     DEFAULT_COMMON_STOCK_BASKET_NAME,
     load_default_common_stock_symbols,
 )
-from src.services.strategy_engine import STRATEGY_HANDLERS, SignalEvent
+from src.services.strategy_engine import RECENT_BAR_COUNT, STRATEGY_HANDLERS, SignalEvent
 from src.services.strategy_registry import build_runtime_payload
 
 DEFAULT_COMPARISON_SYMBOLS = ("SPY", "QQQ")
@@ -27,10 +28,15 @@ SELECT
     i.ticker_canonical AS symbol,
     curr.dt_ny,
     bars.ts_utc AS ts,
+    COALESCE(bars.open_fa, bars.open_u) AS open,
+    COALESCE(bars.high_fa, bars.high_u) AS high,
+    COALESCE(bars.low_fa, bars.low_u) AS low,
     COALESCE(bars.close_fa, bars.close_u) AS close,
     bars.volume,
     curr.atr_14,
     curr.adv_20 AS volume_sma_20,
+    curr.ret_20d,
+    curr.ret_60d,
     curr.sma_10,
     curr.sma_20,
     curr.sma_50,
@@ -298,6 +304,7 @@ def run_backtest(
         benchmark_last_equity: float | None = None
         benchmark_last_return: float | None = None
         benchmark_points = 0
+        recent_history_by_symbol: dict[str, deque[dict[str, Any]]] = {}
 
         for trade_day in sorted(snapshots_by_date):
             day_snapshots = snapshots_by_date[trade_day]
@@ -348,6 +355,7 @@ def run_backtest(
             cash = float(cash_state["cash"])
 
             _inject_backtest_positions(day_snapshots, holdings)
+            _attach_recent_history(day_snapshots, recent_history_by_symbol)
 
             signals = handler(runtime, day_snapshots)
             pending_signals = signals
@@ -603,10 +611,15 @@ def _load_feature_snapshots_by_date(
             "symbol": symbol,
             "dt_ny": trade_date,
             "ts": row["ts"] or datetime.now(timezone.utc),
+            "open": row["open"],
+            "high": row["high"],
+            "low": row["low"],
             "close": row["close"],
             "volume": row["volume"],
             "atr_14": row["atr_14"],
             "volume_sma_20": row["volume_sma_20"],
+            "ret_20d": row["ret_20d"],
+            "ret_60d": row["ret_60d"],
             "sma_10": row["sma_10"],
             "sma_20": row["sma_20"],
             "sma_50": row["sma_50"],
@@ -632,6 +645,7 @@ def _load_feature_snapshots_by_date(
             "prev_ema_20": row["prev_ema_20"],
             "prev_ema_50": row["prev_ema_50"],
             "position": 0.0,
+            "recent_bars": [],
         }
     return snapshots_by_date
 
@@ -643,6 +657,32 @@ def _inject_backtest_positions(
     """Expose current position size to handlers that need state-aware exits."""
     for symbol, snapshot in day_snapshots.items():
         snapshot["position"] = float(holdings.get(symbol, 0.0))
+
+
+def _attach_recent_history(
+    day_snapshots: dict[str, dict[str, Any]],
+    history_by_symbol: dict[str, deque[dict[str, Any]]],
+) -> None:
+    for symbol, snapshot in day_snapshots.items():
+        history = history_by_symbol.setdefault(symbol, deque(maxlen=RECENT_BAR_COUNT))
+        history.append(
+            {
+                "dt_ny": snapshot.get("dt_ny"),
+                "ts": snapshot.get("ts") or datetime.now(timezone.utc),
+                "open": _to_float_or_none(snapshot.get("open")),
+                "high": _to_float_or_none(snapshot.get("high")),
+                "low": _to_float_or_none(snapshot.get("low")),
+                "close": _to_float_or_none(snapshot.get("close")),
+                "volume": _to_float_or_none(snapshot.get("volume")),
+                "atr_14": _to_float_or_none(snapshot.get("atr_14")),
+                "volume_sma_20": _to_float_or_none(snapshot.get("volume_sma_20")),
+                "ret_20d": _to_float_or_none(snapshot.get("ret_20d")),
+                "ret_60d": _to_float_or_none(snapshot.get("ret_60d")),
+                "sma_20": _to_float_or_none(snapshot.get("sma_20")),
+                "sma_50": _to_float_or_none(snapshot.get("sma_50")),
+            }
+        )
+        snapshot["recent_bars"] = list(history)
 
 
 def _resolve_backtest_cost_config(
@@ -945,3 +985,12 @@ def _execution_ts(execution_snapshot: dict[str, Any]) -> datetime:
 def _execution_trade_date(execution_snapshot: dict[str, Any]) -> str | None:
     trade_date = execution_snapshot.get("dt_ny")
     return str(trade_date) if trade_date is not None else None
+
+
+def _to_float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

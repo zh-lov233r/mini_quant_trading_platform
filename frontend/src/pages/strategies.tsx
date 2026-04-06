@@ -84,7 +84,7 @@ export default function StrategiesPage() {
       }
     >
       {loading && <p>{isZh ? "加载中..." : "Loading..."}</p>}
-      {error && <p style={{ color: "crimson" }}>{error}</p>}
+      {error && <p style={{ color: "#fda4af" }}>{error}</p>}
 
       {!loading && !error ? (
         <>
@@ -143,10 +143,10 @@ export default function StrategiesPage() {
               marginBottom: 18,
               padding: 18,
               borderRadius: 24,
-              border: "1px solid rgba(148, 163, 184, 0.18)",
-              background: "rgba(255,255,255,0.82)",
-              color: "#0f172a",
-              boxShadow: "0 18px 44px rgba(15, 23, 42, 0.06)",
+              border: "1px solid rgba(71, 85, 105, 0.3)",
+              background: "linear-gradient(180deg, rgba(8,15,24,0.9), rgba(15,23,42,0.86))",
+              color: "#e2e8f0",
+              boxShadow: "0 18px 44px rgba(2, 6, 23, 0.22)",
             }}
           >
             <div
@@ -160,10 +160,10 @@ export default function StrategiesPage() {
                 style={{
                   padding: 12,
                   borderRadius: 14,
-                  border: "1px solid #dbe4ee",
-                  background: "#fff",
+                  border: "1px solid rgba(71, 85, 105, 0.34)",
+                  background: "rgba(8, 15, 24, 0.82)",
                   fontSize: 14,
-                  color: "#0f172a",
+                  color: "#e2e8f0",
                   fontFamily:
                     "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                 }}
@@ -180,10 +180,10 @@ export default function StrategiesPage() {
                 style={{
                   padding: 12,
                   borderRadius: 14,
-                  border: "1px solid #dbe4ee",
-                  background: "#fff",
+                  border: "1px solid rgba(71, 85, 105, 0.34)",
+                  background: "rgba(8, 15, 24, 0.82)",
                   fontSize: 14,
-                  color: "#0f172a",
+                  color: "#e2e8f0",
                   fontFamily:
                     "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                 }}
@@ -200,10 +200,10 @@ export default function StrategiesPage() {
                 style={{
                   padding: 12,
                   borderRadius: 14,
-                  border: "1px solid #dbe4ee",
-                  background: "#fff",
+                  border: "1px solid rgba(71, 85, 105, 0.34)",
+                  background: "rgba(8, 15, 24, 0.82)",
                   fontSize: 14,
-                  color: "#0f172a",
+                  color: "#e2e8f0",
                   fontFamily:
                     "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                 }}
@@ -222,10 +222,10 @@ export default function StrategiesPage() {
                 style={{
                   padding: 12,
                   borderRadius: 14,
-                  border: "1px solid #dbe4ee",
-                  background: "#fff",
+                  border: "1px solid rgba(71, 85, 105, 0.34)",
+                  background: "rgba(8, 15, 24, 0.82)",
                   fontSize: 14,
-                  color: "#0f172a",
+                  color: "#e2e8f0",
                   fontFamily:
                     "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                 }}
@@ -277,9 +277,9 @@ export default function StrategiesPage() {
                   style={{
                     padding: 24,
                     borderRadius: 20,
-                    border: "1px solid rgba(148, 163, 184, 0.18)",
-                    background: "rgba(255,255,255,0.82)",
-                    color: "#0f172a",
+                    border: "1px solid rgba(71, 85, 105, 0.3)",
+                    background: "rgba(8, 15, 24, 0.82)",
+                    color: "#e2e8f0",
                   }}
                 >
                   {isZh ? "暂无策略，先去创建一个吧。" : "No strategies yet. Create one first."}
@@ -292,7 +292,7 @@ export default function StrategiesPage() {
                 <div
                   style={{
                     marginBottom: 14,
-                    color: "#475569",
+                    color: "rgba(148, 163, 184, 0.88)",
                     fontFamily:
                       "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                   }}
@@ -307,9 +307,9 @@ export default function StrategiesPage() {
                   style={{
                     padding: 24,
                     borderRadius: 20,
-                    border: "1px solid rgba(148, 163, 184, 0.18)",
-                    background: "rgba(255,255,255,0.82)",
-                    color: "#0f172a",
+                    border: "1px solid rgba(71, 85, 105, 0.3)",
+                    background: "rgba(8, 15, 24, 0.82)",
+                    color: "#e2e8f0",
                   }}
                 >
                     {isZh
@@ -348,11 +348,11 @@ export default function StrategiesPage() {
                           style={{
                             padding: 22,
                             borderRadius: 22,
-                            border: "1px solid rgba(148, 163, 184, 0.16)",
+                            border: "1px solid rgba(71, 85, 105, 0.28)",
                             background:
-                              "linear-gradient(140deg, rgba(255,248,237,0.96), rgba(255,255,255,0.98))",
-                            color: "#0f172a",
-                            boxShadow: "0 14px 36px rgba(15, 23, 42, 0.06)",
+                              "radial-gradient(circle at top right, rgba(45,212,191,0.08), transparent 26%), linear-gradient(140deg, rgba(8,15,24,0.94), rgba(15,23,42,0.9))",
+                            color: "#e2e8f0",
+                            boxShadow: "0 14px 36px rgba(2, 6, 23, 0.24)",
                             cursor: "pointer",
                           }}
                           role="link"
@@ -379,7 +379,7 @@ export default function StrategiesPage() {
                               <h2 style={{ margin: "0 0 6px", fontSize: 22 }}>{item.name}</h2>
                               <div
                               style={{
-                                  color: "#475569",
+                                  color: "rgba(148, 163, 184, 0.88)",
                                   fontSize: 14,
                                   fontFamily:
                                     "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -390,7 +390,7 @@ export default function StrategiesPage() {
                             </div>
                             <div
                               style={{
-                                color: "#475569",
+                                color: "rgba(148, 163, 184, 0.88)",
                                 fontSize: 13,
                                 fontFamily:
                                   "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -412,7 +412,7 @@ export default function StrategiesPage() {
                             style={{
                               minHeight: 72,
                               margin: "0 0 16px",
-                              color: "#475569",
+                              color: "rgba(148, 163, 184, 0.88)",
                               lineHeight: 1.7,
                               fontFamily:
                                 "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -428,7 +428,7 @@ export default function StrategiesPage() {
                               gap: 10,
                               marginBottom: 16,
                               fontSize: 14,
-                              color: "#334155",
+                              color: "#cbd5e1",
                               fontFamily:
                                 "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                             }}
@@ -454,12 +454,12 @@ export default function StrategiesPage() {
                               alignItems: "center",
                               flexWrap: "wrap",
                               paddingTop: 14,
-                              borderTop: "1px solid rgba(226, 232, 240, 0.9)",
+                              borderTop: "1px solid rgba(71, 85, 105, 0.3)",
                             }}
                             >
                               <span
                                 style={{
-                                  color: "#475569",
+                                  color: "rgba(148, 163, 184, 0.88)",
                                 fontSize: 13,
                                 fontFamily:
                                   "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -467,23 +467,12 @@ export default function StrategiesPage() {
                             >
                               {isZh ? "更新时间" : "Updated"} {formatDateTime(item.updated_at, locale)}
                             </span>
-                              <span
-                                style={{
-                                  color: "#0f766e",
-                                  fontSize: 14,
-                                  fontWeight: 700,
-                                fontFamily:
-                                  "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-                              }}
-                              >
-                                {isZh ? "下一步建议：补策略详情页" : "Suggested next step: expand the strategy detail page"}
-                              </span>
                               <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
                                 <Link
-                                  href={`/strategies/${item.id}#rename`}
+                                  href={`/strategies/${item.id}/edit`}
                                   onClick={(event) => event.stopPropagation()}
                                   style={{
-                                    color: "#0f766e",
+                                    color: "#5eead4",
                                     textDecoration: "none",
                                     fontSize: 14,
                                     fontWeight: 700,
@@ -491,7 +480,7 @@ export default function StrategiesPage() {
                                       "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                                   }}
                                 >
-                                  {isZh ? "改名" : "Rename"}
+                                  {isZh ? "编辑策略" : "Edit Strategy"}
                                 </Link>
                               </div>
                             </div>

@@ -77,6 +77,13 @@ export function getStrategyTemplateCopy(
           ? "均值回归配置模板，基于 z-score / ATR / 流动性特征做日线信号。"
           : "Mean reversion template using z-score, ATR, and liquidity features to generate daily signals.",
       };
+    case "island_reversal":
+      return {
+        label: isZh ? "岛形反转底" : "Island Reversal Bottom",
+        description: isZh
+          ? "底部岛形反转策略，识别缩量向下衰竭缺口、放量向上突破缺口和缩量回踩缺口。"
+          : "Bottom island reversal strategy using an exhaustion gap down, a volume-backed gap up breakout, and a low-volume gap retest.",
+      };
     case "custom":
       return {
         label: isZh ? "自定义配置" : "Custom Config",

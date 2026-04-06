@@ -16,10 +16,7 @@ from src.api.stock_baskets import router as stock_baskets_router
 from src.api.strategy_allocations import router as strategy_allocations_router
 from src.api.strategies import router as strategies_router
 from src.core.db import SessionLocal, ensure_extensions
-from src.services.paper_account_service import (
-    ensure_default_paper_account,
-    ensure_default_strategy_portfolio,
-)
+from src.services.paper_trading_scheduler import PaperTradingDailyScheduler
 from src.services.stock_basket_service import ensure_default_common_stock_basket
 
 # -----------------------------
@@ -63,19 +60,23 @@ app.include_router(paper_trading_router)
 # 启动/停止事件
 # -----------------------------
 @app.on_event("startup")
-def on_startup():
+async def on_startup():
     ensure_extensions()
     db = SessionLocal()
     try:
         ensure_default_common_stock_basket(db)
-        ensure_default_paper_account(db)
-        ensure_default_strategy_portfolio(db)
     finally:
         db.close()
+    scheduler = PaperTradingDailyScheduler()
+    app.state.paper_trading_scheduler = scheduler
+    await scheduler.start()
     log.info("App started")
 
 @app.on_event("shutdown")
-def on_shutdown():
+async def on_shutdown():
+    scheduler = getattr(app.state, "paper_trading_scheduler", None)
+    if scheduler is not None:
+        await scheduler.stop()
     log.info("App stopped")
 
 # -----------------------------

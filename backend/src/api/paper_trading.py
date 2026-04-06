@@ -13,6 +13,7 @@ from src.models.tables import StockBasket, Strategy
 from src.services.paper_trading_service import (
     MultiStrategyPaperTradingResult,
     PaperTradingResult,
+    PAPER_TRADING_TRIGGER_MANUAL,
     run_multi_strategy_paper_trading,
     run_paper_trading,
 )
@@ -134,6 +135,7 @@ def create_paper_trading_run(payload: PaperTradingRunRequest, db: Session = Depe
             universe_symbols=basket_symbols,
             universe_metadata=basket_metadata,
             portfolio_name=payload.portfolio_name,
+            trigger=PAPER_TRADING_TRIGGER_MANUAL,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -155,6 +157,7 @@ def create_multi_strategy_paper_trading_run(
             portfolio_name=payload.portfolio_name,
             submit_orders=payload.submit_orders,
             continue_on_error=payload.continue_on_error,
+            trigger=PAPER_TRADING_TRIGGER_MANUAL,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

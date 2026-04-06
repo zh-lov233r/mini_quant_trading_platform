@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -18,7 +18,7 @@ from src.models.tables import (
     StrategyRun,
     Transaction,
 )
-from src.services.alpaca_services import AlpacaClient, get_alpaca_client
+from src.services.alpaca_services import AlpacaAPIError, AlpacaClient, get_alpaca_client
 from src.services.strategy_allocation_service import (
     DEFAULT_PORTFOLIO_NAME,
     normalize_portfolio_name,
@@ -70,6 +70,15 @@ class StrategyPortfolioOverview:
 def normalize_account_name(name: str | None) -> str:
     normalized = str(name or DEFAULT_ACCOUNT_NAME).strip()
     return normalized or DEFAULT_ACCOUNT_NAME
+
+
+def normalize_alpaca_base_url(base_url: str | None) -> str:
+    normalized = str(base_url or "").strip().rstrip("/")
+    if not normalized:
+        normalized = "https://paper-api.alpaca.markets"
+    if normalized.endswith("/v2"):
+        normalized = normalized[:-3].rstrip("/")
+    return normalized or "https://paper-api.alpaca.markets"
 
 
 def ensure_default_paper_account(db: Session) -> PaperTradingAccount:
@@ -125,6 +134,44 @@ def list_paper_accounts(
     return db.execute(stmt).scalars().all()
 
 
+def update_paper_account(
+    db: Session,
+    account_id: UUID | str,
+    *,
+    name: str,
+    api_key_env: str,
+    secret_key_env: str,
+    base_url: str,
+    timeout_seconds: float,
+    notes: str | None,
+    status: str,
+) -> PaperTradingAccount:
+    account = db.get(PaperTradingAccount, account_id)
+    if account is None:
+        raise ValueError("paper account not found")
+
+    normalized_name = normalize_account_name(name)
+    existing = db.execute(
+        select(PaperTradingAccount)
+        .where(PaperTradingAccount.id != account.id)
+        .where(PaperTradingAccount.name == normalized_name)
+    ).scalars().first()
+    if existing is not None:
+        raise ValueError("paper account name already exists")
+
+    account.name = normalized_name
+    account.api_key_env = str(api_key_env or "").strip()
+    account.secret_key_env = str(secret_key_env or "").strip()
+    account.base_url = normalize_alpaca_base_url(base_url)
+    account.timeout_seconds = timeout_seconds
+    account.notes = notes
+    account.status = status
+
+    db.commit()
+    db.refresh(account)
+    return account
+
+
 def list_strategy_portfolios(
     db: Session,
     *,
@@ -151,9 +198,6 @@ def rename_strategy_portfolio(
     portfolio = db.get(StrategyPortfolio, portfolio_id)
     if portfolio is None:
         raise ValueError("strategy portfolio not found")
-
-    if portfolio.name == DEFAULT_PORTFOLIO_NAME:
-        raise ValueError("default strategy portfolio cannot be renamed")
 
     normalized_name = normalize_portfolio_name(name)
     if normalized_name == portfolio.name:
@@ -241,9 +285,6 @@ def archive_strategy_portfolio(
     if portfolio is None:
         raise ValueError("strategy portfolio not found")
 
-    if portfolio.name == DEFAULT_PORTFOLIO_NAME:
-        raise ValueError("default strategy portfolio cannot be archived")
-
     if portfolio.status == "archived":
         return portfolio
 
@@ -258,6 +299,37 @@ def archive_strategy_portfolio(
     db.commit()
     db.refresh(portfolio)
     return portfolio
+
+
+def delete_strategy_portfolio(
+    db: Session,
+    portfolio_id: UUID | str,
+) -> StrategyPortfolio:
+    portfolio = db.get(StrategyPortfolio, portfolio_id)
+    if portfolio is None:
+        raise ValueError("strategy portfolio not found")
+
+    _purge_portfolio_related_records(db, {portfolio.name})
+    db.delete(portfolio)
+    db.commit()
+    return portfolio
+
+
+def delete_paper_account(
+    db: Session,
+    account_id: UUID | str,
+) -> PaperTradingAccount:
+    account = db.get(PaperTradingAccount, account_id)
+    if account is None:
+        raise ValueError("paper account not found")
+
+    portfolios = list_strategy_portfolios(db, paper_account_id=account.id)
+    portfolio_names = {portfolio.name for portfolio in portfolios}
+    if portfolio_names:
+        _purge_portfolio_related_records(db, portfolio_names)
+    db.delete(account)
+    db.commit()
+    return account
 
 
 def get_strategy_portfolio_by_name(
@@ -438,6 +510,233 @@ def build_paper_account_overview(
     }
 
 
+def build_paper_account_workspace(
+    db: Session,
+    account_id: UUID | str,
+    *,
+    order_limit: int = 50,
+    transaction_limit: int = 100,
+) -> dict[str, Any]:
+    account = db.get(PaperTradingAccount, account_id)
+    if account is None:
+        raise ValueError("paper account not found")
+
+    overview = build_paper_account_overview(db, account_id)
+    portfolios = overview["portfolios"]
+    portfolio_names = {str(item["name"]) for item in portfolios}
+    runs = db.execute(
+        select(StrategyRun)
+        .where(StrategyRun.mode == "paper")
+        .order_by(StrategyRun.requested_at.desc())
+        .limit(200)
+    ).scalars().all()
+    latest_run_by_portfolio: dict[str, StrategyRun] = {}
+    for run in runs:
+        portfolio_name = _run_portfolio_name(run)
+        if portfolio_name not in portfolio_names or portfolio_name in latest_run_by_portfolio:
+            continue
+        latest_run_by_portfolio[portfolio_name] = run
+
+    tx_rows = db.execute(
+        select(Transaction, Strategy.name)
+        .join(Strategy, Strategy.id == Transaction.strategy_id)
+        .order_by(Transaction.ts.desc())
+    ).all()
+
+    recent_transactions: list[dict[str, Any]] = []
+    tx_summary_by_portfolio: dict[str, dict[str, Any]] = {}
+    for transaction, strategy_name in tx_rows:
+        portfolio_name = _transaction_portfolio_name(transaction)
+        if portfolio_name not in portfolio_names:
+            continue
+
+        net_cash_flow = _transaction_net_cash_flow(transaction)
+        summary = tx_summary_by_portfolio.setdefault(
+            portfolio_name,
+            {
+                "transaction_count": 0,
+                "net_cash_flow": 0.0,
+                "latest_transaction_at": None,
+            },
+        )
+        summary["transaction_count"] += 1
+        summary["net_cash_flow"] += net_cash_flow
+        if summary["latest_transaction_at"] is None:
+            summary["latest_transaction_at"] = transaction.ts
+
+        if len(recent_transactions) < transaction_limit:
+            meta = transaction.meta or {}
+            recent_transactions.append(
+                {
+                    "id": str(transaction.id),
+                    "run_id": str(transaction.run_id) if transaction.run_id else None,
+                    "ts": transaction.ts,
+                    "portfolio_name": portfolio_name,
+                    "strategy_id": str(transaction.strategy_id),
+                    "strategy_name": strategy_name,
+                    "symbol": transaction.symbol,
+                    "side": transaction.side,
+                    "qty": float(transaction.qty),
+                    "price": float(transaction.price),
+                    "fee": float(transaction.fee or 0),
+                    "order_id": transaction.order_id,
+                    "source": str(meta.get("source") or "").strip() or None,
+                    "broker_status": str(meta.get("broker_status") or "").strip() or None,
+                    "net_cash_flow": net_cash_flow,
+                }
+            )
+
+    enriched_portfolios: list[dict[str, Any]] = []
+    for portfolio in portfolios:
+        summary = tx_summary_by_portfolio.get(
+            str(portfolio["name"]),
+            {
+                "transaction_count": 0,
+                "net_cash_flow": 0.0,
+                "latest_transaction_at": None,
+            },
+        )
+        latest_run = latest_run_by_portfolio.get(str(portfolio["name"]))
+        latest_run_equity = portfolio.get("latest_run_equity")
+        latest_run_return_pct = None
+        capital_base = _summary_metric_float(latest_run, "capital_base")
+        if isinstance(latest_run_equity, (int, float)) and capital_base is not None and capital_base > 0:
+            latest_run_return_pct = (float(latest_run_equity) / capital_base) - 1
+
+        enriched_portfolios.append(
+            {
+                **portfolio,
+                "transaction_count": summary["transaction_count"],
+                "net_cash_flow": summary["net_cash_flow"],
+                "latest_transaction_at": summary["latest_transaction_at"],
+                "latest_run_return_pct": latest_run_return_pct,
+            }
+        )
+
+    broker_sync = {
+        "status": "ok",
+        "fetched_at": datetime.utcnow(),
+        "error": None,
+    }
+    broker_account = None
+    broker_clock = None
+    broker_portfolio_history = None
+    broker_positions: list[dict[str, Any]] = []
+    recent_orders: list[dict[str, Any]] = []
+
+    try:
+        client = build_alpaca_client_for_account(account)
+        raw_account = client.get_account()
+        raw_clock = client.get_clock()
+        history_start_at, history_range = _portfolio_history_window(account.created_at)
+        raw_positions = client.list_positions()
+        raw_orders = client.list_orders(status="all", limit=order_limit)
+
+        broker_account = {
+            "broker_account_id": str(raw_account.get("id") or "") or None,
+            "account_number": str(raw_account.get("account_number") or "") or None,
+            "status": str(raw_account.get("status") or "") or None,
+            "currency": str(raw_account.get("currency") or "") or None,
+            "cash": _safe_float(raw_account.get("cash")),
+            "equity": _safe_float(raw_account.get("equity")),
+            "buying_power": _safe_float(raw_account.get("buying_power")),
+            "portfolio_value": _safe_float(raw_account.get("portfolio_value") or raw_account.get("equity")),
+            "long_market_value": _safe_float(raw_account.get("long_market_value")),
+            "short_market_value": _safe_float(raw_account.get("short_market_value")),
+            "last_equity": _safe_float(raw_account.get("last_equity")),
+            "daytrade_count": _safe_int(raw_account.get("daytrade_count")),
+            "pattern_day_trader": _safe_bool(raw_account.get("pattern_day_trader")),
+            "trading_blocked": _safe_bool(raw_account.get("trading_blocked")),
+            "transfers_blocked": _safe_bool(raw_account.get("transfers_blocked")),
+            "account_blocked": _safe_bool(raw_account.get("account_blocked")),
+        }
+        broker_clock = {
+            "timestamp": raw_clock.get("timestamp"),
+            "is_open": _safe_bool(raw_clock.get("is_open")),
+            "next_open": raw_clock.get("next_open"),
+            "next_close": raw_clock.get("next_close"),
+        }
+        try:
+            raw_portfolio_history = client.get_portfolio_history(
+                timeframe="1D",
+                date_start=history_start_at.date(),
+                date_end=datetime.now(UTC).date(),
+            )
+        except AlpacaAPIError as exc:
+            if _is_ignorable_portfolio_history_error(exc):
+                raw_portfolio_history = {}
+            else:
+                raise
+
+        broker_portfolio_history = _build_broker_portfolio_history(
+            raw_portfolio_history,
+            range_label=history_range,
+            start_at=history_start_at,
+        )
+        broker_positions = [
+            {
+                "symbol": str(item.get("symbol") or ""),
+                "side": str(item.get("side") or "") or None,
+                "qty": _safe_float(item.get("qty")),
+                "market_value": _safe_float(item.get("market_value")),
+                "cost_basis": _safe_float(item.get("cost_basis")),
+                "avg_entry_price": _safe_float(item.get("avg_entry_price")),
+                "unrealized_pl": _safe_float(item.get("unrealized_pl")),
+                "unrealized_plpc": _safe_float(item.get("unrealized_plpc")),
+                "current_price": _safe_float(item.get("current_price")),
+                "change_today": _safe_float(item.get("change_today")),
+            }
+            for item in raw_positions
+        ]
+        recent_orders = [
+            {
+                "id": str(item.get("id") or "") or None,
+                "client_order_id": str(item.get("client_order_id") or "") or None,
+                "symbol": str(item.get("symbol") or "") or None,
+                "side": str(item.get("side") or "") or None,
+                "type": str(item.get("type") or "") or None,
+                "time_in_force": str(item.get("time_in_force") or "") or None,
+                "status": str(item.get("status") or "") or None,
+                "qty": _safe_float(item.get("qty")),
+                "filled_qty": _safe_float(item.get("filled_qty")),
+                "filled_avg_price": _safe_float(item.get("filled_avg_price")),
+                "limit_price": _safe_float(item.get("limit_price")),
+                "stop_price": _safe_float(item.get("stop_price")),
+                "submitted_at": item.get("submitted_at"),
+                "filled_at": item.get("filled_at"),
+                "canceled_at": item.get("canceled_at"),
+            }
+            for item in raw_orders
+        ]
+    except Exception as exc:
+        broker_sync = {
+            "status": "error",
+            "fetched_at": datetime.utcnow(),
+            "error": str(exc),
+        }
+
+    return {
+        "account": overview["account"],
+        "broker_sync": broker_sync,
+        "broker_account": broker_account,
+        "broker_clock": broker_clock,
+        "portfolio_history": broker_portfolio_history,
+        "positions": broker_positions,
+        "recent_orders": recent_orders,
+        "recent_transactions": recent_transactions,
+        "portfolios": enriched_portfolios,
+        "stats": {
+            "portfolio_count": overview["portfolio_count"],
+            "active_portfolio_count": overview["active_portfolio_count"],
+            "active_allocation_count": overview["active_allocation_count"],
+            "active_strategy_count": overview["active_strategy_count"],
+            "position_count": len(broker_positions),
+            "order_count": len(recent_orders),
+            "transaction_count": len(recent_transactions),
+        },
+    }
+
+
 def _required_env_value(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value:
@@ -456,3 +755,187 @@ def _summary_metric_float(run: StrategyRun | None, key: str) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _portfolio_history_window(created_at: datetime | None) -> tuple[datetime, str]:
+    now = datetime.now(UTC)
+    one_year_ago = now - timedelta(days=365)
+    if created_at is None:
+        return one_year_ago, "1Y"
+    normalized_created_at = (
+        created_at.replace(tzinfo=UTC)
+        if created_at.tzinfo is None
+        else created_at.astimezone(UTC)
+    )
+    if normalized_created_at < one_year_ago:
+        return one_year_ago, "1Y"
+    return normalized_created_at, "SINCE_INCEPTION"
+
+
+def _build_broker_portfolio_history(
+    raw_history: dict[str, Any],
+    *,
+    range_label: str,
+    start_at: datetime,
+) -> dict[str, Any] | None:
+    timestamps = raw_history.get("timestamp")
+    equity = raw_history.get("equity")
+    if not isinstance(timestamps, list) or not isinstance(equity, list):
+        return None
+
+    point_count = min(len(timestamps), len(equity))
+    if point_count == 0:
+        return None
+
+    profit_loss = raw_history.get("profit_loss")
+    profit_loss_pct = raw_history.get("profit_loss_pct")
+    base_value = _safe_float(raw_history.get("base_value"))
+
+    points: list[dict[str, Any]] = []
+    for index in range(point_count):
+        ts_value = _history_timestamp_to_datetime(timestamps[index])
+        equity_value = _safe_float(equity[index])
+        if ts_value is None or equity_value is None:
+            continue
+        points.append(
+            {
+                "ts": ts_value,
+                "equity": equity_value,
+                "profit_loss": (
+                    _safe_float(profit_loss[index])
+                    if isinstance(profit_loss, list) and index < len(profit_loss)
+                    else None
+                ),
+                "profit_loss_pct": (
+                    _safe_float(profit_loss_pct[index])
+                    if isinstance(profit_loss_pct, list) and index < len(profit_loss_pct)
+                    else None
+                ),
+            }
+        )
+
+    if not points:
+        return None
+
+    start_value = points[0]["equity"]
+    end_value = points[-1]["equity"]
+
+    return {
+        "range_label": range_label,
+        "start_at": start_at,
+        "end_at": points[-1]["ts"],
+        "base_value": base_value,
+        "start_value": start_value,
+        "end_value": end_value,
+        "absolute_change": end_value - start_value,
+        "percent_change": ((end_value / start_value) - 1) if start_value else None,
+        "points": points,
+    }
+
+
+def _is_ignorable_portfolio_history_error(exc: AlpacaAPIError) -> bool:
+    if exc.status_code != 422:
+        return False
+    message = str(exc).lower()
+    return "date_start cannot be after date_end" in message
+
+
+def _purge_portfolio_related_records(db: Session, portfolio_names: set[str]) -> None:
+    if not portfolio_names:
+        return
+
+    allocations = db.execute(
+        select(StrategyAllocation).where(StrategyAllocation.portfolio_name.in_(portfolio_names))
+    ).scalars().all()
+    for allocation in allocations:
+        db.delete(allocation)
+
+    runs = db.execute(
+        select(StrategyRun).where(StrategyRun.mode == "paper")
+    ).scalars().all()
+    matched_run_ids: set[UUID] = set()
+    for run in runs:
+        portfolio_name = _run_portfolio_name(run)
+        if portfolio_name in portfolio_names:
+            matched_run_ids.add(run.id)
+
+    transactions = db.execute(select(Transaction).order_by(Transaction.ts.desc())).scalars().all()
+    for transaction in transactions:
+        tx_portfolio_name = _transaction_portfolio_name(transaction)
+        if tx_portfolio_name in portfolio_names or transaction.run_id in matched_run_ids:
+            db.delete(transaction)
+
+    for run in runs:
+        if run.id in matched_run_ids:
+            db.delete(run)
+
+
+def _run_portfolio_name(run: StrategyRun) -> str | None:
+    paper_cfg = (run.config_snapshot or {}).get("paper_trading", {})
+    if isinstance(paper_cfg, dict):
+        value = str(paper_cfg.get("portfolio_name") or "").strip()
+        if value:
+            return value
+
+    summary_value = str((run.summary_metrics or {}).get("portfolio_name") or "").strip()
+    return summary_value or None
+
+
+def _transaction_portfolio_name(transaction: Transaction) -> str | None:
+    value = str((transaction.meta or {}).get("portfolio_name") or "").strip()
+    return value or None
+
+
+def _transaction_net_cash_flow(transaction: Transaction) -> float:
+    qty = float(transaction.qty)
+    price = float(transaction.price)
+    fee = float(transaction.fee or 0)
+    gross = qty * price
+    if str(transaction.side).upper() == "SELL":
+        return gross - fee
+    return -gross - fee
+
+
+def _safe_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes"}:
+            return True
+        if lowered in {"false", "0", "no"}:
+            return False
+    return bool(value)
+
+
+def _history_timestamp_to_datetime(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    try:
+        timestamp = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    if timestamp > 1_000_000_000_000:
+        timestamp /= 1000
+    return datetime.fromtimestamp(timestamp, tz=UTC)

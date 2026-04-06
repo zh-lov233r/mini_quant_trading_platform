@@ -65,8 +65,8 @@ function fieldBlock(
         boxSizing: "border-box",
         padding: 14,
         borderRadius: 18,
-        border: "1px solid rgba(226, 232, 240, 0.95)",
-        background: "rgba(248, 250, 252, 0.9)",
+        border: "1px solid rgba(71, 85, 105, 0.28)",
+        background: "rgba(15, 23, 42, 0.76)",
       }}
     >
       <div
@@ -78,7 +78,7 @@ function fieldBlock(
       >
         <span
           style={{
-            color: "#0f172a",
+            color: "#f8fafc",
             fontWeight: 700,
             lineHeight: 1.2,
             fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -101,7 +101,7 @@ function fieldBlock(
       </div>
       <span
         style={{
-          color: "#475569",
+          color: "rgba(148, 163, 184, 0.88)",
           lineHeight: 1.6,
           fontSize: 13,
           fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -288,7 +288,7 @@ export default function BacktestsPage() {
       }
     >
       {loading ? <p>{isZh ? "加载中..." : "Loading..."}</p> : null}
-      {error ? <p style={{ color: "crimson" }}>{error}</p> : null}
+      {error ? <p style={{ color: "#fda4af" }}>{error}</p> : null}
 
       {!loading && !error ? (
         <>
@@ -355,9 +355,9 @@ export default function BacktestsPage() {
                 padding: 22,
                 borderRadius: 24,
                 border: "1px solid rgba(148, 163, 184, 0.18)",
-                background: "rgba(255,255,255,0.82)",
-                color: "#0f172a",
-                boxShadow: "0 18px 44px rgba(15, 23, 42, 0.06)",
+                background: "linear-gradient(180deg, rgba(8,15,24,0.92), rgba(15,23,42,0.88))",
+                color: "#e2e8f0",
+                boxShadow: "0 18px 44px rgba(2, 6, 23, 0.22)",
               }}
             >
               <div
@@ -366,17 +366,18 @@ export default function BacktestsPage() {
                   padding: 18,
                   borderRadius: 20,
                   background:
-                    "linear-gradient(135deg, rgba(240,253,250,0.95), rgba(255,247,237,0.95))",
-                  border: "1px solid rgba(15, 118, 110, 0.12)",
+                    "radial-gradient(circle at top right, rgba(34,197,94,0.08), transparent 32%), linear-gradient(135deg, rgba(8,15,24,0.92), rgba(15,23,42,0.86))",
+                  border: "1px solid rgba(71, 85, 105, 0.28)",
+                  boxShadow: "inset 0 1px 0 rgba(148, 163, 184, 0.06)",
                 }}
               >
-                <h2 style={{ margin: "0 0 10px", fontSize: 24 }}>
+                <h2 style={{ margin: "0 0 10px", fontSize: 24, color: "#f8fafc" }}>
                   {isZh ? "发起回测" : "Start Backtest"}
                 </h2>
                 <p
                   style={{
                     margin: "0 0 12px",
-                    color: "#475569",
+                    color: "rgba(148, 163, 184, 0.88)",
                     lineHeight: 1.6,
                     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                   }}
@@ -389,7 +390,7 @@ export default function BacktestsPage() {
                   style={{
                     display: "grid",
                     gap: 6,
-                    color: "#475569",
+                    color: "rgba(148, 163, 184, 0.88)",
                     fontSize: 13,
                     lineHeight: 1.6,
                     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -586,9 +587,9 @@ export default function BacktestsPage() {
                   style={{
                     padding: 14,
                     borderRadius: 16,
-                    background: "#fff7ed",
+                    background: "rgba(120, 53, 15, 0.18)",
                     border: "1px solid rgba(249, 115, 22, 0.14)",
-                    color: "#7c2d12",
+                    color: "#fed7aa",
                     lineHeight: 1.6,
                     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                     fontSize: 13,
@@ -604,13 +605,13 @@ export default function BacktestsPage() {
                     style={{
                       padding: 14,
                       borderRadius: 16,
-                      background: "#f8fafc",
-                      color: "#475569",
+                      background: "rgba(15, 23, 42, 0.76)",
+                      color: "rgba(148, 163, 184, 0.88)",
                       lineHeight: 1.6,
                       fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                     }}
                   >
-                    <div style={{ marginBottom: 6, fontWeight: 700, color: "#0f172a" }}>
+                    <div style={{ marginBottom: 6, fontWeight: 700, color: "#f8fafc" }}>
                       {selectedStrategy.name}
                     </div>
                     <div>{getStrategyDescription(selectedStrategy)}</div>
@@ -622,13 +623,13 @@ export default function BacktestsPage() {
                     style={{
                       padding: 14,
                       borderRadius: 16,
-                      background: "#eff6ff",
-                      color: "#475569",
+                      background: "rgba(30, 64, 175, 0.18)",
+                      color: "#bfdbfe",
                       lineHeight: 1.6,
                       fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                     }}
                   >
-                    <div style={{ marginBottom: 6, fontWeight: 700, color: "#0f172a" }}>
+                    <div style={{ marginBottom: 6, fontWeight: 700, color: "#f8fafc" }}>
                       {isZh ? "已绑定股票组合" : "Selected basket"}: {selectedBasket.name}
                     </div>
                     <div style={{ marginBottom: 6 }}>
@@ -662,15 +663,15 @@ export default function BacktestsPage() {
                 </button>
               </form>
 
-              {submitError ? <p style={{ color: "crimson", marginTop: 12 }}>{submitError}</p> : null}
+              {submitError ? <p style={{ color: "#fda4af", marginTop: 12 }}>{submitError}</p> : null}
               {submitSuccessRun ? (
                 <div
                   style={{
                     marginTop: 12,
                     padding: 14,
                     borderRadius: 14,
-                    background: "#ecfdf5",
-                    color: "#166534",
+                    background: "rgba(20, 83, 45, 0.22)",
+                    color: "#bbf7d0",
                     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                     lineHeight: 1.6,
                   }}
@@ -685,7 +686,7 @@ export default function BacktestsPage() {
                   <Link
                     href={`/backtests/${encodeURIComponent(submitSuccessRun.id)}`}
                     style={{
-                      color: "#0f766e",
+                      color: "#5eead4",
                       textDecoration: "none",
                       fontWeight: 700,
                     }}
@@ -701,9 +702,9 @@ export default function BacktestsPage() {
                 padding: 22,
                 borderRadius: 24,
                 border: "1px solid rgba(148, 163, 184, 0.18)",
-                background: "rgba(255,255,255,0.82)",
-                color: "#0f172a",
-                boxShadow: "0 18px 44px rgba(15, 23, 42, 0.06)",
+                background: "linear-gradient(180deg, rgba(8,15,24,0.92), rgba(15,23,42,0.88))",
+                color: "#e2e8f0",
+                boxShadow: "0 18px 44px rgba(2, 6, 23, 0.22)",
               }}
             >
               <div
@@ -723,7 +724,7 @@ export default function BacktestsPage() {
                   <p
                     style={{
                       margin: 0,
-                      color: "#475569",
+                      color: "rgba(148, 163, 184, 0.88)",
                       lineHeight: 1.6,
                       fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                     }}
@@ -740,8 +741,8 @@ export default function BacktestsPage() {
                   style={{
                     padding: 18,
                     borderRadius: 18,
-                    background: "#f8fafc",
-                    color: "#475569",
+                    background: "rgba(15, 23, 42, 0.76)",
+                    color: "rgba(148, 163, 184, 0.88)",
                     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                   }}
                 >
@@ -767,10 +768,10 @@ export default function BacktestsPage() {
                           style={{
                             padding: 18,
                             borderRadius: 18,
-                            border: "1px solid rgba(226, 232, 240, 0.9)",
+                            border: "1px solid rgba(71, 85, 105, 0.28)",
                             background:
-                              "linear-gradient(135deg, rgba(255,250,240,0.92), rgba(255,255,255,0.96))",
-                            color: "#0f172a",
+                              "radial-gradient(circle at top right, rgba(59,130,246,0.08), transparent 24%), rgba(8, 15, 24, 0.88)",
+                            color: "#e2e8f0",
                           }}
                         >
                           <div
@@ -816,7 +817,7 @@ export default function BacktestsPage() {
                               style={{
                                 fontFamily:
                                   "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-                                color: "#475569",
+                                color: "rgba(148, 163, 184, 0.88)",
                                 fontSize: 13,
                               }}
                             >
@@ -871,7 +872,7 @@ export default function BacktestsPage() {
                           {run.error_message ? (
                             <div
                               style={{
-                                color: "crimson",
+                                color: "#fda4af",
                                 fontFamily:
                                   "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                               }}
@@ -881,7 +882,7 @@ export default function BacktestsPage() {
                           ) : (
                             <div
                               style={{
-                                color: "#0f766e",
+                                color: "#5eead4",
                                 fontWeight: 700,
                                 fontFamily:
                                   "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -909,10 +910,10 @@ const inputStyle: CSSProperties = {
   boxSizing: "border-box",
   padding: 12,
   borderRadius: 14,
-  border: "1px solid #dbe4ee",
-  background: "#fff",
+  border: "1px solid rgba(71, 85, 105, 0.34)",
+  background: "rgba(8, 15, 24, 0.82)",
   fontSize: 14,
-  color: "#0f172a",
+  color: "#e2e8f0",
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
 
@@ -923,14 +924,14 @@ const formGroupStyle: CSSProperties = {
 
 const formGroupTitleStyle: CSSProperties = {
   marginBottom: 4,
-  color: "#0f172a",
+  color: "#f8fafc",
   fontSize: 16,
   fontWeight: 700,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
 
 const formGroupTextStyle: CSSProperties = {
-  color: "#475569",
+  color: "rgba(148, 163, 184, 0.88)",
   lineHeight: 1.6,
   fontSize: 13,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
