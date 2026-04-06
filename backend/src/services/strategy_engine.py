@@ -1,7 +1,13 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+"""Signal generation engine shared by daily runs, paper trading, and backtests.
+
+The module is organized from top-level orchestration helpers down to individual
+strategy handlers and their supporting pattern-detection utilities.
+"""
+
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Literal
 
 from sqlalchemy import bindparam, delete, select, text
@@ -11,7 +17,11 @@ from src.models.tables import Signal, Strategy, StrategyRun
 from src.services.strategy_registry import build_runtime_payload
 
 
-StrategyHandler = Callable[[Dict[str, Any], Dict[str, Dict[str, Any]]], list["SignalEvent"]]
+RuntimeStrategy = Dict[str, Any]
+MarketSnapshot = Dict[str, Any]
+MarketDataBySymbol = Dict[str, MarketSnapshot]
+HistoryBar = Dict[str, Any]
+StrategyHandler = Callable[[RuntimeStrategy, MarketDataBySymbol], list["SignalEvent"]]
 
 RECENT_BAR_COUNT = 40
 RECENT_BAR_LOOKBACK_DAYS = 90
@@ -100,6 +110,8 @@ WHERE bars.dt_ny BETWEEN :history_start AND :trade_date
 
 @dataclass(slots=True)
 class SignalEvent:
+    """Normalized signal payload emitted by a strategy handler."""
+
     strategy_id: str
     ts: datetime
     symbol: str
@@ -111,6 +123,8 @@ class SignalEvent:
 
 @dataclass(slots=True)
 class PersistedSignalRun:
+    """Summary of one strategy run that was written to the database."""
+
     strategy_id: str
     run_id: str
     mode: str
@@ -120,6 +134,8 @@ class PersistedSignalRun:
 
 @dataclass(slots=True)
 class IslandReversalPattern:
+    """Compact representation of a detected island-reversal setup."""
+
     left_gap_idx: int
     breakout_idx: int
     island_low: float
@@ -132,6 +148,13 @@ class IslandReversalPattern:
     breakout_gap_pct: float
 
 
+# ============================================================================
+# Public orchestration API
+# ============================================================================
+
+# Fetch strategies that are currently eligible to participate in signal runs.
+# Input: active SQLAlchemy session.
+# Output: active Strategy rows ordered deterministically by created_at/version.
 def list_active_strategies(db: Session) -> list[Strategy]:
     return db.execute(
         select(Strategy)
@@ -140,11 +163,14 @@ def list_active_strategies(db: Session) -> list[Strategy]:
     ).scalars().all()
 
 
+# Build the runtime market snapshot map for one NY trade date.
+# Input: db session, trade date, and an optional canonical symbol filter.
+# Output: symbol -> snapshot dict with OHLCV, indicators, prev indicators, and recent_bars.
 def load_feature_market_data(
     db: Session,
     trade_date: date,
     symbols: list[str] | None = None,
-) -> Dict[str, Dict[str, Any]]:
+) -> MarketDataBySymbol:
     sql = FEATURE_SNAPSHOT_SQL
     params: dict[str, Any] = {"trade_date": trade_date}
 
@@ -157,50 +183,11 @@ def load_feature_market_data(
         stmt = text(sql)
 
     rows = db.execute(stmt, params).mappings().all()
-    snapshots: Dict[str, Dict[str, Any]] = {}
+    snapshots: MarketDataBySymbol = {}
     for row in rows:
-        symbol = str(row["symbol"]).upper()
-        snapshots[symbol] = {
-            "symbol": symbol,
-            "asset_type": row["asset_type"],
-            "dt_ny": row["dt_ny"],
-            "ts": row["ts"] or datetime.now(timezone.utc),
-            "open": row["open"],
-            "high": row["high"],
-            "low": row["low"],
-            "close": row["close"],
-            "volume": row["volume"],
-            "atr_14": row["atr_14"],
-            "volume_sma_20": row["volume_sma_20"],
-            "ret_20d": row["ret_20d"],
-            "ret_60d": row["ret_60d"],
-            "sma_10": row["sma_10"],
-            "sma_20": row["sma_20"],
-            "sma_50": row["sma_50"],
-            "sma_100": row["sma_100"],
-            "sma_200": row["sma_200"],
-            "ema_12": row["ema_12"],
-            "ema_15": row["ema_15"],
-            "ema_20": row["ema_20"],
-            "ema_50": row["ema_50"],
-            "rsi_2": row["rsi_2"],
-            "rsi_5": row["rsi_5"],
-            "rsi_14": row["rsi_14"],
-            "zscore_5": row["zscore_5"],
-            "zscore_10": row["zscore_10"],
-            "zscore_20": row["zscore_20"],
-            "prev_sma_10": row["prev_sma_10"],
-            "prev_sma_20": row["prev_sma_20"],
-            "prev_sma_50": row["prev_sma_50"],
-            "prev_sma_100": row["prev_sma_100"],
-            "prev_sma_200": row["prev_sma_200"],
-            "prev_ema_12": row["prev_ema_12"],
-            "prev_ema_15": row["prev_ema_15"],
-            "prev_ema_20": row["prev_ema_20"],
-            "prev_ema_50": row["prev_ema_50"],
-            "position": 0,
-            "recent_bars": [],
-        }
+        snapshot = _build_feature_snapshot(row)
+        snapshots[snapshot["symbol"]] = snapshot
+
     recent_history = _load_recent_bar_history(db, trade_date, symbols)
     for symbol, bars in recent_history.items():
         if symbol in snapshots:
@@ -208,40 +195,9 @@ def load_feature_market_data(
     return snapshots
 
 
-def _load_recent_bar_history(
-    db: Session,
-    trade_date: date,
-    symbols: list[str] | None = None,
-) -> Dict[str, list[Dict[str, Any]]]:
-    sql = RECENT_BAR_HISTORY_SQL
-    params: dict[str, Any] = {
-        "trade_date": trade_date,
-        "history_start": trade_date - timedelta(days=RECENT_BAR_LOOKBACK_DAYS),
-    }
-
-    if symbols:
-        sql += " AND i.ticker_canonical IN :symbols"
-        stmt = text(sql + " ORDER BY i.ticker_canonical, bars.dt_ny").bindparams(
-            bindparam("symbols", expanding=True)
-        )
-        params["symbols"] = [symbol.upper() for symbol in symbols]
-    else:
-        sql += " AND i.asset_type = 'CS'"
-        stmt = text(sql + " ORDER BY i.ticker_canonical, bars.dt_ny")
-
-    rows = db.execute(stmt, params).mappings().all()
-    history_by_symbol: Dict[str, list[Dict[str, Any]]] = {}
-    for row in rows:
-        symbol = str(row["symbol"]).upper()
-        history_by_symbol.setdefault(symbol, []).append(_build_history_bar(row))
-
-    return {
-        symbol: bars[-RECENT_BAR_COUNT:]
-        for symbol, bars in history_by_symbol.items()
-        if bars
-    }
-
-
+# Convenience entrypoint for in-memory signal generation on a single trade date.
+# Input: db session, trade date, and an optional canonical symbol filter.
+# Output: flat SignalEvent list across all active engine-ready strategies.
 def generate_signals_for_trade_date(
     db: Session,
     trade_date: date,
@@ -251,6 +207,9 @@ def generate_signals_for_trade_date(
     return generate_signals(db, snapshots)
 
 
+# Run all active engine-ready strategies and persist one StrategyRun per strategy/date.
+# Input: db session, trade date, execution mode, and an optional canonical symbol filter.
+# Output: persisted run summaries for strategies that were executed and committed.
 def generate_and_persist_signals_for_trade_date(
     db: Session,
     trade_date: date,
@@ -308,13 +267,93 @@ def generate_and_persist_signals_for_trade_date(
     return results
 
 
-def run_trend_following_strategy(
-    runtime_strategy: Dict[str, Any],
-    market_data_by_symbol: Dict[str, Dict[str, Any]],
+# Run all active engine-ready strategies against an already-built snapshot map.
+# Input: db session plus market_data_by_symbol snapshots that include indicators/position state.
+# Output: combined SignalEvent list without creating StrategyRun or Signal database records.
+def generate_signals(
+    db: Session,
+    market_data_by_symbol: MarketDataBySymbol,
+) -> list[SignalEvent]:
+    signals: list[SignalEvent] = []
+
+    for strategy in list_active_strategies(db):
+        runtime = build_runtime_payload(strategy)
+        if not runtime["engine_ready"]:
+            continue
+
+        handler = STRATEGY_HANDLERS.get(runtime["strategy_type"])
+        if handler is None:
+            continue
+
+        signals.extend(handler(runtime, market_data_by_symbol))
+
+    return signals
+
+
+# Backward-compatible wrapper for callers that still import the old public helper.
+# Input: runtime strategy payload plus a symbol -> snapshot market map.
+# Output: the same SignalEvent list produced by the trend-following handler.
+def trend_following(
+    runtime_strategy: RuntimeStrategy,
+    market_data_by_symbol: MarketDataBySymbol,
 ) -> list[SignalEvent]:
     return _trend_following_handler(runtime_strategy, market_data_by_symbol)
 
 
+# Legacy compatibility wrapper kept for older imports/tests.
+# Input: runtime strategy payload plus a symbol -> snapshot market map.
+# Output: the same SignalEvent list produced by the trend-following handler.
+def run_trend_following_strategy(
+    runtime_strategy: RuntimeStrategy,
+    market_data_by_symbol: MarketDataBySymbol,
+) -> list[SignalEvent]:
+    return _trend_following_handler(runtime_strategy, market_data_by_symbol)
+
+
+# ============================================================================
+# Database and payload helpers
+# ============================================================================
+
+# Load recent daily history used by pattern-aware handlers such as island reversal.
+# Input: db session, trade date, and an optional canonical symbol filter.
+# Output: symbol -> last RECENT_BAR_COUNT history bars with OHLCV and context indicators.
+def _load_recent_bar_history(
+    db: Session,
+    trade_date: date,
+    symbols: list[str] | None = None,
+) -> Dict[str, list[HistoryBar]]:
+    sql = RECENT_BAR_HISTORY_SQL
+    params: dict[str, Any] = {
+        "trade_date": trade_date,
+        "history_start": trade_date - timedelta(days=RECENT_BAR_LOOKBACK_DAYS),
+    }
+
+    if symbols:
+        sql += " AND i.ticker_canonical IN :symbols"
+        stmt = text(sql + " ORDER BY i.ticker_canonical, bars.dt_ny").bindparams(
+            bindparam("symbols", expanding=True)
+        )
+        params["symbols"] = [symbol.upper() for symbol in symbols]
+    else:
+        sql += " AND i.asset_type = 'CS'"
+        stmt = text(sql + " ORDER BY i.ticker_canonical, bars.dt_ny")
+
+    rows = db.execute(stmt, params).mappings().all()
+    history_by_symbol: Dict[str, list[HistoryBar]] = {}
+    for row in rows:
+        symbol = str(row["symbol"]).upper()
+        history_by_symbol.setdefault(symbol, []).append(_build_history_bar(row))
+
+    return {
+        symbol: bars[-RECENT_BAR_COUNT:]
+        for symbol, bars in history_by_symbol.items()
+        if bars
+    }
+
+
+# Reuse the existing one-day StrategyRun for this strategy/mode/date or create a fresh one.
+# Input: strategy ORM row, execution mode, trade date, config snapshot, and run start timestamp.
+# Output: StrategyRun ORM object left in "running" state inside the current transaction.
 def _get_or_create_signal_run(
     db: Session,
     strategy: Strategy,
@@ -357,6 +396,9 @@ def _get_or_create_signal_run(
     return run
 
 
+# Replace all persisted Signal rows for one run with the current event list.
+# Input: StrategyRun row, owning Strategy row, and normalized SignalEvent objects.
+# Output: None; the current transaction is mutated via DELETE + INSERT side effects.
 def _replace_signals_for_run(
     db: Session,
     run: StrategyRun,
@@ -379,52 +421,12 @@ def _replace_signals_for_run(
         )
 
 
-def generate_signals(
-    db: Session,
-    market_data_by_symbol: Dict[str, Dict[str, Any]],
-) -> list[SignalEvent]:
-    """
-    market_data_by_symbol 的建议结构：
-    {
-        "AAPL": {
-            "close": 212.3,
-            "ema_15": 210.1,
-            "sma_200": 205.8,
-            "prev_fast": 204.5,
-            "prev_slow": 205.1,
-            "volume": 1500000,
-            "volume_sma_20": 900000,
-            "atr_14": 4.2,
-            "position": 0
-        }
-    }
-    """
-    signals: list[SignalEvent] = []
-
-    for strategy in list_active_strategies(db):
-        runtime = build_runtime_payload(strategy)
-        if not runtime["engine_ready"]:
-            continue
-
-        handler = STRATEGY_HANDLERS.get(runtime["strategy_type"])
-        if handler is None:
-            continue
-
-        signals.extend(handler(runtime, market_data_by_symbol))
-
-    return signals
-
-
-def trend_following(
-    runtime_strategy: Dict[str, Any],
-    market_data_by_symbol: Dict[str, Dict[str, Any]],
-) -> list[SignalEvent]:
-    return _trend_following_handler(runtime_strategy, market_data_by_symbol)
-
-
+# Normalize a strategy's universe config into the concrete symbols to scan today.
+# Input: universe config and the current symbol -> snapshot market map.
+# Output: sorted symbol list based on explicit symbols or the configured stock universe.
 def _resolve_strategy_universe(
     universe_cfg: Dict[str, Any],
-    market_data_by_symbol: Dict[str, Dict[str, Any]],
+    market_data_by_symbol: MarketDataBySymbol,
 ) -> list[str]:
     if universe_cfg.get("selection_mode") == "all_common_stock" and not universe_cfg.get("symbols"):
         return sorted(
@@ -435,9 +437,109 @@ def _resolve_strategy_universe(
     return universe_cfg.get("symbols") or sorted(market_data_by_symbol.keys())
 
 
+# Convert one FEATURE_SNAPSHOT_SQL row into the runtime snapshot shape used by handlers.
+# Input: SQLAlchemy mapping row with current-day bars plus current/previous indicators.
+# Output: one per-symbol snapshot dict with empty recent_bars ready to be backfilled.
+def _build_feature_snapshot(row: Dict[str, Any]) -> MarketSnapshot:
+    symbol = str(row["symbol"]).upper()
+    return {
+        "symbol": symbol,
+        "asset_type": row["asset_type"],
+        "dt_ny": row["dt_ny"],
+        "ts": row["ts"] or datetime.now(timezone.utc),
+        "open": row["open"],
+        "high": row["high"],
+        "low": row["low"],
+        "close": row["close"],
+        "volume": row["volume"],
+        "atr_14": row["atr_14"],
+        "volume_sma_20": row["volume_sma_20"],
+        "ret_20d": row["ret_20d"],
+        "ret_60d": row["ret_60d"],
+        "sma_10": row["sma_10"],
+        "sma_20": row["sma_20"],
+        "sma_50": row["sma_50"],
+        "sma_100": row["sma_100"],
+        "sma_200": row["sma_200"],
+        "ema_12": row["ema_12"],
+        "ema_15": row["ema_15"],
+        "ema_20": row["ema_20"],
+        "ema_50": row["ema_50"],
+        "rsi_2": row["rsi_2"],
+        "rsi_5": row["rsi_5"],
+        "rsi_14": row["rsi_14"],
+        "zscore_5": row["zscore_5"],
+        "zscore_10": row["zscore_10"],
+        "zscore_20": row["zscore_20"],
+        "prev_sma_10": row["prev_sma_10"],
+        "prev_sma_20": row["prev_sma_20"],
+        "prev_sma_50": row["prev_sma_50"],
+        "prev_sma_100": row["prev_sma_100"],
+        "prev_sma_200": row["prev_sma_200"],
+        "prev_ema_12": row["prev_ema_12"],
+        "prev_ema_15": row["prev_ema_15"],
+        "prev_ema_20": row["prev_ema_20"],
+        "prev_ema_50": row["prev_ema_50"],
+        "position": 0,
+        "recent_bars": [],
+    }
+
+
+# Best-effort scalar conversion when missing/non-numeric input should fall back to a number.
+# Input: arbitrary value and an optional numeric default.
+# Output: float(value) when possible, otherwise the provided default.
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+# Best-effort scalar conversion when callers need to preserve "missing" as None.
+# Input: arbitrary value.
+# Output: float(value) when possible, otherwise None.
+def _safe_float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+# Convert one RECENT_BAR_HISTORY_SQL row into the history-bar shape used by pattern scanners.
+# Input: SQLAlchemy mapping row with historical OHLCV plus a few trend/volume indicators.
+# Output: compact per-day dict stored under snapshot["recent_bars"].
+def _build_history_bar(row: Dict[str, Any]) -> HistoryBar:
+    return {
+        "dt_ny": row["dt_ny"],
+        "ts": row["ts"] or datetime.now(timezone.utc),
+        "open": _safe_float_or_none(row.get("open")),
+        "high": _safe_float_or_none(row.get("high")),
+        "low": _safe_float_or_none(row.get("low")),
+        "close": _safe_float_or_none(row.get("close")),
+        "volume": _safe_float_or_none(row.get("volume")),
+        "atr_14": _safe_float_or_none(row.get("atr_14")),
+        "volume_sma_20": _safe_float_or_none(row.get("volume_sma_20")),
+        "ret_20d": _safe_float_or_none(row.get("ret_20d")),
+        "ret_60d": _safe_float_or_none(row.get("ret_60d")),
+        "sma_20": _safe_float_or_none(row.get("sma_20")),
+        "sma_50": _safe_float_or_none(row.get("sma_50")),
+    }
+
+
+# ============================================================================
+# Strategy handlers
+# ============================================================================
+
+# Evaluate moving-average crossover signals with a volume confirmation filter.
+# Input: runtime strategy payload plus the symbol -> snapshot market map.
+# Output: BUY/SELL SignalEvent objects for symbols whose fast/slow crossover changed today.
 def _trend_following_handler(
-    runtime_strategy: Dict[str, Any],
-    market_data_by_symbol: Dict[str, Dict[str, Any]],
+    runtime_strategy: RuntimeStrategy,
+    market_data_by_symbol: MarketDataBySymbol,
 ) -> list[SignalEvent]:
     params = runtime_strategy["params"]
     signal_cfg = params["signal"]
@@ -503,45 +605,12 @@ def _trend_following_handler(
     return signals
 
 
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    if value is None:
-        return default
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _safe_float_or_none(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _build_history_bar(row: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "dt_ny": row["dt_ny"],
-        "ts": row["ts"] or datetime.now(timezone.utc),
-        "open": _safe_float_or_none(row.get("open")),
-        "high": _safe_float_or_none(row.get("high")),
-        "low": _safe_float_or_none(row.get("low")),
-        "close": _safe_float_or_none(row.get("close")),
-        "volume": _safe_float_or_none(row.get("volume")),
-        "atr_14": _safe_float_or_none(row.get("atr_14")),
-        "volume_sma_20": _safe_float_or_none(row.get("volume_sma_20")),
-        "ret_20d": _safe_float_or_none(row.get("ret_20d")),
-        "ret_60d": _safe_float_or_none(row.get("ret_60d")),
-        "sma_20": _safe_float_or_none(row.get("sma_20")),
-        "sma_50": _safe_float_or_none(row.get("sma_50")),
-    }
-
-
+# Evaluate z-score-based mean-reversion entry/exit rules across the configured universe.
+# Input: runtime strategy payload plus the symbol -> snapshot market map.
+# Output: BUY/SELL SignalEvent objects for entry or exit conditions triggered today.
 def _mean_reversion_handler(
-    runtime_strategy: Dict[str, Any],
-    market_data_by_symbol: Dict[str, Dict[str, Any]],
+    runtime_strategy: RuntimeStrategy,
+    market_data_by_symbol: MarketDataBySymbol,
 ) -> list[SignalEvent]:
     params = runtime_strategy["params"]
     signal_cfg = params["signal"]
@@ -609,9 +678,12 @@ def _mean_reversion_handler(
     return signals
 
 
+# Evaluate island-reversal setups using recent OHLCV history and position-aware exit logic.
+# Input: runtime strategy payload plus the symbol -> snapshot map with recent_bars populated.
+# Output: BUY/SELL SignalEvent objects for breakout, retest, or exit conditions.
 def _island_reversal_handler(
-    runtime_strategy: Dict[str, Any],
-    market_data_by_symbol: Dict[str, Dict[str, Any]],
+    runtime_strategy: RuntimeStrategy,
+    market_data_by_symbol: MarketDataBySymbol,
 ) -> list[SignalEvent]:
     params = runtime_strategy["params"]
     signal_cfg = params["signal"]
@@ -685,8 +757,15 @@ def _island_reversal_handler(
     return signals
 
 
+# ============================================================================
+# Island reversal helpers
+# ============================================================================
+
+# Scan recent bars from newest to oldest to find the latest valid island-reversal setup.
+# Input: ordered recent_bars history and the strategy's island-reversal signal config.
+# Output: IslandReversalPattern when a complete setup exists, otherwise None.
 def _find_latest_island_reversal_pattern(
-    recent_bars: list[Dict[str, Any]],
+    recent_bars: list[HistoryBar],
     signal_cfg: Dict[str, Any],
 ) -> IslandReversalPattern | None:
     if len(recent_bars) < 4:
@@ -775,7 +854,10 @@ def _find_latest_island_reversal_pattern(
             )
             if island_high == float("-inf") or island_low == float("inf"):
                 continue
-            if any((_safe_float_or_none(bar.get("high")) or float("inf")) >= prev_low for bar in island_bars):
+            if any(
+                (_safe_float_or_none(bar.get("high")) or float("inf")) >= prev_low
+                for bar in island_bars
+            ):
                 continue
 
             breakout_gap_pct = (breakout_low - island_high) / island_high if island_high > 0 else 0.0
@@ -797,8 +879,11 @@ def _find_latest_island_reversal_pattern(
     return None
 
 
+# Check whether the left-gap bar sits inside the intended bearish/downtrend context.
+# Input: one history bar plus configured lookback/drop thresholds.
+# Output: True when return-based or moving-average-based downtrend evidence is present.
 def _has_island_downtrend_context(
-    left_gap_bar: Dict[str, Any],
+    left_gap_bar: HistoryBar,
     *,
     downtrend_lookback: int,
     min_drop_pct: float,
@@ -814,9 +899,12 @@ def _has_island_downtrend_context(
     return False
 
 
+# Turn a detected island pattern and current position state into a concrete trade action.
+# Input: recent bars, detected pattern, island signal config, risk config, and current position size.
+# Output: (action, reason, stage) where any field may be None when no trade should fire today.
 def _resolve_island_reversal_action(
     *,
-    recent_bars: list[Dict[str, Any]],
+    recent_bars: list[HistoryBar],
     pattern: IslandReversalPattern,
     signal_cfg: Dict[str, Any],
     risk_cfg: Dict[str, Any],
@@ -873,6 +961,7 @@ def _resolve_island_reversal_action(
     return None, None, None
 
 
+# Registry consulted by paper/live trading and backtests to route runtime strategies to handlers.
 STRATEGY_HANDLERS: dict[str, StrategyHandler] = {
     "trend": _trend_following_handler,
     "mean_reversion": _mean_reversion_handler,

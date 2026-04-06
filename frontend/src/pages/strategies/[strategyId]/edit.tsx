@@ -74,8 +74,8 @@ export default function EditStrategyPage() {
       title={isZh ? "编辑策略参数" : "Edit Strategy Parameters"}
       subtitle={
         isZh
-          ? "直接修改策略库中这条策略的参数、说明和状态。保存后，回测和后续执行会读取这份更新后的配置。"
-          : "Update the persisted parameters, description, and status for this strategy. Once saved, backtests and future execution reads will use the refreshed configuration."
+          ? "直接修改策这条策略的参数、说明和状态。保存后，回测和后续执行会读取这份更新后的配置"
+          : "Update the persisted parameters, description, and status for this strategy. Once saved, backtests and future execution reads will use the refreshed configuration"
       }
       actions={
         <>

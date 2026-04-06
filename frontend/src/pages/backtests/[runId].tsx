@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 
 import { getBacktest } from "@/api/backtests";
+import { getCandleSeries } from "@/api/quotes";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
@@ -14,6 +15,7 @@ import type {
   BacktestSignalOut,
   BacktestTransactionOut,
 } from "@/types/backtest";
+import type { CandleBarOut, CandleSeriesOut } from "@/types/quote";
 import { formatDateTime, formatPercent } from "@/utils/strategy";
 
 function actionLink(href: string, label: string, filled = false) {
@@ -119,6 +121,23 @@ function getMetaNumber(meta: Record<string, unknown> | undefined, key: string): 
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function getObjectValue(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function getRecordText(record: Record<string, unknown> | null, key: string): string | null {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function getRecordNumber(record: Record<string, unknown> | null, key: string): number | null {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function buildLinePath(
   values: number[],
   width: number,
@@ -180,6 +199,19 @@ function buildAreaPath(
   )} ${baseY.toFixed(2)} Z`;
 }
 
+function projectValueToChartY(
+  value: number,
+  height: number,
+  paddingTop: number,
+  paddingBottom: number,
+  minValue: number,
+  maxValue: number
+): number {
+  const yRange = maxValue - minValue || 1;
+  const usableHeight = height - paddingTop - paddingBottom;
+  return height - paddingBottom - ((value - minValue) / yRange) * usableHeight;
+}
+
 function buildYAxisTicks(
   min: number,
   max: number,
@@ -235,11 +267,87 @@ type SymbolPnlRow = {
   tradeCount: number;
 };
 
+type PositionLifecycleRow = {
+  key: string;
+  symbol: string;
+  sequence: number;
+  status: "closed" | "open";
+  qty: number;
+  entryTs: string | null;
+  entrySignalTs: string | null;
+  exitTs: string | null;
+  exitSignalTs: string | null;
+  markTs: string | null;
+  entryTradeDate: string | null;
+  entrySignalTradeDate: string | null;
+  exitTradeDate: string | null;
+  exitSignalTradeDate: string | null;
+  markTradeDate: string | null;
+  entryPrice: number;
+  exitPrice: number | null;
+  markPrice: number | null;
+  pnl: number | null;
+  returnPct: number | null;
+  holdingDays: number | null;
+  entryReason: string | null;
+  exitReason: string | null;
+};
+
+type LifecycleChartMarker = {
+  key: string;
+  label: string;
+  date: string;
+  price: number | null;
+  tone: "buy" | "buy_signal" | "sell" | "sell_signal" | "mark";
+  description: string;
+};
+
+type IslandReversalGapSetup = {
+  leftGapTradeDate: string;
+  breakoutTradeDate: string;
+  islandHigh: number;
+  breakoutGapLow: number;
+  leftGapPct: number | null;
+  breakoutGapPct: number | null;
+};
+
+type LifecycleGapOverlay = {
+  key: string;
+  label: string;
+  referenceDate: string;
+  anchorDate: string;
+  lowPrice: number;
+  highPrice: number;
+  tone: "left_gap" | "right_gap";
+  description: string;
+};
+
+type OpenLifecycleLot = {
+  symbol: string;
+  qty: number;
+  entryTs: string | null;
+  entrySignalTs: string | null;
+  entryTradeDate: string | null;
+  entrySignalTradeDate: string | null;
+  entryPrice: number;
+  entryFee: number;
+  entryReason: string | null;
+  txId: string;
+};
+
 type CurveVisibility = {
   strategy: boolean;
   SPY: boolean;
   QQQ: boolean;
 };
+
+const LIFECYCLE_PRE_ENTRY_LOOKBACK_TRADING_DAYS = 30;
+const LIFECYCLE_POST_EXIT_LOOKAHEAD_DAYS = 0;
+const LIFECYCLE_PRE_ENTRY_FETCH_BUFFER_DAYS = 90;
+const LIFECYCLE_PRE_ENTRY_LOOKBACK_MIN = 0;
+const LIFECYCLE_PRE_ENTRY_LOOKBACK_MAX = 240;
+const LIFECYCLE_PRE_ENTRY_LOOKBACK_PRESETS = [10, 30, 60, 120];
+const LIFECYCLE_POST_EXIT_LOOKAHEAD_PRESETS = [0, 10, 30, 60];
 
 function toTimeValue(value?: string | null): number | null {
   if (!value) {
@@ -281,6 +389,241 @@ function normalizePositionPayload(value: unknown): { qty: number; close: number;
   return { qty, close, marketValue };
 }
 
+function sortTransactionsChronologically(transactions: BacktestTransactionOut[]) {
+  return [...transactions].sort((left, right) => {
+    const leftTs = toTimeValue(left.ts) || 0;
+    const rightTs = toTimeValue(right.ts) || 0;
+    if (leftTs !== rightTs) {
+      return leftTs - rightTs;
+    }
+    return left.id.localeCompare(right.id);
+  });
+}
+
+function holdingDaysBetween(startTradeDate: string | null, endTradeDate: string | null): number | null {
+  if (!startTradeDate || !endTradeDate) {
+    return null;
+  }
+
+  const start = Date.parse(`${startTradeDate}T00:00:00Z`);
+  const end = Date.parse(`${endTradeDate}T00:00:00Z`);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return null;
+  }
+  return Math.max(0, Math.round((end - start) / 86_400_000));
+}
+
+function shiftDateKey(dateKey: string | null, deltaDays: number): string | null {
+  if (!dateKey) {
+    return null;
+  }
+
+  const base = new Date(`${dateKey}T00:00:00Z`);
+  if (!Number.isFinite(base.getTime())) {
+    return null;
+  }
+
+  base.setUTCDate(base.getUTCDate() + deltaDays);
+  return base.toISOString().slice(0, 10);
+}
+
+function trimLifecycleBars(
+  bars: CandleBarOut[],
+  entryTradeDate: string | null,
+  endTradeDate: string | null,
+  lookbackTradingDays: number,
+  lookaheadTradingDays = 0
+) {
+  if (!entryTradeDate || !endTradeDate || bars.length === 0) {
+    return bars;
+  }
+
+  const entryIndex = bars.findIndex((bar) => bar.trade_date >= entryTradeDate);
+  let exitIndex = -1;
+  for (let index = bars.length - 1; index >= 0; index -= 1) {
+    if (bars[index].trade_date <= endTradeDate) {
+      exitIndex = index;
+      break;
+    }
+  }
+
+  if (entryIndex < 0 || exitIndex < 0 || exitIndex < entryIndex) {
+    return bars;
+  }
+
+  const startIndex = Math.max(0, entryIndex - lookbackTradingDays);
+  const finalEndIndex = Math.min(
+    bars.length - 1,
+    exitIndex + Math.max(0, lookaheadTradingDays)
+  );
+  return bars.slice(startIndex, finalEndIndex + 1);
+}
+
+function normalizeLifecycleLookbackDays(value: number) {
+  if (!Number.isFinite(value)) {
+    return LIFECYCLE_PRE_ENTRY_LOOKBACK_TRADING_DAYS;
+  }
+  return Math.round(
+    Math.min(
+      LIFECYCLE_PRE_ENTRY_LOOKBACK_MAX,
+      Math.max(LIFECYCLE_PRE_ENTRY_LOOKBACK_MIN, value)
+    )
+  );
+}
+
+function estimateLifecycleFetchBufferDays(lookbackTradingDays: number) {
+  const estimatedCalendarDays = Math.ceil(lookbackTradingDays * 1.8) + 20;
+  return Math.max(LIFECYCLE_PRE_ENTRY_FETCH_BUFFER_DAYS, estimatedCalendarDays);
+}
+
+function buildPositionLifecycleRows(run: BacktestDetailOut): PositionLifecycleRow[] {
+  const orderedTransactions = sortTransactionsChronologically(run.transactions);
+  const latestSnapshotTs = run.latest_snapshot?.ts || run.finished_at || run.window_end || null;
+  const latestSnapshotTradeDate = toTradeDateKey(latestSnapshotTs);
+  const latestPositions = run.latest_snapshot?.positions || {};
+  const openLotsBySymbol = new Map<string, OpenLifecycleLot[]>();
+  const cycleCountBySymbol = new Map<string, number>();
+  const rows: PositionLifecycleRow[] = [];
+
+  orderedTransactions.forEach((txn) => {
+    const symbol = txn.symbol.toUpperCase();
+    const fee = typeof txn.fee === "number" ? txn.fee : 0;
+    const tradeDate = getMetaText(txn.meta, "execution_trade_date") || toTradeDateKey(txn.ts);
+    const signalTs = getMetaText(txn.meta, "signal_ts");
+    const signalTradeDate = toTradeDateKey(signalTs);
+    const reason = getMetaText(txn.meta, "reason");
+
+    if (txn.side === "BUY") {
+      const lots = openLotsBySymbol.get(symbol) || [];
+      lots.push({
+        symbol,
+        qty: txn.qty,
+        entryTs: txn.ts || null,
+        entrySignalTs: signalTs,
+        entryTradeDate: tradeDate,
+        entrySignalTradeDate: signalTradeDate,
+        entryPrice: txn.price,
+        entryFee: fee,
+        entryReason: reason,
+        txId: txn.id,
+      });
+      openLotsBySymbol.set(symbol, lots);
+      return;
+    }
+
+    if (txn.side !== "SELL") {
+      return;
+    }
+
+    let remainingQty = txn.qty;
+    const lots = openLotsBySymbol.get(symbol) || [];
+
+    while (remainingQty > 1e-9 && lots.length > 0) {
+      const lot = lots[0];
+      const lotQtyBeforeMatch = lot.qty;
+      const matchedQty = Math.min(remainingQty, lotQtyBeforeMatch);
+      const entryFeeAllocated =
+        lotQtyBeforeMatch > 0 ? lot.entryFee * (matchedQty / lotQtyBeforeMatch) : 0;
+      const exitFeeAllocated = txn.qty > 0 ? fee * (matchedQty / txn.qty) : 0;
+      const entryCost = matchedQty * lot.entryPrice + entryFeeAllocated;
+      const exitProceeds = matchedQty * txn.price - exitFeeAllocated;
+      const pnl = exitProceeds - entryCost;
+      const sequence = (cycleCountBySymbol.get(symbol) || 0) + 1;
+      cycleCountBySymbol.set(symbol, sequence);
+
+      rows.push({
+        key: `${symbol}-${sequence}-${lot.txId}-${txn.id}`,
+        symbol,
+        sequence,
+        status: "closed",
+        qty: matchedQty,
+        entryTs: lot.entryTs,
+        entrySignalTs: lot.entrySignalTs,
+        exitTs: txn.ts || null,
+        exitSignalTs: signalTs,
+        markTs: null,
+        entryTradeDate: lot.entryTradeDate,
+        entrySignalTradeDate: lot.entrySignalTradeDate,
+        exitTradeDate: tradeDate,
+        exitSignalTradeDate: signalTradeDate,
+        markTradeDate: null,
+        entryPrice: lot.entryPrice,
+        exitPrice: txn.price,
+        markPrice: null,
+        pnl,
+        returnPct: entryCost > 0 ? pnl / entryCost : null,
+        holdingDays: holdingDaysBetween(lot.entryTradeDate, tradeDate),
+        entryReason: lot.entryReason,
+        exitReason: reason,
+      });
+
+      lot.qty = Math.max(lot.qty - matchedQty, 0);
+      lot.entryFee = Math.max(lot.entryFee - entryFeeAllocated, 0);
+      remainingQty = Math.max(remainingQty - matchedQty, 0);
+
+      if (lot.qty <= 1e-9) {
+        lots.shift();
+      } else {
+        lots[0] = lot;
+      }
+    }
+
+    if (lots.length > 0) {
+      openLotsBySymbol.set(symbol, lots);
+    } else {
+      openLotsBySymbol.delete(symbol);
+    }
+  });
+
+  openLotsBySymbol.forEach((lots, symbol) => {
+    const positionPayload = normalizePositionPayload(latestPositions[symbol]);
+
+    lots.forEach((lot) => {
+      const sequence = (cycleCountBySymbol.get(symbol) || 0) + 1;
+      cycleCountBySymbol.set(symbol, sequence);
+      const markPrice = positionPayload?.close ?? null;
+      const entryCost = lot.qty * lot.entryPrice + lot.entryFee;
+      const markValue = markPrice != null ? lot.qty * markPrice : null;
+      const pnl = markValue != null ? markValue - entryCost : null;
+
+      rows.push({
+        key: `${symbol}-${sequence}-${lot.txId}-open`,
+        symbol,
+        sequence,
+        status: "open",
+        qty: lot.qty,
+        entryTs: lot.entryTs,
+        entrySignalTs: lot.entrySignalTs,
+        exitTs: null,
+        exitSignalTs: null,
+        markTs: latestSnapshotTs,
+        entryTradeDate: lot.entryTradeDate,
+        entrySignalTradeDate: lot.entrySignalTradeDate,
+        exitTradeDate: null,
+        exitSignalTradeDate: null,
+        markTradeDate: latestSnapshotTradeDate,
+        entryPrice: lot.entryPrice,
+        exitPrice: null,
+        markPrice,
+        pnl,
+        returnPct: pnl != null && entryCost > 0 ? pnl / entryCost : null,
+        holdingDays: holdingDaysBetween(lot.entryTradeDate, latestSnapshotTradeDate),
+        entryReason: lot.entryReason,
+        exitReason: null,
+      });
+    });
+  });
+
+  return rows.sort((left, right) => {
+    const rightTime = toTimeValue(right.exitTs || right.markTs || right.entryTs) || 0;
+    const leftTime = toTimeValue(left.exitTs || left.markTs || left.entryTs) || 0;
+    if (rightTime !== leftTime) {
+      return rightTime - leftTime;
+    }
+    return left.symbol.localeCompare(right.symbol);
+  });
+}
+
 function buildSymbolPnlRows(run: BacktestDetailOut): SymbolPnlRow[] {
   const positions = run.latest_snapshot?.positions || {};
   const bySymbol = new Map<
@@ -288,11 +631,7 @@ function buildSymbolPnlRows(run: BacktestDetailOut): SymbolPnlRow[] {
     { qty: number; avgCost: number; realizedPnl: number; tradeCount: number }
   >();
 
-  const orderedTransactions = [...run.transactions].sort((left, right) => {
-    const leftTs = toTimeValue(left.ts) || 0;
-    const rightTs = toTimeValue(right.ts) || 0;
-    return leftTs - rightTs;
-  });
+  const orderedTransactions = sortTransactionsChronologically(run.transactions);
 
   orderedTransactions.forEach((txn) => {
     const symbol = txn.symbol.toUpperCase();
@@ -366,6 +705,8 @@ function buildEventMarkers(
   paddingLeft: number,
   paddingTop: number,
   paddingBottom: number,
+  minValue: number,
+  maxValue: number,
   signals: BacktestSignalOut[],
   transactions: BacktestTransactionOut[],
   locale: string
@@ -374,18 +715,29 @@ function buildEventMarkers(
     return [];
   }
 
-  const values = normalizedPoints.map((point) => point.equity);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const yRange = max - min || 1;
   const xStep = normalizedPoints.length > 1 ? (width - paddingLeft * 2) / (normalizedPoints.length - 1) : 0;
-  const usableHeight = height - paddingTop - paddingBottom;
   const pointTimes = normalizedPoints.map((point) => toTimeValue(point.ts));
+  const pointDateKeys = normalizedPoints.map((point) => toTradeDateKey(point.ts));
   const firstPointTime = pointTimes[0] ?? null;
   const lastPointTime = pointTimes[pointTimes.length - 1] ?? null;
+  const indexByDateKey = new Map<string, number>();
   const occupancy = new Map<string, number>();
 
+  pointDateKeys.forEach((dateKey, index) => {
+    if (dateKey && !indexByDateKey.has(dateKey)) {
+      indexByDateKey.set(dateKey, index);
+    }
+  });
+
   const indexForTime = (rawTs?: string | null) => {
+    const dateKey = toTradeDateKey(rawTs);
+    if (dateKey) {
+      const exactIndex = indexByDateKey.get(dateKey);
+      if (typeof exactIndex === "number") {
+        return exactIndex;
+      }
+    }
+
     const target = toTimeValue(rawTs);
     if (target == null) {
       return null;
@@ -414,8 +766,22 @@ function buildEventMarkers(
 
   const pointPosition = (index: number) => {
     const x = paddingLeft + index * xStep;
-    const y = height - paddingBottom - ((normalizedPoints[index].equity - min) / yRange) * usableHeight;
+    const y = projectValueToChartY(
+      normalizedPoints[index].equity,
+      height,
+      paddingTop,
+      paddingBottom,
+      minValue,
+      maxValue
+    );
     return { x, y };
+  };
+
+  const markerY = (baseY: number, direction: "above" | "below", offset: number) => {
+    const rawY = direction === "above" ? baseY - offset : baseY + offset;
+    const minY = paddingTop + 8;
+    const maxY = height - paddingBottom - 8;
+    return Math.max(minY, Math.min(maxY, rawY));
   };
 
   const markers: ChartMarker[] = [];
@@ -452,15 +818,15 @@ function buildEventMarkers(
       if (index == null) {
         return;
       }
-      const stackKey = `signal-${index}`;
+      const isBuy = group.signal === "BUY";
+      const stackKey = `signal-${isBuy ? "buy" : "sell"}-${index}`;
       const stack = occupancy.get(stackKey) || 0;
       occupancy.set(stackKey, stack + 1);
       const position = pointPosition(index);
-      const isBuy = group.signal === "BUY";
       markers.push({
         key: `signal-${group.signal}-${group.ts}`,
         x: position.x,
-        y: position.y - 12 - stack * 8,
+        y: markerY(position.y, isBuy ? "above" : "below", 8 + stack * 8),
         category: isBuy ? "buy_signal" : "sell_signal",
         shape: "circle",
         stroke: isBuy ? "#2563eb" : "#d97706",
@@ -507,15 +873,15 @@ function buildEventMarkers(
       if (index == null) {
         return;
       }
-      const stackKey = `transaction-${index}`;
+      const isBuy = group.side === "BUY";
+      const stackKey = `transaction-${isBuy ? "buy" : "sell"}-${index}`;
       const stack = occupancy.get(stackKey) || 0;
       occupancy.set(stackKey, stack + 1);
       const position = pointPosition(index);
-      const isBuy = group.side === "BUY";
       markers.push({
         key: `transaction-${group.side}-${group.ts}`,
         x: position.x,
-        y: position.y + 14 + stack * 10,
+        y: markerY(position.y, isBuy ? "below" : "above", 12 + stack * 7),
         category: isBuy ? "buy_fill" : "sell_fill",
         shape: isBuy ? "triangle-up" : "triangle-down",
         stroke: isBuy ? "#16a34a" : "#dc2626",
@@ -956,9 +1322,14 @@ function EquityCurveCard({
   const referenceLineY =
     referenceValue == null
       ? null
-      : height -
-          chartBottomPadding -
-          ((referenceValue - min) / yRange) * (height - chartTopPadding - chartBottomPadding);
+      : projectValueToChartY(
+          referenceValue,
+          height,
+          chartTopPadding,
+          chartBottomPadding,
+          min,
+          max
+        );
   const visibleWindowStart = visiblePoints[0]?.ts || null;
   const visibleWindowEnd = visiblePoints[visiblePoints.length - 1]?.ts || null;
   const yAxisTicks = buildYAxisTicks(min, max, height, chartTopPadding, chartBottomPadding);
@@ -969,9 +1340,10 @@ function EquityCurveCard({
     axisLeftPadding,
     chartTopPadding,
     chartBottomPadding,
+    min,
+    max,
     signals,
-    transactions
-    ,
+    transactions,
     locale
   );
   const visibleMarkers = markers.filter((marker) => markerVisibility[marker.category]);
@@ -1502,6 +1874,1572 @@ const tableToggleButtonStyle = {
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 } as const;
 
+function lifecycleLookbackChipStyle(active: boolean) {
+  return {
+    borderRadius: 999,
+    padding: "8px 12px",
+    border: `1px solid ${active ? "rgba(34, 197, 94, 0.42)" : "rgba(148, 163, 184, 0.24)"}`,
+    background: active ? "rgba(20, 83, 45, 0.88)" : "rgba(15, 23, 42, 0.72)",
+    color: active ? "#f0fdf4" : "#e2e8f0",
+    fontWeight: 700,
+    cursor: "pointer",
+    fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+  } as const;
+}
+
+const lifecycleLookbackInputStyle = {
+  width: 72,
+  borderRadius: 10,
+  border: "1px solid rgba(71, 85, 105, 0.42)",
+  background: "rgba(8, 15, 24, 0.92)",
+  color: "#f8fafc",
+  padding: "7px 10px",
+  fontSize: 13,
+  fontWeight: 700,
+  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+} as const;
+
+function buildLifecycleChartMarkers(
+  row: PositionLifecycleRow,
+  locale: string,
+  isZh: boolean
+): LifecycleChartMarker[] {
+  const markers: LifecycleChartMarker[] = [];
+
+  if (row.entrySignalTradeDate) {
+    markers.push({
+      key: `buy-signal-${row.key}`,
+      label: isZh ? "买信号" : "Buy Signal",
+      date: row.entrySignalTradeDate,
+      price: row.entryPrice,
+      tone: "buy_signal",
+      description: `${isZh ? "买入信号" : "Buy Signal"} ${row.symbol} · ${formatDateTime(row.entrySignalTs, locale)}${
+        row.entryPrice != null ? ` · ${formatCurrency(row.entryPrice, locale)}` : ""
+      }`,
+    });
+  }
+
+  if (row.entryTradeDate) {
+    markers.push({
+      key: `buy-${row.key}`,
+      label: isZh ? "买入" : "Buy",
+      date: row.entryTradeDate,
+      price: row.entryPrice,
+      tone: "buy",
+      description: `${isZh ? "买入" : "Buy"} ${row.symbol} · ${formatDateTime(row.entryTs, locale)} · ${formatCurrency(row.entryPrice, locale)}`,
+    });
+  }
+
+  if (row.exitSignalTradeDate) {
+    markers.push({
+      key: `sell-signal-${row.key}`,
+      label: isZh ? "卖信号" : "Sell Signal",
+      date: row.exitSignalTradeDate,
+      price: row.exitPrice ?? row.markPrice ?? row.entryPrice,
+      tone: "sell_signal",
+      description: `${isZh ? "卖出信号" : "Sell Signal"} ${row.symbol} · ${formatDateTime(row.exitSignalTs, locale)}${
+        row.exitPrice != null
+          ? ` · ${formatCurrency(row.exitPrice, locale)}`
+          : row.markPrice != null
+            ? ` · ${formatCurrency(row.markPrice, locale)}`
+            : ""
+      }`,
+    });
+  }
+
+  if (row.exitTradeDate && row.exitPrice != null) {
+    markers.push({
+      key: `sell-${row.key}`,
+      label: isZh ? "卖出" : "Sell",
+      date: row.exitTradeDate,
+      price: row.exitPrice,
+      tone: "sell",
+      description: `${isZh ? "卖出" : "Sell"} ${row.symbol} · ${formatDateTime(row.exitTs, locale)} · ${formatCurrency(row.exitPrice, locale)}`,
+    });
+  } else if (row.markTradeDate && row.markPrice != null) {
+    markers.push({
+      key: `mark-${row.key}`,
+      label: isZh ? "标记" : "Mark",
+      date: row.markTradeDate,
+      price: row.markPrice,
+      tone: "mark",
+      description: `${isZh ? "标记价格" : "Marked Price"} ${row.symbol} · ${formatDateTime(row.markTs, locale)} · ${formatCurrency(row.markPrice, locale)}`,
+    });
+  }
+
+  return markers;
+}
+
+function findLifecycleSignal(
+  signals: BacktestSignalOut[],
+  row: PositionLifecycleRow,
+  action: "BUY" | "SELL"
+) {
+  const signalTs = action === "BUY" ? row.entrySignalTs : row.exitSignalTs;
+  const signalTradeDate = toTradeDateKey(signalTs);
+  const symbol = row.symbol.toUpperCase();
+
+  const exactMatch = signals.find(
+    (signal) =>
+      signal.symbol.toUpperCase() === symbol
+      && signal.signal === action
+      && signal.ts === signalTs
+  );
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  if (!signalTradeDate) {
+    return null;
+  }
+
+  return (
+    signals.find(
+      (signal) =>
+        signal.symbol.toUpperCase() === symbol
+        && signal.signal === action
+        && toTradeDateKey(signal.ts) === signalTradeDate
+    ) || null
+  );
+}
+
+function extractIslandReversalGapSetup(signal: BacktestSignalOut | null): IslandReversalGapSetup | null {
+  const features = getObjectValue(signal?.features);
+  const setup = getObjectValue(features?.setup);
+  if (!setup) {
+    return null;
+  }
+
+  const leftGapTradeDate = getRecordText(setup, "left_gap_trade_date");
+  const breakoutTradeDate = getRecordText(setup, "breakout_trade_date");
+  const islandHigh = getRecordNumber(setup, "island_high");
+  const breakoutGapLow = getRecordNumber(setup, "breakout_gap_low");
+
+  if (!leftGapTradeDate || !breakoutTradeDate || islandHigh == null || breakoutGapLow == null) {
+    return null;
+  }
+
+  return {
+    leftGapTradeDate,
+    breakoutTradeDate,
+    islandHigh,
+    breakoutGapLow,
+    leftGapPct: getRecordNumber(setup, "left_gap_pct"),
+    breakoutGapPct: getRecordNumber(setup, "breakout_gap_pct"),
+  };
+}
+
+function buildLifecycleGapOverlays(
+  bars: CandleBarOut[],
+  setup: IslandReversalGapSetup | null,
+  locale: string,
+  isZh: boolean
+): LifecycleGapOverlay[] {
+  if (!setup || bars.length === 0) {
+    return [];
+  }
+
+  const overlays: LifecycleGapOverlay[] = [];
+  const leftGapIndex = bars.findIndex((bar) => bar.trade_date === setup.leftGapTradeDate);
+
+  if (leftGapIndex > 0) {
+    const previousBar = bars[leftGapIndex - 1];
+    const leftGapBar = bars[leftGapIndex];
+    const lowPrice = leftGapBar.high;
+    const highPrice = previousBar.low;
+
+    if (highPrice > lowPrice) {
+      overlays.push({
+        key: `left-gap-${setup.leftGapTradeDate}`,
+        label: isZh ? "左缺口" : "Left Gap",
+        referenceDate: previousBar.trade_date,
+        anchorDate: leftGapBar.trade_date,
+        lowPrice,
+        highPrice,
+        tone: "left_gap",
+        description: [
+          isZh ? "左侧向下缺口" : "Left Gap Down",
+          `${previousBar.trade_date} -> ${leftGapBar.trade_date}`,
+          `${formatCurrency(lowPrice, locale)} - ${formatCurrency(highPrice, locale)}`,
+          setup.leftGapPct != null ? formatPercent(setup.leftGapPct, 2) : null,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      });
+    }
+  }
+
+  const breakoutIndex = bars.findIndex((bar) => bar.trade_date === setup.breakoutTradeDate);
+  if (breakoutIndex > 0) {
+    const previousBar = bars[breakoutIndex - 1];
+    const breakoutBar = bars[breakoutIndex];
+    const lowPrice = previousBar.high;
+    const highPrice = breakoutBar.low;
+
+    if (highPrice > lowPrice) {
+      overlays.push({
+        key: `right-gap-${setup.breakoutTradeDate}`,
+        label: isZh ? "右缺口" : "Right Gap",
+        referenceDate: previousBar.trade_date,
+        anchorDate: breakoutBar.trade_date,
+        lowPrice,
+        highPrice,
+        tone: "right_gap",
+        description: [
+          isZh ? "右侧向上缺口" : "Right Gap Up",
+          `${previousBar.trade_date} -> ${breakoutBar.trade_date}`,
+          `${formatCurrency(lowPrice, locale)} - ${formatCurrency(highPrice, locale)}`,
+          setup.breakoutGapPct != null ? formatPercent(setup.breakoutGapPct, 2) : null,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      });
+    }
+  }
+
+  return overlays;
+}
+
+function formatChartAxisPrice(value: number, locale: string) {
+  return value.toLocaleString(locale, {
+    minimumFractionDigits: value >= 100 ? 0 : 2,
+    maximumFractionDigits: value >= 100 ? 2 : 2,
+  });
+}
+
+function formatCompactNumber(value: number, locale: string) {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+  return new Intl.NumberFormat(locale, {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function clampNumeric(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function rectsOverlap(
+  leftA: number,
+  topA: number,
+  widthA: number,
+  heightA: number,
+  leftB: number,
+  topB: number,
+  widthB: number,
+  heightB: number,
+  gap = 6
+) {
+  return !(
+    leftA + widthA + gap <= leftB
+    || leftB + widthB + gap <= leftA
+    || topA + heightA + gap <= topB
+    || topB + heightB + gap <= topA
+  );
+}
+
+function layoutLifecycleLabels(
+  items: Array<{
+    key: string;
+    labelX: number;
+    labelY: number;
+    labelWidth: number;
+    labelHeight: number;
+  }>,
+  bounds: {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+  }
+) {
+  const placed: Array<{
+    key: string;
+    labelX: number;
+    labelY: number;
+    labelWidth: number;
+    labelHeight: number;
+  }> = [];
+  const nextPositions = new Map<string, { labelX: number; labelY: number }>();
+  const sortedItems = [...items].sort(
+    (left, right) => left.labelY - right.labelY || left.labelX - right.labelX
+  );
+
+  sortedItems.forEach((item) => {
+    let labelX = clampNumeric(
+      item.labelX,
+      bounds.minX,
+      bounds.maxX - item.labelWidth
+    );
+    let labelY = clampNumeric(
+      item.labelY,
+      bounds.minY,
+      bounds.maxY - item.labelHeight
+    );
+
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      const collision = placed.find((other) =>
+        rectsOverlap(
+          labelX,
+          labelY,
+          item.labelWidth,
+          item.labelHeight,
+          other.labelX,
+          other.labelY,
+          other.labelWidth,
+          other.labelHeight
+        )
+      );
+      if (!collision) {
+        break;
+      }
+
+      const shiftedY = collision.labelY + collision.labelHeight + 6;
+      if (shiftedY <= bounds.maxY - item.labelHeight) {
+        labelY = shiftedY;
+        continue;
+      }
+
+      const rightX = collision.labelX + collision.labelWidth + 10;
+      if (rightX <= bounds.maxX - item.labelWidth) {
+        labelX = rightX;
+        labelY = Math.max(bounds.minY, collision.labelY - 4);
+        continue;
+      }
+
+      const leftX = collision.labelX - item.labelWidth - 10;
+      if (leftX >= bounds.minX) {
+        labelX = leftX;
+        labelY = Math.max(bounds.minY, collision.labelY - 4);
+        continue;
+      }
+
+      labelY = clampNumeric(
+        collision.labelY + collision.labelHeight + 6,
+        bounds.minY,
+        bounds.maxY - item.labelHeight
+      );
+    }
+
+    placed.push({
+      key: item.key,
+      labelX,
+      labelY,
+      labelWidth: item.labelWidth,
+      labelHeight: item.labelHeight,
+    });
+    nextPositions.set(item.key, { labelX, labelY });
+  });
+
+  return nextPositions;
+}
+
+function LifecycleCandlestickChart({
+  bars,
+  markers,
+  gapOverlays,
+  locale,
+}: {
+  bars: CandleBarOut[];
+  markers: LifecycleChartMarker[];
+  gapOverlays: LifecycleGapOverlay[];
+  locale: string;
+}) {
+  const svgWidth = Math.max(760, bars.length * 13 + 120);
+  const svgHeight = 384;
+  const padding = { top: 18, right: 22, bottom: 34, left: 74 };
+  const labelRailHeight = 58;
+  const labelRailGap = 10;
+  const volumeAreaHeight = bars.length > 140 ? 82 : bars.length > 90 ? 74 : 64;
+  const volumeAreaGap = 12;
+  const lowestLow = Math.min(...bars.map((bar) => bar.low));
+  const highestHigh = Math.max(...bars.map((bar) => bar.high));
+  const priceSpan = highestHigh - lowestLow || Math.max(highestHigh, 1);
+  const chartLow = lowestLow - priceSpan * 0.05;
+  const chartHigh = highestHigh + priceSpan * 0.05;
+  const chartSpan = chartHigh - chartLow || 1;
+  const plotWidth = svgWidth - padding.left - padding.right;
+  const plotHeight = svgHeight - padding.top - padding.bottom;
+  const labelRailTop = padding.top;
+  const labelRailBottom = labelRailTop + labelRailHeight;
+  const priceAreaTop = labelRailBottom + labelRailGap;
+  const pricePlotHeight = plotHeight - labelRailHeight - labelRailGap - volumeAreaHeight - volumeAreaGap;
+  const priceAreaBottom = priceAreaTop + pricePlotHeight;
+  const volumeAreaTop = priceAreaBottom + volumeAreaGap;
+  const volumeAreaBottom = volumeAreaTop + volumeAreaHeight;
+  const candleStep = plotWidth / Math.max(bars.length, 1);
+  const candleBodyWidth = Math.max(4, Math.min(10, candleStep * 0.55));
+  const volumeBarWidth = Math.max(4, Math.min(12, candleStep * 0.68));
+  const midBar = bars[Math.floor(bars.length / 2)] ?? bars[0];
+  const tickValues = Array.from({ length: 4 }, (_, index) => chartHigh - (chartSpan * index) / 3);
+  const maxVolume = Math.max(...bars.map((bar) => bar.volume ?? 0), 1);
+  const markerPalette: Record<LifecycleChartMarker["tone"], { stroke: string; fill: string; bubble: string }> = {
+    buy: {
+      stroke: "#22c55e",
+      fill: "#22c55e",
+      bubble: "rgba(20, 83, 45, 0.92)",
+    },
+    buy_signal: {
+      stroke: "#38bdf8",
+      fill: "#38bdf8",
+      bubble: "rgba(12, 74, 110, 0.94)",
+    },
+    sell: {
+      stroke: "#ef4444",
+      fill: "#ef4444",
+      bubble: "rgba(127, 29, 29, 0.92)",
+    },
+    sell_signal: {
+      stroke: "#f59e0b",
+      fill: "#f59e0b",
+      bubble: "rgba(120, 53, 15, 0.94)",
+    },
+    mark: {
+      stroke: "#38bdf8",
+      fill: "#38bdf8",
+      bubble: "rgba(8, 47, 73, 0.94)",
+    },
+  };
+  const gapOverlayPalette: Record<
+    LifecycleGapOverlay["tone"],
+    { stroke: string; fill: string; bubble: string }
+  > = {
+    left_gap: {
+      stroke: "#f59e0b",
+      fill: "rgba(245, 158, 11, 0.14)",
+      bubble: "rgba(120, 53, 15, 0.92)",
+    },
+    right_gap: {
+      stroke: "#06b6d4",
+      fill: "rgba(6, 182, 212, 0.14)",
+      bubble: "rgba(8, 47, 73, 0.94)",
+    },
+  };
+
+  function priceToY(price: number) {
+    return priceAreaTop + ((chartHigh - price) / chartSpan) * pricePlotHeight;
+  }
+
+  const projectedGapOverlays = gapOverlays
+    .map((overlay) => {
+      const referenceIndex = bars.findIndex((bar) => bar.trade_date === overlay.referenceDate);
+      const anchorIndex = bars.findIndex((bar) => bar.trade_date === overlay.anchorDate);
+      if (referenceIndex < 0 || anchorIndex < 0) {
+        return null;
+      }
+
+      const leftIndex = Math.min(referenceIndex, anchorIndex);
+      const rightIndex = Math.max(referenceIndex, anchorIndex);
+      const leftCenter = padding.left + candleStep * leftIndex + candleStep / 2;
+      const rightCenter = padding.left + candleStep * rightIndex + candleStep / 2;
+      const x = clampNumeric(
+        Math.min(leftCenter, rightCenter) - candleStep * 0.2,
+        padding.left + 1,
+        svgWidth - padding.right - candleStep * 0.7
+      );
+      const width = Math.max(candleStep * 0.7, Math.abs(rightCenter - leftCenter) + candleStep * 0.4);
+      const topY = priceToY(clampNumeric(overlay.highPrice, chartLow, chartHigh));
+      const bottomY = priceToY(clampNumeric(overlay.lowPrice, chartLow, chartHigh));
+      const y = Math.min(topY, bottomY);
+      const height = Math.max(3, Math.abs(bottomY - topY));
+      const dotX = x + width / 2;
+      const dotY = clampNumeric(y - 9, priceAreaTop + 8, priceAreaBottom - 12);
+      const palette = gapOverlayPalette[overlay.tone];
+      const labelWidth = Math.max(52, overlay.label.length * 7.5 + 18);
+      const labelHeight = 18;
+      const labelX = clampNumeric(
+        dotX - labelWidth / 2,
+        padding.left + 2,
+        svgWidth - padding.right - labelWidth - 2
+      );
+      const labelY = clampNumeric(labelRailTop + 4, labelRailTop + 2, labelRailBottom - labelHeight - 2);
+
+      return {
+        ...overlay,
+        x,
+        y,
+        width,
+        height,
+        dotX,
+        dotY,
+        labelX,
+        labelY,
+        labelWidth,
+        labelHeight,
+        palette,
+      };
+    })
+    .filter((overlay): overlay is NonNullable<typeof overlay> => overlay !== null);
+
+  const projectedMarkers = markers
+    .map((marker) => {
+      const index = bars.findIndex((bar) => bar.trade_date === marker.date);
+      if (index < 0) {
+        return null;
+      }
+      const x = padding.left + candleStep * index + candleStep / 2;
+      const markerPrice = marker.price ?? bars[index].close;
+      const y = priceToY(clampNumeric(markerPrice, chartLow, chartHigh));
+      const dotY = clampNumeric(
+        priceToY(Math.max(bars[index].high, markerPrice)) - 10,
+        priceAreaTop + 8,
+        priceAreaBottom - 12
+      );
+      const palette = markerPalette[marker.tone];
+      const bubbleWidth = Math.max(50, marker.label.length * 7.5 + 16);
+      const bubbleHeight = 22;
+      const bubbleY = clampNumeric(
+        marker.tone === "buy" || marker.tone === "sell" ? labelRailTop + 30 : labelRailTop + 4,
+        labelRailTop + 2,
+        labelRailBottom - bubbleHeight - 2
+      );
+      const bubbleX = clampNumeric(
+        x - bubbleWidth / 2,
+        padding.left + 2,
+        svgWidth - padding.right - bubbleWidth - 2
+      );
+
+      return {
+        ...marker,
+        x,
+        y,
+        dotY,
+        bubbleX,
+        bubbleY,
+        bubbleWidth,
+        bubbleHeight,
+        palette,
+      };
+    })
+    .filter((marker): marker is NonNullable<typeof marker> => marker !== null);
+
+  const labelPositions = layoutLifecycleLabels(
+    [
+      ...projectedGapOverlays.map((overlay) => ({
+        key: `gap-${overlay.key}`,
+        labelX: overlay.labelX,
+        labelY: overlay.labelY,
+        labelWidth: overlay.labelWidth,
+        labelHeight: overlay.labelHeight,
+      })),
+      ...projectedMarkers.map((marker) => ({
+        key: `marker-${marker.key}`,
+        labelX: marker.bubbleX,
+        labelY: marker.bubbleY,
+        labelWidth: marker.bubbleWidth,
+        labelHeight: marker.bubbleHeight,
+      })),
+    ],
+    {
+      minX: padding.left + 2,
+      maxX: svgWidth - padding.right - 2,
+      minY: labelRailTop + 2,
+      maxY: labelRailBottom - 2,
+    }
+  );
+
+  const laidOutGapOverlays = projectedGapOverlays.map((overlay) => {
+    const nextPosition = labelPositions.get(`gap-${overlay.key}`);
+    return nextPosition
+      ? {
+          ...overlay,
+          labelX: nextPosition.labelX,
+          labelY: nextPosition.labelY,
+        }
+      : overlay;
+  });
+
+  const laidOutMarkers = projectedMarkers.map((marker) => {
+    const nextPosition = labelPositions.get(`marker-${marker.key}`);
+    if (!nextPosition) {
+      return marker;
+    }
+    return {
+      ...marker,
+      bubbleX: nextPosition.labelX,
+      bubbleY: nextPosition.labelY,
+    };
+  });
+
+  return (
+    <div
+      style={{
+        overflowX: "auto",
+        overflowY: "hidden",
+        borderRadius: 18,
+        border: "1px solid rgba(71, 85, 105, 0.24)",
+        background:
+          "radial-gradient(circle at top, rgba(14, 116, 144, 0.18), transparent 42%), rgba(3, 7, 18, 0.88)",
+        padding: 10,
+      }}
+    >
+      <svg
+        width={svgWidth}
+        height={svgHeight}
+        viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+        role="img"
+        aria-label="lifecycle candlestick chart"
+      >
+        <rect
+          x={padding.left}
+          y={labelRailTop}
+          width={plotWidth}
+          height={labelRailHeight}
+          rx="12"
+          fill="rgba(15, 23, 42, 0.22)"
+          stroke="rgba(71, 85, 105, 0.14)"
+        />
+        <line
+          x1={padding.left}
+          y1={priceAreaTop - labelRailGap / 2}
+          x2={svgWidth - padding.right}
+          y2={priceAreaTop - labelRailGap / 2}
+          stroke="rgba(148, 163, 184, 0.12)"
+          strokeDasharray="4 6"
+        />
+        {tickValues.map((value) => {
+          const y = priceToY(value);
+          return (
+            <g key={value}>
+              <line
+                x1={padding.left}
+                y1={y}
+                x2={svgWidth - padding.right}
+                y2={y}
+                stroke="rgba(148, 163, 184, 0.14)"
+                strokeDasharray="4 6"
+              />
+              <text
+                x={padding.left - 10}
+                y={y + 4}
+                textAnchor="end"
+                fill="rgba(226, 232, 240, 0.66)"
+                fontSize="11"
+                fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
+              >
+                {formatChartAxisPrice(value, locale)}
+              </text>
+            </g>
+          );
+        })}
+
+        <line
+          x1={padding.left}
+          y1={volumeAreaTop - 6}
+          x2={svgWidth - padding.right}
+          y2={volumeAreaTop - 6}
+          stroke="rgba(148, 163, 184, 0.12)"
+          strokeDasharray="4 6"
+        />
+        <rect
+          x={padding.left}
+          y={volumeAreaTop}
+          width={plotWidth}
+          height={volumeAreaHeight}
+          rx="10"
+          fill="rgba(15, 23, 42, 0.28)"
+          stroke="rgba(71, 85, 105, 0.18)"
+        />
+
+        {laidOutGapOverlays.map((overlay) => (
+          <g key={overlay.key}>
+            <line
+              x1={overlay.dotX}
+              y1={overlay.dotY}
+              x2={overlay.labelX + overlay.labelWidth / 2}
+              y2={overlay.labelY + overlay.labelHeight}
+              stroke={overlay.palette.stroke}
+              strokeWidth="1.2"
+              strokeDasharray="4 4"
+              opacity="0.88"
+            />
+            <rect
+              x={overlay.x}
+              y={overlay.y}
+              width={overlay.width}
+              height={overlay.height}
+              rx="4"
+              fill={overlay.palette.fill}
+              stroke={overlay.palette.stroke}
+              strokeDasharray="5 4"
+              strokeWidth="1.3"
+            />
+            <circle
+              cx={overlay.dotX}
+              cy={overlay.dotY}
+              r="5.2"
+              fill={overlay.palette.stroke}
+              stroke="#f8fafc"
+              strokeWidth="1.4"
+            />
+            <rect
+              x={overlay.labelX}
+              y={overlay.labelY}
+              width={overlay.labelWidth}
+              height={overlay.labelHeight}
+              rx="999"
+              fill={overlay.palette.bubble}
+              stroke={overlay.palette.stroke}
+              strokeWidth="1"
+            />
+            <text
+              x={overlay.labelX + overlay.labelWidth / 2}
+              y={overlay.labelY + 12.5}
+              textAnchor="middle"
+              fill="#f8fafc"
+              fontSize="10"
+              fontWeight="700"
+              fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
+            >
+              {overlay.label}
+            </text>
+            <title>{overlay.description}</title>
+          </g>
+        ))}
+
+        {bars.map((bar, index) => {
+          const centerX = padding.left + candleStep * index + candleStep / 2;
+          const highY = priceToY(bar.high);
+          const lowY = priceToY(bar.low);
+          const openY = priceToY(bar.open);
+          const closeY = priceToY(bar.close);
+          const bodyTop = Math.min(openY, closeY);
+          const bodyHeight = Math.max(1.8, Math.abs(closeY - openY));
+          const isUp = bar.close > bar.open;
+          const isFlat = bar.close === bar.open;
+          const color = isFlat ? "#fbbf24" : isUp ? "#34d399" : "#fb7185";
+
+          return (
+            <g key={`${bar.trade_date}-${index}`}>
+              <line
+                x1={centerX}
+                y1={highY}
+                x2={centerX}
+                y2={lowY}
+                stroke={color}
+                strokeWidth="1.4"
+              />
+              <rect
+                x={centerX - candleBodyWidth / 2}
+                y={bodyTop}
+                width={candleBodyWidth}
+                height={bodyHeight}
+                rx="1.5"
+                fill={color}
+                fillOpacity={isFlat ? 0.8 : 0.28}
+                stroke={color}
+                strokeWidth="1.3"
+              />
+            </g>
+          );
+        })}
+
+        {bars.map((bar, index) => {
+          const centerX = padding.left + candleStep * index + candleStep / 2;
+          const isUp = bar.close > bar.open;
+          const isFlat = bar.close === bar.open;
+          const color = isFlat ? "rgba(251, 191, 36, 0.9)" : isUp ? "rgba(52, 211, 153, 0.92)" : "rgba(251, 113, 133, 0.92)";
+          const volume = Math.max(bar.volume ?? 0, 0);
+          const volumeRatio = maxVolume > 0 ? volume / maxVolume : 0;
+          const emphasizedRatio = Math.sqrt(volumeRatio);
+          const barHeight = emphasizedRatio * (volumeAreaHeight - 6);
+
+          return (
+            <rect
+              key={`volume-${bar.trade_date}-${index}`}
+              x={centerX - volumeBarWidth / 2}
+              y={volumeAreaBottom - barHeight}
+              width={volumeBarWidth}
+              height={Math.max(barHeight, 1.5)}
+              rx="1.5"
+              fill={color}
+            />
+          );
+        })}
+
+        <text
+          x={padding.left}
+          y={volumeAreaTop + 10}
+          fill="rgba(148, 163, 184, 0.72)"
+          fontSize="11"
+          fontWeight="700"
+          fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
+        >
+          VOL
+        </text>
+        <text
+          x={padding.left}
+          y={volumeAreaTop + 24}
+          fill="rgba(148, 163, 184, 0.56)"
+          fontSize="10"
+          fontWeight="600"
+          fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
+        >
+          {formatCompactNumber(maxVolume, locale)}
+        </text>
+
+        {laidOutMarkers.map((marker) => (
+          <g key={marker.key}>
+            <line
+              x1={marker.x}
+              y1={marker.dotY}
+              x2={marker.bubbleX + marker.bubbleWidth / 2}
+              y2={marker.bubbleY + marker.bubbleHeight}
+              stroke={marker.palette.stroke}
+              strokeWidth="1.4"
+              strokeDasharray="4 4"
+              opacity="0.9"
+            />
+            <circle
+              cx={marker.x}
+              cy={marker.dotY}
+              r="5.5"
+              fill={marker.palette.fill}
+              stroke="#f8fafc"
+              strokeWidth="1.4"
+            />
+            <rect
+              x={marker.bubbleX}
+              y={marker.bubbleY}
+              width={marker.bubbleWidth}
+              height={marker.bubbleHeight}
+              rx="999"
+              fill={marker.palette.bubble}
+              stroke={marker.palette.stroke}
+              strokeWidth="1"
+            />
+            <text
+              x={marker.bubbleX + marker.bubbleWidth / 2}
+              y={marker.bubbleY + 15}
+              textAnchor="middle"
+              fill="#f8fafc"
+              fontSize="10.5"
+              fontWeight="700"
+              fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
+            >
+              {marker.label}
+            </text>
+            <title>{marker.description}</title>
+          </g>
+        ))}
+
+        <text
+          x={padding.left}
+          y={svgHeight - 8}
+          fill="rgba(226, 232, 240, 0.72)"
+          fontSize="11"
+          fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
+        >
+          {bars[0]?.trade_date}
+        </text>
+        <text
+          x={svgWidth / 2}
+          y={svgHeight - 8}
+          textAnchor="middle"
+          fill="rgba(226, 232, 240, 0.6)"
+          fontSize="11"
+          fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
+        >
+          {midBar.trade_date}
+        </text>
+        <text
+          x={svgWidth - padding.right}
+          y={svgHeight - 8}
+          textAnchor="end"
+          fill="rgba(226, 232, 240, 0.72)"
+          fontSize="11"
+          fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
+        >
+          {bars[bars.length - 1]?.trade_date}
+        </text>
+      </svg>
+    </div>
+  );
+}
+
+function LifecycleDetailPanel({
+  row,
+  signals,
+}: {
+  row: PositionLifecycleRow;
+  signals: BacktestSignalOut[];
+}) {
+  const { locale } = useI18n();
+  const isZh = locale === "zh-CN";
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [series, setSeries] = useState<CandleSeriesOut | null>(null);
+  const [lookbackTradingDays, setLookbackTradingDays] = useState(
+    LIFECYCLE_PRE_ENTRY_LOOKBACK_TRADING_DAYS
+  );
+  const [lookbackInput, setLookbackInput] = useState(
+    String(LIFECYCLE_PRE_ENTRY_LOOKBACK_TRADING_DAYS)
+  );
+  const [postExitTradingDays, setPostExitTradingDays] = useState(
+    LIFECYCLE_POST_EXIT_LOOKAHEAD_DAYS
+  );
+  const [postExitInput, setPostExitInput] = useState(
+    String(LIFECYCLE_POST_EXIT_LOOKAHEAD_DAYS)
+  );
+  const entryTradeDate = row.entryTradeDate || toTradeDateKey(row.entryTs);
+  const exitTradeDate = row.exitTradeDate || null;
+  const fetchBufferDays = estimateLifecycleFetchBufferDays(lookbackTradingDays);
+  const fetchStartDate =
+    shiftDateKey(entryTradeDate, -fetchBufferDays) || entryTradeDate;
+  const baseEndDate =
+    row.exitTradeDate || row.markTradeDate || entryTradeDate || fetchStartDate;
+  const fetchForwardBufferDays =
+    row.status === "closed" && postExitTradingDays > 0
+      ? estimateLifecycleFetchBufferDays(postExitTradingDays)
+      : 0;
+  const fetchEndDate =
+    row.status === "closed" && exitTradeDate && fetchForwardBufferDays > 0
+      ? shiftDateKey(exitTradeDate, fetchForwardBufferDays) || baseEndDate
+      : baseEndDate;
+  const markers = useMemo(
+    () => buildLifecycleChartMarkers(row, locale, isZh),
+    [isZh, locale, row]
+  );
+  const entrySignal = useMemo(() => findLifecycleSignal(signals, row, "BUY"), [row, signals]);
+  const exitSignal = useMemo(() => findLifecycleSignal(signals, row, "SELL"), [row, signals]);
+
+  function applyLookbackDays(nextValue: number) {
+    const normalized = normalizeLifecycleLookbackDays(nextValue);
+    setLookbackTradingDays(normalized);
+    setLookbackInput(String(normalized));
+  }
+
+  function applyPostExitDays(nextValue: number) {
+    const normalized = normalizeLifecycleLookbackDays(nextValue);
+    setPostExitTradingDays(normalized);
+    setPostExitInput(String(normalized));
+  }
+
+  useEffect(() => {
+    if (!fetchStartDate || !fetchEndDate) {
+      setError(isZh ? "缺少生命周期对应的交易日期，暂时无法绘图" : "Lifecycle dates are missing, so the chart cannot be drawn yet.");
+      setSeries(null);
+      setLoading(false);
+      return;
+    }
+    if (fetchStartDate > fetchEndDate) {
+      setError(isZh ? "生命周期日期区间无效" : "The lifecycle date range is invalid.");
+      setSeries(null);
+      setLoading(false);
+      return;
+    }
+
+    let active = true;
+    if (
+      series
+      && series.symbol.toUpperCase() === row.symbol.toUpperCase()
+      && series.start_date <= fetchStartDate
+      && series.end_date >= fetchEndDate
+    ) {
+      setLoading(false);
+      setError(null);
+      return () => {
+        active = false;
+      };
+    }
+
+    setLoading(true);
+    setError(null);
+
+    void getCandleSeries({
+      symbol: row.symbol,
+      start_date: fetchStartDate,
+      end_date: fetchEndDate,
+    })
+      .then((nextSeries) => {
+        if (!active) {
+          return;
+        }
+        setSeries(nextSeries);
+      })
+      .catch((err) => {
+        if (!active) {
+          return;
+        }
+        setSeries(null);
+        setError(err instanceof Error ? err.message : isZh ? "加载生命周期蜡烛图失败" : "Failed to load the lifecycle candlestick chart.");
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [fetchEndDate, fetchStartDate, isZh, row.symbol, series]);
+
+  const bars = useMemo(
+    () =>
+      trimLifecycleBars(
+        series?.bars ?? [],
+        entryTradeDate,
+        baseEndDate,
+        lookbackTradingDays,
+        row.status === "closed" ? postExitTradingDays : 0
+      ),
+    [baseEndDate, entryTradeDate, lookbackTradingDays, postExitTradingDays, row.status, series?.bars]
+  );
+  const visibleStartDate = bars[0]?.trade_date || fetchStartDate;
+  const visibleEndDate = bars[bars.length - 1]?.trade_date || baseEndDate;
+  const gapSetup = useMemo(
+    () => extractIslandReversalGapSetup(entrySignal) || extractIslandReversalGapSetup(exitSignal),
+    [entrySignal, exitSignal]
+  );
+  const gapOverlays = useMemo(
+    () => buildLifecycleGapOverlays(bars, gapSetup, locale, isZh),
+    [bars, gapSetup, isZh, locale]
+  );
+
+  return (
+    <div style={lifecycleDetailPanelStyle}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          flexWrap: "wrap",
+          alignItems: "flex-start",
+          marginBottom: 14,
+        }}
+      >
+        <div>
+          <div style={{ color: "#f8fafc", fontSize: 17, fontWeight: 800, marginBottom: 6 }}>
+            {row.symbol} #{row.sequence} · {isZh ? "生命周期图" : "Lifecycle Chart"}
+          </div>
+          <div style={{ color: "rgba(148, 163, 184, 0.88)", fontSize: 13, lineHeight: 1.6 }}>
+            {isZh
+              ? `${visibleStartDate || "-"} -> ${visibleEndDate || "-"}，当前额外包含买入前 ${lookbackTradingDays} 个交易日${
+                  row.status === "closed" ? `、卖出后 ${postExitTradingDays} 个交易日` : ""
+                }的走势，并标出买卖信号、实际买卖，以及岛形反转的左右跳空缺口。`
+              : `${visibleStartDate || "-"} -> ${visibleEndDate || "-"}, currently including ${lookbackTradingDays} trading days before entry${
+                  row.status === "closed" ? ` and ${postExitTradingDays} trading days after exit` : ""
+                } so you can see signal-generation points, actual fills, and the left/right gap zones for island-reversal setups.`}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <Badge tone={row.status === "closed" ? "success" : "warning"}>
+            {row.status === "closed"
+              ? isZh
+                ? "已平仓"
+                : "Closed"
+              : isZh
+                ? "持有中"
+                : "Open"}
+          </Badge>
+          <Badge tone="neutral">
+            {isZh ? "股数" : "Qty"} {row.qty.toLocaleString(locale, { maximumFractionDigits: 4 })}
+          </Badge>
+          <Badge tone="info">
+            {isZh ? "收益率" : "Return"} {formatPercent(row.returnPct, 2)}
+          </Badge>
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+          gap: 12,
+          marginBottom: 14,
+          padding: "12px 14px",
+          borderRadius: 16,
+          background: "rgba(15, 23, 42, 0.56)",
+          border: "1px solid rgba(71, 85, 105, 0.24)",
+        }}
+      >
+        <div style={{ display: "grid", gap: 10 }}>
+          <div style={{ color: "rgba(226, 232, 240, 0.88)", fontSize: 13, fontWeight: 700 }}>
+            {isZh ? "买入前显示范围" : "Pre-entry Window"}
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            {LIFECYCLE_PRE_ENTRY_LOOKBACK_PRESETS.map((days) => (
+              <button
+                key={days}
+                type="button"
+                onClick={() => applyLookbackDays(days)}
+                style={lifecycleLookbackChipStyle(lookbackTradingDays === days)}
+              >
+                {days}
+                {isZh ? " 日" : "d"}
+              </button>
+            ))}
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                color: "rgba(226, 232, 240, 0.78)",
+                fontSize: 13,
+                fontWeight: 600,
+              }}
+            >
+              <span>{isZh ? "自定义" : "Custom"}</span>
+              <input
+                type="number"
+                min={LIFECYCLE_PRE_ENTRY_LOOKBACK_MIN}
+                max={LIFECYCLE_PRE_ENTRY_LOOKBACK_MAX}
+                inputMode="numeric"
+                value={lookbackInput}
+                onChange={(event) => setLookbackInput(event.target.value)}
+                onBlur={() =>
+                  applyLookbackDays(
+                    lookbackInput.trim() === "" ? lookbackTradingDays : Number(lookbackInput)
+                  )
+                }
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") {
+                    return;
+                  }
+                  event.preventDefault();
+                  applyLookbackDays(
+                    lookbackInput.trim() === "" ? lookbackTradingDays : Number(lookbackInput)
+                  );
+                }}
+                style={lifecycleLookbackInputStyle}
+              />
+              <span style={{ color: "rgba(148, 163, 184, 0.82)" }}>
+                {isZh ? "交易日" : "days"}
+              </span>
+            </label>
+          </div>
+        </div>
+        <div style={{ display: "grid", gap: 10 }}>
+          <div style={{ color: "rgba(226, 232, 240, 0.88)", fontSize: 13, fontWeight: 700 }}>
+            {isZh ? "卖出后显示范围" : "Post-exit Window"}
+          </div>
+          {row.status === "closed" ? (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              {LIFECYCLE_POST_EXIT_LOOKAHEAD_PRESETS.map((days) => (
+                <button
+                  key={days}
+                  type="button"
+                  onClick={() => applyPostExitDays(days)}
+                  style={lifecycleLookbackChipStyle(postExitTradingDays === days)}
+                >
+                  {days}
+                  {isZh ? " 日" : "d"}
+                </button>
+              ))}
+              <label
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                  color: "rgba(226, 232, 240, 0.78)",
+                  fontSize: 13,
+                  fontWeight: 600,
+                }}
+              >
+                <span>{isZh ? "自定义" : "Custom"}</span>
+                <input
+                  type="number"
+                  min={LIFECYCLE_PRE_ENTRY_LOOKBACK_MIN}
+                  max={LIFECYCLE_PRE_ENTRY_LOOKBACK_MAX}
+                  inputMode="numeric"
+                  value={postExitInput}
+                  onChange={(event) => setPostExitInput(event.target.value)}
+                  onBlur={() =>
+                    applyPostExitDays(
+                      postExitInput.trim() === "" ? postExitTradingDays : Number(postExitInput)
+                    )
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter") {
+                      return;
+                    }
+                    event.preventDefault();
+                    applyPostExitDays(
+                      postExitInput.trim() === "" ? postExitTradingDays : Number(postExitInput)
+                    );
+                  }}
+                  style={lifecycleLookbackInputStyle}
+                />
+                <span style={{ color: "rgba(148, 163, 184, 0.82)" }}>
+                  {isZh ? "交易日" : "days"}
+                </span>
+              </label>
+            </div>
+          ) : (
+            <div style={{ color: "rgba(148, 163, 184, 0.82)", fontSize: 13, lineHeight: 1.6 }}>
+              {isZh ? "这段生命周期还没有卖出，所以暂时没有卖出后范围。" : "This lifecycle is still open, so there is no post-exit window yet."}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+          gap: 10,
+          marginBottom: 14,
+        }}
+      >
+        <div style={miniMetricStyle}>
+          <div style={labelStyle}>{isZh ? "买入时间" : "Buy Time"}</div>
+          <div style={miniMetricValueStyle}>{formatDateTime(row.entryTs, locale)}</div>
+        </div>
+        <div style={miniMetricStyle}>
+          <div style={labelStyle}>{isZh ? "卖出 / 标记时间" : "Sell / Mark Time"}</div>
+          <div style={miniMetricValueStyle}>{formatDateTime(row.exitTs || row.markTs, locale)}</div>
+        </div>
+        <div style={miniMetricStyle}>
+          <div style={labelStyle}>{isZh ? "买入价" : "Buy Price"}</div>
+          <div style={miniMetricValueStyle}>{formatCurrency(row.entryPrice, locale)}</div>
+        </div>
+        <div style={miniMetricStyle}>
+          <div style={labelStyle}>
+            {row.status === "closed"
+              ? isZh
+                ? "卖出价"
+                : "Sell Price"
+              : isZh
+                ? "标记价"
+                : "Mark Price"}
+          </div>
+          <div style={miniMetricValueStyle}>
+            {formatCurrency(row.exitPrice ?? row.markPrice, locale)}
+          </div>
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={emptyStateStyle}>{isZh ? "正在加载这段生命周期的蜡烛图..." : "Loading the candlestick chart for this lifecycle..."}</div>
+      ) : error ? (
+        <div style={{ ...emptyStateStyle, color: "#fecaca", border: "1px solid rgba(248, 113, 113, 0.22)" }}>{error}</div>
+      ) : bars.length === 0 ? (
+        <div style={emptyStateStyle}>
+          {isZh ? "这个生命周期区间内没有可用的日线数据" : "There are no daily bars available inside this lifecycle window"}
+        </div>
+      ) : (
+        <>
+          <LifecycleCandlestickChart
+            bars={bars}
+            markers={markers}
+            gapOverlays={gapOverlays}
+            locale={locale}
+          />
+          <div
+            style={{
+              display: "flex",
+              gap: 14,
+              flexWrap: "wrap",
+              marginTop: 10,
+              color: "rgba(226, 232, 240, 0.82)",
+              fontSize: 13,
+              fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+            }}
+          >
+            {gapOverlays.map((overlay) => (
+              <span key={overlay.key} style={legendItemStyle}>
+                <span
+                  style={{
+                    ...legendDotStyle,
+                    background: overlay.tone === "left_gap" ? "#f59e0b" : "#06b6d4",
+                  }}
+                />
+                {overlay.description}
+              </span>
+            ))}
+            {markers.map((marker) => (
+              <span key={marker.key} style={legendItemStyle}>
+                <span
+                  style={{
+                    ...legendDotStyle,
+                    background:
+                      marker.tone === "buy"
+                        ? "#22c55e"
+                        : marker.tone === "buy_signal"
+                          ? "#38bdf8"
+                        : marker.tone === "sell"
+                          ? "#ef4444"
+                          : marker.tone === "sell_signal"
+                            ? "#f59e0b"
+                            : "#38bdf8",
+                  }}
+                />
+                {marker.description}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function PositionLifecycleCard({ run }: { run: BacktestDetailOut }) {
+  const { locale } = useI18n();
+  const isZh = locale === "zh-CN";
+  const [showAllRows, setShowAllRows] = useState(false);
+  const [expandedRowKey, setExpandedRowKey] = useState<string | null>(null);
+  const rows = useMemo(() => buildPositionLifecycleRows(run), [run]);
+  const visibleRows = showAllRows ? rows : rows.slice(0, 12);
+
+  const closedRows = rows.filter((row) => row.status === "closed");
+  const openRows = rows.filter((row) => row.status === "open");
+  const winningClosedRows = closedRows.filter((row) => (row.pnl ?? 0) > 0);
+  const rowsWithHoldingDays = rows.filter((row) => row.holdingDays != null);
+  const totalPnl = rows.reduce((sum, row) => sum + (row.pnl ?? 0), 0);
+  const averageHoldingDays =
+    rowsWithHoldingDays.length > 0
+      ? rowsWithHoldingDays.reduce((sum, row) => sum + (row.holdingDays ?? 0), 0) / rowsWithHoldingDays.length
+      : null;
+  const winRate =
+    closedRows.length > 0 ? winningClosedRows.length / closedRows.length : null;
+
+  return (
+    <section style={sectionCardStyle}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          flexWrap: "wrap",
+          alignItems: "center",
+          marginBottom: 16,
+        }}
+      >
+        <div>
+          <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>
+            {isZh ? "持仓生命周期" : "Position Lifecycles"}
+          </h2>
+          <p style={sectionSubtitleStyle}>
+            {isZh
+              ? "每一行表示一段从买入到卖出的 round-trip；如果回测结束时仍持有，则按最后快照价格标记为 open。"
+              : "Each row represents one buy-to-sell round-trip. Positions still open at the end of the run are shown as open and marked to the latest snapshot price."}
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <Badge tone="info">
+            {rows.length} {isZh ? "段生命周期" : rows.length === 1 ? "lifecycle" : "lifecycles"}
+          </Badge>
+          {rows.length > 12 ? (
+            <button
+              type="button"
+              onClick={() => setShowAllRows((current) => !current)}
+              style={tableToggleButtonStyle}
+            >
+              {showAllRows
+                ? isZh
+                  ? "收起到前 12 条"
+                  : "Show Top 12"
+                : isZh
+                  ? "展开全部"
+                  : "Show All"}
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {rows.length === 0 ? (
+        <div style={emptyStateStyle}>
+          {isZh
+            ? "这次回测还没有形成可识别的持仓生命周期"
+            : "This backtest does not have identifiable position lifecycles yet"}
+        </div>
+      ) : (
+        <>
+          <div
+            style={{
+              marginBottom: 14,
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+              gap: 12,
+            }}
+          >
+            <div style={miniMetricStyle}>
+              <div style={labelStyle}>{isZh ? "已闭环" : "Closed"}</div>
+              <div style={miniMetricValueStyle}>{closedRows.length}</div>
+            </div>
+            <div style={miniMetricStyle}>
+              <div style={labelStyle}>{isZh ? "仍持有" : "Open"}</div>
+              <div style={miniMetricValueStyle}>{openRows.length}</div>
+            </div>
+            <div style={miniMetricStyle}>
+              <div style={labelStyle}>{isZh ? "胜率" : "Win Rate"}</div>
+              <div style={miniMetricValueStyle}>{formatPercent(winRate, 2)}</div>
+            </div>
+            <div style={miniMetricStyle}>
+              <div style={labelStyle}>{isZh ? "平均持有天数" : "Avg Hold Days"}</div>
+              <div style={miniMetricValueStyle}>
+                {averageHoldingDays == null ? "-" : averageHoldingDays.toLocaleString(locale, { maximumFractionDigits: 1 })}
+              </div>
+            </div>
+            <div style={miniMetricStyle}>
+              <div style={labelStyle}>{isZh ? "生命周期盈亏" : "Lifecycle PnL"}</div>
+              <div style={miniMetricValueStyle}>{formatCurrency(totalPnl, locale)}</div>
+            </div>
+          </div>
+
+          {rows.length > 12 ? (
+            <div style={{ marginBottom: 10, color: "rgba(148, 163, 184, 0.88)", fontSize: 13 }}>
+              {isZh
+                ? `当前显示 ${visibleRows.length} / ${rows.length} 段生命周期，按最近结束或最近标记时间倒序。`
+                : `Showing ${visibleRows.length} / ${rows.length} lifecycles, ordered by the most recent close or mark time.`}
+            </div>
+          ) : null}
+
+          <div
+            style={{
+              overflowX: "auto",
+              borderRadius: 18,
+              border: "1px solid rgba(71, 85, 105, 0.28)",
+              background: "rgba(15, 23, 42, 0.74)",
+            }}
+          >
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                minWidth: 1440,
+                fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+              }}
+            >
+              <thead>
+                <tr
+                  style={{
+                    background: "rgba(30, 41, 59, 0.9)",
+                    color: "rgba(148, 163, 184, 0.88)",
+                    textAlign: "left",
+                  }}
+                >
+                  {(isZh
+                    ? ["标的", "周期", "状态", "入场时间", "出场 / 标记时间", "股数", "入场价", "出场 / 标记价", "盈亏", "收益率", "持有天数", "入场原因", "出场原因"]
+                    : ["Symbol", "Cycle", "Status", "Entry Time", "Exit / Mark Time", "Qty", "Entry Px", "Exit / Mark Px", "PnL", "Return", "Days Held", "Entry Reason", "Exit Reason"]
+                  ).map((label) => (
+                    <th
+                      key={label}
+                      style={{
+                        ...stickyTableHeaderCellStyle,
+                        padding: "12px 14px",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        letterSpacing: "0.03em",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      {label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {visibleRows.map((row) => {
+                  const displayEndTs = row.exitTs || row.markTs;
+                  const displayEndPrice = row.exitPrice ?? row.markPrice;
+                  const pnlTone = (row.pnl ?? 0) >= 0 ? "#15803d" : "#b91c1c";
+                  const statusLabel =
+                    row.status === "closed"
+                      ? isZh
+                        ? "平仓"
+                        : "Closed"
+                      : isZh
+                        ? "持有"
+                        : "Open";
+                  const expanded = expandedRowKey === row.key;
+
+                  return (
+                    <Fragment key={row.key}>
+                      <tr
+                        tabIndex={0}
+                        aria-expanded={expanded}
+                        onClick={() =>
+                          setExpandedRowKey((current) => (current === row.key ? null : row.key))
+                        }
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter" && event.key !== " ") {
+                            return;
+                          }
+                          event.preventDefault();
+                          setExpandedRowKey((current) => (current === row.key ? null : row.key));
+                        }}
+                        style={{
+                          borderBottom: expanded
+                            ? "1px solid rgba(56, 189, 248, 0.2)"
+                            : "1px solid rgba(241, 245, 249, 1)",
+                          cursor: "pointer",
+                          background: expanded ? "rgba(8, 47, 73, 0.16)" : "transparent",
+                          outline: "none",
+                        }}
+                      >
+                        <td style={cellStyle}>
+                          <span style={lifecyclePrimaryCellStyle}>
+                            <span style={lifecycleChevronStyle(expanded)}>{expanded ? "▾" : "▸"}</span>
+                            <span>{row.symbol}</span>
+                          </span>
+                        </td>
+                        <td style={cellStyle}>#{row.sequence}</td>
+                        <td style={lifecycleStatusCellStyle}>
+                          <Badge
+                            tone={row.status === "closed" ? "success" : "warning"}
+                            style={lifecycleStatusBadgeStyle}
+                          >
+                            {statusLabel}
+                          </Badge>
+                        </td>
+                        <td style={cellStyle}>{formatDateTime(row.entryTs, locale)}</td>
+                        <td style={cellStyle}>
+                          {displayEndTs
+                            ? formatDateTime(displayEndTs, locale)
+                            : row.status === "open"
+                              ? isZh
+                                ? "仍在持有"
+                                : "Still Open"
+                              : "-"}
+                        </td>
+                        <td style={cellStyle}>{row.qty.toLocaleString(locale, { maximumFractionDigits: 4 })}</td>
+                        <td style={cellStyle}>{formatCurrency(row.entryPrice, locale)}</td>
+                        <td style={cellStyle}>{formatCurrency(displayEndPrice, locale)}</td>
+                        <td style={{ ...cellStyle, color: row.pnl == null ? cellStyle.color : pnlTone, fontWeight: 700 }}>
+                          {formatCurrency(row.pnl, locale)}
+                        </td>
+                        <td style={cellStyle}>{formatPercent(row.returnPct, 2)}</td>
+                        <td style={cellStyle}>
+                          {row.holdingDays == null
+                            ? "-"
+                            : isZh
+                              ? `${row.holdingDays} 天`
+                              : `${row.holdingDays} d`}
+                        </td>
+                        <td style={cellStyle}>{row.entryReason || "-"}</td>
+                        <td style={cellStyle}>
+                          {row.exitReason ||
+                            (row.status === "open"
+                              ? isZh
+                                ? "按最后快照估值"
+                                : "Marked to latest snapshot"
+                              : "-")}
+                        </td>
+                      </tr>
+                      {expanded ? (
+                        <tr>
+                          <td colSpan={13} style={lifecycleExpandedCellStyle}>
+                            <LifecycleDetailPanel row={row} signals={run.signals} />
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 function TransactionsCard({ transactions }: { transactions: BacktestTransactionOut[] }) {
   const { locale } = useI18n();
   const isZh = locale === "zh-CN";
@@ -1786,6 +3724,14 @@ export default function BacktestDetailPage() {
             />
           </section>
 
+          <section
+            style={{
+              marginBottom: 18,
+            }}
+          >
+            <PositionLifecycleCard run={run} />
+          </section>
+
           <TransactionsCard transactions={run.transactions} />
 
           <section
@@ -1947,6 +3893,50 @@ const cellStyle = {
   fontSize: 14,
   lineHeight: 1.5,
 } as const;
+
+const lifecycleStatusCellStyle = {
+  ...cellStyle,
+  width: 96,
+  whiteSpace: "nowrap" as const,
+};
+
+const lifecycleStatusBadgeStyle = {
+  minWidth: 64,
+  justifyContent: "center",
+  whiteSpace: "nowrap" as const,
+};
+
+const lifecyclePrimaryCellStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 10,
+  fontWeight: 700,
+};
+
+function lifecycleChevronStyle(expanded: boolean) {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 16,
+    color: expanded ? "#67e8f9" : "rgba(148, 163, 184, 0.86)",
+    fontSize: 12,
+    transform: expanded ? "translateY(0)" : "translateY(-0.5px)",
+  } as const;
+}
+
+const lifecycleExpandedCellStyle = {
+  padding: "0 14px 16px",
+  background: "rgba(8, 15, 24, 0.68)",
+};
+
+const lifecycleDetailPanelStyle = {
+  padding: 18,
+  borderRadius: 18,
+  border: "1px solid rgba(56, 189, 248, 0.16)",
+  background: "linear-gradient(180deg, rgba(8,15,24,0.96), rgba(15,23,42,0.9))",
+  boxShadow: "inset 0 1px 0 rgba(148, 163, 184, 0.08)",
+};
 
 const stickyTableHeaderCellStyle = {
   position: "sticky" as const,

@@ -1,6 +1,7 @@
 import type { AppProps } from "next/app";
 
 import BackToTopButton from "@/components/BackToTopButton";
+import StockCandleWidget from "@/components/StockCandleWidget";
 import { I18nProvider } from "@/i18n/provider";
 
 export default function App({ Component, pageProps }: AppProps) {
@@ -48,6 +49,7 @@ export default function App({ Component, pageProps }: AppProps) {
           }
         `}</style>
         <Component {...pageProps} />
+        <StockCandleWidget />
         <BackToTopButton />
       </>
     </I18nProvider>

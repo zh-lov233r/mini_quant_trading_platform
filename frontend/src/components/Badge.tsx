@@ -24,9 +24,10 @@ const TONE_STYLES: Record<BadgeTone, CSSProperties> = {
 interface BadgeProps {
   children: ReactNode;
   tone?: BadgeTone;
+  style?: CSSProperties;
 }
 
-export default function Badge({ children, tone = "neutral" }: BadgeProps) {
+export default function Badge({ children, tone = "neutral", style }: BadgeProps) {
   return (
     <span
       style={{
@@ -39,6 +40,7 @@ export default function Badge({ children, tone = "neutral" }: BadgeProps) {
         lineHeight: 1,
         fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
         ...TONE_STYLES[tone],
+        ...style,
       }}
     >
       {children}

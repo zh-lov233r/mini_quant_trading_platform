@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # 引入 API routers 和数据库初始化函数
 from src.api.backtests import router as backtests_router
+from src.api.market_data import router as market_data_router
 from src.api.paper_accounts import router as paper_accounts_router
 from src.api.paper_trading import router as paper_trading_router
 from src.api.stock_baskets import router as stock_baskets_router
@@ -51,6 +52,7 @@ app.add_middleware(
 # 挂载你的业务路由
 app.include_router(strategies_router)
 app.include_router(backtests_router)
+app.include_router(market_data_router)
 app.include_router(stock_baskets_router)
 app.include_router(paper_accounts_router)
 app.include_router(strategy_allocations_router)

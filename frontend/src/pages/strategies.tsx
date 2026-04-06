@@ -346,6 +346,9 @@ export default function StrategiesPage() {
                         <article
                           key={item.id}
                           style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            height: "100%",
                             padding: 22,
                             borderRadius: 22,
                             border: "1px solid rgba(71, 85, 105, 0.28)",
@@ -365,85 +368,116 @@ export default function StrategiesPage() {
                             }
                           }}
                         >
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              flex: "1 1 auto",
+                              minHeight: 0,
+                            }}
+                          >
                             <div
                               style={{
                                 display: "flex",
                                 justifyContent: "space-between",
                                 gap: 12,
-                              alignItems: "flex-start",
-                              marginBottom: 12,
-                              flexWrap: "wrap",
-                            }}
-                          >
-                            <div>
-                              <h2 style={{ margin: "0 0 6px", fontSize: 22 }}>{item.name}</h2>
+                                alignItems: "flex-start",
+                                marginBottom: 12,
+                                flexWrap: "wrap",
+                                minHeight: 76,
+                              }}
+                            >
+                              <div style={{ minWidth: 0, flex: "1 1 220px" }}>
+                                <h2
+                                  style={{
+                                    margin: "0 0 6px",
+                                    fontSize: 22,
+                                    lineHeight: 1.2,
+                                    minHeight: 52,
+                                    wordBreak: "break-word",
+                                  }}
+                                >
+                                  {item.name}
+                                </h2>
+                                <div
+                                  style={{
+                                    color: "rgba(148, 163, 184, 0.88)",
+                                    fontSize: 14,
+                                    minHeight: 20,
+                                    fontFamily:
+                                      "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+                                  }}
+                                >
+                                  {getTypeLabel(item.strategy_type, catalog)} · v{item.version}
+                                </div>
+                              </div>
                               <div
-                              style={{
+                                style={{
                                   color: "rgba(148, 163, 184, 0.88)",
-                                  fontSize: 14,
+                                  fontSize: 13,
+                                  textAlign: "right",
                                   fontFamily:
                                     "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                                 }}
                               >
-                                {getTypeLabel(item.strategy_type, catalog)} · v{item.version}
+                                {formatDateTime(item.created_at, locale)}
                               </div>
                             </div>
+
                             <div
                               style={{
+                                display: "flex",
+                                gap: 8,
+                                flexWrap: "wrap",
+                                marginBottom: 12,
+                                minHeight: 62,
+                                alignContent: "flex-start",
+                              }}
+                            >
+                              <Badge tone={item.engine_ready ? "success" : "warning"}>
+                                {item.engine_ready ? "engine-ready" : "stored-only"}
+                              </Badge>
+                              <Badge>{item.status}</Badge>
+                              <Badge tone="info">{item.strategy_type}</Badge>
+                            </div>
+
+                            <p
+                              style={{
+                                minHeight: 72,
+                                margin: "0 0 16px",
                                 color: "rgba(148, 163, 184, 0.88)",
-                                fontSize: 13,
+                                lineHeight: 1.7,
                                 fontFamily:
                                   "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                               }}
                             >
-                              {formatDateTime(item.created_at, locale)}
+                              {getStrategyDescription(item)}
+                            </p>
+
+                            <div
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                                gap: 10,
+                                marginBottom: 16,
+                                fontSize: 14,
+                                color: "#cbd5e1",
+                                fontFamily:
+                                  "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+                              }}
+                            >
+                              <div>{isZh ? "股票池" : "Universe"}: {getUniverseSummary(item)}</div>
+                              <div>{isZh ? "最大持仓" : "Max Positions"}: {maxPositions ?? "-"}</div>
+                              <div>
+                                {isZh ? "单票仓位" : "Position Size"}:
+                                {typeof positionSizePct === "number"
+                                  ? ` ${(positionSizePct * 100).toFixed(0)}%`
+                                  : " -"}
+                              </div>
+                              <div>{isZh ? "调仓频率" : "Rebalance"}: {rebalance || "-"}</div>
+                              <div>{isZh ? "运行时机" : "Run Timing"}: {runAt || "-"}</div>
+                              <div>ID: {item.id.slice(0, 8)}...</div>
                             </div>
-                          </div>
-
-                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-                            <Badge tone={item.engine_ready ? "success" : "warning"}>
-                              {item.engine_ready ? "engine-ready" : "stored-only"}
-                            </Badge>
-                            <Badge>{item.status}</Badge>
-                            <Badge tone="info">{item.strategy_type}</Badge>
-                          </div>
-
-                          <p
-                            style={{
-                              minHeight: 72,
-                              margin: "0 0 16px",
-                              color: "rgba(148, 163, 184, 0.88)",
-                              lineHeight: 1.7,
-                              fontFamily:
-                                "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-                            }}
-                          >
-                            {getStrategyDescription(item)}
-                          </p>
-
-                          <div
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                              gap: 10,
-                              marginBottom: 16,
-                              fontSize: 14,
-                              color: "#cbd5e1",
-                              fontFamily:
-                                "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-                            }}
-                          >
-                            <div>{isZh ? "股票池" : "Universe"}: {getUniverseSummary(item)}</div>
-                            <div>{isZh ? "最大持仓" : "Max Positions"}: {maxPositions ?? "-"}</div>
-                            <div>
-                              {isZh ? "单票仓位" : "Position Size"}:
-                              {typeof positionSizePct === "number"
-                                ? ` ${(positionSizePct * 100).toFixed(0)}%`
-                                : " -"}
-                            </div>
-                            <div>{isZh ? "调仓频率" : "Rebalance"}: {rebalance || "-"}</div>
-                            <div>{isZh ? "运行时机" : "Run Timing"}: {runAt || "-"}</div>
-                            <div>ID: {item.id.slice(0, 8)}...</div>
                           </div>
 
                           <div
@@ -453,13 +487,14 @@ export default function StrategiesPage() {
                               gap: 12,
                               alignItems: "center",
                               flexWrap: "wrap",
+                              marginTop: "auto",
                               paddingTop: 14,
                               borderTop: "1px solid rgba(71, 85, 105, 0.3)",
                             }}
-                            >
-                              <span
-                                style={{
-                                  color: "rgba(148, 163, 184, 0.88)",
+                          >
+                            <span
+                              style={{
+                                color: "rgba(148, 163, 184, 0.88)",
                                 fontSize: 13,
                                 fontFamily:
                                   "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
@@ -467,24 +502,25 @@ export default function StrategiesPage() {
                             >
                               {isZh ? "更新时间" : "Updated"} {formatDateTime(item.updated_at, locale)}
                             </span>
-                              <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                                <Link
-                                  href={`/strategies/${item.id}/edit`}
-                                  onClick={(event) => event.stopPropagation()}
-                                  style={{
-                                    color: "#5eead4",
-                                    textDecoration: "none",
-                                    fontSize: 14,
-                                    fontWeight: 700,
-                                    fontFamily:
-                                      "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-                                  }}
-                                >
-                                  {isZh ? "编辑策略" : "Edit Strategy"}
-                                </Link>
-                              </div>
+                            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                              <Link
+                                href={`/strategies/${item.id}/edit`}
+                                onClick={(event) => event.stopPropagation()}
+                                style={{
+                                  color: "#5eead4",
+                                  textDecoration: "none",
+                                  fontSize: 14,
+                                  fontWeight: 700,
+                                  whiteSpace: "nowrap",
+                                  fontFamily:
+                                    "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+                                }}
+                              >
+                                {isZh ? "编辑策略" : "Edit Strategy"}
+                              </Link>
                             </div>
-                          </article>
+                          </div>
+                        </article>
                       );
                     })}
                   </div>
