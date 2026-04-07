@@ -152,6 +152,18 @@ export interface StrategyRuntimeOut {
   params: Record<string, unknown>;
 }
 
+export interface StrategyDeleteOut {
+  strategy_id: string;
+  strategy_name: string;
+  deleted_backtest_runs: number;
+  deleted_paper_runs: number;
+  deleted_live_runs: number;
+  deleted_backtest_snapshots: number;
+  deleted_signals: number;
+  deleted_transactions: number;
+  deleted_allocations: number;
+}
+
 export interface StrategyCatalogItem {
   strategy_type: StrategyType;
   label: string;

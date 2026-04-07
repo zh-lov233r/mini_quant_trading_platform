@@ -7,11 +7,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from src.core.db import get_db
-from src.models.tables import Strategy
+from src.models.tables import PortfolioSnapshot, Signal, Strategy, StrategyAllocation, StrategyRun, Transaction
 from src.services.strategy_registry import (
     build_runtime_payload,
     build_strategy_catalog,
@@ -88,6 +88,18 @@ class StrategyRuntimeOut(BaseModel):
     params: Dict[str, Any]
 
 
+class StrategyDeleteOut(BaseModel):
+    strategy_id: UUID
+    strategy_name: str
+    deleted_backtest_runs: int
+    deleted_paper_runs: int
+    deleted_live_runs: int
+    deleted_backtest_snapshots: int
+    deleted_signals: int
+    deleted_transactions: int
+    deleted_allocations: int
+
+
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
 
 
@@ -148,6 +160,59 @@ def _build_feature_support_payload(db: Session) -> StrategyFeatureSupportOut:
             sma_windows=sma_windows,
         )
     )
+
+
+def _build_delete_summary(db: Session, strategy_id: UUID) -> dict[str, int]:
+    run_counts = {
+        str(mode): int(count)
+        for mode, count in db.execute(
+            select(StrategyRun.mode, func.count())
+            .where(StrategyRun.strategy_id == strategy_id)
+            .group_by(StrategyRun.mode)
+        ).all()
+    }
+
+    deleted_backtest_snapshots = int(
+        db.execute(
+            select(func.count())
+            .select_from(PortfolioSnapshot)
+            .join(StrategyRun, StrategyRun.id == PortfolioSnapshot.run_id)
+            .where(StrategyRun.strategy_id == strategy_id)
+            .where(StrategyRun.mode == "backtest")
+        ).scalar_one()
+    )
+
+    deleted_signals = int(
+        db.execute(
+            select(func.count())
+            .select_from(Signal)
+            .where(Signal.strategy_id == strategy_id)
+        ).scalar_one()
+    )
+    deleted_transactions = int(
+        db.execute(
+            select(func.count())
+            .select_from(Transaction)
+            .where(Transaction.strategy_id == strategy_id)
+        ).scalar_one()
+    )
+    deleted_allocations = int(
+        db.execute(
+            select(func.count())
+            .select_from(StrategyAllocation)
+            .where(StrategyAllocation.strategy_id == strategy_id)
+        ).scalar_one()
+    )
+
+    return {
+        "deleted_backtest_runs": int(run_counts.get("backtest", 0)),
+        "deleted_paper_runs": int(run_counts.get("paper", 0)),
+        "deleted_live_runs": int(run_counts.get("live", 0)),
+        "deleted_backtest_snapshots": deleted_backtest_snapshots,
+        "deleted_signals": deleted_signals,
+        "deleted_transactions": deleted_transactions,
+        "deleted_allocations": deleted_allocations,
+    }
 
 
 def _validate_feature_support(
@@ -403,3 +468,32 @@ def update_strategy_config(
 
     db.refresh(obj)
     return _to_strategy_out(obj)
+
+
+@router.delete("/{strategy_id}", response_model=StrategyDeleteOut)
+def delete_strategy(
+    strategy_id: UUID,
+    db: Session = Depends(get_db),
+):
+    obj = db.get(Strategy, strategy_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+    delete_summary = _build_delete_summary(db, strategy_id)
+    strategy_name = obj.name
+
+    try:
+        db.delete(obj)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"delete strategy failed: {str(exc)}",
+        ) from exc
+
+    return StrategyDeleteOut(
+        strategy_id=strategy_id,
+        strategy_name=strategy_name,
+        **delete_summary,
+    )

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { getBacktest, listBacktests } from "@/api/backtests";
 import {
+  deleteStrategy,
   getStrategy,
   getStrategyCatalog,
   getStrategyRuntime,
@@ -177,6 +178,8 @@ export default function StrategyDetailPage() {
   const [renameError, setRenameError] = useState<string | null>(null);
   const [renameSuccess, setRenameSuccess] = useState<string | null>(null);
   const [renameSaving, setRenameSaving] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteSaving, setDeleteSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [runsLoading, setRunsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -311,6 +314,32 @@ export default function StrategyDetailPage() {
     }
   };
 
+  const handleDelete = async () => {
+    if (!strategy || deleteSaving) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      isZh
+        ? `确认删除策略 "${strategy.name}" 吗？与它相关的回测、回测快照、signals、transactions、allocations 以及其它 strategy runs 也会一起删除。这个操作不能撤销。`
+        : `Delete strategy "${strategy.name}"? Its related backtests, backtest snapshots, signals, transactions, allocations, and other strategy runs will be deleted as well. This action cannot be undone.`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setDeleteSaving(true);
+      setDeleteError(null);
+      await deleteStrategy(strategy.id);
+      await router.push("/strategies");
+    } catch (err: any) {
+      setDeleteError(err?.message || (isZh ? "删除策略失败" : "Failed to delete the strategy"));
+    } finally {
+      setDeleteSaving(false);
+    }
+  };
+
   if (!loading && !error && !strategy) {
     return (
       <AppShell
@@ -352,6 +381,7 @@ export default function StrategyDetailPage() {
     >
       {loading ? <p>{isZh ? "加载中..." : "Loading..."}</p> : null}
       {error ? <p style={{ color: "#fda4af" }}>{error}</p> : null}
+      {deleteError ? <p style={{ color: "#fda4af" }}>{deleteError}</p> : null}
 
       {!loading && !error && strategy ? (
         <>
@@ -637,6 +667,61 @@ export default function StrategyDetailPage() {
                     : "Under the current rules, renaming does not change `strategy_id`, `strategy_key`, `version`, or any existing backtest and allocation links. It only updates the display name."}
                 </div>
               </form>
+            )}
+          </section>
+
+          <section id="danger-zone" style={{ marginBottom: 18 }}>
+            {sectionCard(
+              isZh ? "删除策略" : "Delete Strategy",
+              isZh
+                ? "这是危险操作。删除策略后，与这条策略直接关联的回测、回测快照、signals、transactions、allocations 和其它运行记录都会一起删除。"
+                : "This is a destructive action. Deleting the strategy also removes its related backtests, backtest snapshots, signals, transactions, allocations, and other runs tied to it.",
+              <div
+                style={{
+                  display: "grid",
+                  gap: 14,
+                  fontFamily:
+                    "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+                }}
+              >
+                <div
+                  style={{
+                    padding: 14,
+                    borderRadius: 18,
+                    background: "rgba(127, 29, 29, 0.22)",
+                    border: "1px solid rgba(248, 113, 113, 0.22)",
+                    color: "#fecaca",
+                    lineHeight: 1.7,
+                  }}
+                >
+                  {isZh
+                    ? "如果你只是想停用它，更安全的做法通常是把状态改成 archived。只有在确定这条策略及其历史运行记录都不再需要时，才建议直接删除。"
+                    : "If you only want to retire it, changing the status to archived is usually safer. Delete it only when you are sure the strategy and its historical runs are no longer needed."}
+                </div>
+                <div style={{ display: "flex", justifyContent: "flex-start" }}>
+                  <button
+                    type="button"
+                    onClick={() => void handleDelete()}
+                    disabled={deleteSaving}
+                    style={{
+                      padding: "12px 16px",
+                      borderRadius: 14,
+                      border: "1px solid rgba(248, 113, 113, 0.35)",
+                      background: deleteSaving ? "rgba(127, 29, 29, 0.42)" : "rgba(153, 27, 27, 0.82)",
+                      color: "#fff1f2",
+                      fontWeight: 700,
+                      cursor: deleteSaving ? "not-allowed" : "pointer",
+                      minWidth: 156,
+                    }}
+                  >
+                    {deleteSaving
+                      ? (isZh ? "删除中..." : "Deleting...")
+                      : isZh
+                        ? "删除这条策略"
+                        : "Delete This Strategy"}
+                  </button>
+                </div>
+              </div>
             )}
           </section>
 

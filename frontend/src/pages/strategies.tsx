@@ -2,7 +2,7 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 
-import { getStrategyCatalog, listStrategies } from "@/api/strategies";
+import { deleteStrategy, getStrategyCatalog, listStrategies } from "@/api/strategies";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
@@ -26,6 +26,8 @@ export default function StrategiesPage() {
   const [catalog, setCatalog] = useState<StrategyCatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletingStrategyId, setDeletingStrategyId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
@@ -58,6 +60,28 @@ export default function StrategiesPage() {
     };
   }, [isZh]);
 
+  const handleDelete = async (item: StrategyOut) => {
+    const confirmed = window.confirm(
+      isZh
+        ? `确认删除策略 "${item.name}" 吗？与它相关的回测、回测快照、signals、transactions、allocations 以及其它 strategy runs 也会一起删除。这个操作不能撤销。`
+        : `Delete strategy "${item.name}"? Its related backtests, backtest snapshots, signals, transactions, allocations, and other strategy runs will be deleted as well. This action cannot be undone.`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setDeletingStrategyId(item.id);
+      setDeleteError(null);
+      await deleteStrategy(item.id);
+      setItems((current) => current.filter((candidate) => candidate.id !== item.id));
+    } catch (err: any) {
+      setDeleteError(err?.message || (isZh ? "删除策略失败" : "Failed to delete the strategy"));
+    } finally {
+      setDeletingStrategyId(null);
+    }
+  };
+
   return (
     <AppShell
       title={isZh ? "策略库" : "Strategy Library"}
@@ -85,6 +109,7 @@ export default function StrategiesPage() {
     >
       {loading && <p>{isZh ? "加载中..." : "Loading..."}</p>}
       {error && <p style={{ color: "#fda4af" }}>{error}</p>}
+      {deleteError && <p style={{ color: "#fda4af" }}>{deleteError}</p>}
 
       {!loading && !error ? (
         <>
@@ -518,6 +543,34 @@ export default function StrategiesPage() {
                               >
                                 {isZh ? "编辑策略" : "Edit Strategy"}
                               </Link>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void handleDelete(item);
+                                }}
+                                disabled={deletingStrategyId === item.id}
+                                style={{
+                                  padding: 0,
+                                  border: "none",
+                                  background: "transparent",
+                                  color: "#fda4af",
+                                  textDecoration: "none",
+                                  fontSize: 14,
+                                  fontWeight: 700,
+                                  whiteSpace: "nowrap",
+                                  fontFamily:
+                                    "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+                                  cursor: deletingStrategyId === item.id ? "not-allowed" : "pointer",
+                                  opacity: deletingStrategyId === item.id ? 0.7 : 1,
+                                }}
+                              >
+                                {deletingStrategyId === item.id
+                                  ? (isZh ? "删除中..." : "Deleting...")
+                                  : isZh
+                                    ? "删除策略"
+                                    : "Delete"}
+                              </button>
                             </div>
                           </div>
                         </article>

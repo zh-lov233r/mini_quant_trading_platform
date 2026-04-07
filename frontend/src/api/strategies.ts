@@ -3,6 +3,7 @@ import type {
   StrategyCatalogItem,
   StrategyConfigUpdate,
   StrategyCreate,
+  StrategyDeleteOut,
   StrategyFeatureSupport,
   StrategyRename,
   StrategyOut,
@@ -71,5 +72,11 @@ export function updateStrategyConfig(
   return http<StrategyOut>(`/api/strategies/${strategyId}/config`, {
     method: "PATCH",
     body: JSON.stringify(payload),
+  });
+}
+
+export function deleteStrategy(strategyId: string): Promise<StrategyDeleteOut> {
+  return http<StrategyDeleteOut>(`/api/strategies/${strategyId}`, {
+    method: "DELETE",
   });
 }
