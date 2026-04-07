@@ -1,0 +1,11 @@
+ticker_canonical,duplicate_count,instrument_id,name,exchange,asset_type,market,locale,is_active,share_class_figi,composite_figi,cik,open_symbols
+BBUC,2,453,Brookfield Business Corporation Class A Exchangeable Subordinate Voting Shares,XNYS,CS,stocks,us,True,BBG015P1Z2Y7,BBG015MRS011,0001871130,XNYS:BBUC
+BBUC,2,15398,Brookfield Business Corporation Class A Subordinate Voting Shares,XNYS,CS,stocks,us,True,BBG0211B2RT6,BBG0211B3568,0001654795,
+HIW,2,1777,Highwoods Properties Inc.,XNYS,CS,stocks,us,True,BBG001S7X2X4,BBG000C43744,0000921082,XNYS:HIW
+HIW,2,5595,HILLENBRAND INC W.I.,XNYS,CS,stocks,us,False,BBG001STH2P3,BBG000KT0GV3,0001417398,XNYS:HI
+KW,2,2137,"KENNEDY-WILSON HOLDINGS, INC.",XNYS,CS,stocks,us,True,BBG001SM6C41,BBG000CTY4J6,0001408100,XNYS:KW
+KW,2,5892,Kellanova,XNYS,CS,stocks,us,False,BBG01J9LYYL6,BBG01J9LYXR2,0000055067,
+MRLN,2,17418,"Merlin, Inc. Common Stock",XNAS,CS,stocks,us,True,BBG01R1Y9VF9,BBG01R1Y9TJ0,0002028707,
+MRLN,2,6169,Marlin Business Services Corp,XNAS,CS,stocks,us,False,BBG001S9RRN3,BBG00L43P406,0001260968,XNAS:MRLN
+NINE,2,17552,"Nine Energy Service, Inc.",XASE,CS,stocks,us,True,BBG020W1T2P6,BBG020W1T2N8,0001532286,XASE:NINE
+NINE,2,6248,"Nine Energy Service, Inc.",XNYS,CS,stocks,us,False,BBG004M28MG8,BBG004M28MF9,0001532286,XNYS:NINE

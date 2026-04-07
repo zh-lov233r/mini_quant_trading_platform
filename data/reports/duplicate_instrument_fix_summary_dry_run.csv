@@ -1,0 +1,6 @@
+action,rows,tickers
+keep_active,4,4
+manual_review,2,1
+nullify_ticker,1,1
+nullify_ticker+close_open_history,2,2
+retarget_ticker+close_open_history,1,1

@@ -2,8 +2,9 @@ from __future__ import annotations
 """Daily market backfill entrypoint.
 
 This script keeps the local market database current by syncing the security
-master first, then filling missing eod_bars rows, and finally refreshing the
-daily_features window used by backtests and paper trading.
+master first, then refreshing corporate actions, filling missing eod_bars rows,
+recomputing adjusted prices, and finally refreshing the daily_features window
+used by backtests and paper trading.
 """
 
 import argparse
@@ -200,6 +201,16 @@ def parse_args() -> argparse.Namespace:
         "--skip-features",
         action="store_true",
         help="Only fill eod_bars and skip the daily_features refresh step.",
+    )
+    parser.add_argument(
+        "--skip-adjustments",
+        action="store_true",
+        help="Skip recomputing adjusted OHLC prices after the EOD gap-fill step.",
+    )
+    parser.add_argument(
+        "--skip-corporate-actions",
+        action="store_true",
+        help="Skip syncing corporate actions after the security-master refresh step.",
     )
     parser.add_argument(
         "--skip-security-master",
@@ -446,8 +457,54 @@ def _run_feature_refresh(
     subprocess.run(command, cwd=REPO_ROOT, check=True)
 
 
+def _run_corporate_action_sync(
+    *,
+    database_url: str,
+    start_date: date,
+    end_date: date,
+) -> None:
+    """Refresh corporate actions for the same date window after security-master sync."""
+    action_script = REPO_ROOT / "backend" / "utils" / "backfill_corporate_actions.py"
+    command = [
+        sys.executable,
+        str(action_script),
+        "--start-date",
+        start_date.isoformat(),
+        "--end-date",
+        end_date.isoformat(),
+        "--database-url",
+        database_url,
+    ]
+    printable = " ".join(command)
+    print(f"\n[sync-corporate-actions] {printable}", flush=True)
+    subprocess.run(command, cwd=REPO_ROOT, check=True)
+
+
+def _run_adjusted_price_refresh(
+    *,
+    database_url: str,
+    start_date: date,
+    end_date: date,
+) -> None:
+    """Refresh adjusted OHLC columns for the same date window after EOD writes."""
+    adjustment_script = REPO_ROOT / "backend" / "utils" / "backfill_adjusted_prices.py"
+    command = [
+        sys.executable,
+        str(adjustment_script),
+        "--start-date",
+        start_date.isoformat(),
+        "--end-date",
+        end_date.isoformat(),
+        "--database-url",
+        database_url,
+    ]
+    printable = " ".join(command)
+    print(f"\n[refresh-adjusted-prices] {printable}", flush=True)
+    subprocess.run(command, cwd=REPO_ROOT, check=True)
+
+
 def main() -> None:
-    """Run the full daily sync flow: security master, EOD gaps, then features."""
+    """Run the full daily sync flow: security master, corporate actions, EOD gaps, adjustments, then features."""
     load_dotenv(REPO_ROOT / ".env")
     args = parse_args()
     try:
@@ -475,11 +532,25 @@ def main() -> None:
     )
 
     if args.dry_run:
-        print("Dry run enabled; skipping security master sync because it writes to the database.", flush=True)
+        print(
+            "Dry run enabled; skipping security master and corporate-action sync because they write to the database.",
+            flush=True,
+        )
     elif args.skip_security_master:
         print("Skipping security master sync by request.", flush=True)
     else:
         _run_security_master_sync(database_url=args.database_url)
+
+    if args.dry_run:
+        pass
+    elif args.skip_corporate_actions:
+        print("Skipping corporate-action sync by request.", flush=True)
+    else:
+        _run_corporate_action_sync(
+            database_url=args.database_url,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
     total_missing = 0
     total_unique_missing_instruments = 0
@@ -558,15 +629,20 @@ def main() -> None:
     )
 
     if args.dry_run:
-        print("\nDry run enabled; skipping daily_features refresh.", flush=True)
+        print("\nDry run enabled; skipping adjusted-price and daily_features refresh.", flush=True)
         return
+
+    if args.skip_adjustments:
+        print("\nSkipping adjusted-price refresh by request.", flush=True)
+    else:
+        _run_adjusted_price_refresh(
+            database_url=args.database_url,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
     if args.skip_features:
         print("\nSkipping daily_features refresh by request.", flush=True)
-        return
-
-    if total_upserted <= 0:
-        print("\nNo eod_bars rows were written; skipping daily_features refresh.", flush=True)
         return
 
     _run_feature_refresh(

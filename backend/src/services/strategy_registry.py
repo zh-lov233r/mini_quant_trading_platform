@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable
 
 ENGINE_SUPPORTED_TYPES = {"trend", "mean_reversion", "island_reversal"}
 _INDICATOR_PATTERN = re.compile(r"^(EMA|SMA)(\d+)$", re.IGNORECASE)
+MEAN_REVERSION_SUPPORTED_LOOKBACK_WINDOWS = (5, 10, 20)
 
 TREND_DEFAULTS: Dict[str, Any] = {
     "signal": {
@@ -25,7 +26,9 @@ TREND_DEFAULTS: Dict[str, Any] = {
     "risk": {
         "max_positions": 10,
         "position_size_pct": 0.1,
+        "stop_loss_pct": 0.10,
         "stop_loss_atr": 2.0,
+        "take_profit_atr": 4.0,
     },
     "execution": {
         "timeframe": "1d",
@@ -52,6 +55,8 @@ MEAN_REVERSION_DEFAULTS: Dict[str, Any] = {
     "risk": {
         "max_positions": 10,
         "position_size_pct": 0.1,
+        "stop_loss_pct": 0.10,
+        "take_profit_pct": 0.10,
     },
     "execution": {
         "timeframe": "1d",
@@ -86,6 +91,8 @@ ISLAND_REVERSAL_DEFAULTS: Dict[str, Any] = {
         "max_positions": 6,
         "position_size_pct": 0.15,
         "stop_loss_atr": 1.5,
+        "max_loss_pct": 0.10,
+        "take_profit_atr": 3.0,
     },
     "execution": {
         "timeframe": "1d",
@@ -353,8 +360,12 @@ def _normalize_trend_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         normalized["risk"]["max_positions"] = raw["max_positions"]
     if "position_size_pct" in raw:
         normalized["risk"]["position_size_pct"] = raw["position_size_pct"]
+    if "stop_loss_pct" in raw:
+        normalized["risk"]["stop_loss_pct"] = raw["stop_loss_pct"]
     if "stop_loss_atr" in raw:
         normalized["risk"]["stop_loss_atr"] = raw["stop_loss_atr"]
+    if "take_profit_atr" in raw:
+        normalized["risk"]["take_profit_atr"] = raw["take_profit_atr"]
     if "rebalance" in raw:
         normalized["execution"]["rebalance"] = raw["rebalance"]
     if "timeframe" in raw:
@@ -377,9 +388,17 @@ def _normalize_trend_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         normalized["risk"].get("position_size_pct", TREND_DEFAULTS["risk"]["position_size_pct"]),
         "risk.position_size_pct",
     )
+    normalized["risk"]["stop_loss_pct"] = _fraction(
+        normalized["risk"].get("stop_loss_pct", TREND_DEFAULTS["risk"]["stop_loss_pct"]),
+        "risk.stop_loss_pct",
+    )
     normalized["risk"]["stop_loss_atr"] = _positive_float(
         normalized["risk"].get("stop_loss_atr", normalized["signal"]["atr_multiplier"]),
         "risk.stop_loss_atr",
+    )
+    normalized["risk"]["take_profit_atr"] = _positive_float(
+        normalized["risk"].get("take_profit_atr", TREND_DEFAULTS["risk"]["take_profit_atr"]),
+        "risk.take_profit_atr",
     )
     normalized["execution"]["timeframe"] = str(
         normalized["execution"].get("timeframe", TREND_DEFAULTS["execution"]["timeframe"])
@@ -416,6 +435,20 @@ def _normalize_mean_reversion_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         normalized["signal"]["zscore_entry"] = raw["zscore_entry"]
     if "zscore_exit" in raw:
         normalized["signal"]["zscore_exit"] = raw["zscore_exit"]
+    if "max_positions" in raw:
+        normalized["risk"]["max_positions"] = raw["max_positions"]
+    if "position_size_pct" in raw:
+        normalized["risk"]["position_size_pct"] = raw["position_size_pct"]
+    if "stop_loss_pct" in raw:
+        normalized["risk"]["stop_loss_pct"] = raw["stop_loss_pct"]
+    if "take_profit_pct" in raw:
+        normalized["risk"]["take_profit_pct"] = raw["take_profit_pct"]
+    if "rebalance" in raw:
+        normalized["execution"]["rebalance"] = raw["rebalance"]
+    if "timeframe" in raw:
+        normalized["execution"]["timeframe"] = raw["timeframe"]
+    if "run_at" in raw:
+        normalized["execution"]["run_at"] = raw["run_at"]
     if "description" in raw:
         normalized["metadata"]["description"] = raw["description"]
 
@@ -423,6 +456,9 @@ def _normalize_mean_reversion_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         normalized["signal"].get("lookback_window"),
         "signal.lookback_window",
     )
+    if normalized["signal"]["lookback_window"] not in MEAN_REVERSION_SUPPORTED_LOOKBACK_WINDOWS:
+        allowed = ", ".join(str(window) for window in MEAN_REVERSION_SUPPORTED_LOOKBACK_WINDOWS)
+        raise ValueError(f"signal.lookback_window must be one of: {allowed}")
     normalized["signal"]["zscore_entry"] = _positive_float(
         normalized["signal"].get("zscore_entry"),
         "signal.zscore_entry",
@@ -441,8 +477,25 @@ def _normalize_mean_reversion_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         "risk.max_positions",
     )
     normalized["risk"]["position_size_pct"] = _fraction(
-        normalized["risk"].get("position_size_pct", 0.1),
+        normalized["risk"].get("position_size_pct", MEAN_REVERSION_DEFAULTS["risk"]["position_size_pct"]),
         "risk.position_size_pct",
+    )
+    normalized["risk"]["stop_loss_pct"] = _fraction(
+        normalized["risk"].get("stop_loss_pct", MEAN_REVERSION_DEFAULTS["risk"]["stop_loss_pct"]),
+        "risk.stop_loss_pct",
+    )
+    normalized["risk"]["take_profit_pct"] = _fraction(
+        normalized["risk"].get("take_profit_pct", MEAN_REVERSION_DEFAULTS["risk"]["take_profit_pct"]),
+        "risk.take_profit_pct",
+    )
+    normalized["execution"]["timeframe"] = str(
+        normalized["execution"].get("timeframe", MEAN_REVERSION_DEFAULTS["execution"]["timeframe"])
+    )
+    normalized["execution"]["rebalance"] = str(
+        normalized["execution"].get("rebalance", MEAN_REVERSION_DEFAULTS["execution"]["rebalance"])
+    )
+    normalized["execution"]["run_at"] = str(
+        normalized["execution"].get("run_at", MEAN_REVERSION_DEFAULTS["execution"]["run_at"])
     )
     normalized["metadata"]["description"] = str(normalized["metadata"].get("description", "")).strip()
     normalized["metadata"]["schema_version"] = _positive_int(
@@ -486,6 +539,8 @@ def _normalize_island_reversal_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         normalized["risk"]["position_size_pct"] = raw["position_size_pct"]
     if "stop_loss_atr" in raw:
         normalized["risk"]["stop_loss_atr"] = raw["stop_loss_atr"]
+    if "take_profit_atr" in raw:
+        normalized["risk"]["take_profit_atr"] = raw["take_profit_atr"]
     if "rebalance" in raw:
         normalized["execution"]["rebalance"] = raw["rebalance"]
     if "timeframe" in raw:
@@ -558,6 +613,14 @@ def _normalize_island_reversal_params(raw: Dict[str, Any]) -> Dict[str, Any]:
     normalized["risk"]["stop_loss_atr"] = _positive_float(
         normalized["risk"].get("stop_loss_atr", ISLAND_REVERSAL_DEFAULTS["risk"]["stop_loss_atr"]),
         "risk.stop_loss_atr",
+    )
+    normalized["risk"]["max_loss_pct"] = _fraction(
+        normalized["risk"].get("max_loss_pct", ISLAND_REVERSAL_DEFAULTS["risk"]["max_loss_pct"]),
+        "risk.max_loss_pct",
+    )
+    normalized["risk"]["take_profit_atr"] = _positive_float(
+        normalized["risk"].get("take_profit_atr", ISLAND_REVERSAL_DEFAULTS["risk"]["take_profit_atr"]),
+        "risk.take_profit_atr",
     )
     normalized["execution"]["timeframe"] = str(
         normalized["execution"].get("timeframe", ISLAND_REVERSAL_DEFAULTS["execution"]["timeframe"])

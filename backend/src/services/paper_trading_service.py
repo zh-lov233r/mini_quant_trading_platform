@@ -31,7 +31,13 @@ from src.services.strategy_allocation_service import (
     normalize_portfolio_name,
     validate_portfolio_allocations,
 )
-from src.services.strategy_engine import STRATEGY_HANDLERS, SignalEvent, load_feature_market_data
+from src.services.strategy_engine import (
+    STRATEGY_HANDLERS,
+    SignalEvent,
+    load_feature_market_data,
+    required_recent_bar_count_for_runtime,
+    required_recent_bar_lookback_days,
+)
 from src.services.strategy_registry import build_runtime_payload
 
 
@@ -203,7 +209,15 @@ def run_paper_trading(
         broker_positions_before = client.list_positions()
         open_orders = client.list_orders(status="open") if submit_orders else []
 
-        snapshots = load_feature_market_data(db, trade_date, symbols)
+        recent_bar_count = required_recent_bar_count_for_runtime(runtime)
+        recent_bar_lookback_days = required_recent_bar_lookback_days(recent_bar_count)
+        snapshots = load_feature_market_data(
+            db,
+            trade_date,
+            symbols,
+            recent_bar_count=recent_bar_count,
+            recent_bar_lookback_days=recent_bar_lookback_days,
+        )
         if not snapshots:
             raise ValueError("no feature snapshots found for the requested universe and trade date")
 
@@ -927,6 +941,7 @@ def _inject_virtual_positions(
     for symbol, snapshot in snapshots.items():
         position = positions_by_symbol.get(symbol)
         snapshot["position"] = position.qty if position is not None else 0.0
+        snapshot["avg_entry_price"] = position.avg_entry_price if position is not None else None
 
 
 def _build_price_lookup(

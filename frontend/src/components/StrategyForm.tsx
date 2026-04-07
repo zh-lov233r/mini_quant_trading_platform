@@ -17,6 +17,8 @@ import type {
   StrategyType,
 } from "@/types/strategy";
 
+const MEAN_REVERSION_LOOKBACK_OPTIONS = [5, 10, 20];
+
 function toRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
@@ -109,6 +111,12 @@ export default function StrategyForm({
   const [atrMul, setAtrMul] = useState(
     toFiniteNumber(initialSignal.atr_multiplier, 2.0)
   );
+  const [trendStopLossPct, setTrendStopLossPct] = useState(
+    toFiniteNumber(initialRisk.stop_loss_pct, 0.1)
+  );
+  const [trendTakeProfitAtr, setTrendTakeProfitAtr] = useState(
+    toFiniteNumber(initialRisk.take_profit_atr, 4.0)
+  );
   const [symbols, setSymbols] = useState(toSymbolText(initialUniverse.symbols));
   const [maxPositions, setMaxPositions] = useState(
     toFiniteNumber(initialRisk.max_positions, 10)
@@ -121,6 +129,21 @@ export default function StrategyForm({
   );
   const [runAt, setRunAt] = useState(
     toStringValue(initialExecution.run_at, "close")
+  );
+  const [meanReversionLookback, setMeanReversionLookback] = useState(
+    toFiniteNumber(initialSignal.lookback_window, 20)
+  );
+  const [meanReversionZscoreEntry, setMeanReversionZscoreEntry] = useState(
+    toFiniteNumber(initialSignal.zscore_entry, 2.0)
+  );
+  const [meanReversionZscoreExit, setMeanReversionZscoreExit] = useState(
+    toFiniteNumber(initialSignal.zscore_exit, 0.5)
+  );
+  const [meanReversionStopLossPct, setMeanReversionStopLossPct] = useState(
+    toFiniteNumber(initialRisk.stop_loss_pct, 0.1)
+  );
+  const [meanReversionTakeProfitPct, setMeanReversionTakeProfitPct] = useState(
+    toFiniteNumber(initialRisk.take_profit_pct, 0.1)
   );
   const [islandDowntrendLookback, setIslandDowntrendLookback] = useState(
     toFiniteNumber(initialSignal.downtrend_lookback, 60)
@@ -157,6 +180,12 @@ export default function StrategyForm({
   );
   const [islandStopLossAtr, setIslandStopLossAtr] = useState(
     toFiniteNumber(initialRisk.stop_loss_atr, 1.5)
+  );
+  const [islandMaxLossPct, setIslandMaxLossPct] = useState(
+    toFiniteNumber(initialRisk.max_loss_pct, 0.1)
+  );
+  const [islandTakeProfitAtr, setIslandTakeProfitAtr] = useState(
+    toFiniteNumber(initialRisk.take_profit_atr, 3.0)
   );
   const [rawJson, setRawJson] = useState(
     initialStrategy
@@ -214,6 +243,32 @@ export default function StrategyForm({
     if (isEditMode) {
       return;
     }
+    if (strategyType !== "mean_reversion" || !selectedTemplate) {
+      return;
+    }
+
+    const defaults = toRecord(selectedTemplate.defaults);
+    const signal = toRecord(defaults.signal);
+    const universe = toRecord(defaults.universe);
+    const risk = toRecord(defaults.risk);
+    const execution = toRecord(defaults.execution);
+
+    setMeanReversionLookback(toFiniteNumber(signal.lookback_window, 20));
+    setMeanReversionZscoreEntry(toFiniteNumber(signal.zscore_entry, 2.0));
+    setMeanReversionZscoreExit(toFiniteNumber(signal.zscore_exit, 0.5));
+    setSymbols(toSymbolText(universe.symbols));
+    setMaxPositions(toFiniteNumber(risk.max_positions, 10));
+    setPositionSizePct(toFiniteNumber(risk.position_size_pct, 0.1));
+    setMeanReversionStopLossPct(toFiniteNumber(risk.stop_loss_pct, 0.1));
+    setMeanReversionTakeProfitPct(toFiniteNumber(risk.take_profit_pct, 0.1));
+    setRebalance(toStringValue(execution.rebalance, "daily"));
+    setRunAt(toStringValue(execution.run_at, "close"));
+  }, [isEditMode, selectedTemplate, strategyType]);
+
+  useEffect(() => {
+    if (isEditMode) {
+      return;
+    }
     if (strategyType !== "island_reversal" || !selectedTemplate) {
       return;
     }
@@ -239,6 +294,8 @@ export default function StrategyForm({
     setMaxPositions(toFiniteNumber(risk.max_positions, 6));
     setPositionSizePct(toFiniteNumber(risk.position_size_pct, 0.15));
     setIslandStopLossAtr(toFiniteNumber(risk.stop_loss_atr, 1.5));
+    setIslandMaxLossPct(toFiniteNumber(risk.max_loss_pct, 0.1));
+    setIslandTakeProfitAtr(toFiniteNumber(risk.take_profit_atr, 3.0));
     setRebalance(toStringValue(execution.rebalance, "daily"));
     setRunAt(toStringValue(execution.run_at, "close"));
   }, [isEditMode, selectedTemplate, strategyType]);
@@ -306,7 +363,9 @@ export default function StrategyForm({
       risk: {
         max_positions: Number(maxPositions),
         position_size_pct: Number(positionSizePct),
+        stop_loss_pct: Number(trendStopLossPct),
         stop_loss_atr: Number(atrMul),
+        take_profit_atr: Number(trendTakeProfitAtr),
       },
       execution: {
         timeframe: "1d",
@@ -331,7 +390,59 @@ export default function StrategyForm({
       slowKind,
       slowWindow,
       symbols,
+      trendStopLossPct,
+      trendTakeProfitAtr,
       volMul,
+    ]
+  );
+
+  const meanReversionParams = useMemo(
+    () => {
+      const parsedSymbols = symbols
+        .split(",")
+        .map((item) => item.trim().toUpperCase())
+        .filter(Boolean);
+
+      return {
+        signal: {
+          lookback_window: Number(meanReversionLookback),
+          zscore_entry: Number(meanReversionZscoreEntry),
+          zscore_exit: Number(meanReversionZscoreExit),
+          price_field: "close",
+        },
+        universe: {
+          symbols: parsedSymbols,
+          selection_mode: parsedSymbols.length > 0 ? "manual" : "all_common_stock",
+        },
+        risk: {
+          max_positions: Number(maxPositions),
+          position_size_pct: Number(positionSizePct),
+          stop_loss_pct: Number(meanReversionStopLossPct),
+          take_profit_pct: Number(meanReversionTakeProfitPct),
+        },
+        execution: {
+          timeframe: "1d",
+          rebalance,
+          run_at: runAt,
+        },
+        metadata: {
+          description,
+          schema_version: 1,
+        },
+      };
+    },
+    [
+      description,
+      maxPositions,
+      meanReversionLookback,
+      meanReversionStopLossPct,
+      meanReversionTakeProfitPct,
+      meanReversionZscoreEntry,
+      meanReversionZscoreExit,
+      positionSizePct,
+      rebalance,
+      runAt,
+      symbols,
     ]
   );
 
@@ -364,6 +475,8 @@ export default function StrategyForm({
           max_positions: Number(maxPositions),
           position_size_pct: Number(positionSizePct),
           stop_loss_atr: Number(islandStopLossAtr),
+          max_loss_pct: Number(islandMaxLossPct),
+          take_profit_atr: Number(islandTakeProfitAtr),
         },
         execution: {
           timeframe: "1d",
@@ -380,7 +493,9 @@ export default function StrategyForm({
       description,
       islandDowntrendLookback,
       islandDowntrendMinDropPct,
+      islandMaxLossPct,
       islandStopLossAtr,
+      islandTakeProfitAtr,
       leftGapMinPct,
       leftVolumeRatioMax,
       maxIslandBars,
@@ -406,6 +521,15 @@ export default function StrategyForm({
         strategy_type: strategyType,
         status,
         params: trendParams,
+      };
+    }
+    if (strategyType === "mean_reversion") {
+      return {
+        name,
+        description,
+        strategy_type: strategyType,
+        status,
+        params: meanReversionParams,
       };
     }
     if (strategyType === "island_reversal") {
@@ -435,7 +559,7 @@ export default function StrategyForm({
         params: {},
       };
     }
-  }, [description, islandReversalParams, name, rawJson, status, strategyType, trendParams]);
+  }, [description, islandReversalParams, meanReversionParams, name, rawJson, status, strategyType, trendParams]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -468,6 +592,12 @@ export default function StrategyForm({
         }
         if (!(Number(volMul) > 0)) throw new Error(isZh ? "成交量过滤倍数必须 > 0" : "Volume multiplier must be > 0");
         if (!(Number(atrMul) > 0)) throw new Error(isZh ? "ATR 乘数必须 > 0" : "ATR multiplier must be > 0");
+        if (!(Number(trendStopLossPct) > 0 && Number(trendStopLossPct) <= 1)) {
+          throw new Error(isZh ? "固定止损比例必须在 (0, 1] 之间" : "Fixed stop loss pct must be within (0, 1]");
+        }
+        if (!(Number(trendTakeProfitAtr) > 0)) {
+          throw new Error(isZh ? "ATR 止盈倍数必须 > 0" : "ATR take profit must be > 0");
+        }
         if (!(Number(maxPositions) > 0)) throw new Error(isZh ? "最大持仓数必须 > 0" : "Max positions must be > 0");
         if (!(Number(positionSizePct) > 0 && Number(positionSizePct) <= 1)) {
           throw new Error(isZh ? "单票仓位比例必须在 (0, 1] 之间" : "Position size percentage must be within (0, 1]");
@@ -478,6 +608,39 @@ export default function StrategyForm({
           strategy_type: strategyType,
           status,
           params: trendParams,
+        };
+      } else if (strategyType === "mean_reversion") {
+        if (!MEAN_REVERSION_LOOKBACK_OPTIONS.includes(Number(meanReversionLookback))) {
+          throw new Error(
+            isZh
+              ? `均值回归回看窗口必须是 ${MEAN_REVERSION_LOOKBACK_OPTIONS.join(", ")} 中的一个`
+              : `Mean-reversion lookback must be one of ${MEAN_REVERSION_LOOKBACK_OPTIONS.join(", ")}`
+          );
+        }
+        if (!(Number(meanReversionZscoreEntry) > 0)) {
+          throw new Error(isZh ? "Z-score 入场阈值必须 > 0" : "Z-score entry threshold must be > 0");
+        }
+        if (!(Number(meanReversionZscoreExit) > 0)) {
+          throw new Error(isZh ? "Z-score 出场阈值必须 > 0" : "Z-score exit threshold must be > 0");
+        }
+        if (!(Number(maxPositions) > 0)) {
+          throw new Error(isZh ? "最大持仓数必须 > 0" : "Max positions must be > 0");
+        }
+        if (!(Number(positionSizePct) > 0 && Number(positionSizePct) <= 1)) {
+          throw new Error(isZh ? "单票仓位比例必须在 (0, 1] 之间" : "Position size percentage must be within (0, 1]");
+        }
+        if (!(Number(meanReversionStopLossPct) > 0 && Number(meanReversionStopLossPct) <= 1)) {
+          throw new Error(isZh ? "止损比例必须在 (0, 1] 之间" : "Stop loss pct must be within (0, 1]");
+        }
+        if (!(Number(meanReversionTakeProfitPct) > 0 && Number(meanReversionTakeProfitPct) <= 1)) {
+          throw new Error(isZh ? "止盈比例必须在 (0, 1] 之间" : "Take profit pct must be within (0, 1]");
+        }
+        payload = {
+          name: name.trim(),
+          description: description.trim(),
+          strategy_type: strategyType,
+          status,
+          params: meanReversionParams,
         };
       } else if (strategyType === "island_reversal") {
         if (!(Number(islandDowntrendLookback) > 0)) {
@@ -521,6 +684,12 @@ export default function StrategyForm({
         }
         if (!(Number(islandStopLossAtr) > 0)) {
           throw new Error(isZh ? "ATR 止损倍数必须 > 0" : "ATR stop loss must be > 0");
+        }
+        if (!(Number(islandMaxLossPct) > 0 && Number(islandMaxLossPct) <= 1)) {
+          throw new Error(isZh ? "最大亏损强平比例必须在 (0, 1] 之间" : "Max loss pct must be within (0, 1]");
+        }
+        if (!(Number(islandTakeProfitAtr) > 0)) {
+          throw new Error(isZh ? "ATR 止盈倍数必须 > 0" : "ATR take profit must be > 0");
         }
         payload = {
           name: name.trim(),
@@ -833,7 +1002,7 @@ export default function StrategyForm({
                   />
                 </div>
                 <div style={boxStyle}>
-                  <label>{isZh ? "ATR 乘数" : "ATR Multiplier"}</label>
+                  <label>{isZh ? "ATR 止损倍数" : "ATR Stop Loss"}</label>
                   <input
                     type="number"
                     min={0.1}
@@ -841,6 +1010,29 @@ export default function StrategyForm({
                     style={inputStyle}
                     value={atrMul}
                     onChange={(e) => setAtrMul(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "固定止损比例" : "Fixed Stop Loss Pct"}</label>
+                  <input
+                    type="number"
+                    min={0.001}
+                    max={1}
+                    step="any"
+                    style={inputStyle}
+                    value={trendStopLossPct}
+                    onChange={(e) => setTrendStopLossPct(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "ATR 止盈倍数" : "ATR Take Profit"}</label>
+                  <input
+                    type="number"
+                    min={0.1}
+                    step="0.1"
+                    style={inputStyle}
+                    value={trendTakeProfitAtr}
+                    onChange={(e) => setTrendTakeProfitAtr(Number(e.target.value))}
                   />
                 </div>
               </div>
@@ -863,6 +1055,146 @@ export default function StrategyForm({
                     ? "当前默认行为：如果股票池留空，策略会把 universe 解释为全部 active US common stock。"
                     : "Current default behavior: if universe is left empty, the strategy interprets it as all active US common stocks."}
                 </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                <div style={boxStyle}>
+                  <label>{isZh ? "最大持仓数" : "Max Positions"}</label>
+                  <input
+                    type="number"
+                    min={1}
+                    style={inputStyle}
+                    value={maxPositions}
+                    onChange={(e) => setMaxPositions(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "单票仓位比例" : "Position Size Pct"}</label>
+                  <input
+                    type="number"
+                    min={0.01}
+                    max={1}
+                    step="0.01"
+                    style={inputStyle}
+                    value={positionSizePct}
+                    onChange={(e) => setPositionSizePct(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "调仓频率" : "Rebalance Frequency"}</label>
+                  <select
+                    style={inputStyle}
+                    value={rebalance}
+                    onChange={(e) => setRebalance(e.target.value)}
+                  >
+                    <option value="daily">daily</option>
+                    <option value="weekly">weekly</option>
+                    <option value="monthly">monthly</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style={boxStyle}>
+                <label>{isZh ? "运行时机" : "Run Timing"}</label>
+                <select
+                  style={inputStyle}
+                  value={runAt}
+                  onChange={(e) => setRunAt(e.target.value)}
+                >
+                  <option value="close">close</option>
+                  <option value="open">open</option>
+                </select>
+              </div>
+            </section>
+          ) : strategyType === "mean_reversion" ? (
+            <section style={cardStyle}>
+              <h3 style={{ marginTop: 0 }}>{isZh ? "均值回归参数" : "Mean Reversion Parameters"}</h3>
+              <div style={{ marginBottom: 14, color: "rgba(148, 163, 184, 0.88)", fontSize: 13, lineHeight: 1.6 }}>
+                {isZh
+                  ? "止盈止损字段都使用小数表示百分比，例如 0.1 = 10%。当前 z-score 窗口只支持 5 / 10 / 20。"
+                  : "Stop-loss and take-profit fields use decimal percentages, for example 0.1 = 10%. Supported z-score windows are 5 / 10 / 20."}
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div style={boxStyle}>
+                  <label>{isZh ? "回看窗口" : "Lookback Window"}</label>
+                  <select
+                    style={inputStyle}
+                    value={meanReversionLookback}
+                    onChange={(e) => setMeanReversionLookback(Number(e.target.value))}
+                  >
+                    {MEAN_REVERSION_LOOKBACK_OPTIONS.map((window) => (
+                      <option key={`mr-lookback-${window}`} value={window}>
+                        {window}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "Z-score 入场阈值" : "Z-score Entry"}</label>
+                  <input
+                    type="number"
+                    min={0.1}
+                    step="0.1"
+                    style={inputStyle}
+                    value={meanReversionZscoreEntry}
+                    onChange={(e) => setMeanReversionZscoreEntry(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "Z-score 出场阈值" : "Z-score Exit"}</label>
+                  <input
+                    type="number"
+                    min={0.1}
+                    step="0.1"
+                    style={inputStyle}
+                    value={meanReversionZscoreExit}
+                    onChange={(e) => setMeanReversionZscoreExit(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "止损比例" : "Stop Loss Pct"}</label>
+                  <input
+                    type="number"
+                    min={0.001}
+                    max={1}
+                    step="any"
+                    style={inputStyle}
+                    value={meanReversionStopLossPct}
+                    onChange={(e) => setMeanReversionStopLossPct(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "止盈比例" : "Take Profit Pct"}</label>
+                  <input
+                    type="number"
+                    min={0.001}
+                    max={1}
+                    step="any"
+                    style={inputStyle}
+                    value={meanReversionTakeProfitPct}
+                    onChange={(e) => setMeanReversionTakeProfitPct(Number(e.target.value))}
+                  />
+                </div>
+              </div>
+
+              <div style={boxStyle}>
+                <label>{isZh ? "股票池" : "Universe"}</label>
+                <input
+                  style={inputStyle}
+                  value={symbols}
+                  onChange={(e) => setSymbols(e.target.value)}
+                  placeholder={
+                    isZh
+                      ? "留空则默认绑定全部 common stock；也可以手动输入 AAPL,MSFT,NVDA"
+                      : "Leave empty to use all common stocks by default, or enter symbols like AAPL,MSFT,NVDA"
+                  }
+                />
+              </div>
+              <div style={{ color: "rgba(148, 163, 184, 0.88)", fontSize: 13, lineHeight: 1.6 }}>
+                {isZh
+                  ? "股票池留空时，会在全部 common stock 中扫描均值回归机会。"
+                  : "If the universe is empty, the strategy scans for mean-reversion setups across all common stocks."}
+              </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
                 <div style={boxStyle}>
@@ -1037,7 +1369,7 @@ export default function StrategyForm({
                   />
                 </div>
                 <div style={boxStyle}>
-                  <label>{isZh ? "缺口支撑容差" : "Support Tolerance Pct"}</label>
+                  <label>{isZh ? "缺口容差" : "Gap Tolerance Pct"}</label>
                   <input
                     type="number"
                     min={0.001}
@@ -1057,6 +1389,29 @@ export default function StrategyForm({
                     style={inputStyle}
                     value={islandStopLossAtr}
                     onChange={(e) => setIslandStopLossAtr(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "最大亏损强平比例" : "Max Loss Exit Pct"}</label>
+                  <input
+                    type="number"
+                    min={0.001}
+                    max={1}
+                    step="any"
+                    style={inputStyle}
+                    value={islandMaxLossPct}
+                    onChange={(e) => setIslandMaxLossPct(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "ATR 止盈倍数" : "ATR Take Profit"}</label>
+                  <input
+                    type="number"
+                    min={0.1}
+                    step="0.1"
+                    style={inputStyle}
+                    value={islandTakeProfitAtr}
+                    onChange={(e) => setIslandTakeProfitAtr(Number(e.target.value))}
                   />
                 </div>
               </div>

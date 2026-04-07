@@ -25,6 +25,7 @@ StrategyHandler = Callable[[RuntimeStrategy, MarketDataBySymbol], list["SignalEv
 
 RECENT_BAR_COUNT = 40
 RECENT_BAR_LOOKBACK_DAYS = 90
+ISLAND_REVERSAL_STOP_ATR_WINDOW = 20
 
 FEATURE_SNAPSHOT_SQL = """
 SELECT
@@ -170,6 +171,9 @@ def load_feature_market_data(
     db: Session,
     trade_date: date,
     symbols: list[str] | None = None,
+    *,
+    recent_bar_count: int = RECENT_BAR_COUNT,
+    recent_bar_lookback_days: int = RECENT_BAR_LOOKBACK_DAYS,
 ) -> MarketDataBySymbol:
     sql = FEATURE_SNAPSHOT_SQL
     params: dict[str, Any] = {"trade_date": trade_date}
@@ -188,7 +192,13 @@ def load_feature_market_data(
         snapshot = _build_feature_snapshot(row)
         snapshots[snapshot["symbol"]] = snapshot
 
-    recent_history = _load_recent_bar_history(db, trade_date, symbols)
+    recent_history = _load_recent_bar_history(
+        db,
+        trade_date,
+        symbols,
+        recent_bar_count=recent_bar_count,
+        recent_bar_lookback_days=recent_bar_lookback_days,
+    )
     for symbol, bars in recent_history.items():
         if symbol in snapshots:
             snapshots[symbol]["recent_bars"] = bars
@@ -203,7 +213,15 @@ def generate_signals_for_trade_date(
     trade_date: date,
     symbols: list[str] | None = None,
 ) -> list[SignalEvent]:
-    snapshots = load_feature_market_data(db, trade_date, symbols)
+    active_runtimes = _list_engine_ready_runtimes(db)
+    recent_bar_count, recent_bar_lookback_days = _recent_history_window_for_runtimes(active_runtimes)
+    snapshots = load_feature_market_data(
+        db,
+        trade_date,
+        symbols,
+        recent_bar_count=recent_bar_count,
+        recent_bar_lookback_days=recent_bar_lookback_days,
+    )
     return generate_signals(db, snapshots)
 
 
@@ -217,10 +235,17 @@ def generate_and_persist_signals_for_trade_date(
     mode: Literal["paper", "live"] = "paper",
     symbols: list[str] | None = None,
 ) -> list[PersistedSignalRun]:
-    snapshots = load_feature_market_data(db, trade_date, symbols)
-    results: list[PersistedSignalRun] = []
-
     active_strategies = list_active_strategies(db)
+    active_runtimes = _list_engine_ready_runtimes_from_strategies(active_strategies)
+    recent_bar_count, recent_bar_lookback_days = _recent_history_window_for_runtimes(active_runtimes)
+    snapshots = load_feature_market_data(
+        db,
+        trade_date,
+        symbols,
+        recent_bar_count=recent_bar_count,
+        recent_bar_lookback_days=recent_bar_lookback_days,
+    )
+    results: list[PersistedSignalRun] = []
     started_at = datetime.now(timezone.utc)
 
     for strategy in active_strategies:
@@ -321,11 +346,14 @@ def _load_recent_bar_history(
     db: Session,
     trade_date: date,
     symbols: list[str] | None = None,
+    *,
+    recent_bar_count: int = RECENT_BAR_COUNT,
+    recent_bar_lookback_days: int = RECENT_BAR_LOOKBACK_DAYS,
 ) -> Dict[str, list[HistoryBar]]:
     sql = RECENT_BAR_HISTORY_SQL
     params: dict[str, Any] = {
         "trade_date": trade_date,
-        "history_start": trade_date - timedelta(days=RECENT_BAR_LOOKBACK_DAYS),
+        "history_start": trade_date - timedelta(days=recent_bar_lookback_days),
     }
 
     if symbols:
@@ -345,10 +373,67 @@ def _load_recent_bar_history(
         history_by_symbol.setdefault(symbol, []).append(_build_history_bar(row))
 
     return {
-        symbol: bars[-RECENT_BAR_COUNT:]
+        symbol: bars[-recent_bar_count:]
         for symbol, bars in history_by_symbol.items()
         if bars
     }
+
+
+def _safe_positive_int(value: Any, fallback: int) -> int:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return normalized if normalized > 0 else fallback
+
+
+def required_recent_bar_count_for_runtime(runtime_strategy: RuntimeStrategy) -> int:
+    recent_bar_count = RECENT_BAR_COUNT
+    if runtime_strategy.get("strategy_type") != "island_reversal":
+        return recent_bar_count
+
+    signal_cfg = runtime_strategy.get("params", {}).get("signal", {}) or {}
+    downtrend_lookback = _safe_positive_int(signal_cfg.get("downtrend_lookback"), 0)
+    max_island_bars = _safe_positive_int(signal_cfg.get("max_island_bars"), 0)
+    retest_window = _safe_positive_int(signal_cfg.get("retest_window"), 0)
+    return max(
+        recent_bar_count,
+        downtrend_lookback + max_island_bars + retest_window + 2,
+    )
+
+
+def required_recent_bar_lookback_days(recent_bar_count: int) -> int:
+    estimated_calendar_days = int(recent_bar_count * 1.8) + 30
+    return max(RECENT_BAR_LOOKBACK_DAYS, estimated_calendar_days)
+
+
+def _recent_history_window_for_runtimes(
+    runtimes: list[RuntimeStrategy],
+) -> tuple[int, int]:
+    if not runtimes:
+        return RECENT_BAR_COUNT, RECENT_BAR_LOOKBACK_DAYS
+
+    recent_bar_count = max(
+        required_recent_bar_count_for_runtime(runtime)
+        for runtime in runtimes
+    )
+    return recent_bar_count, required_recent_bar_lookback_days(recent_bar_count)
+
+
+def _list_engine_ready_runtimes_from_strategies(strategies: list[Strategy]) -> list[RuntimeStrategy]:
+    runtimes: list[RuntimeStrategy] = []
+    for strategy in strategies:
+        runtime = build_runtime_payload(strategy)
+        if not runtime["engine_ready"]:
+            continue
+        if STRATEGY_HANDLERS.get(runtime["strategy_type"]) is None:
+            continue
+        runtimes.append(runtime)
+    return runtimes
+
+
+def _list_engine_ready_runtimes(db: Session) -> list[RuntimeStrategy]:
+    return _list_engine_ready_runtimes_from_strategies(list_active_strategies(db))
 
 
 # Reuse the existing one-day StrategyRun for this strategy/mode/date or create a fresh one.
@@ -481,6 +566,7 @@ def _build_feature_snapshot(row: Dict[str, Any]) -> MarketSnapshot:
         "prev_ema_20": row["prev_ema_20"],
         "prev_ema_50": row["prev_ema_50"],
         "position": 0,
+        "avg_entry_price": None,
         "recent_bars": [],
     }
 
@@ -507,6 +593,46 @@ def _safe_float_or_none(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _true_range(
+    high_p: float | None,
+    low_p: float | None,
+    prev_close: float | None,
+) -> float | None:
+    if high_p is None or low_p is None:
+        return None
+    if prev_close is None:
+        return high_p - low_p
+    return max(
+        high_p - low_p,
+        abs(high_p - prev_close),
+        abs(low_p - prev_close),
+    )
+
+
+def _compute_recent_atr(recent_bars: list[HistoryBar], window: int) -> float | None:
+    if window <= 0 or len(recent_bars) < window:
+        return None
+
+    true_ranges: list[float] = []
+    prev_close: float | None = None
+    for idx, bar in enumerate(recent_bars):
+        if idx > 0:
+            prev_close = _safe_float_or_none(recent_bars[idx - 1].get("close"))
+        tr = _true_range(
+            _safe_float_or_none(bar.get("high")),
+            _safe_float_or_none(bar.get("low")),
+            prev_close,
+        )
+        if tr is not None:
+            true_ranges.append(tr)
+
+    if len(true_ranges) < window:
+        return None
+
+    window_true_ranges = true_ranges[-window:]
+    return sum(window_true_ranges) / float(window)
 
 
 # Convert one RECENT_BAR_HISTORY_SQL row into the history-bar shape used by pattern scanners.
@@ -543,6 +669,7 @@ def _trend_following_handler(
 ) -> list[SignalEvent]:
     params = runtime_strategy["params"]
     signal_cfg = params["signal"]
+    risk_cfg = params["risk"]
     universe_cfg = params["universe"]
     universe = _resolve_strategy_universe(universe_cfg, market_data_by_symbol)
 
@@ -556,6 +683,112 @@ def _trend_following_handler(
     for symbol in universe:
         snapshot = market_data_by_symbol.get(symbol)
         if not snapshot:
+            continue
+
+        position = float(snapshot.get("position", 0) or 0)
+        avg_entry_price = _safe_float_or_none(snapshot.get("avg_entry_price"))
+        close_price = _safe_float_or_none(snapshot.get("close"))
+        current_atr = _safe_float_or_none(snapshot.get("atr_14"))
+        stop_loss_pct = float(risk_cfg["stop_loss_pct"])
+
+        if (
+            position > 0
+            and close_price is not None
+            and avg_entry_price is not None
+            and avg_entry_price > 0
+            and close_price <= avg_entry_price * (1.0 - stop_loss_pct)
+        ):
+            signals.append(
+                SignalEvent(
+                    strategy_id=runtime_strategy["strategy_id"],
+                    ts=snapshot.get("ts") or datetime.now(timezone.utc),
+                    symbol=symbol,
+                    action="SELL",
+                    reason="price fell below the fixed stop-loss threshold",
+                    score=float(abs((avg_entry_price - close_price) / avg_entry_price)),
+                    metadata={
+                        "close": close_price,
+                        "atr_14": current_atr,
+                        "position": position,
+                        "avg_entry_price": avg_entry_price,
+                        "config": {
+                            "volume_multiplier": signal_cfg["volume_multiplier"],
+                            "atr_multiplier": signal_cfg["atr_multiplier"],
+                            "stop_loss_pct": stop_loss_pct,
+                            "stop_loss_atr": risk_cfg["stop_loss_atr"],
+                            "take_profit_atr": risk_cfg["take_profit_atr"],
+                        },
+                    },
+                )
+            )
+            continue
+
+        if (
+            position > 0
+            and close_price is not None
+            and avg_entry_price is not None
+            and avg_entry_price > 0
+            and current_atr is not None
+            and current_atr > 0
+            and close_price <= avg_entry_price - (float(risk_cfg["stop_loss_atr"]) * current_atr)
+        ):
+            signals.append(
+                SignalEvent(
+                    strategy_id=runtime_strategy["strategy_id"],
+                    ts=snapshot.get("ts") or datetime.now(timezone.utc),
+                    symbol=symbol,
+                    action="SELL",
+                    reason="price hit the ATR stop-loss threshold",
+                    score=float(abs((avg_entry_price - close_price) / avg_entry_price)),
+                    metadata={
+                        "close": close_price,
+                        "atr_14": current_atr,
+                        "position": position,
+                        "avg_entry_price": avg_entry_price,
+                        "config": {
+                            "volume_multiplier": signal_cfg["volume_multiplier"],
+                            "atr_multiplier": signal_cfg["atr_multiplier"],
+                            "stop_loss_pct": stop_loss_pct,
+                            "stop_loss_atr": risk_cfg["stop_loss_atr"],
+                            "take_profit_atr": risk_cfg["take_profit_atr"],
+                        },
+                    },
+                )
+            )
+            continue
+
+        if (
+            position > 0
+            and close_price is not None
+            and avg_entry_price is not None
+            and avg_entry_price > 0
+            and current_atr is not None
+            and current_atr > 0
+            and close_price >= avg_entry_price + (float(risk_cfg["take_profit_atr"]) * current_atr)
+        ):
+            signals.append(
+                SignalEvent(
+                    strategy_id=runtime_strategy["strategy_id"],
+                    ts=snapshot.get("ts") or datetime.now(timezone.utc),
+                    symbol=symbol,
+                    action="SELL",
+                    reason="price reached the ATR take-profit threshold",
+                    score=float(abs((close_price - avg_entry_price) / avg_entry_price)),
+                    metadata={
+                        "close": close_price,
+                        "atr_14": current_atr,
+                        "position": position,
+                        "avg_entry_price": avg_entry_price,
+                        "config": {
+                            "volume_multiplier": signal_cfg["volume_multiplier"],
+                            "atr_multiplier": signal_cfg["atr_multiplier"],
+                            "stop_loss_pct": stop_loss_pct,
+                            "stop_loss_atr": risk_cfg["stop_loss_atr"],
+                            "take_profit_atr": risk_cfg["take_profit_atr"],
+                        },
+                    },
+                )
+            )
             continue
 
         volume = _safe_float(snapshot.get("volume"))
@@ -593,10 +826,14 @@ def _trend_following_handler(
                 metadata={
                     "close": snapshot.get("close"),
                     "atr_14": snapshot.get("atr_14"),
-                    "position": snapshot.get("position", 0),
+                    "position": position,
+                    "avg_entry_price": avg_entry_price,
                     "config": {
                         "volume_multiplier": signal_cfg["volume_multiplier"],
                         "atr_multiplier": signal_cfg["atr_multiplier"],
+                        "stop_loss_pct": stop_loss_pct,
+                        "stop_loss_atr": risk_cfg["stop_loss_atr"],
+                        "take_profit_atr": risk_cfg["take_profit_atr"],
                     },
                 },
             )
@@ -614,6 +851,7 @@ def _mean_reversion_handler(
 ) -> list[SignalEvent]:
     params = runtime_strategy["params"]
     signal_cfg = params["signal"]
+    risk_cfg = params["risk"]
     universe_cfg = params["universe"]
     universe = _resolve_strategy_universe(universe_cfg, market_data_by_symbol)
 
@@ -621,6 +859,8 @@ def _mean_reversion_handler(
     zscore_key = f"zscore_{lookback}"
     zscore_entry = float(signal_cfg["zscore_entry"])
     zscore_exit = float(signal_cfg["zscore_exit"])
+    stop_loss_pct = float(risk_cfg["stop_loss_pct"])
+    take_profit_pct = float(risk_cfg["take_profit_pct"])
 
     signals: list[SignalEvent] = []
     for symbol in universe:
@@ -635,10 +875,48 @@ def _mean_reversion_handler(
         action: Literal["BUY", "SELL", "HOLD"] | None = None
         reason: str | None = None
         position = float(snapshot.get("position", 0) or 0)
+        avg_entry_price = _safe_float_or_none(snapshot.get("avg_entry_price"))
+        close_price = _safe_float_or_none(snapshot.get("close"))
 
-        if position > 0 and zscore >= -zscore_exit:
+        if (
+            position > 0
+            and close_price is not None
+            and avg_entry_price is not None
+            and avg_entry_price > 0
+            and close_price <= avg_entry_price * (1.0 - stop_loss_pct)
+        ):
+            action = "SELL"
+            reason = f"price fell below the {stop_loss_pct:.1%} stop-loss threshold"
+        elif (
+            position > 0
+            and close_price is not None
+            and avg_entry_price is not None
+            and avg_entry_price > 0
+            and close_price >= avg_entry_price * (1.0 + take_profit_pct)
+        ):
+            action = "SELL"
+            reason = f"price reached the {take_profit_pct:.1%} take-profit threshold"
+        elif position > 0 and zscore >= -zscore_exit:
             action = "SELL"
             reason = f"{zscore_key} reverted above exit threshold"
+        elif (
+            position < 0
+            and close_price is not None
+            and avg_entry_price is not None
+            and avg_entry_price > 0
+            and close_price >= avg_entry_price * (1.0 + stop_loss_pct)
+        ):
+            action = "BUY"
+            reason = f"price rose above the {stop_loss_pct:.1%} short stop-loss threshold"
+        elif (
+            position < 0
+            and close_price is not None
+            and avg_entry_price is not None
+            and avg_entry_price > 0
+            and close_price <= avg_entry_price * (1.0 - take_profit_pct)
+        ):
+            action = "BUY"
+            reason = f"price reached the {take_profit_pct:.1%} short take-profit threshold"
         elif position < 0 and zscore <= zscore_exit:
             action = "BUY"
             reason = f"{zscore_key} reverted below exit threshold"
@@ -666,10 +944,13 @@ def _mean_reversion_handler(
                     "rsi_14": snapshot.get("rsi_14"),
                     zscore_key: zscore,
                     "position": position,
+                    "avg_entry_price": avg_entry_price,
                     "config": {
                         "lookback_window": lookback,
                         "zscore_entry": zscore_entry,
                         "zscore_exit": zscore_exit,
+                        "stop_loss_pct": stop_loss_pct,
+                        "take_profit_pct": take_profit_pct,
                     },
                 },
             )
@@ -708,6 +989,7 @@ def _island_reversal_handler(
             signal_cfg=signal_cfg,
             risk_cfg=risk_cfg,
             position=position,
+            avg_entry_price=_safe_float_or_none(snapshot.get("avg_entry_price")),
         )
         if action is None or reason is None:
             continue
@@ -732,6 +1014,7 @@ def _island_reversal_handler(
                     "low": snapshot.get("low"),
                     "atr_14": snapshot.get("atr_14"),
                     "position": position,
+                    "avg_entry_price": snapshot.get("avg_entry_price"),
                     "setup": {
                         "stage": stage,
                         "left_gap_trade_date": str(recent_bars[pattern.left_gap_idx]["dt_ny"]),
@@ -749,6 +1032,8 @@ def _island_reversal_handler(
                         "right_gap_min_pct": signal_cfg["right_gap_min_pct"],
                         "retest_window": signal_cfg["retest_window"],
                         "support_tolerance_pct": signal_cfg["support_tolerance_pct"],
+                        "max_loss_pct": risk_cfg["max_loss_pct"],
+                        "take_profit_atr": risk_cfg["take_profit_atr"],
                     },
                 },
             )
@@ -761,7 +1046,7 @@ def _island_reversal_handler(
 # Island reversal helpers
 # ============================================================================
 
-# Scan recent bars from newest to oldest to find the latest valid island-reversal setup.
+# Scan recent bars with breakout-gap priority to find the latest valid island-reversal setup.
 # Input: ordered recent_bars history and the strategy's island-reversal signal config.
 # Output: IslandReversalPattern when a complete setup exists, otherwise None.
 def _find_latest_island_reversal_pattern(
@@ -780,7 +1065,8 @@ def _find_latest_island_reversal_pattern(
     left_volume_ratio_max = float(signal_cfg["left_volume_ratio_max"])
     right_volume_ratio_min = float(signal_cfg["right_volume_ratio_min"])
 
-    for breakout_idx in range(len(recent_bars) - 1, 1, -1):
+    earliest_breakout_idx = min_island_bars + 1
+    for breakout_idx in range(len(recent_bars) - 1, earliest_breakout_idx - 1, -1):
         breakout_bar = recent_bars[breakout_idx]
         breakout_open = _safe_float_or_none(breakout_bar.get("open"))
         breakout_close = _safe_float_or_none(breakout_bar.get("close"))
@@ -802,17 +1088,14 @@ def _find_latest_island_reversal_pattern(
         if breakout_volume_ratio < right_volume_ratio_min:
             continue
 
-        left_start = max(1, breakout_idx - max_island_bars)
-        left_end = breakout_idx - min_island_bars + 1
-        if left_end <= left_start:
+        latest_left_gap_idx = breakout_idx - min_island_bars
+        earliest_left_gap_idx = max(1, breakout_idx - max_island_bars)
+        if latest_left_gap_idx < earliest_left_gap_idx:
             continue
 
-        for left_gap_idx in range(left_end - 1, left_start - 1, -1):
+        for left_gap_idx in range(latest_left_gap_idx, earliest_left_gap_idx - 1, -1):
             left_gap_bar = recent_bars[left_gap_idx]
             pre_gap_bar = recent_bars[left_gap_idx - 1]
-            island_bars = recent_bars[left_gap_idx:breakout_idx]
-            if len(island_bars) < min_island_bars:
-                continue
 
             left_gap_high = _safe_float_or_none(left_gap_bar.get("high"))
             left_gap_open = _safe_float_or_none(left_gap_bar.get("open"))
@@ -838,10 +1121,15 @@ def _find_latest_island_reversal_pattern(
             if left_gap_volume / left_gap_avg_volume > left_volume_ratio_max:
                 continue
             if not _has_island_downtrend_context(
-                left_gap_bar,
+                recent_bars,
+                left_gap_idx=left_gap_idx,
                 downtrend_lookback=downtrend_lookback,
                 min_drop_pct=downtrend_min_drop_pct,
             ):
+                continue
+
+            island_bars = recent_bars[left_gap_idx:breakout_idx]
+            if len(island_bars) < min_island_bars:
                 continue
 
             island_high = max(
@@ -883,14 +1171,20 @@ def _find_latest_island_reversal_pattern(
 # Input: one history bar plus configured lookback/drop thresholds.
 # Output: True when return-based or moving-average-based downtrend evidence is present.
 def _has_island_downtrend_context(
-    left_gap_bar: HistoryBar,
+    recent_bars: list[HistoryBar],
     *,
+    left_gap_idx: int,
     downtrend_lookback: int,
     min_drop_pct: float,
 ) -> bool:
-    ret_key = "ret_20d" if downtrend_lookback <= 20 else "ret_60d"
-    lookback_return = _safe_float_or_none(left_gap_bar.get(ret_key))
+    left_gap_bar = recent_bars[left_gap_idx]
     close = _safe_float_or_none(left_gap_bar.get("close"))
+    lookback_return = None
+    anchor_index = left_gap_idx - downtrend_lookback
+    if close is not None and anchor_index >= 0:
+        anchor_close = _safe_float_or_none(recent_bars[anchor_index].get("close"))
+        if anchor_close is not None and anchor_close > 0:
+            lookback_return = (close / anchor_close) - 1.0
     sma_50 = _safe_float_or_none(left_gap_bar.get("sma_50"))
     if lookback_return is not None and lookback_return <= -min_drop_pct:
         return True
@@ -909,22 +1203,38 @@ def _resolve_island_reversal_action(
     signal_cfg: Dict[str, Any],
     risk_cfg: Dict[str, Any],
     position: float,
+    avg_entry_price: float | None = None,
 ) -> tuple[Literal["BUY", "SELL", "HOLD"] | None, str | None, str | None]:
     current_idx = len(recent_bars) - 1
     current_bar = recent_bars[current_idx]
     current_close = _safe_float_or_none(current_bar.get("close"))
     current_low = _safe_float_or_none(current_bar.get("low"))
     current_volume = _safe_float_or_none(current_bar.get("volume"))
-    current_atr = _safe_float_or_none(current_bar.get("atr_14"))
+    current_atr = _compute_recent_atr(recent_bars, ISLAND_REVERSAL_STOP_ATR_WINDOW)
+    breakout_atr = _compute_recent_atr(
+        recent_bars[:pattern.breakout_idx + 1],
+        ISLAND_REVERSAL_STOP_ATR_WINDOW,
+    )
     support_tolerance_pct = float(signal_cfg["support_tolerance_pct"])
     support_floor = pattern.island_high * (1.0 - support_tolerance_pct)
     hard_stop = pattern.island_low * (1.0 - support_tolerance_pct)
 
     if position > 0:
-        if current_close is not None and current_close < support_floor:
-            return "SELL", "price closed below the island gap support", "support_break"
+        if (
+            current_close is not None
+            and avg_entry_price is not None
+            and avg_entry_price > 0
+            and current_close <= avg_entry_price * (1.0 - float(risk_cfg["max_loss_pct"]))
+        ):
+            return "SELL", "price fell more than the configured max-loss threshold from entry", "max_loss_stop"
         if current_low is not None and current_low < hard_stop:
             return "SELL", "price broke below the island base low", "base_break"
+        if (
+            current_close is not None
+            and breakout_atr is not None
+            and current_close >= pattern.breakout_close + (float(risk_cfg["take_profit_atr"]) * breakout_atr)
+        ):
+            return "SELL", "price reached the ATR take-profit target from the breakout confirmation", "take_profit"
         if (
             current_close is not None
             and current_atr is not None

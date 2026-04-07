@@ -6,6 +6,34 @@ export interface IndicatorSpec {
   window: number;
 }
 
+export interface MeanReversionStrategyParams {
+  signal: {
+    lookback_window: number;
+    zscore_entry: number;
+    zscore_exit: number;
+    price_field: string;
+  };
+  universe: {
+    symbols: string[];
+    selection_mode: string;
+  };
+  risk: {
+    max_positions: number;
+    position_size_pct: number;
+    stop_loss_pct: number;
+    take_profit_pct: number;
+  };
+  execution: {
+    timeframe: string;
+    rebalance: string;
+    run_at: string;
+  };
+  metadata: {
+    description: string;
+    schema_version: number;
+  };
+}
+
 export interface TrendStrategyParams {
   signal: {
     fast_indicator: IndicatorSpec;
@@ -22,7 +50,9 @@ export interface TrendStrategyParams {
   risk: {
     max_positions: number;
     position_size_pct: number;
+    stop_loss_pct: number;
     stop_loss_atr: number;
+    take_profit_atr: number;
   };
   execution: {
     timeframe: string;
@@ -57,6 +87,8 @@ export interface IslandReversalStrategyParams {
     max_positions: number;
     position_size_pct: number;
     stop_loss_atr: number;
+    max_loss_pct: number;
+    take_profit_atr: number;
   };
   execution: {
     timeframe: string;
@@ -71,6 +103,7 @@ export interface IslandReversalStrategyParams {
 
 export type StrategyParams =
   | TrendStrategyParams
+  | MeanReversionStrategyParams
   | IslandReversalStrategyParams
   | Record<string, unknown>;
 

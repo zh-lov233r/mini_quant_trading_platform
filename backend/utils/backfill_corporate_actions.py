@@ -108,7 +108,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def _psycopg_dsn(url: str) -> str:
-    return url.replace("postgresql+psycopg://", "postgresql://", 1)
+    normalized = url.replace("postgresql+psycopg://", "postgresql://", 1)
+    return normalized.replace("postgresql+psycopg2://", "postgresql://", 1)
 
 
 def _parse_date(value: str | None) -> date | None:

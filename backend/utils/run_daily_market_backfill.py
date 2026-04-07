@@ -33,7 +33,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Run the daily market-data catch-up flow: fill missing eod_bars rows first, "
-            "then refresh daily_features for the same window."
+            "then sync corporate actions, recompute adjusted prices, and refresh daily_features "
+            "for the same window."
         )
     )
     parser.add_argument(
@@ -73,6 +74,16 @@ def parse_args() -> argparse.Namespace:
         "--skip-features",
         action="store_true",
         help="Only fill eod_bars and skip daily_features refresh.",
+    )
+    parser.add_argument(
+        "--skip-adjustments",
+        action="store_true",
+        help="Skip recomputing adjusted OHLC prices after the EOD sync step.",
+    )
+    parser.add_argument(
+        "--skip-corporate-actions",
+        action="store_true",
+        help="Skip syncing corporate actions after the EOD sync step.",
     )
     parser.add_argument(
         "--dry-run",
@@ -147,6 +158,16 @@ def _run_step(step_name: str, script_path: Path, script_args: list[str]) -> None
     subprocess.run(command, cwd=REPO_ROOT, check=True)
 
 
+def _run_adjusted_price_refresh(shared_args: list[str]) -> None:
+    adjustment_script = REPO_ROOT / "backend" / "utils" / "backfill_adjusted_prices.py"
+    _run_step("refresh-adjusted-prices", adjustment_script, shared_args)
+
+
+def _run_corporate_action_sync(shared_args: list[str]) -> None:
+    action_script = REPO_ROOT / "backend" / "utils" / "backfill_corporate_actions.py"
+    _run_step("sync-corporate-actions", action_script, shared_args)
+
+
 def main() -> None:
     load_dotenv(REPO_ROOT / ".env")
     args = parse_args()
@@ -185,16 +206,30 @@ def main() -> None:
     ]
 
     eod_script = REPO_ROOT / "backend" / "utils" / "backfill_missing_eod_from_massive.py"
-    eod_args = list(shared_args)
+    eod_args = [*shared_args, "--skip-features", "--skip-adjustments", "--skip-corporate-actions"]
     if args.dry_run:
         eod_args.append("--dry-run")
     _run_step("fill-eod-gaps", eod_script, eod_args)
 
     if args.dry_run:
         print(
-            "\nDry run enabled; skipping daily_features refresh because no eod rows were written.",
+            "\nDry run enabled; skipping corporate-action, adjusted-price, and daily_features refresh because no eod rows were written.",
             flush=True,
         )
+    elif args.skip_corporate_actions:
+        print("\nSkipping corporate-action sync by request.", flush=True)
+    else:
+        _run_corporate_action_sync(shared_args)
+
+    if args.dry_run:
+        pass
+    elif args.skip_adjustments:
+        print("\nSkipping adjusted-price refresh by request.", flush=True)
+    else:
+        _run_adjusted_price_refresh(shared_args)
+
+    if args.dry_run:
+        pass
     elif args.skip_features:
         print("\nSkipping daily_features refresh by request.", flush=True)
     else:

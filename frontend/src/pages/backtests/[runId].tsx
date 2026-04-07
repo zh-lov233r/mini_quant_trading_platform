@@ -293,6 +293,8 @@ type PositionLifecycleRow = {
   exitReason: string | null;
 };
 
+type PositionLifecyclePnlFilter = "all" | "profit" | "loss" | "flat";
+
 type LifecycleChartMarker = {
   key: string;
   label: string;
@@ -1874,6 +1876,19 @@ const tableToggleButtonStyle = {
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 } as const;
 
+function lifecyclePnlFilterChipStyle(active: boolean) {
+  return {
+    borderRadius: 999,
+    padding: "8px 12px",
+    border: `1px solid ${active ? "rgba(59, 130, 246, 0.42)" : "rgba(148, 163, 184, 0.24)"}`,
+    background: active ? "rgba(30, 64, 175, 0.24)" : "rgba(15, 23, 42, 0.72)",
+    color: active ? "#dbeafe" : "#e2e8f0",
+    fontWeight: 700,
+    cursor: "pointer",
+    fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+  } as const;
+}
+
 function lifecycleLookbackChipStyle(active: boolean) {
   return {
     borderRadius: 999,
@@ -1885,6 +1900,17 @@ function lifecycleLookbackChipStyle(active: boolean) {
     cursor: "pointer",
     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
   } as const;
+}
+
+function classifyLifecyclePnl(row: PositionLifecycleRow): Exclude<PositionLifecyclePnlFilter, "all"> {
+  const pnl = row.pnl ?? 0;
+  if (pnl > 0) {
+    return "profit";
+  }
+  if (pnl < 0) {
+    return "loss";
+  }
+  return "flat";
 }
 
 const lifecycleLookbackInputStyle = {
@@ -3182,8 +3208,8 @@ function PositionLifecycleCard({ run }: { run: BacktestDetailOut }) {
   const isZh = locale === "zh-CN";
   const [showAllRows, setShowAllRows] = useState(false);
   const [expandedRowKey, setExpandedRowKey] = useState<string | null>(null);
+  const [pnlFilter, setPnlFilter] = useState<PositionLifecyclePnlFilter>("all");
   const rows = useMemo(() => buildPositionLifecycleRows(run), [run]);
-  const visibleRows = showAllRows ? rows : rows.slice(0, 12);
 
   const closedRows = rows.filter((row) => row.status === "closed");
   const openRows = rows.filter((row) => row.status === "open");
@@ -3196,6 +3222,57 @@ function PositionLifecycleCard({ run }: { run: BacktestDetailOut }) {
       : null;
   const winRate =
     closedRows.length > 0 ? winningClosedRows.length / closedRows.length : null;
+  const pnlFilterCounts = useMemo(
+    () => ({
+      profit: rows.filter((row) => classifyLifecyclePnl(row) === "profit").length,
+      loss: rows.filter((row) => classifyLifecyclePnl(row) === "loss").length,
+      flat: rows.filter((row) => classifyLifecyclePnl(row) === "flat").length,
+    }),
+    [rows]
+  );
+  const filteredRows = useMemo(() => {
+    if (pnlFilter === "all") {
+      return rows;
+    }
+    return rows.filter((row) => classifyLifecyclePnl(row) === pnlFilter);
+  }, [pnlFilter, rows]);
+  const visibleRows = showAllRows ? filteredRows : filteredRows.slice(0, 12);
+
+  useEffect(() => {
+    if (!expandedRowKey) {
+      return;
+    }
+    if (!filteredRows.some((row) => row.key === expandedRowKey)) {
+      setExpandedRowKey(null);
+    }
+  }, [expandedRowKey, filteredRows]);
+
+  const pnlFilterOptions: Array<{
+    value: PositionLifecyclePnlFilter;
+    label: string;
+    count: number;
+  }> = [
+    {
+      value: "all",
+      label: isZh ? "全部" : "All",
+      count: rows.length,
+    },
+    {
+      value: "profit",
+      label: isZh ? "盈利" : "Profit",
+      count: pnlFilterCounts.profit,
+    },
+    {
+      value: "loss",
+      label: isZh ? "亏损" : "Loss",
+      count: pnlFilterCounts.loss,
+    },
+    {
+      value: "flat",
+      label: isZh ? "持平" : "Flat",
+      count: pnlFilterCounts.flat,
+    },
+  ];
 
   return (
     <section style={sectionCardStyle}>
@@ -3223,7 +3300,7 @@ function PositionLifecycleCard({ run }: { run: BacktestDetailOut }) {
           <Badge tone="info">
             {rows.length} {isZh ? "段生命周期" : rows.length === 1 ? "lifecycle" : "lifecycles"}
           </Badge>
-          {rows.length > 12 ? (
+          {filteredRows.length > 12 ? (
             <button
               type="button"
               onClick={() => setShowAllRows((current) => !current)}
@@ -3241,11 +3318,15 @@ function PositionLifecycleCard({ run }: { run: BacktestDetailOut }) {
         </div>
       </div>
 
-      {rows.length === 0 ? (
+          {rows.length === 0 ? (
         <div style={emptyStateStyle}>
           {isZh
             ? "这次回测还没有形成可识别的持仓生命周期"
             : "This backtest does not have identifiable position lifecycles yet"}
+        </div>
+      ) : filteredRows.length === 0 ? (
+        <div style={emptyStateStyle}>
+          {isZh ? "当前筛选条件下没有匹配的生命周期" : "No lifecycles match the current filter."}
         </div>
       ) : (
         <>
@@ -3275,19 +3356,44 @@ function PositionLifecycleCard({ run }: { run: BacktestDetailOut }) {
                 {averageHoldingDays == null ? "-" : averageHoldingDays.toLocaleString(locale, { maximumFractionDigits: 1 })}
               </div>
             </div>
-            <div style={miniMetricStyle}>
-              <div style={labelStyle}>{isZh ? "生命周期盈亏" : "Lifecycle PnL"}</div>
-              <div style={miniMetricValueStyle}>{formatCurrency(totalPnl, locale)}</div>
+              <div style={miniMetricStyle}>
+                <div style={labelStyle}>{isZh ? "生命周期盈亏" : "Lifecycle PnL"}</div>
+                <div style={miniMetricValueStyle}>{formatCurrency(totalPnl, locale)}</div>
+              </div>
+            </div>
+
+          <div
+            style={{
+              marginBottom: 12,
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 12,
+              flexWrap: "wrap",
+              alignItems: "center",
+            }}
+          >
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              {pnlFilterOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setPnlFilter(option.value)}
+                  style={lifecyclePnlFilterChipStyle(pnlFilter === option.value)}
+                >
+                  {option.label} {option.count}
+                </button>
+              ))}
+            </div>
+            <div style={{ color: "rgba(148, 163, 184, 0.88)", fontSize: 13 }}>
+              {isZh
+                ? `当前显示 ${visibleRows.length} / ${filteredRows.length} 段生命周期${
+                    pnlFilter === "all" ? "" : `（总计 ${rows.length} 段）`
+                  }，按最近结束或最近标记时间倒序。`
+                : `Showing ${visibleRows.length} / ${filteredRows.length} lifecycles${
+                    pnlFilter === "all" ? "" : ` (${rows.length} total)`
+                  }, ordered by the most recent close or mark time.`}
             </div>
           </div>
-
-          {rows.length > 12 ? (
-            <div style={{ marginBottom: 10, color: "rgba(148, 163, 184, 0.88)", fontSize: 13 }}>
-              {isZh
-                ? `当前显示 ${visibleRows.length} / ${rows.length} 段生命周期，按最近结束或最近标记时间倒序。`
-                : `Showing ${visibleRows.length} / ${rows.length} lifecycles, ordered by the most recent close or mark time.`}
-            </div>
-          ) : null}
 
           <div
             style={{

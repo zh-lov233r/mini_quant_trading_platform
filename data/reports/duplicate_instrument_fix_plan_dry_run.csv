@@ -1,0 +1,11 @@
+duplicate_ticker,duplicate_count,instrument_id,name,is_active,old_ticker_canonical,proposed_ticker_canonical,open_symbols,open_history_count,close_open_history,close_history_date,action,reason,applied
+BBUC,2,453,Brookfield Business Corporation Class A Exchangeable Subordinate Voting Shares,True,BBUC,BBUC,BBUC,1,False,,manual_review,multiple active instruments share this ticker,False
+BBUC,2,15398,Brookfield Business Corporation Class A Subordinate Voting Shares,True,BBUC,BBUC,,0,False,,manual_review,multiple active instruments share this ticker,False
+HIW,2,1777,Highwoods Properties Inc.,True,HIW,HIW,HIW,1,False,,keep_active,active instrument remains the canonical owner of this ticker,False
+HIW,2,5595,HILLENBRAND INC W.I.,False,HIW,HI,HI,1,True,2026-04-06,retarget_ticker+close_open_history,inactive duplicate ticker was retargeted to its sole open symbol_history alias,False
+KW,2,2137,"KENNEDY-WILSON HOLDINGS, INC.",True,KW,KW,KW,1,False,,keep_active,active instrument remains the canonical owner of this ticker,False
+KW,2,5892,Kellanova,False,KW,,,0,False,,nullify_ticker,inactive duplicate ticker had no open symbol_history alias; ticker_canonical was cleared instead,False
+MRLN,2,17418,"Merlin, Inc. Common Stock",True,MRLN,MRLN,,0,False,,keep_active,active instrument remains the canonical owner of this ticker,False
+MRLN,2,6169,Marlin Business Services Corp,False,MRLN,,MRLN,1,True,2026-04-06,nullify_ticker+close_open_history,inactive duplicate ticker had no unique open symbol_history alias; ticker_canonical was cleared instead,False
+NINE,2,17552,"Nine Energy Service, Inc.",True,NINE,NINE,NINE,1,False,,keep_active,active instrument remains the canonical owner of this ticker,False
+NINE,2,6248,"Nine Energy Service, Inc.",False,NINE,,NINE,1,True,2026-04-06,nullify_ticker+close_open_history,inactive duplicate ticker had no unique open symbol_history alias; ticker_canonical was cleared instead,False
