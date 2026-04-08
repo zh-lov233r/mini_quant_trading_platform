@@ -1131,7 +1131,9 @@ export default function StrategyForm({
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "minmax(0, 1.3fr) minmax(320px, 1fr)",
+          gridTemplateColumns: isEditMode
+            ? "minmax(0, 1fr)"
+            : "minmax(0, 1.3fr) minmax(320px, 1fr)",
           gap: 20,
           alignItems: "start",
         }}
@@ -1619,7 +1621,7 @@ export default function StrategyForm({
                   <input
                     type="number"
                     min={0.1}
-                    step="0.1"
+                    step="any"
                     style={inputStyle}
                     value={leftVolumeRatioMax}
                     onChange={(e) => setLeftVolumeRatioMax(Number(e.target.value))}
@@ -1630,7 +1632,7 @@ export default function StrategyForm({
                   <input
                     type="number"
                     min={0.1}
-                    step="0.1"
+                    step="any"
                     style={inputStyle}
                     value={rightVolumeRatioMin}
                     onChange={(e) => setRightVolumeRatioMin(Number(e.target.value))}
@@ -1652,7 +1654,7 @@ export default function StrategyForm({
                   <input
                     type="number"
                     min={0.1}
-                    step="0.1"
+                    step="any"
                     style={inputStyle}
                     value={retestVolumeRatioMax}
                     onChange={(e) => setRetestVolumeRatioMax(Number(e.target.value))}
@@ -1892,7 +1894,7 @@ export default function StrategyForm({
                   <input
                     type="number"
                     min={0.1}
-                    step="0.1"
+                    step="any"
                     style={inputStyle}
                     value={secondBottomVolumeRatioMax}
                     onChange={(e) => setSecondBottomVolumeRatioMax(Number(e.target.value))}
@@ -1903,7 +1905,7 @@ export default function StrategyForm({
                   <input
                     type="number"
                     min={0.1}
-                    step="0.1"
+                    step="any"
                     style={inputStyle}
                     value={breakoutVolumeRatioMin}
                     onChange={(e) => setBreakoutVolumeRatioMin(Number(e.target.value))}
@@ -1948,7 +1950,7 @@ export default function StrategyForm({
                   <input
                     type="number"
                     min={0.1}
-                    step="0.1"
+                    step="any"
                     style={inputStyle}
                     value={doubleBottomRetestVolumeRatioMax}
                     onChange={(e) => setDoubleBottomRetestVolumeRatioMax(Number(e.target.value))}
@@ -2116,43 +2118,47 @@ export default function StrategyForm({
           </button>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <section style={cardStyle}>
-            <h3 style={{ marginTop: 0 }}>{isZh ? "提交预览" : "Submit Preview"}</h3>
-            <pre
-              style={{
-                margin: 0,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                fontSize: 13,
-                lineHeight: 1.6,
-                color: "#cbd5e1",
-              }}
-            >
-              {JSON.stringify(previewPayload, null, 2)}
-            </pre>
-          </section>
+        {!isEditMode || err || resp ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {!isEditMode ? (
+              <section style={cardStyle}>
+                <h3 style={{ marginTop: 0 }}>{isZh ? "提交预览" : "Submit Preview"}</h3>
+                <pre
+                  style={{
+                    margin: 0,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    fontSize: 13,
+                    lineHeight: 1.6,
+                    color: "#cbd5e1",
+                  }}
+                >
+                  {JSON.stringify(previewPayload, null, 2)}
+                </pre>
+              </section>
+            ) : null}
 
-          {err && <div style={{ color: "#fda4af" }}>{err}</div>}
+            {err && <div style={{ color: "#fda4af" }}>{err}</div>}
 
-          {resp && (
-            <section style={cardStyle}>
-              <h3 style={{ marginTop: 0 }}>{isZh ? "后端响应" : "Backend Response"}</h3>
-              <pre
-                style={{
-                margin: 0,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                fontSize: 13,
-                lineHeight: 1.6,
-                color: "#cbd5e1",
-              }}
-            >
-              {JSON.stringify(resp, null, 2)}
-              </pre>
-            </section>
-          )}
-        </div>
+            {resp && (
+              <section style={cardStyle}>
+                <h3 style={{ marginTop: 0 }}>{isZh ? "后端响应" : "Backend Response"}</h3>
+                <pre
+                  style={{
+                    margin: 0,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    fontSize: 13,
+                    lineHeight: 1.6,
+                    color: "#cbd5e1",
+                  }}
+                >
+                  {JSON.stringify(resp, null, 2)}
+                </pre>
+              </section>
+            )}
+          </div>
+        ) : null}
       </div>
     </form>
   );

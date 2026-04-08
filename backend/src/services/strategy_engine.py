@@ -176,6 +176,20 @@ class DoubleBottomLeftCandidate:
     left_bottom_low: float
 
 
+@dataclass(slots=True)
+class DoubleBottomRightCandidate:
+    """Validated double-bottom base waiting for a breakout confirmation."""
+
+    left_bottom_idx: int
+    neckline_idx: int
+    right_bottom_idx: int
+    left_bottom_low: float
+    right_bottom_low: float
+    neckline_price: float
+    bottom_distance_pct: float
+    rebound_up_day_ratio: float
+
+
 # ============================================================================
 # Public orchestration API
 # ============================================================================
@@ -1645,192 +1659,270 @@ def _find_latest_double_bottom_pattern(
     max_breakout_bars_after_right_bottom = int(signal_cfg.get("max_breakout_bars_after_right_bottom", 40))
     breakout_buffer_pct = float(signal_cfg["breakout_buffer_pct"])
 
-    left_candidates = _collect_double_bottom_left_candidates(
-        recent_bars,
-        min_bottom_spacing=min_bottom_spacing,
-        downtrend_lookback=downtrend_lookback,
-        downtrend_min_drop_pct=downtrend_min_drop_pct,
-        left_bottom_before_bars=left_bottom_before_bars,
-        left_bottom_after_bars=left_bottom_after_bars,
-        bottom_volume_ratio_max=second_bottom_volume_ratio_max,
-    )
-    if not left_candidates:
-        return None
-
+    left_candidates: list[DoubleBottomLeftCandidate] = []
+    right_candidates: list[DoubleBottomRightCandidate] = []
     best_pattern: DoubleBottomPattern | None = None
-    latest_right_bottom_idx = len(recent_bars) - 2
 
-    for left_candidate in left_candidates:
-        left_bottom_idx = left_candidate.left_bottom_idx
-        left_bottom_low = left_candidate.left_bottom_low
-        earliest_right_idx = left_bottom_idx + min_bottom_spacing
-        latest_right_idx = min(latest_right_bottom_idx, left_bottom_idx + max_bottom_spacing)
-        if earliest_right_idx > latest_right_idx:
+    for current_idx in range(len(recent_bars)):
+        left_candidate = _build_double_bottom_left_candidate(
+            recent_bars,
+            current_idx=current_idx,
+            downtrend_lookback=downtrend_lookback,
+            downtrend_min_drop_pct=downtrend_min_drop_pct,
+            left_bottom_before_bars=left_bottom_before_bars,
+            left_bottom_after_bars=left_bottom_after_bars,
+            bottom_volume_ratio_max=second_bottom_volume_ratio_max,
+        )
+        if left_candidate is not None:
+            left_candidates.append(left_candidate)
+
+        right_bottom_idx = current_idx - 1
+        if right_bottom_idx >= 0:
+            right_candidates.extend(
+                _promote_double_bottom_right_candidates(
+                    recent_bars,
+                    left_candidates=left_candidates,
+                    right_bottom_idx=right_bottom_idx,
+                    min_bottom_spacing=min_bottom_spacing,
+                    max_bottom_spacing=max_bottom_spacing,
+                    bottom_tolerance_pct=bottom_tolerance_pct,
+                    neckline_min_rebound_pct=neckline_min_rebound_pct,
+                    rebound_up_day_ratio_min=rebound_up_day_ratio_min,
+                    bottom_volume_ratio_max=second_bottom_volume_ratio_max,
+                )
+            )
+
+        if not right_candidates:
             continue
 
-        for right_bottom_idx in range(earliest_right_idx, latest_right_idx + 1):
-            if not _is_local_minimum(recent_bars, right_bottom_idx):
+        active_right_candidates: list[DoubleBottomRightCandidate] = []
+        for right_candidate in right_candidates:
+            if current_idx > right_candidate.right_bottom_idx + max_breakout_bars_after_right_bottom:
                 continue
-
-            right_bottom_bar = recent_bars[right_bottom_idx]
-            right_bottom_low = _safe_float_or_none(right_bottom_bar.get("low"))
-            right_bottom_volume = _safe_float_or_none(right_bottom_bar.get("volume"))
-            right_bottom_avg_volume = _safe_float_or_none(right_bottom_bar.get("volume_sma_20"))
-            if (
-                right_bottom_low is None
-                or right_bottom_volume is None
-                or right_bottom_avg_volume is None
-                or right_bottom_avg_volume <= 0
-            ):
-                continue
-
-            right_bottom_volume_ratio = right_bottom_volume / right_bottom_avg_volume
-            if right_bottom_volume_ratio > second_bottom_volume_ratio_max:
-                continue
-
-            bottom_distance_pct = abs(right_bottom_low - left_bottom_low) / max(
-                left_bottom_low,
-                right_bottom_low,
-            )
-            if bottom_distance_pct > bottom_tolerance_pct:
-                continue
-            if right_bottom_low < left_bottom_low * (1.0 - bottom_tolerance_pct):
-                continue
-            if not _double_bottom_intermediate_lows_hold(
+            pattern = _build_double_bottom_pattern_from_right_candidate(
                 recent_bars,
-                left_bottom_idx=left_bottom_idx,
-                right_bottom_idx=right_bottom_idx,
-                floor_low=min(left_bottom_low, right_bottom_low),
-            ):
-                continue
-
-            neckline_idx, neckline_price = _find_double_bottom_neckline(
-                recent_bars,
-                left_bottom_idx=left_bottom_idx,
-                right_bottom_idx=right_bottom_idx,
-            )
-            if neckline_idx is None or neckline_price is None or neckline_price <= 0:
-                continue
-            if neckline_price < max(left_bottom_low, right_bottom_low) * (1.0 + neckline_min_rebound_pct):
-                continue
-
-            rebound_up_day_ratio = _compute_up_day_ratio(
-                recent_bars,
-                start_idx=left_bottom_idx,
-                end_idx=right_bottom_idx,
-            )
-            if rebound_up_day_ratio is None or rebound_up_day_ratio < rebound_up_day_ratio_min:
-                continue
-
-            breakout_idx = _find_first_double_bottom_breakout_idx(
-                recent_bars,
-                right_bottom_idx=right_bottom_idx,
-                neckline_price=neckline_price,
+                right_candidate=right_candidate,
+                breakout_idx=current_idx,
                 breakout_buffer_pct=breakout_buffer_pct,
                 breakout_volume_ratio_min=breakout_volume_ratio_min,
-                max_breakout_bars_after_right_bottom=max_breakout_bars_after_right_bottom,
             )
-            if breakout_idx is None:
+            if pattern is None:
+                active_right_candidates.append(right_candidate)
                 continue
 
-            breakout_bar = recent_bars[breakout_idx]
-            breakout_close = _safe_float_or_none(breakout_bar.get("close"))
-            breakout_volume = _safe_float_or_none(breakout_bar.get("volume"))
-            breakout_avg_volume = _safe_float_or_none(breakout_bar.get("volume_sma_20"))
-            if (
-                breakout_close is None
-                or breakout_volume is None
-                or breakout_avg_volume is None
-                or breakout_avg_volume <= 0
-            ):
-                continue
-
-            pattern = DoubleBottomPattern(
-                left_bottom_idx=left_bottom_idx,
-                neckline_idx=neckline_idx,
-                right_bottom_idx=right_bottom_idx,
-                breakout_idx=breakout_idx,
-                left_bottom_low=left_bottom_low,
-                right_bottom_low=right_bottom_low,
-                neckline_price=neckline_price,
-                breakout_close=breakout_close,
-                breakout_volume=breakout_volume,
-                breakout_volume_ratio=breakout_volume / breakout_avg_volume,
-                bottom_distance_pct=bottom_distance_pct,
-                rebound_up_day_ratio=rebound_up_day_ratio,
-            )
-            if (
-                best_pattern is None
-                or pattern.breakout_idx > best_pattern.breakout_idx
-                or (
-                    pattern.breakout_idx == best_pattern.breakout_idx
-                    and pattern.right_bottom_idx > best_pattern.right_bottom_idx
-                )
-            ):
+            if _is_preferred_double_bottom_pattern(pattern, best_pattern):
                 best_pattern = pattern
+        right_candidates = active_right_candidates
 
     return best_pattern
 
 
-def _collect_double_bottom_left_candidates(
+def _build_double_bottom_left_candidate(
     recent_bars: list[HistoryBar],
     *,
-    min_bottom_spacing: int,
+    current_idx: int,
     downtrend_lookback: int,
     downtrend_min_drop_pct: float,
     left_bottom_before_bars: int,
     left_bottom_after_bars: int,
     bottom_volume_ratio_max: float,
-) -> list[DoubleBottomLeftCandidate]:
-    latest_left_idx = min(
-        len(recent_bars) - left_bottom_after_bars - 1,
-        len(recent_bars) - min_bottom_spacing - 2,
+) -> DoubleBottomLeftCandidate | None:
+    left_bottom_idx = current_idx - left_bottom_after_bars
+    if left_bottom_idx < left_bottom_before_bars:
+        return None
+    if not _is_local_minimum(
+        recent_bars,
+        left_bottom_idx,
+        before_span=left_bottom_before_bars,
+        after_span=left_bottom_after_bars,
+    ):
+        return None
+
+    left_bottom_bar = recent_bars[left_bottom_idx]
+    left_bottom_low = _safe_float_or_none(left_bottom_bar.get("low"))
+    left_bottom_volume = _safe_float_or_none(left_bottom_bar.get("volume"))
+    left_bottom_avg_volume = _safe_float_or_none(left_bottom_bar.get("volume_sma_20"))
+    if left_bottom_low is None or left_bottom_low <= 0:
+        return None
+    if (
+        left_bottom_volume is None
+        or left_bottom_avg_volume is None
+        or left_bottom_avg_volume <= 0
+    ):
+        return None
+    if left_bottom_volume / left_bottom_avg_volume > bottom_volume_ratio_max:
+        return None
+    if not _has_double_bottom_downtrend_context(
+        recent_bars,
+        left_bottom_idx=left_bottom_idx,
+        downtrend_lookback=downtrend_lookback,
+        min_drop_pct=downtrend_min_drop_pct,
+    ):
+        return None
+
+    return DoubleBottomLeftCandidate(
+        left_bottom_idx=left_bottom_idx,
+        left_bottom_low=left_bottom_low,
     )
-    if latest_left_idx < left_bottom_before_bars:
+
+
+def _promote_double_bottom_right_candidates(
+    recent_bars: list[HistoryBar],
+    *,
+    left_candidates: list[DoubleBottomLeftCandidate],
+    right_bottom_idx: int,
+    min_bottom_spacing: int,
+    max_bottom_spacing: int,
+    bottom_tolerance_pct: float,
+    neckline_min_rebound_pct: float,
+    rebound_up_day_ratio_min: float,
+    bottom_volume_ratio_max: float,
+) -> list[DoubleBottomRightCandidate]:
+    if not left_candidates or not _is_local_minimum(recent_bars, right_bottom_idx):
         return []
 
-    candidates: list[DoubleBottomLeftCandidate] = []
-    for left_bottom_idx in range(left_bottom_before_bars, latest_left_idx + 1):
-        if not _is_local_minimum(
-            recent_bars,
-            left_bottom_idx,
-            before_span=left_bottom_before_bars,
-            after_span=left_bottom_after_bars,
-        ):
+    candidates: list[DoubleBottomRightCandidate] = []
+    for left_candidate in left_candidates:
+        spacing = right_bottom_idx - left_candidate.left_bottom_idx
+        if spacing < min_bottom_spacing or spacing > max_bottom_spacing:
             continue
 
-        left_bottom_bar = recent_bars[left_bottom_idx]
-        left_bottom_low = _safe_float_or_none(left_bottom_bar.get("low"))
-        left_bottom_volume = _safe_float_or_none(left_bottom_bar.get("volume"))
-        left_bottom_avg_volume = _safe_float_or_none(left_bottom_bar.get("volume_sma_20"))
-        if left_bottom_low is None or left_bottom_low <= 0:
-            continue
-        if (
-            left_bottom_volume is None
-            or left_bottom_avg_volume is None
-            or left_bottom_avg_volume <= 0
-        ):
-            continue
-        if left_bottom_volume / left_bottom_avg_volume > bottom_volume_ratio_max:
-            continue
-        if not _has_double_bottom_downtrend_context(
+        right_candidate = _build_double_bottom_right_candidate(
             recent_bars,
-            left_bottom_idx=left_bottom_idx,
-            downtrend_lookback=downtrend_lookback,
-            min_drop_pct=downtrend_min_drop_pct,
-        ):
-            continue
-
-        candidates.append(
-            DoubleBottomLeftCandidate(
-                left_bottom_idx=left_bottom_idx,
-                left_bottom_low=left_bottom_low,
-            )
+            left_candidate=left_candidate,
+            right_bottom_idx=right_bottom_idx,
+            bottom_tolerance_pct=bottom_tolerance_pct,
+            neckline_min_rebound_pct=neckline_min_rebound_pct,
+            rebound_up_day_ratio_min=rebound_up_day_ratio_min,
+            bottom_volume_ratio_max=bottom_volume_ratio_max,
         )
+        if right_candidate is not None:
+            candidates.append(right_candidate)
 
     return candidates
 
 
+def _build_double_bottom_right_candidate(
+    recent_bars: list[HistoryBar],
+    *,
+    left_candidate: DoubleBottomLeftCandidate,
+    right_bottom_idx: int,
+    bottom_tolerance_pct: float,
+    neckline_min_rebound_pct: float,
+    rebound_up_day_ratio_min: float,
+    bottom_volume_ratio_max: float,
+) -> DoubleBottomRightCandidate | None:
+    right_bottom_bar = recent_bars[right_bottom_idx]
+    right_bottom_low = _safe_float_or_none(right_bottom_bar.get("low"))
+    right_bottom_volume = _safe_float_or_none(right_bottom_bar.get("volume"))
+    right_bottom_avg_volume = _safe_float_or_none(right_bottom_bar.get("volume_sma_20"))
+    if (
+        right_bottom_low is None
+        or right_bottom_volume is None
+        or right_bottom_avg_volume is None
+        or right_bottom_avg_volume <= 0
+    ):
+        return None
+    if right_bottom_volume / right_bottom_avg_volume > bottom_volume_ratio_max:
+        return None
+
+    left_bottom_idx = left_candidate.left_bottom_idx
+    left_bottom_low = left_candidate.left_bottom_low
+    bottom_distance_pct = abs(right_bottom_low - left_bottom_low) / max(
+        left_bottom_low,
+        right_bottom_low,
+    )
+    if bottom_distance_pct > bottom_tolerance_pct:
+        return None
+    if right_bottom_low < left_bottom_low * (1.0 - bottom_tolerance_pct):
+        return None
+    if not _double_bottom_intermediate_lows_hold(
+        recent_bars,
+        left_bottom_idx=left_bottom_idx,
+        right_bottom_idx=right_bottom_idx,
+        floor_low=min(left_bottom_low, right_bottom_low),
+    ):
+        return None
+
+    neckline_idx, neckline_price = _find_double_bottom_neckline(
+        recent_bars,
+        left_bottom_idx=left_bottom_idx,
+        right_bottom_idx=right_bottom_idx,
+    )
+    if neckline_idx is None or neckline_price is None or neckline_price <= 0:
+        return None
+    if neckline_price < max(left_bottom_low, right_bottom_low) * (1.0 + neckline_min_rebound_pct):
+        return None
+
+    rebound_up_day_ratio = _compute_up_day_ratio(
+        recent_bars,
+        start_idx=left_bottom_idx,
+        end_idx=right_bottom_idx,
+    )
+    if rebound_up_day_ratio is None or rebound_up_day_ratio < rebound_up_day_ratio_min:
+        return None
+
+    return DoubleBottomRightCandidate(
+        left_bottom_idx=left_bottom_idx,
+        neckline_idx=neckline_idx,
+        right_bottom_idx=right_bottom_idx,
+        left_bottom_low=left_bottom_low,
+        right_bottom_low=right_bottom_low,
+        neckline_price=neckline_price,
+        bottom_distance_pct=bottom_distance_pct,
+        rebound_up_day_ratio=rebound_up_day_ratio,
+    )
+
+
+def _build_double_bottom_pattern_from_right_candidate(
+    recent_bars: list[HistoryBar],
+    *,
+    right_candidate: DoubleBottomRightCandidate,
+    breakout_idx: int,
+    breakout_buffer_pct: float,
+    breakout_volume_ratio_min: float,
+) -> DoubleBottomPattern | None:
+    if breakout_idx <= right_candidate.right_bottom_idx:
+        return None
+
+    breakout_match = _match_double_bottom_breakout_bar(
+        recent_bars[breakout_idx],
+        neckline_price=right_candidate.neckline_price,
+        breakout_buffer_pct=breakout_buffer_pct,
+        breakout_volume_ratio_min=breakout_volume_ratio_min,
+    )
+    if breakout_match is None:
+        return None
+
+    breakout_close, breakout_volume, breakout_avg_volume = breakout_match
+    return DoubleBottomPattern(
+        left_bottom_idx=right_candidate.left_bottom_idx,
+        neckline_idx=right_candidate.neckline_idx,
+        right_bottom_idx=right_candidate.right_bottom_idx,
+        breakout_idx=breakout_idx,
+        left_bottom_low=right_candidate.left_bottom_low,
+        right_bottom_low=right_candidate.right_bottom_low,
+        neckline_price=right_candidate.neckline_price,
+        breakout_close=breakout_close,
+        breakout_volume=breakout_volume,
+        breakout_volume_ratio=breakout_volume / breakout_avg_volume,
+        bottom_distance_pct=right_candidate.bottom_distance_pct,
+        rebound_up_day_ratio=right_candidate.rebound_up_day_ratio,
+    )
+
+
+def _is_preferred_double_bottom_pattern(
+    candidate: DoubleBottomPattern,
+    incumbent: DoubleBottomPattern | None,
+) -> bool:
+    return (
+        incumbent is None
+        or candidate.breakout_idx > incumbent.breakout_idx
+        or (
+            candidate.breakout_idx == incumbent.breakout_idx
+            and candidate.right_bottom_idx > incumbent.right_bottom_idx
+        )
+    )
 def _is_local_minimum(
     recent_bars: list[HistoryBar],
     idx: int,
@@ -1955,6 +2047,35 @@ def _find_double_bottom_neckline(
     return neckline_idx, neckline_price
 
 
+def _match_double_bottom_breakout_bar(
+    bar: HistoryBar,
+    *,
+    neckline_price: float,
+    breakout_buffer_pct: float,
+    breakout_volume_ratio_min: float,
+) -> tuple[float, float, float] | None:
+    breakout_threshold = neckline_price * (1.0 + breakout_buffer_pct)
+    close = _safe_float_or_none(bar.get("close"))
+    open_price = _safe_float_or_none(bar.get("open"))
+    volume = _safe_float_or_none(bar.get("volume"))
+    avg_volume = _safe_float_or_none(bar.get("volume_sma_20"))
+    if (
+        close is None
+        or open_price is None
+        or volume is None
+        or avg_volume is None
+        or avg_volume <= 0
+    ):
+        return None
+    if close <= breakout_threshold:
+        return None
+    if close <= open_price:
+        return None
+    if volume / avg_volume < breakout_volume_ratio_min:
+        return None
+    return close, volume, avg_volume
+
+
 def _find_first_double_bottom_breakout_idx(
     recent_bars: list[HistoryBar],
     *,
@@ -1964,32 +2085,18 @@ def _find_first_double_bottom_breakout_idx(
     breakout_volume_ratio_min: float,
     max_breakout_bars_after_right_bottom: int,
 ) -> int | None:
-    breakout_threshold = neckline_price * (1.0 + breakout_buffer_pct)
     breakout_search_end = min(
         len(recent_bars),
         right_bottom_idx + max_breakout_bars_after_right_bottom + 1,
     )
     for idx in range(right_bottom_idx + 1, breakout_search_end):
-        bar = recent_bars[idx]
-        close = _safe_float_or_none(bar.get("close"))
-        open_price = _safe_float_or_none(bar.get("open"))
-        volume = _safe_float_or_none(bar.get("volume"))
-        avg_volume = _safe_float_or_none(bar.get("volume_sma_20"))
-        if (
-            close is None
-            or open_price is None
-            or volume is None
-            or avg_volume is None
-            or avg_volume <= 0
-        ):
-            continue
-        if close <= breakout_threshold:
-            continue
-        if close <= open_price:
-            continue
-        if volume / avg_volume < breakout_volume_ratio_min:
-            continue
-        return idx
+        if _match_double_bottom_breakout_bar(
+            recent_bars[idx],
+            neckline_price=neckline_price,
+            breakout_buffer_pct=breakout_buffer_pct,
+            breakout_volume_ratio_min=breakout_volume_ratio_min,
+        ) is not None:
+            return idx
     return None
 
 

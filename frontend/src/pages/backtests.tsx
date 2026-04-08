@@ -1,7 +1,7 @@
 import type { CSSProperties, FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { createBacktest, listBacktests } from "@/api/backtests";
 import { listStockBaskets } from "@/api/stock-baskets";
@@ -42,6 +42,67 @@ function actionLink(href: string, label: string, filled = false) {
 
 function toDateInputValue(dt: Date): string {
   return dt.toISOString().slice(0, 10);
+}
+
+const BACKTEST_FORM_DRAFT_STORAGE_KEY = "backtests-page-form-draft-v1";
+
+type BacktestFormDraft = {
+  strategyId: string;
+  basketId: string;
+  startDate: string;
+  endDate: string;
+  initialCash: number;
+  benchmarkSymbol: string;
+  commissionBps: number;
+  commissionMin: number;
+  slippageBps: number;
+};
+
+function readBacktestFormDraft(): Partial<BacktestFormDraft> | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const raw = window.localStorage.getItem(BACKTEST_FORM_DRAFT_STORAGE_KEY);
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const draft: Partial<BacktestFormDraft> = {};
+
+    if (typeof parsed.strategyId === "string") {
+      draft.strategyId = parsed.strategyId;
+    }
+    if (typeof parsed.basketId === "string") {
+      draft.basketId = parsed.basketId;
+    }
+    if (typeof parsed.startDate === "string") {
+      draft.startDate = parsed.startDate;
+    }
+    if (typeof parsed.endDate === "string") {
+      draft.endDate = parsed.endDate;
+    }
+    if (typeof parsed.initialCash === "number" && Number.isFinite(parsed.initialCash)) {
+      draft.initialCash = parsed.initialCash;
+    }
+    if (typeof parsed.benchmarkSymbol === "string") {
+      draft.benchmarkSymbol = parsed.benchmarkSymbol;
+    }
+    if (typeof parsed.commissionBps === "number" && Number.isFinite(parsed.commissionBps)) {
+      draft.commissionBps = parsed.commissionBps;
+    }
+    if (typeof parsed.commissionMin === "number" && Number.isFinite(parsed.commissionMin)) {
+      draft.commissionMin = parsed.commissionMin;
+    }
+    if (typeof parsed.slippageBps === "number" && Number.isFinite(parsed.slippageBps)) {
+      draft.slippageBps = parsed.slippageBps;
+    }
+    return draft;
+  } catch {
+    return null;
+  }
 }
 
 function getMetric(summary: Record<string, unknown>, key: string): number | null {
@@ -118,6 +179,7 @@ export default function BacktestsPage() {
   const router = useRouter();
   const { locale } = useI18n();
   const isZh = locale === "zh-CN";
+  const restoredStrategyIdRef = useRef<string | null>(null);
   const preselectedStrategyId = Array.isArray(router.query.strategyId)
     ? router.query.strategyId[0]
     : router.query.strategyId;
@@ -130,6 +192,7 @@ export default function BacktestsPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitSuccessRun, setSubmitSuccessRun] = useState<BacktestRunOut | null>(null);
+  const [draftHydrated, setDraftHydrated] = useState(false);
 
   const [strategyId, setStrategyId] = useState("");
   const [basketId, setBasketId] = useState("");
@@ -142,6 +205,45 @@ export default function BacktestsPage() {
   const [slippageBps, setSlippageBps] = useState(5);
 
   useEffect(() => {
+    const draft = readBacktestFormDraft();
+    if (draft) {
+      if (typeof draft.strategyId === "string") {
+        restoredStrategyIdRef.current = draft.strategyId;
+        setStrategyId(draft.strategyId);
+      }
+      if (typeof draft.basketId === "string") {
+        setBasketId(draft.basketId);
+      }
+      if (typeof draft.startDate === "string") {
+        setStartDate(draft.startDate);
+      }
+      if (typeof draft.endDate === "string") {
+        setEndDate(draft.endDate);
+      }
+      if (typeof draft.initialCash === "number") {
+        setInitialCash(draft.initialCash);
+      }
+      if (typeof draft.benchmarkSymbol === "string") {
+        setBenchmarkSymbol(draft.benchmarkSymbol);
+      }
+      if (typeof draft.commissionBps === "number") {
+        setCommissionBps(draft.commissionBps);
+      }
+      if (typeof draft.commissionMin === "number") {
+        setCommissionMin(draft.commissionMin);
+      }
+      if (typeof draft.slippageBps === "number") {
+        setSlippageBps(draft.slippageBps);
+      }
+    }
+    setDraftHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!draftHydrated) {
+      return undefined;
+    }
+
     let cancelled = false;
 
     Promise.all([listStrategies(), listBacktests(), listStockBaskets()])
@@ -152,14 +254,31 @@ export default function BacktestsPage() {
         setStrategies(strategyItems);
         setRuns(runItems);
         setBaskets(basketItems);
-        if (preselectedStrategyId) {
-          setStrategyId(preselectedStrategyId);
-        } else if (strategyItems.length > 0) {
+        const eligibleStrategyItems = strategyItems.filter((item) => item.engine_ready);
+        setStrategyId((current) => {
+          if (
+            preselectedStrategyId
+            && eligibleStrategyItems.some((item) => item.id === preselectedStrategyId)
+          ) {
+            return preselectedStrategyId;
+          }
+          if (current && eligibleStrategyItems.some((item) => item.id === current)) {
+            return current;
+          }
+
+          const restoredStrategyId = restoredStrategyIdRef.current;
+          if (
+            restoredStrategyId
+            && eligibleStrategyItems.some((item) => item.id === restoredStrategyId)
+          ) {
+            return restoredStrategyId;
+          }
+
           const preferred = strategyItems.find(
             (item) => item.engine_ready && item.status === "active"
           );
-          setStrategyId(preferred?.id || strategyItems[0].id);
-        }
+          return preferred?.id || eligibleStrategyItems[0]?.id || strategyItems[0]?.id || "";
+        });
       })
       .catch((err: Error) => {
         if (!cancelled) {
@@ -175,7 +294,37 @@ export default function BacktestsPage() {
     return () => {
       cancelled = true;
     };
-  }, [isZh, preselectedStrategyId]);
+  }, [draftHydrated, isZh, preselectedStrategyId]);
+
+  useEffect(() => {
+    if (!draftHydrated || typeof window === "undefined") {
+      return;
+    }
+
+    const draft: BacktestFormDraft = {
+      strategyId,
+      basketId,
+      startDate,
+      endDate,
+      initialCash,
+      benchmarkSymbol,
+      commissionBps,
+      commissionMin,
+      slippageBps,
+    };
+    window.localStorage.setItem(BACKTEST_FORM_DRAFT_STORAGE_KEY, JSON.stringify(draft));
+  }, [
+    basketId,
+    benchmarkSymbol,
+    commissionBps,
+    commissionMin,
+    draftHydrated,
+    endDate,
+    initialCash,
+    slippageBps,
+    startDate,
+    strategyId,
+  ]);
 
   useEffect(() => {
     if (loading || !runs.some((run) => run.status === "queued" || run.status === "running")) {

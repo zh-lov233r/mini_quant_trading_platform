@@ -364,9 +364,7 @@ def required_feature_keys(strategy_type: str, params: Dict[str, Any]) -> list[st
             "volume",
             "volume_sma_20",
             "atr_14",
-            "ret_60d",
             "sma_20",
-            "sma_50",
         ]
     return []
 
