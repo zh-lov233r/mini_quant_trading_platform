@@ -87,6 +87,25 @@ WHERE curr.dt_ny BETWEEN :start_date AND :end_date
 ORDER BY curr.dt_ny, i.ticker_canonical;
 """
 
+SPLIT_ACTION_RANGE_SQL = """
+SELECT
+    i.ticker_canonical AS symbol,
+    ca.ex_date,
+    ca.action_type,
+    ca.split_from,
+    ca.split_to
+FROM corporate_actions ca
+JOIN instruments i
+  ON i.id = ca.instrument_id
+WHERE ca.ex_date BETWEEN :start_date AND :end_date
+  AND ca.action_type IN ('split', 'reverse_split', 'stock_dividend')
+  AND ca.split_from IS NOT NULL
+  AND ca.split_to IS NOT NULL
+  AND i.is_active = TRUE
+  AND i.ticker_canonical IN :symbols
+ORDER BY ca.ex_date, i.ticker_canonical, ca.id;
+"""
+
 
 @dataclass(slots=True)
 class BacktestResult:
@@ -278,6 +297,12 @@ def run_backtest(
             history_start_date,
             end_date,
         )
+        split_adjustments_by_date = _load_split_adjustments_by_date(
+            db,
+            symbols,
+            start_date,
+            end_date,
+        )
         if not snapshots_by_date:
             raise ValueError("no feature snapshots found for the requested universe and window")
         benchmark_symbol_normalized = _normalize_symbols([benchmark_symbol])[0] if benchmark_symbol else None
@@ -308,6 +333,8 @@ def run_backtest(
         peak_equity = float(initial_cash)
         holdings: dict[str, float] = {}
         avg_entry_prices: dict[str, float] = {}
+        entry_trade_dates: dict[str, date] = {}
+        entry_day_indices: dict[str, int] = {}
         last_prices: dict[str, float] = {}
         trade_count = 0
         signal_count = 0
@@ -334,8 +361,14 @@ def run_backtest(
                 recent_bar_count=recent_bar_count,
             )
 
-        for trade_day in trading_days:
+        for trade_day_index, trade_day in enumerate(trading_days):
             day_snapshots = snapshots_by_date[trade_day]
+            _apply_split_adjustments(
+                trade_day,
+                split_adjustments_by_date,
+                holdings,
+                avg_entry_prices,
+            )
             snapshot_ts = _snapshot_ts(day_snapshots)
             execution_prices = _snapshot_price_map(day_snapshots, "open")
             close_prices = _snapshot_price_map(day_snapshots, "close")
@@ -350,6 +383,8 @@ def run_backtest(
                 signals=pending_signals,
                 holdings=holdings,
                 avg_entry_prices=avg_entry_prices,
+                entry_trade_dates=entry_trade_dates,
+                entry_day_indices=entry_day_indices,
                 execution_prices=execution_prices,
                 execution_snapshots=day_snapshots,
                 cash_ref=cash_state,
@@ -370,6 +405,8 @@ def run_backtest(
                 signals=pending_signals,
                 holdings=holdings,
                 avg_entry_prices=avg_entry_prices,
+                entry_trade_dates=entry_trade_dates,
+                entry_day_indices=entry_day_indices,
                 execution_prices=execution_prices,
                 execution_snapshots=day_snapshots,
                 cash_ref=cash_state,
@@ -377,13 +414,23 @@ def run_backtest(
                 max_positions=max_positions,
                 position_size_pct=position_size_pct,
                 cost_config=cost_config,
+                trade_day=trade_day,
+                trade_day_index=trade_day_index,
             )
             trade_count += buy_stats.trade_count
             total_fees += buy_stats.total_fees
             total_slippage += buy_stats.total_slippage
             cash = float(cash_state["cash"])
 
-            _inject_backtest_positions(day_snapshots, holdings, avg_entry_prices)
+            _inject_backtest_positions(
+                day_snapshots,
+                holdings,
+                avg_entry_prices,
+                entry_trade_dates,
+                entry_day_indices,
+                trade_day,
+                trade_day_index,
+            )
             _attach_recent_history(
                 day_snapshots,
                 recent_history_by_symbol,
@@ -461,7 +508,13 @@ def run_backtest(
                     gross_exposure=_gross_exposure(holdings, last_prices),
                     net_exposure=_gross_exposure(holdings, last_prices),
                     drawdown=drawdown,
-                    positions=_serialize_positions(holdings, avg_entry_prices, last_prices, signal_by_symbol),
+                    positions=_serialize_positions(
+                        holdings,
+                        avg_entry_prices,
+                        entry_trade_dates,
+                        last_prices,
+                        signal_by_symbol,
+                    ),
                     metrics={
                         "holdings_count": len(holdings),
                         "signal_count_cumulative": signal_count,
@@ -684,15 +737,86 @@ def _load_feature_snapshots_by_date(
     return snapshots_by_date
 
 
+def _load_split_adjustments_by_date(
+    db: Session,
+    symbols: list[str],
+    start_date: date,
+    end_date: date,
+) -> dict[date, dict[str, float]]:
+    """Load per-symbol quantity adjustment factors for split-style corporate actions."""
+    normalized_symbols = _normalize_symbols(symbols)
+    if not normalized_symbols:
+        return {}
+
+    stmt = text(SPLIT_ACTION_RANGE_SQL).bindparams(bindparam("symbols", expanding=True))
+    rows = db.execute(
+        stmt,
+        {
+            "symbols": normalized_symbols,
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+    ).mappings().all()
+
+    adjustments_by_date: dict[date, dict[str, float]] = {}
+    for row in rows:
+        symbol = str(row["symbol"]).upper()
+        trade_date = row["ex_date"]
+        split_from = float(row["split_from"])
+        split_to = float(row["split_to"])
+        if split_from <= 0 or split_to <= 0:
+            continue
+
+        quantity_factor = split_to / split_from
+        day_adjustments = adjustments_by_date.setdefault(trade_date, {})
+        day_adjustments[symbol] = float(day_adjustments.get(symbol, 1.0)) * quantity_factor
+
+    return adjustments_by_date
+
+
+def _apply_split_adjustments(
+    trade_day: date,
+    split_adjustments_by_date: dict[date, dict[str, float]],
+    holdings: dict[str, float],
+    avg_entry_prices: dict[str, float],
+) -> None:
+    """Adjust open positions for split-style corporate actions effective on trade_day."""
+    day_adjustments = split_adjustments_by_date.get(trade_day)
+    if not day_adjustments:
+        return
+
+    for symbol, quantity_factor in day_adjustments.items():
+        current_qty = float(holdings.get(symbol, 0.0))
+        if current_qty <= 0 or quantity_factor <= 0:
+            continue
+        if abs(quantity_factor - 1.0) <= 1e-12:
+            continue
+
+        holdings[symbol] = current_qty * quantity_factor
+
+        avg_entry_price = avg_entry_prices.get(symbol)
+        if avg_entry_price is not None:
+            avg_entry_prices[symbol] = float(avg_entry_price) / quantity_factor
+
+
 def _inject_backtest_positions(
     day_snapshots: dict[str, dict[str, Any]],
     holdings: dict[str, float],
     avg_entry_prices: dict[str, float],
+    entry_trade_dates: dict[str, date],
+    entry_day_indices: dict[str, int],
+    trade_day: date,
+    trade_day_index: int,
 ) -> None:
     """Expose current position size to handlers that need state-aware exits."""
     for symbol, snapshot in day_snapshots.items():
         snapshot["position"] = float(holdings.get(symbol, 0.0))
         snapshot["avg_entry_price"] = avg_entry_prices.get(symbol)
+        snapshot["entry_trade_date"] = entry_trade_dates.get(symbol)
+        entry_day_index = entry_day_indices.get(symbol)
+        snapshot["position_holding_days"] = (
+            max(trade_day_index - entry_day_index, 0) if entry_day_index is not None else None
+        )
 
 
 def _attach_recent_history(
@@ -852,6 +976,8 @@ def _apply_sell_signals(
     signals: list[SignalEvent],
     holdings: dict[str, float],
     avg_entry_prices: dict[str, float],
+    entry_trade_dates: dict[str, date],
+    entry_day_indices: dict[str, int],
     execution_prices: dict[str, float],
     execution_snapshots: dict[str, dict[str, Any]],
     cash_ref: dict[str, float],
@@ -876,6 +1002,8 @@ def _apply_sell_signals(
         cash_ref["cash"] += proceeds
         del holdings[event.symbol]
         avg_entry_prices.pop(event.symbol, None)
+        entry_trade_dates.pop(event.symbol, None)
+        entry_day_indices.pop(event.symbol, None)
         stats.trade_count += 1
         stats.total_fees += fee
         stats.total_slippage += slippage_cost
@@ -914,6 +1042,8 @@ def _apply_buy_signals(
     signals: list[SignalEvent],
     holdings: dict[str, float],
     avg_entry_prices: dict[str, float],
+    entry_trade_dates: dict[str, date],
+    entry_day_indices: dict[str, int],
     execution_prices: dict[str, float],
     execution_snapshots: dict[str, dict[str, Any]],
     cash_ref: dict[str, float],
@@ -921,6 +1051,8 @@ def _apply_buy_signals(
     max_positions: int,
     position_size_pct: float,
     cost_config: BacktestCostConfig,
+    trade_day: date,
+    trade_day_index: int,
 ) -> ExecutionStats:
     """Open new long positions for queued BUY signals on the next session open."""
     stats = ExecutionStats()
@@ -955,6 +1087,8 @@ def _apply_buy_signals(
         cash_ref["cash"] -= total_cash_out
         holdings[event.symbol] = qty
         avg_entry_prices[event.symbol] = execution_price
+        entry_trade_dates[event.symbol] = trade_day
+        entry_day_indices[event.symbol] = trade_day_index
         stats.trade_count += 1
         stats.total_fees += fee
         stats.total_slippage += slippage_cost
@@ -1011,6 +1145,7 @@ def _snapshot_price_map(
 def _serialize_positions(
     holdings: dict[str, float],
     avg_entry_prices: dict[str, float],
+    entry_trade_dates: dict[str, date],
     last_prices: dict[str, float],
     signal_by_symbol: dict[str, Any],
 ) -> dict[str, dict[str, float | str | None]]:
@@ -1022,6 +1157,9 @@ def _serialize_positions(
         payload[symbol] = {
             "qty": float(qty),
             "avg_entry_price": avg_entry_prices.get(symbol),
+            "entry_trade_date": (
+                entry_trade_dates[symbol].isoformat() if entry_trade_dates.get(symbol) is not None else None
+            ),
             "close": close_px,
             "market_value": float(qty) * close_px,
             "latest_signal": getattr(event, "action", None),

@@ -1,4 +1,9 @@
-export type StrategyType = "trend" | "mean_reversion" | "island_reversal" | "custom";
+export type StrategyType =
+  | "trend"
+  | "mean_reversion"
+  | "island_reversal"
+  | "double_bottom"
+  | "custom";
 export type StrategyStatus = "draft" | "active" | "archived";
 
 export interface IndicatorSpec {
@@ -22,6 +27,7 @@ export interface MeanReversionStrategyParams {
     position_size_pct: number;
     stop_loss_pct: number;
     take_profit_pct: number;
+    max_holding_days: number;
   };
   execution: {
     timeframe: string;
@@ -101,10 +107,49 @@ export interface IslandReversalStrategyParams {
   };
 }
 
+export interface DoubleBottomStrategyParams {
+  signal: {
+    downtrend_lookback: number;
+    downtrend_min_drop_pct: number;
+    min_bottom_spacing: number;
+    max_bottom_spacing: number;
+    bottom_tolerance_pct: number;
+    neckline_min_rebound_pct: number;
+    rebound_up_day_ratio_min: number;
+    second_bottom_volume_ratio_max: number;
+    breakout_volume_ratio_min: number;
+    breakout_buffer_pct: number;
+    retest_window: number;
+    retest_volume_ratio_max: number;
+    support_tolerance_pct: number;
+  };
+  universe: {
+    symbols: string[];
+    selection_mode: string;
+  };
+  risk: {
+    max_positions: number;
+    position_size_pct: number;
+    stop_loss_atr: number;
+    max_loss_pct: number;
+    take_profit_atr: number;
+  };
+  execution: {
+    timeframe: string;
+    rebalance: string;
+    run_at: string;
+  };
+  metadata: {
+    description: string;
+    schema_version: number;
+  };
+}
+
 export type StrategyParams =
   | TrendStrategyParams
   | MeanReversionStrategyParams
   | IslandReversalStrategyParams
+  | DoubleBottomStrategyParams
   | Record<string, unknown>;
 
 export interface StrategyCreate {

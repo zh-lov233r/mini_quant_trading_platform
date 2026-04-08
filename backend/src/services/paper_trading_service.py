@@ -62,6 +62,7 @@ class VirtualPosition:
     qty: float
     avg_entry_price: float
     current_price: float = 0.0
+    entry_trade_date: date | None = None
 
     @property
     def market_value(self) -> float:
@@ -228,7 +229,7 @@ def run_paper_trading(
             allocation_cfg,
             price_lookup_before,
         )
-        _inject_virtual_positions(snapshots, sleeve_before.positions_by_symbol)
+        _inject_virtual_positions(snapshots, sleeve_before.positions_by_symbol, trade_date)
         signals = handler(runtime, snapshots)
         _persist_signals(db, strategy, run, signals)
 
@@ -551,6 +552,7 @@ def _rebuild_virtual_subportfolio_state(
             qty=float(txn.qty),
             price=float(txn.price),
             fee=float(txn.fee or 0),
+            trade_date=_transaction_trade_date(txn),
         )
 
     return _mark_virtual_subportfolio_to_market(state, price_lookup)
@@ -641,6 +643,7 @@ def _execute_paper_orders(
                 db=db,
                 strategy=strategy,
                 run=run,
+                trade_date=trade_date,
                 client=client,
                 event=event,
                 submit_orders=submit_orders,
@@ -662,6 +665,7 @@ def _execute_paper_orders(
                     qty=fill_qty,
                     price=fill_price,
                     fee=0.0,
+                    trade_date=trade_date,
                 )
                 projected_sleeve = _mark_virtual_subportfolio_to_market(
                     projected_sleeve,
@@ -722,6 +726,7 @@ def _execute_paper_orders(
             db=db,
             strategy=strategy,
             run=run,
+            trade_date=trade_date,
             client=client,
             event=event,
             submit_orders=submit_orders,
@@ -743,6 +748,7 @@ def _execute_paper_orders(
                 qty=fill_qty,
                 price=fill_price,
                 fee=0.0,
+                trade_date=trade_date,
             )
             projected_sleeve = _mark_virtual_subportfolio_to_market(
                 projected_sleeve,
@@ -758,6 +764,7 @@ def _submit_paper_order(
     db: Session,
     strategy: Strategy,
     run: StrategyRun,
+    trade_date: date,
     client: AlpacaClient,
     event: SignalEvent,
     submit_orders: bool,
@@ -822,6 +829,7 @@ def _submit_paper_order(
                 "source": "alpaca_paper",
                 "reason": event.reason,
                 "signal_ts": event.ts.isoformat(),
+                "execution_trade_date": trade_date.isoformat(),
                 "client_order_id": client_order_id,
                 "broker_status": broker_status,
                 "reference_price": reference_price,
@@ -857,11 +865,13 @@ def _apply_virtual_fill(
     qty: float,
     price: float,
     fee: float,
+    trade_date: date | None = None,
 ) -> None:
     normalized_symbol = symbol.upper()
     position = state.positions_by_symbol.get(normalized_symbol)
     current_qty = position.qty if position is not None else 0.0
     current_avg = position.avg_entry_price if position is not None else 0.0
+    current_entry_trade_date = position.entry_trade_date if position is not None else None
 
     if side.upper() == "BUY":
         total_cost = (qty * price) + fee
@@ -876,6 +886,7 @@ def _apply_virtual_fill(
             qty=new_qty,
             avg_entry_price=avg_entry,
             current_price=price,
+            entry_trade_date=current_entry_trade_date or trade_date,
         )
         return
 
@@ -890,6 +901,7 @@ def _apply_virtual_fill(
         qty=remaining_qty,
         avg_entry_price=current_avg,
         current_price=price,
+        entry_trade_date=current_entry_trade_date,
     )
 
 
@@ -906,6 +918,7 @@ def _mark_virtual_subportfolio_to_market(
             qty=position.qty,
             avg_entry_price=position.avg_entry_price,
             current_price=current_price,
+            entry_trade_date=position.entry_trade_date,
         )
         market_value = state.positions_by_symbol[symbol].market_value
         gross_exposure += abs(market_value)
@@ -928,6 +941,7 @@ def _clone_virtual_state(state: VirtualSubportfolioState) -> VirtualSubportfolio
                 qty=position.qty,
                 avg_entry_price=position.avg_entry_price,
                 current_price=position.current_price,
+                entry_trade_date=position.entry_trade_date,
             )
             for symbol, position in state.positions_by_symbol.items()
         },
@@ -937,11 +951,18 @@ def _clone_virtual_state(state: VirtualSubportfolioState) -> VirtualSubportfolio
 def _inject_virtual_positions(
     snapshots: dict[str, dict[str, Any]],
     positions_by_symbol: dict[str, VirtualPosition],
+    trade_date: date,
 ) -> None:
     for symbol, snapshot in snapshots.items():
         position = positions_by_symbol.get(symbol)
         snapshot["position"] = position.qty if position is not None else 0.0
         snapshot["avg_entry_price"] = position.avg_entry_price if position is not None else None
+        snapshot["entry_trade_date"] = position.entry_trade_date if position is not None else None
+        snapshot["position_holding_days"] = (
+            max((trade_date - position.entry_trade_date).days, 0)
+            if position is not None and position.entry_trade_date is not None
+            else None
+        )
 
 
 def _build_price_lookup(
@@ -984,11 +1005,25 @@ def _serialize_virtual_positions(
         payload[symbol] = {
             "qty": position.qty,
             "avg_entry_price": position.avg_entry_price,
+            "entry_trade_date": (
+                position.entry_trade_date.isoformat() if position.entry_trade_date is not None else None
+            ),
             "current_price": position.current_price,
             "market_value": position.market_value,
             "latest_signal": getattr(signal, "action", None),
         }
     return payload
+
+
+def _transaction_trade_date(txn: Transaction) -> date:
+    meta = txn.meta or {}
+    execution_trade_date = meta.get("execution_trade_date")
+    if isinstance(execution_trade_date, str):
+        try:
+            return date.fromisoformat(execution_trade_date)
+        except ValueError:
+            pass
+    return txn.ts.date() if txn.ts is not None else datetime.now(timezone.utc).date()
 
 
 def _snapshot_ts(

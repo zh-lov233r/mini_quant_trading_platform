@@ -269,8 +269,10 @@ class RollingStats:
     def std(self) -> float | None:
         if len(self.values) < self.window:
             return None
-        mean = self.sum / self.window
-        variance = (self.sum_sq / self.window) - mean * mean
+        # Recompute variance from the active window values to avoid catastrophic
+        # cancellation after long histories with large split-adjusted prices.
+        mean = sum(self.values) / self.window
+        variance = sum((value - mean) * (value - mean) for value in self.values) / self.window
         if variance < 0:
             variance = 0.0
         return math.sqrt(variance)

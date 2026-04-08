@@ -84,6 +84,13 @@ export function getStrategyTemplateCopy(
           ? "底部岛形反转策略，识别缩量向下衰竭缺口、放量向上突破缺口和缩量回踩缺口。"
           : "Bottom island reversal strategy using an exhaustion gap down, a volume-backed gap up breakout, and a low-volume gap retest.",
       };
+    case "double_bottom":
+      return {
+        label: isZh ? "双底形态" : "Double Bottom",
+        description: isZh
+          ? "保守版双底形态策略，确认长期下跌后的双底、放量突破颈线与缩量回踩。"
+          : "Conservative double-bottom strategy focused on a confirmed neckline breakout and low-volume retest after a prolonged decline.",
+      };
     case "custom":
       return {
         label: isZh ? "自定义配置" : "Custom Config",

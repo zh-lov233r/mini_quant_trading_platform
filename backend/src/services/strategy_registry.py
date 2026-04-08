@@ -6,7 +6,7 @@ import re
 from typing import Any, Dict, Iterable
 
 
-ENGINE_SUPPORTED_TYPES = {"trend", "mean_reversion", "island_reversal"}
+ENGINE_SUPPORTED_TYPES = {"trend", "mean_reversion", "island_reversal", "double_bottom"}
 _INDICATOR_PATTERN = re.compile(r"^(EMA|SMA)(\d+)$", re.IGNORECASE)
 MEAN_REVERSION_SUPPORTED_LOOKBACK_WINDOWS = (5, 10, 20)
 
@@ -57,6 +57,7 @@ MEAN_REVERSION_DEFAULTS: Dict[str, Any] = {
         "position_size_pct": 0.1,
         "stop_loss_pct": 0.10,
         "take_profit_pct": 0.10,
+        "max_holding_days": 0,
     },
     "execution": {
         "timeframe": "1d",
@@ -92,6 +93,44 @@ ISLAND_REVERSAL_DEFAULTS: Dict[str, Any] = {
         "position_size_pct": 0.15,
         "stop_loss_atr": 1.5,
         "max_loss_pct": 0.10,
+        "take_profit_atr": 3.0,
+    },
+    "execution": {
+        "timeframe": "1d",
+        "rebalance": "daily",
+        "run_at": "close",
+    },
+    "metadata": {
+        "description": "",
+        "schema_version": 1,
+    },
+}
+
+DOUBLE_BOTTOM_DEFAULTS: Dict[str, Any] = {
+    "signal": {
+        "downtrend_lookback": 60,
+        "downtrend_min_drop_pct": 0.20,
+        "min_bottom_spacing": 5,
+        "max_bottom_spacing": 30,
+        "bottom_tolerance_pct": 0.03,
+        "neckline_min_rebound_pct": 0.06,
+        "rebound_up_day_ratio_min": 0.60,
+        "second_bottom_volume_ratio_max": 0.90,
+        "breakout_volume_ratio_min": 1.50,
+        "breakout_buffer_pct": 0.005,
+        "retest_window": 10,
+        "retest_volume_ratio_max": 0.80,
+        "support_tolerance_pct": 0.02,
+    },
+    "universe": {
+        "symbols": [],
+        "selection_mode": "all_common_stock",
+    },
+    "risk": {
+        "max_positions": 6,
+        "position_size_pct": 0.15,
+        "stop_loss_atr": 1.5,
+        "max_loss_pct": 0.08,
         "take_profit_atr": 3.0,
     },
     "execution": {
@@ -156,6 +195,13 @@ def build_strategy_catalog() -> list[Dict[str, Any]]:
             "defaults": copy.deepcopy(ISLAND_REVERSAL_DEFAULTS),
         },
         {
+            "strategy_type": "double_bottom",
+            "label": "Double Bottom",
+            "description": "保守版双底形态策略，确认长期下跌后的双底、放量突破颈线与缩量回踩。",
+            "engine_ready": True,
+            "defaults": copy.deepcopy(DOUBLE_BOTTOM_DEFAULTS),
+        },
+        {
             "strategy_type": "custom",
             "label": "Custom Config",
             "description": "自定义 JSON/DSL 策略定义。建议存储规则，不要直接存储可执行代码。",
@@ -185,6 +231,8 @@ def normalize_strategy_params(
         normalized = _normalize_mean_reversion_params(raw)
     elif strategy_type == "island_reversal":
         normalized = _normalize_island_reversal_params(raw)
+    elif strategy_type == "double_bottom":
+        normalized = _normalize_double_bottom_params(raw)
     elif strategy_type == "custom":
         normalized = _normalize_custom_params(raw)
     else:
@@ -229,6 +277,15 @@ def is_engine_ready(strategy_type: str, params: Dict[str, Any]) -> bool:
             and signal.get("left_gap_min_pct")
             and signal.get("right_gap_min_pct")
             and signal.get("max_island_bars")
+            and signal.get("retest_window")
+        )
+    if strategy_type == "double_bottom":
+        return bool(
+            signal.get("downtrend_lookback")
+            and signal.get("min_bottom_spacing")
+            and signal.get("max_bottom_spacing")
+            and signal.get("bottom_tolerance_pct")
+            and signal.get("breakout_volume_ratio_min")
             and signal.get("retest_window")
         )
     return False
@@ -293,6 +350,19 @@ def required_feature_keys(strategy_type: str, params: Dict[str, Any]) -> list[st
             "atr_14",
             "ret_20d",
             "ret_60d",
+            "sma_50",
+        ]
+    if strategy_type == "double_bottom":
+        return [
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "volume_sma_20",
+            "atr_14",
+            "ret_60d",
+            "sma_20",
             "sma_50",
         ]
     return []
@@ -443,6 +513,8 @@ def _normalize_mean_reversion_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         normalized["risk"]["stop_loss_pct"] = raw["stop_loss_pct"]
     if "take_profit_pct" in raw:
         normalized["risk"]["take_profit_pct"] = raw["take_profit_pct"]
+    if "max_holding_days" in raw:
+        normalized["risk"]["max_holding_days"] = raw["max_holding_days"]
     if "rebalance" in raw:
         normalized["execution"]["rebalance"] = raw["rebalance"]
     if "timeframe" in raw:
@@ -487,6 +559,10 @@ def _normalize_mean_reversion_params(raw: Dict[str, Any]) -> Dict[str, Any]:
     normalized["risk"]["take_profit_pct"] = _fraction(
         normalized["risk"].get("take_profit_pct", MEAN_REVERSION_DEFAULTS["risk"]["take_profit_pct"]),
         "risk.take_profit_pct",
+    )
+    normalized["risk"]["max_holding_days"] = _non_negative_int(
+        normalized["risk"].get("max_holding_days", MEAN_REVERSION_DEFAULTS["risk"]["max_holding_days"]),
+        "risk.max_holding_days",
     )
     normalized["execution"]["timeframe"] = str(
         normalized["execution"].get("timeframe", MEAN_REVERSION_DEFAULTS["execution"]["timeframe"])
@@ -639,6 +715,152 @@ def _normalize_island_reversal_params(raw: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
+def _normalize_double_bottom_params(raw: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = copy.deepcopy(DOUBLE_BOTTOM_DEFAULTS)
+    normalized["signal"] = _merge_nested_section(normalized["signal"], raw.get("signal"))
+    normalized["universe"] = _merge_nested_section(
+        normalized["universe"],
+        raw.get("universe"),
+        symbols=raw.get("symbols") or raw.get("universe_symbols"),
+    )
+    normalized["risk"] = _merge_nested_section(normalized["risk"], raw.get("risk"))
+    normalized["execution"] = _merge_nested_section(normalized["execution"], raw.get("execution"))
+    normalized["metadata"] = _merge_nested_section(normalized["metadata"], raw.get("metadata"))
+
+    for field in (
+        "downtrend_lookback",
+        "downtrend_min_drop_pct",
+        "min_bottom_spacing",
+        "max_bottom_spacing",
+        "bottom_tolerance_pct",
+        "neckline_min_rebound_pct",
+        "rebound_up_day_ratio_min",
+        "second_bottom_volume_ratio_max",
+        "breakout_volume_ratio_min",
+        "breakout_buffer_pct",
+        "retest_window",
+        "retest_volume_ratio_max",
+        "support_tolerance_pct",
+    ):
+        if field in raw:
+            normalized["signal"][field] = raw[field]
+
+    if "max_positions" in raw:
+        normalized["risk"]["max_positions"] = raw["max_positions"]
+    if "position_size_pct" in raw:
+        normalized["risk"]["position_size_pct"] = raw["position_size_pct"]
+    if "stop_loss_atr" in raw:
+        normalized["risk"]["stop_loss_atr"] = raw["stop_loss_atr"]
+    if "max_loss_pct" in raw:
+        normalized["risk"]["max_loss_pct"] = raw["max_loss_pct"]
+    if "take_profit_atr" in raw:
+        normalized["risk"]["take_profit_atr"] = raw["take_profit_atr"]
+    if "rebalance" in raw:
+        normalized["execution"]["rebalance"] = raw["rebalance"]
+    if "timeframe" in raw:
+        normalized["execution"]["timeframe"] = raw["timeframe"]
+    if "run_at" in raw:
+        normalized["execution"]["run_at"] = raw["run_at"]
+    if "description" in raw:
+        normalized["metadata"]["description"] = raw["description"]
+
+    normalized["signal"]["downtrend_lookback"] = _positive_int(
+        normalized["signal"].get("downtrend_lookback"),
+        "signal.downtrend_lookback",
+    )
+    normalized["signal"]["downtrend_min_drop_pct"] = _fraction(
+        normalized["signal"].get("downtrend_min_drop_pct"),
+        "signal.downtrend_min_drop_pct",
+    )
+    normalized["signal"]["min_bottom_spacing"] = _positive_int(
+        normalized["signal"].get("min_bottom_spacing"),
+        "signal.min_bottom_spacing",
+    )
+    normalized["signal"]["max_bottom_spacing"] = _positive_int(
+        normalized["signal"].get("max_bottom_spacing"),
+        "signal.max_bottom_spacing",
+    )
+    if normalized["signal"]["min_bottom_spacing"] > normalized["signal"]["max_bottom_spacing"]:
+        raise ValueError("signal.min_bottom_spacing cannot exceed signal.max_bottom_spacing")
+    normalized["signal"]["bottom_tolerance_pct"] = _fraction(
+        normalized["signal"].get("bottom_tolerance_pct"),
+        "signal.bottom_tolerance_pct",
+    )
+    normalized["signal"]["neckline_min_rebound_pct"] = _fraction(
+        normalized["signal"].get("neckline_min_rebound_pct"),
+        "signal.neckline_min_rebound_pct",
+    )
+    normalized["signal"]["rebound_up_day_ratio_min"] = _fraction(
+        normalized["signal"].get("rebound_up_day_ratio_min"),
+        "signal.rebound_up_day_ratio_min",
+    )
+    normalized["signal"]["second_bottom_volume_ratio_max"] = _positive_float(
+        normalized["signal"].get("second_bottom_volume_ratio_max"),
+        "signal.second_bottom_volume_ratio_max",
+    )
+    normalized["signal"]["breakout_volume_ratio_min"] = _positive_float(
+        normalized["signal"].get("breakout_volume_ratio_min"),
+        "signal.breakout_volume_ratio_min",
+    )
+    normalized["signal"]["breakout_buffer_pct"] = _fraction(
+        normalized["signal"].get("breakout_buffer_pct"),
+        "signal.breakout_buffer_pct",
+    )
+    normalized["signal"]["retest_window"] = _positive_int(
+        normalized["signal"].get("retest_window"),
+        "signal.retest_window",
+    )
+    normalized["signal"]["retest_volume_ratio_max"] = _positive_float(
+        normalized["signal"].get("retest_volume_ratio_max"),
+        "signal.retest_volume_ratio_max",
+    )
+    normalized["signal"]["support_tolerance_pct"] = _fraction(
+        normalized["signal"].get("support_tolerance_pct"),
+        "signal.support_tolerance_pct",
+    )
+
+    normalized["universe"]["symbols"] = _normalize_symbols(normalized["universe"].get("symbols", []))
+    normalized["universe"]["selection_mode"] = _normalize_selection_mode(
+        normalized["universe"].get("selection_mode"),
+        normalized["universe"]["symbols"],
+    )
+    normalized["risk"]["max_positions"] = _positive_int(
+        normalized["risk"].get("max_positions", DOUBLE_BOTTOM_DEFAULTS["risk"]["max_positions"]),
+        "risk.max_positions",
+    )
+    normalized["risk"]["position_size_pct"] = _fraction(
+        normalized["risk"].get("position_size_pct", DOUBLE_BOTTOM_DEFAULTS["risk"]["position_size_pct"]),
+        "risk.position_size_pct",
+    )
+    normalized["risk"]["stop_loss_atr"] = _positive_float(
+        normalized["risk"].get("stop_loss_atr", DOUBLE_BOTTOM_DEFAULTS["risk"]["stop_loss_atr"]),
+        "risk.stop_loss_atr",
+    )
+    normalized["risk"]["max_loss_pct"] = _fraction(
+        normalized["risk"].get("max_loss_pct", DOUBLE_BOTTOM_DEFAULTS["risk"]["max_loss_pct"]),
+        "risk.max_loss_pct",
+    )
+    normalized["risk"]["take_profit_atr"] = _positive_float(
+        normalized["risk"].get("take_profit_atr", DOUBLE_BOTTOM_DEFAULTS["risk"]["take_profit_atr"]),
+        "risk.take_profit_atr",
+    )
+    normalized["execution"]["timeframe"] = str(
+        normalized["execution"].get("timeframe", DOUBLE_BOTTOM_DEFAULTS["execution"]["timeframe"])
+    )
+    normalized["execution"]["rebalance"] = str(
+        normalized["execution"].get("rebalance", DOUBLE_BOTTOM_DEFAULTS["execution"]["rebalance"])
+    )
+    normalized["execution"]["run_at"] = str(
+        normalized["execution"].get("run_at", DOUBLE_BOTTOM_DEFAULTS["execution"]["run_at"])
+    )
+    normalized["metadata"]["description"] = str(normalized["metadata"].get("description", "")).strip()
+    normalized["metadata"]["schema_version"] = _positive_int(
+        normalized["metadata"].get("schema_version", 1),
+        "metadata.schema_version",
+    )
+    return normalized
+
+
 def _normalize_custom_params(raw: Dict[str, Any]) -> Dict[str, Any]:
     normalized = copy.deepcopy(CUSTOM_DEFAULTS)
     if not isinstance(raw, dict):
@@ -747,6 +969,16 @@ def _positive_int(value: Any, label: str) -> int:
         raise ValueError(f"{label} must be a positive integer") from exc
     if ivalue <= 0:
         raise ValueError(f"{label} must be a positive integer")
+    return ivalue
+
+
+def _non_negative_int(value: Any, label: str) -> int:
+    try:
+        ivalue = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a non-negative integer") from exc
+    if ivalue < 0:
+        raise ValueError(f"{label} must be a non-negative integer")
     return ivalue
 
 

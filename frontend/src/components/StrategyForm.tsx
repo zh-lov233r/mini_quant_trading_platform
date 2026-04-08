@@ -45,7 +45,13 @@ function toSymbolText(value: unknown): string {
 }
 
 function isStrategyType(value: unknown): value is StrategyType {
-  return value === "trend" || value === "mean_reversion" || value === "island_reversal" || value === "custom";
+  return (
+    value === "trend"
+    || value === "mean_reversion"
+    || value === "island_reversal"
+    || value === "double_bottom"
+    || value === "custom"
+  );
 }
 
 function isStrategyStatus(value: unknown): value is StrategyStatus {
@@ -144,6 +150,9 @@ export default function StrategyForm({
   );
   const [meanReversionTakeProfitPct, setMeanReversionTakeProfitPct] = useState(
     toFiniteNumber(initialRisk.take_profit_pct, 0.1)
+  );
+  const [meanReversionMaxHoldingDays, setMeanReversionMaxHoldingDays] = useState(
+    toFiniteNumber(initialRisk.max_holding_days, 0)
   );
   const [islandDowntrendLookback, setIslandDowntrendLookback] = useState(
     toFiniteNumber(initialSignal.downtrend_lookback, 60)
@@ -261,6 +270,7 @@ export default function StrategyForm({
     setPositionSizePct(toFiniteNumber(risk.position_size_pct, 0.1));
     setMeanReversionStopLossPct(toFiniteNumber(risk.stop_loss_pct, 0.1));
     setMeanReversionTakeProfitPct(toFiniteNumber(risk.take_profit_pct, 0.1));
+    setMeanReversionMaxHoldingDays(toFiniteNumber(risk.max_holding_days, 0));
     setRebalance(toStringValue(execution.rebalance, "daily"));
     setRunAt(toStringValue(execution.run_at, "close"));
   }, [isEditMode, selectedTemplate, strategyType]);
@@ -419,6 +429,7 @@ export default function StrategyForm({
           position_size_pct: Number(positionSizePct),
           stop_loss_pct: Number(meanReversionStopLossPct),
           take_profit_pct: Number(meanReversionTakeProfitPct),
+          max_holding_days: Number(meanReversionMaxHoldingDays),
         },
         execution: {
           timeframe: "1d",
@@ -437,6 +448,7 @@ export default function StrategyForm({
       meanReversionLookback,
       meanReversionStopLossPct,
       meanReversionTakeProfitPct,
+      meanReversionMaxHoldingDays,
       meanReversionZscoreEntry,
       meanReversionZscoreExit,
       positionSizePct,
@@ -634,6 +646,9 @@ export default function StrategyForm({
         }
         if (!(Number(meanReversionTakeProfitPct) > 0 && Number(meanReversionTakeProfitPct) <= 1)) {
           throw new Error(isZh ? "止盈比例必须在 (0, 1] 之间" : "Take profit pct must be within (0, 1]");
+        }
+        if (!(Number(meanReversionMaxHoldingDays) >= 0 && Number.isInteger(Number(meanReversionMaxHoldingDays)))) {
+          throw new Error(isZh ? "最大持仓天数必须是大于等于 0 的整数" : "Max holding days must be a non-negative integer");
         }
         payload = {
           name: name.trim(),
@@ -1174,6 +1189,20 @@ export default function StrategyForm({
                     value={meanReversionTakeProfitPct}
                     onChange={(e) => setMeanReversionTakeProfitPct(Number(e.target.value))}
                   />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "最大持仓天数" : "Max Holding Days"}</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    style={inputStyle}
+                    value={meanReversionMaxHoldingDays}
+                    onChange={(e) => setMeanReversionMaxHoldingDays(Number(e.target.value))}
+                  />
+                  <div style={{ color: "rgba(148, 163, 184, 0.82)", fontSize: 12, marginTop: 6 }}>
+                    {isZh ? "填 0 表示禁用这条时间止盈/止损规则。" : "Use 0 to disable the time-based exit rule."}
+                  </div>
                 </div>
               </div>
 
