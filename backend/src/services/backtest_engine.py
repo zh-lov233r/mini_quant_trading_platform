@@ -19,6 +19,8 @@ from src.services.strategy_engine import (
     RECENT_BAR_COUNT,
     STRATEGY_HANDLERS,
     SignalEvent,
+    build_stateful_backtest_signal_state,
+    generate_stateful_backtest_signals,
     required_recent_bar_count_for_runtime,
     required_recent_bar_lookback_days,
 )
@@ -349,6 +351,7 @@ def run_backtest(
         benchmark_last_return: float | None = None
         benchmark_points = 0
         recent_history_by_symbol: dict[str, deque[dict[str, Any]]] = {}
+        stateful_signal_state = build_stateful_backtest_signal_state(runtime)
         ordered_trade_days = sorted(snapshots_by_date)
         warmup_days = [trade_day for trade_day in ordered_trade_days if trade_day < start_date]
         trading_days = [trade_day for trade_day in ordered_trade_days if trade_day >= start_date]
@@ -356,6 +359,13 @@ def run_backtest(
             raise ValueError("no feature snapshots found inside the requested backtest window")
 
         for trade_day in warmup_days:
+            if stateful_signal_state is not None:
+                generate_stateful_backtest_signals(
+                    runtime,
+                    snapshots_by_date[trade_day],
+                    stateful_signal_state,
+                    emit_signals=False,
+                )
             _attach_recent_history(
                 snapshots_by_date[trade_day],
                 recent_history_by_symbol,
@@ -441,7 +451,15 @@ def run_backtest(
                 recent_bar_count=recent_bar_count,
             )
 
-            signals = handler(runtime, day_snapshots)
+            if stateful_signal_state is not None:
+                signals = generate_stateful_backtest_signals(
+                    runtime,
+                    day_snapshots,
+                    stateful_signal_state,
+                    emit_signals=True,
+                )
+            else:
+                signals = handler(runtime, day_snapshots)
             pending_signals = signals
             signal_count += len(signals)
             for event in signals:
@@ -682,8 +700,8 @@ def _load_feature_snapshots_by_date(
 ) -> dict[date, dict[str, dict[str, Any]]]:
     """Load all per-symbol daily inputs once, then group them by trade date.
 
-    The backtest loop works on one in-memory snapshot per day so handlers can stay
-    stateless and identical to the live signal-generation path.
+    The backtest loop works on one in-memory snapshot per day. Most handlers remain
+    stateless, while strategy-specific backtest state can be layered on top when needed.
     """
     stmt = text(FEATURE_RANGE_SQL).bindparams(bindparam("symbols", expanding=True))
     rows = db.execute(

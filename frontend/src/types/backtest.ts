@@ -22,6 +22,7 @@ export interface BacktestRunOut {
   requested_at?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
+  runtime_ms?: number | null;
   window_start?: string | null;
   window_end?: string | null;
   initial_cash?: number | null;

@@ -110,6 +110,8 @@ DOUBLE_BOTTOM_DEFAULTS: Dict[str, Any] = {
     "signal": {
         "downtrend_lookback": 60,
         "downtrend_min_drop_pct": 0.20,
+        "downtrend_max_up_day_ratio": 0.35,
+        "downtrend_min_r_squared": 0.65,
         "min_bottom_spacing": 5,
         "max_bottom_spacing": 30,
         "left_bottom_before_bars": 1,
@@ -731,6 +733,8 @@ def _normalize_double_bottom_params(raw: Dict[str, Any]) -> Dict[str, Any]:
     for field in (
         "downtrend_lookback",
         "downtrend_min_drop_pct",
+        "downtrend_max_up_day_ratio",
+        "downtrend_min_r_squared",
         "min_bottom_spacing",
         "max_bottom_spacing",
         "left_bottom_before_bars",
@@ -775,6 +779,14 @@ def _normalize_double_bottom_params(raw: Dict[str, Any]) -> Dict[str, Any]:
     normalized["signal"]["downtrend_min_drop_pct"] = _fraction(
         normalized["signal"].get("downtrend_min_drop_pct"),
         "signal.downtrend_min_drop_pct",
+    )
+    normalized["signal"]["downtrend_max_up_day_ratio"] = _fraction(
+        normalized["signal"].get("downtrend_max_up_day_ratio"),
+        "signal.downtrend_max_up_day_ratio",
+    )
+    normalized["signal"]["downtrend_min_r_squared"] = _fraction(
+        normalized["signal"].get("downtrend_min_r_squared"),
+        "signal.downtrend_min_r_squared",
     )
     normalized["signal"]["min_bottom_spacing"] = _positive_int(
         normalized["signal"].get("min_bottom_spacing"),

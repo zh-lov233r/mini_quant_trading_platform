@@ -190,6 +190,23 @@ class DoubleBottomRightCandidate:
     rebound_up_day_ratio: float
 
 
+@dataclass(slots=True)
+class DoubleBottomBacktestSymbolState:
+    """Per-symbol state carried across the whole backtest lifecycle."""
+
+    history_bars: list[HistoryBar] = field(default_factory=list)
+    left_candidates: list[DoubleBottomLeftCandidate] = field(default_factory=list)
+    right_candidates: list[DoubleBottomRightCandidate] = field(default_factory=list)
+    best_pattern: DoubleBottomPattern | None = None
+
+
+@dataclass(slots=True)
+class DoubleBottomBacktestState:
+    """Backtest-only double-bottom state keyed by symbol."""
+
+    symbols: dict[str, DoubleBottomBacktestSymbolState] = field(default_factory=dict)
+
+
 # ============================================================================
 # Public orchestration API
 # ============================================================================
@@ -1399,6 +1416,140 @@ def _resolve_island_reversal_action(
     return None, None, None
 
 
+def build_stateful_backtest_signal_state(
+    runtime_strategy: RuntimeStrategy,
+) -> DoubleBottomBacktestState | None:
+    if runtime_strategy.get("strategy_type") == "double_bottom":
+        return DoubleBottomBacktestState()
+    return None
+
+
+def generate_stateful_backtest_signals(
+    runtime_strategy: RuntimeStrategy,
+    market_data_by_symbol: MarketDataBySymbol,
+    state: DoubleBottomBacktestState,
+    *,
+    emit_signals: bool = True,
+) -> list[SignalEvent]:
+    if runtime_strategy.get("strategy_type") != "double_bottom":
+        return []
+    return _double_bottom_backtest_handler(
+        runtime_strategy,
+        market_data_by_symbol,
+        state,
+        emit_signals=emit_signals,
+    )
+
+
+def _double_bottom_backtest_handler(
+    runtime_strategy: RuntimeStrategy,
+    market_data_by_symbol: MarketDataBySymbol,
+    state: DoubleBottomBacktestState,
+    *,
+    emit_signals: bool = True,
+) -> list[SignalEvent]:
+    params = runtime_strategy["params"]
+    signal_cfg = params["signal"]
+    risk_cfg = params["risk"]
+    universe = _resolve_strategy_universe(params["universe"], market_data_by_symbol)
+
+    signals: list[SignalEvent] = []
+    for symbol in universe:
+        snapshot = market_data_by_symbol.get(symbol)
+        if not snapshot:
+            continue
+
+        symbol_state = state.symbols.setdefault(symbol, DoubleBottomBacktestSymbolState())
+        _append_double_bottom_backtest_history_bar(symbol_state, snapshot)
+        pattern = _advance_double_bottom_backtest_symbol_state(symbol_state, signal_cfg)
+        if not emit_signals:
+            continue
+
+        recent_bars = symbol_state.history_bars
+        position = float(snapshot.get("position", 0) or 0.0)
+        avg_entry_price = _safe_float_or_none(snapshot.get("avg_entry_price"))
+
+        if position > 0:
+            exit_setup = _extract_double_bottom_position_setup(snapshot)
+            if exit_setup is None and pattern is not None:
+                exit_setup = _build_double_bottom_setup_payload(recent_bars, pattern)
+            if exit_setup is None:
+                continue
+
+            action, reason, stage = _resolve_double_bottom_exit_action(
+                recent_bars=recent_bars,
+                setup=exit_setup,
+                signal_cfg=signal_cfg,
+                risk_cfg=risk_cfg,
+                avg_entry_price=avg_entry_price,
+            )
+            if action is None or reason is None or stage is None:
+                continue
+
+            setup_payload = dict(exit_setup)
+            setup_payload["stage"] = stage
+        else:
+            if pattern is None:
+                continue
+
+            action, reason, stage = _resolve_double_bottom_action(
+                recent_bars=recent_bars,
+                pattern=pattern,
+                signal_cfg=signal_cfg,
+                risk_cfg=risk_cfg,
+                position=position,
+                avg_entry_price=avg_entry_price,
+            )
+            if action is None or reason is None or stage is None:
+                continue
+
+            setup_payload = _build_double_bottom_setup_payload(
+                recent_bars,
+                pattern,
+                stage=stage,
+            )
+
+        score = _compute_double_bottom_signal_score(setup_payload)
+        signals.append(
+            SignalEvent(
+                strategy_id=runtime_strategy["strategy_id"],
+                ts=snapshot.get("ts") or datetime.now(timezone.utc),
+                symbol=symbol,
+                action=action,
+                reason=reason,
+                score=score,
+                metadata={
+                    "close": snapshot.get("close"),
+                    "open": snapshot.get("open"),
+                    "high": snapshot.get("high"),
+                    "low": snapshot.get("low"),
+                    "atr_14": snapshot.get("atr_14"),
+                    "position": position,
+                    "avg_entry_price": avg_entry_price,
+                    "setup": setup_payload,
+                    "config": {
+                        "downtrend_min_drop_pct": signal_cfg["downtrend_min_drop_pct"],
+                        "downtrend_max_up_day_ratio": signal_cfg["downtrend_max_up_day_ratio"],
+                        "downtrend_min_r_squared": signal_cfg["downtrend_min_r_squared"],
+                        "bottom_tolerance_pct": signal_cfg["bottom_tolerance_pct"],
+                        "left_bottom_before_bars": signal_cfg.get("left_bottom_before_bars", 1),
+                        "left_bottom_after_bars": signal_cfg.get("left_bottom_after_bars", 1),
+                        "neckline_min_rebound_pct": signal_cfg["neckline_min_rebound_pct"],
+                        "breakout_buffer_pct": signal_cfg["breakout_buffer_pct"],
+                        "breakout_volume_ratio_min": signal_cfg["breakout_volume_ratio_min"],
+                        "max_breakout_bars_after_right_bottom": signal_cfg.get("max_breakout_bars_after_right_bottom", 40),
+                        "retest_window": signal_cfg["retest_window"],
+                        "support_tolerance_pct": signal_cfg["support_tolerance_pct"],
+                        "max_loss_pct": risk_cfg["max_loss_pct"],
+                        "take_profit_atr": risk_cfg["take_profit_atr"],
+                    },
+                },
+            )
+        )
+
+    return signals
+
+
 # Evaluate conservative double-bottom setups using recent OHLCV history and position-aware exits.
 # Input: runtime strategy payload plus the symbol -> snapshot map with recent_bars populated.
 # Output: BUY/SELL SignalEvent objects for breakout, retest, or exit conditions.
@@ -1485,6 +1636,8 @@ def _double_bottom_handler(
                     "setup": setup_payload,
                     "config": {
                         "downtrend_min_drop_pct": signal_cfg["downtrend_min_drop_pct"],
+                        "downtrend_max_up_day_ratio": signal_cfg["downtrend_max_up_day_ratio"],
+                        "downtrend_min_r_squared": signal_cfg["downtrend_min_r_squared"],
                         "bottom_tolerance_pct": signal_cfg["bottom_tolerance_pct"],
                         "left_bottom_before_bars": signal_cfg.get("left_bottom_before_bars", 1),
                         "left_bottom_after_bars": signal_cfg.get("left_bottom_after_bars", 1),
@@ -1507,6 +1660,131 @@ def _double_bottom_handler(
 # ============================================================================
 # Double bottom helpers
 # ============================================================================
+
+def _append_double_bottom_backtest_history_bar(
+    symbol_state: DoubleBottomBacktestSymbolState,
+    snapshot: MarketSnapshot,
+) -> None:
+    history_bar = _build_history_bar_from_snapshot(snapshot)
+    history_trade_date = _safe_date_or_none(history_bar.get("dt_ny"))
+    if symbol_state.history_bars:
+        last_trade_date = _safe_date_or_none(symbol_state.history_bars[-1].get("dt_ny"))
+        if history_trade_date is not None and history_trade_date == last_trade_date:
+            symbol_state.history_bars[-1] = history_bar
+            return
+    symbol_state.history_bars.append(history_bar)
+
+
+def _build_history_bar_from_snapshot(snapshot: MarketSnapshot) -> HistoryBar:
+    return {
+        "dt_ny": _safe_date_or_none(snapshot.get("dt_ny")),
+        "ts": snapshot.get("ts") or datetime.now(timezone.utc),
+        "open": _safe_float_or_none(snapshot.get("open")),
+        "high": _safe_float_or_none(snapshot.get("high")),
+        "low": _safe_float_or_none(snapshot.get("low")),
+        "close": _safe_float_or_none(snapshot.get("close")),
+        "volume": _safe_float_or_none(snapshot.get("volume")),
+        "atr_14": _safe_float_or_none(snapshot.get("atr_14")),
+        "volume_sma_20": _safe_float_or_none(snapshot.get("volume_sma_20")),
+        "ret_20d": _safe_float_or_none(snapshot.get("ret_20d")),
+        "ret_60d": _safe_float_or_none(snapshot.get("ret_60d")),
+        "sma_20": _safe_float_or_none(snapshot.get("sma_20")),
+        "sma_50": _safe_float_or_none(snapshot.get("sma_50")),
+    }
+
+
+def _advance_double_bottom_backtest_symbol_state(
+    symbol_state: DoubleBottomBacktestSymbolState,
+    signal_cfg: Dict[str, Any],
+) -> DoubleBottomPattern | None:
+    recent_bars = symbol_state.history_bars
+    if len(recent_bars) < 2:
+        return symbol_state.best_pattern
+
+    min_bottom_spacing = int(signal_cfg["min_bottom_spacing"])
+    max_bottom_spacing = int(signal_cfg["max_bottom_spacing"])
+    left_bottom_before_bars = int(signal_cfg.get("left_bottom_before_bars", 1))
+    left_bottom_after_bars = int(signal_cfg.get("left_bottom_after_bars", 1))
+    downtrend_lookback = int(signal_cfg["downtrend_lookback"])
+    downtrend_min_drop_pct = float(signal_cfg["downtrend_min_drop_pct"])
+    downtrend_max_up_day_ratio = float(signal_cfg["downtrend_max_up_day_ratio"])
+    downtrend_min_r_squared = float(signal_cfg["downtrend_min_r_squared"])
+    bottom_tolerance_pct = float(signal_cfg["bottom_tolerance_pct"])
+    neckline_min_rebound_pct = float(signal_cfg["neckline_min_rebound_pct"])
+    rebound_up_day_ratio_min = float(signal_cfg["rebound_up_day_ratio_min"])
+    second_bottom_volume_ratio_max = float(signal_cfg["second_bottom_volume_ratio_max"])
+    breakout_volume_ratio_min = float(signal_cfg["breakout_volume_ratio_min"])
+    max_breakout_bars_after_right_bottom = int(signal_cfg.get("max_breakout_bars_after_right_bottom", 40))
+    breakout_buffer_pct = float(signal_cfg["breakout_buffer_pct"])
+    current_idx = len(recent_bars) - 1
+
+    left_candidate = _build_double_bottom_left_candidate(
+        recent_bars,
+        current_idx=current_idx,
+        downtrend_lookback=downtrend_lookback,
+        downtrend_min_drop_pct=downtrend_min_drop_pct,
+        downtrend_max_up_day_ratio=downtrend_max_up_day_ratio,
+        downtrend_min_r_squared=downtrend_min_r_squared,
+        left_bottom_before_bars=left_bottom_before_bars,
+        left_bottom_after_bars=left_bottom_after_bars,
+        bottom_volume_ratio_max=second_bottom_volume_ratio_max,
+    )
+    if (
+        left_candidate is not None
+        and all(existing.left_bottom_idx != left_candidate.left_bottom_idx for existing in symbol_state.left_candidates)
+    ):
+        symbol_state.left_candidates.append(left_candidate)
+
+    symbol_state.left_candidates = [
+        candidate
+        for candidate in symbol_state.left_candidates
+        if current_idx <= candidate.left_bottom_idx + max_bottom_spacing + 1
+    ]
+
+    right_bottom_idx = current_idx - 1
+    if right_bottom_idx >= 0:
+        new_right_candidates = _promote_double_bottom_right_candidates(
+            recent_bars,
+            left_candidates=symbol_state.left_candidates,
+            right_bottom_idx=right_bottom_idx,
+            min_bottom_spacing=min_bottom_spacing,
+            max_bottom_spacing=max_bottom_spacing,
+            bottom_tolerance_pct=bottom_tolerance_pct,
+            neckline_min_rebound_pct=neckline_min_rebound_pct,
+            rebound_up_day_ratio_min=rebound_up_day_ratio_min,
+            bottom_volume_ratio_max=second_bottom_volume_ratio_max,
+        )
+        existing_pairs = {
+            (candidate.left_bottom_idx, candidate.right_bottom_idx)
+            for candidate in symbol_state.right_candidates
+        }
+        for candidate in new_right_candidates:
+            pair = (candidate.left_bottom_idx, candidate.right_bottom_idx)
+            if pair not in existing_pairs:
+                symbol_state.right_candidates.append(candidate)
+                existing_pairs.add(pair)
+
+    active_right_candidates: list[DoubleBottomRightCandidate] = []
+    for right_candidate in symbol_state.right_candidates:
+        if current_idx > right_candidate.right_bottom_idx + max_breakout_bars_after_right_bottom:
+            continue
+
+        pattern = _build_double_bottom_pattern_from_right_candidate(
+            recent_bars,
+            right_candidate=right_candidate,
+            breakout_idx=current_idx,
+            breakout_buffer_pct=breakout_buffer_pct,
+            breakout_volume_ratio_min=breakout_volume_ratio_min,
+        )
+        if pattern is None:
+            active_right_candidates.append(right_candidate)
+            continue
+
+        if _is_preferred_double_bottom_pattern(pattern, symbol_state.best_pattern):
+            symbol_state.best_pattern = pattern
+
+    symbol_state.right_candidates = active_right_candidates
+    return symbol_state.best_pattern
 
 def _build_double_bottom_setup_payload(
     recent_bars: list[HistoryBar],
@@ -1651,6 +1929,8 @@ def _find_latest_double_bottom_pattern(
     left_bottom_after_bars = int(signal_cfg.get("left_bottom_after_bars", 1))
     downtrend_lookback = int(signal_cfg["downtrend_lookback"])
     downtrend_min_drop_pct = float(signal_cfg["downtrend_min_drop_pct"])
+    downtrend_max_up_day_ratio = float(signal_cfg["downtrend_max_up_day_ratio"])
+    downtrend_min_r_squared = float(signal_cfg["downtrend_min_r_squared"])
     bottom_tolerance_pct = float(signal_cfg["bottom_tolerance_pct"])
     neckline_min_rebound_pct = float(signal_cfg["neckline_min_rebound_pct"])
     rebound_up_day_ratio_min = float(signal_cfg["rebound_up_day_ratio_min"])
@@ -1669,6 +1949,8 @@ def _find_latest_double_bottom_pattern(
             current_idx=current_idx,
             downtrend_lookback=downtrend_lookback,
             downtrend_min_drop_pct=downtrend_min_drop_pct,
+            downtrend_max_up_day_ratio=downtrend_max_up_day_ratio,
+            downtrend_min_r_squared=downtrend_min_r_squared,
             left_bottom_before_bars=left_bottom_before_bars,
             left_bottom_after_bars=left_bottom_after_bars,
             bottom_volume_ratio_max=second_bottom_volume_ratio_max,
@@ -1723,6 +2005,8 @@ def _build_double_bottom_left_candidate(
     current_idx: int,
     downtrend_lookback: int,
     downtrend_min_drop_pct: float,
+    downtrend_max_up_day_ratio: float,
+    downtrend_min_r_squared: float,
     left_bottom_before_bars: int,
     left_bottom_after_bars: int,
     bottom_volume_ratio_max: float,
@@ -1757,6 +2041,14 @@ def _build_double_bottom_left_candidate(
         left_bottom_idx=left_bottom_idx,
         downtrend_lookback=downtrend_lookback,
         min_drop_pct=downtrend_min_drop_pct,
+    ):
+        return None
+    if not _has_smooth_double_bottom_downtrend(
+        recent_bars,
+        left_bottom_idx=left_bottom_idx,
+        downtrend_lookback=downtrend_lookback,
+        max_up_day_ratio=downtrend_max_up_day_ratio,
+        min_r_squared=downtrend_min_r_squared,
     ):
         return None
 
@@ -1999,6 +2291,76 @@ def _compute_up_day_ratio(
     return up_days / float(directional_days)
 
 
+def _compute_linear_trend_fit(values: list[float]) -> tuple[float, float] | None:
+    if len(values) < 2:
+        return None
+
+    count = len(values)
+    x_mean = (count - 1) / 2.0
+    y_mean = sum(values) / float(count)
+    sum_squared_x = 0.0
+    sum_xy = 0.0
+    total_variance = 0.0
+    for idx, value in enumerate(values):
+        x_delta = idx - x_mean
+        y_delta = value - y_mean
+        sum_squared_x += x_delta * x_delta
+        sum_xy += x_delta * y_delta
+        total_variance += y_delta * y_delta
+
+    if sum_squared_x <= 0:
+        return None
+
+    slope = sum_xy / sum_squared_x
+    intercept = y_mean - (slope * x_mean)
+    if total_variance <= 0:
+        return slope, 1.0
+
+    residual_variance = 0.0
+    for idx, value in enumerate(values):
+        fitted_value = intercept + (slope * idx)
+        residual = value - fitted_value
+        residual_variance += residual * residual
+
+    r_squared = 1.0 - (residual_variance / total_variance)
+    return slope, max(0.0, min(1.0, r_squared))
+
+
+def _has_smooth_double_bottom_downtrend(
+    recent_bars: list[HistoryBar],
+    *,
+    left_bottom_idx: int,
+    downtrend_lookback: int,
+    max_up_day_ratio: float,
+    min_r_squared: float,
+) -> bool:
+    anchor_idx = left_bottom_idx - downtrend_lookback
+    if anchor_idx < 0:
+        return False
+
+    up_day_ratio = _compute_up_day_ratio(
+        recent_bars,
+        start_idx=anchor_idx,
+        end_idx=left_bottom_idx,
+    )
+    if up_day_ratio is None or up_day_ratio > max_up_day_ratio:
+        return False
+
+    closes: list[float] = []
+    for idx in range(anchor_idx, left_bottom_idx + 1):
+        close = _safe_float_or_none(recent_bars[idx].get("close"))
+        if close is None or close <= 0:
+            return False
+        closes.append(close)
+
+    trend_fit = _compute_linear_trend_fit(closes)
+    if trend_fit is None:
+        return False
+
+    slope, r_squared = trend_fit
+    return slope < 0 and r_squared >= min_r_squared
+
+
 def _has_double_bottom_downtrend_context(
     recent_bars: list[HistoryBar],
     *,
@@ -2015,15 +2377,7 @@ def _has_double_bottom_downtrend_context(
         if anchor_close is not None and anchor_close > 0:
             lookback_return = (close / anchor_close) - 1.0
 
-    ret_60d = _safe_float_or_none(left_bottom_bar.get("ret_60d"))
-    sma_50 = _safe_float_or_none(left_bottom_bar.get("sma_50"))
-    if lookback_return is not None and lookback_return <= -min_drop_pct:
-        return True
-    if ret_60d is not None and ret_60d <= -min_drop_pct:
-        return True
-    if close is not None and sma_50 is not None and close < sma_50:
-        return True
-    return False
+    return lookback_return is not None and lookback_return <= -min_drop_pct
 
 
 def _find_double_bottom_neckline(

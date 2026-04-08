@@ -15,6 +15,7 @@ import type { StockBasketOut } from "@/types/stock-basket";
 import type { StrategyOut } from "@/types/strategy";
 import {
   formatDateTime,
+  formatDurationMs,
   formatPercent,
   getStrategyDescription,
   summarizeStrategies,
@@ -1015,6 +1016,12 @@ export default function BacktestsPage() {
                                     })
                                   : "-"}
                               </div>
+                            </div>
+                            <div>
+                              <div style={{ color: "#64748b", fontSize: 12, fontWeight: 700 }}>
+                                {isZh ? "总耗时" : "Runtime"}
+                              </div>
+                              <div>{formatDurationMs(run.runtime_ms, locale)}</div>
                             </div>
                           </div>
 

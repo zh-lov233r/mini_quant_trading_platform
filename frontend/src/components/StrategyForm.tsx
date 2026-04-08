@@ -202,6 +202,12 @@ export default function StrategyForm({
   const [doubleBottomDowntrendMinDropPct, setDoubleBottomDowntrendMinDropPct] = useState(
     toFiniteNumber(initialSignal.downtrend_min_drop_pct, 0.2)
   );
+  const [doubleBottomDowntrendMaxUpDayRatio, setDoubleBottomDowntrendMaxUpDayRatio] = useState(
+    toFiniteNumber(initialSignal.downtrend_max_up_day_ratio, 0.35)
+  );
+  const [doubleBottomDowntrendMinRSquared, setDoubleBottomDowntrendMinRSquared] = useState(
+    toFiniteNumber(initialSignal.downtrend_min_r_squared, 0.65)
+  );
   const [minBottomSpacing, setMinBottomSpacing] = useState(
     toFiniteNumber(initialSignal.min_bottom_spacing, 5)
   );
@@ -265,6 +271,111 @@ export default function StrategyForm({
     () => catalog.find((item) => item.strategy_type === strategyType) || null,
     [catalog, strategyType]
   );
+
+  const applyTemplateDefaults = (template: StrategyCatalogItem) => {
+    const defaults = toRecord(template.defaults);
+    const signal = toRecord(defaults.signal);
+    const universe = toRecord(defaults.universe);
+    const risk = toRecord(defaults.risk);
+    const execution = toRecord(defaults.execution);
+
+    setSymbols(toSymbolText(universe.symbols));
+    setMaxPositions(toFiniteNumber(risk.max_positions, 10));
+    setPositionSizePct(toFiniteNumber(risk.position_size_pct, 0.1));
+    setRebalance(toStringValue(execution.rebalance, "daily"));
+    setRunAt(toStringValue(execution.run_at, "close"));
+
+    if (template.strategy_type === "trend") {
+      const fastIndicator = toRecord(signal.fast_indicator);
+      const slowIndicator = toRecord(signal.slow_indicator);
+
+      setFastKind(fastIndicator.kind === "sma" ? "sma" : "ema");
+      setFastWindow(toFiniteNumber(fastIndicator.window, 15));
+      setSlowKind(slowIndicator.kind === "ema" ? "ema" : "sma");
+      setSlowWindow(toFiniteNumber(slowIndicator.window, 200));
+      setVolMul(toFiniteNumber(signal.volume_multiplier, 1.5));
+      setAtrMul(toFiniteNumber(signal.atr_multiplier, 2.0));
+      setTrendStopLossPct(toFiniteNumber(risk.stop_loss_pct, 0.1));
+      setTrendTakeProfitAtr(toFiniteNumber(risk.take_profit_atr, 4.0));
+      return;
+    }
+
+    if (template.strategy_type === "mean_reversion") {
+      setMeanReversionLookback(toFiniteNumber(signal.lookback_window, 20));
+      setMeanReversionZscoreEntry(toFiniteNumber(signal.zscore_entry, 2.0));
+      setMeanReversionZscoreExit(toFiniteNumber(signal.zscore_exit, 0.5));
+      setMeanReversionStopLossPct(toFiniteNumber(risk.stop_loss_pct, 0.1));
+      setMeanReversionTakeProfitPct(toFiniteNumber(risk.take_profit_pct, 0.1));
+      setMeanReversionMaxHoldingDays(toFiniteNumber(risk.max_holding_days, 0));
+      return;
+    }
+
+    if (template.strategy_type === "island_reversal") {
+      setIslandDowntrendLookback(toFiniteNumber(signal.downtrend_lookback, 60));
+      setIslandDowntrendMinDropPct(toFiniteNumber(signal.downtrend_min_drop_pct, 0.15));
+      setLeftGapMinPct(toFiniteNumber(signal.left_gap_min_pct, 0.02));
+      setRightGapMinPct(toFiniteNumber(signal.right_gap_min_pct, 0.02));
+      setMinIslandBars(toFiniteNumber(signal.min_island_bars, 1));
+      setMaxIslandBars(toFiniteNumber(signal.max_island_bars, 8));
+      setLeftVolumeRatioMax(toFiniteNumber(signal.left_volume_ratio_max, 0.8));
+      setRightVolumeRatioMin(toFiniteNumber(signal.right_volume_ratio_min, 1.5));
+      setRetestWindow(toFiniteNumber(signal.retest_window, 10));
+      setRetestVolumeRatioMax(toFiniteNumber(signal.retest_volume_ratio_max, 0.7));
+      setSupportTolerancePct(toFiniteNumber(signal.support_tolerance_pct, 0.01));
+      setIslandStopLossAtr(toFiniteNumber(risk.stop_loss_atr, 1.5));
+      setIslandMaxLossPct(toFiniteNumber(risk.max_loss_pct, 0.1));
+      setIslandTakeProfitAtr(toFiniteNumber(risk.take_profit_atr, 3.0));
+      return;
+    }
+
+    if (template.strategy_type === "double_bottom") {
+      setDoubleBottomDowntrendLookback(toFiniteNumber(signal.downtrend_lookback, 60));
+      setDoubleBottomDowntrendMinDropPct(toFiniteNumber(signal.downtrend_min_drop_pct, 0.2));
+      setDoubleBottomDowntrendMaxUpDayRatio(toFiniteNumber(signal.downtrend_max_up_day_ratio, 0.35));
+      setDoubleBottomDowntrendMinRSquared(toFiniteNumber(signal.downtrend_min_r_squared, 0.65));
+      setMinBottomSpacing(toFiniteNumber(signal.min_bottom_spacing, 5));
+      setMaxBottomSpacing(toFiniteNumber(signal.max_bottom_spacing, 30));
+      setLeftBottomBeforeBars(toFiniteNumber(signal.left_bottom_before_bars, 1));
+      setLeftBottomAfterBars(toFiniteNumber(signal.left_bottom_after_bars, 1));
+      setBottomTolerancePct(toFiniteNumber(signal.bottom_tolerance_pct, 0.03));
+      setNecklineMinReboundPct(toFiniteNumber(signal.neckline_min_rebound_pct, 0.06));
+      setReboundUpDayRatioMin(toFiniteNumber(signal.rebound_up_day_ratio_min, 0.6));
+      setSecondBottomVolumeRatioMax(toFiniteNumber(signal.second_bottom_volume_ratio_max, 0.9));
+      setBreakoutVolumeRatioMin(toFiniteNumber(signal.breakout_volume_ratio_min, 1.5));
+      setMaxBreakoutBarsAfterRightBottom(toFiniteNumber(signal.max_breakout_bars_after_right_bottom, 40));
+      setBreakoutBufferPct(toFiniteNumber(signal.breakout_buffer_pct, 0.005));
+      setDoubleBottomRetestWindow(toFiniteNumber(signal.retest_window, 10));
+      setDoubleBottomRetestVolumeRatioMax(toFiniteNumber(signal.retest_volume_ratio_max, 0.8));
+      setDoubleBottomSupportTolerancePct(toFiniteNumber(signal.support_tolerance_pct, 0.02));
+      setDoubleBottomStopLossAtr(toFiniteNumber(risk.stop_loss_atr, 1.5));
+      setDoubleBottomMaxLossPct(toFiniteNumber(risk.max_loss_pct, 0.08));
+      setDoubleBottomTakeProfitAtr(toFiniteNumber(risk.take_profit_atr, 3.0));
+      return;
+    }
+
+    setRawJson(JSON.stringify(template.defaults, null, 2));
+  };
+
+  const resetToTemplateDefaults = () => {
+    if (!selectedTemplate) {
+      return;
+    }
+
+    const confirmed = typeof window === "undefined"
+      ? true
+      : window.confirm(
+        isZh
+          ? "确认将当前策略参数重置为该策略类型的默认值吗？这不会修改策略名称、说明或状态。"
+          : "Reset the current strategy parameters to this template's defaults? This keeps the strategy name, description, and status unchanged."
+      );
+    if (!confirmed) {
+      return;
+    }
+
+    applyTemplateDefaults(selectedTemplate);
+    setErr(null);
+    setResp(null);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -384,6 +495,8 @@ export default function StrategyForm({
 
     setDoubleBottomDowntrendLookback(toFiniteNumber(signal.downtrend_lookback, 60));
     setDoubleBottomDowntrendMinDropPct(toFiniteNumber(signal.downtrend_min_drop_pct, 0.2));
+    setDoubleBottomDowntrendMaxUpDayRatio(toFiniteNumber(signal.downtrend_max_up_day_ratio, 0.35));
+    setDoubleBottomDowntrendMinRSquared(toFiniteNumber(signal.downtrend_min_r_squared, 0.65));
     setMinBottomSpacing(toFiniteNumber(signal.min_bottom_spacing, 5));
     setMaxBottomSpacing(toFiniteNumber(signal.max_bottom_spacing, 30));
     setLeftBottomBeforeBars(toFiniteNumber(signal.left_bottom_before_bars, 1));
@@ -634,6 +747,8 @@ export default function StrategyForm({
         signal: {
           downtrend_lookback: Number(doubleBottomDowntrendLookback),
           downtrend_min_drop_pct: Number(doubleBottomDowntrendMinDropPct),
+          downtrend_max_up_day_ratio: Number(doubleBottomDowntrendMaxUpDayRatio),
+          downtrend_min_r_squared: Number(doubleBottomDowntrendMinRSquared),
           min_bottom_spacing: Number(minBottomSpacing),
           max_bottom_spacing: Number(maxBottomSpacing),
           left_bottom_before_bars: Number(leftBottomBeforeBars),
@@ -677,7 +792,9 @@ export default function StrategyForm({
       breakoutVolumeRatioMin,
       description,
       doubleBottomDowntrendLookback,
+      doubleBottomDowntrendMaxUpDayRatio,
       doubleBottomDowntrendMinDropPct,
+      doubleBottomDowntrendMinRSquared,
       doubleBottomMaxLossPct,
       doubleBottomRetestVolumeRatioMax,
       doubleBottomRetestWindow,
@@ -904,6 +1021,16 @@ export default function StrategyForm({
         if (!(Number(doubleBottomDowntrendMinDropPct) > 0 && Number(doubleBottomDowntrendMinDropPct) <= 1)) {
           throw new Error(isZh ? "最低下跌幅度必须在 (0, 1] 之间" : "Min downtrend drop must be within (0, 1]");
         }
+        if (!(Number(doubleBottomDowntrendMaxUpDayRatio) > 0 && Number(doubleBottomDowntrendMaxUpDayRatio) <= 1)) {
+          throw new Error(
+            isZh ? "下跌上涨天数占比上限必须在 (0, 1] 之间" : "Downtrend max up-day ratio must be within (0, 1]"
+          );
+        }
+        if (!(Number(doubleBottomDowntrendMinRSquared) > 0 && Number(doubleBottomDowntrendMinRSquared) <= 1)) {
+          throw new Error(
+            isZh ? "下跌最小线性拟合度必须在 (0, 1] 之间" : "Downtrend min R-squared must be within (0, 1]"
+          );
+        }
         if (!(Number(minBottomSpacing) > 0)) {
           throw new Error(isZh ? "双底最小间距必须 > 0" : "Min bottom spacing must be > 0");
         }
@@ -1076,6 +1203,27 @@ export default function StrategyForm({
         >
           {isZh ? "返回上一页" : "Back"}
         </button>
+
+        {isEditMode ? (
+          <button
+            type="button"
+            onClick={resetToTemplateDefaults}
+            disabled={loading || !selectedTemplate}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 14,
+              border: "1px solid rgba(125, 211, 252, 0.3)",
+              background: "rgba(8, 47, 73, 0.72)",
+              color: "#e0f2fe",
+              fontWeight: 700,
+              cursor: loading || !selectedTemplate ? "not-allowed" : "pointer",
+              fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+              opacity: loading || !selectedTemplate ? 0.56 : 1,
+            }}
+          >
+            {isZh ? "重置参数为默认值" : "Reset Params To Defaults"}
+          </button>
+        ) : null}
 
         <button
           type="submit"
@@ -1781,8 +1929,8 @@ export default function StrategyForm({
               <h3 style={{ marginTop: 0 }}>{isZh ? "双底形态参数" : "Double Bottom Parameters"}</h3>
               <div style={{ marginBottom: 14, color: "rgba(148, 163, 184, 0.88)", fontSize: 13, lineHeight: 1.6 }}>
                 {isZh
-                  ? "这是保守版双底：重点交易放量突破颈线，以及突破后的缩量回踩。所有百分比字段均使用小数表示，例如 0.03 = 3%。"
-                  : "This is the conservative double-bottom setup: it trades a volume-backed neckline breakout and a low-volume retest. Percent-style fields use decimals, for example 0.03 = 3%."}
+                  ? "这是保守版双底：重点交易放量突破颈线，以及突破后的缩量回踩。左底前会额外检查下跌是否足够平滑。所有百分比字段均使用小数表示，例如 0.03 = 3%。"
+                  : "This is the conservative double-bottom setup: it trades a volume-backed neckline breakout and a low-volume retest. The left bottom also requires a smooth downtrend. Percent-style fields use decimals, for example 0.03 = 3%."}
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -1807,6 +1955,30 @@ export default function StrategyForm({
                     style={inputStyle}
                     value={doubleBottomDowntrendMinDropPct}
                     onChange={(e) => setDoubleBottomDowntrendMinDropPct(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "下跌上涨天数占比上限" : "Downtrend Max Up-Day Ratio"}</label>
+                  <input
+                    type="number"
+                    min={0.001}
+                    max={1}
+                    step="any"
+                    style={inputStyle}
+                    value={doubleBottomDowntrendMaxUpDayRatio}
+                    onChange={(e) => setDoubleBottomDowntrendMaxUpDayRatio(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "下跌最小线性拟合度" : "Downtrend Min R-Squared"}</label>
+                  <input
+                    type="number"
+                    min={0.001}
+                    max={1}
+                    step="any"
+                    style={inputStyle}
+                    value={doubleBottomDowntrendMinRSquared}
+                    onChange={(e) => setDoubleBottomDowntrendMinRSquared(Number(e.target.value))}
                   />
                 </div>
                 <div style={boxStyle}>

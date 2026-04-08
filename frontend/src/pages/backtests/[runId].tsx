@@ -16,7 +16,7 @@ import type {
   BacktestTransactionOut,
 } from "@/types/backtest";
 import type { CandleBarOut, CandleSeriesOut } from "@/types/quote";
-import { formatDateTime, formatPercent } from "@/utils/strategy";
+import { formatDateTime, formatDurationMs, formatPercent } from "@/utils/strategy";
 
 function actionLink(href: string, label: string, filled = false) {
   return (
@@ -1145,6 +1145,10 @@ function RunOverviewPanel({ run }: { run: BacktestDetailOut }) {
         <div>
           <div style={labelStyle}>{isZh ? "完成时间" : "Completed At"}</div>
           <div style={valueStyle}>{formatDateTime(run.finished_at || run.requested_at, locale)}</div>
+        </div>
+        <div>
+          <div style={labelStyle}>{isZh ? "总耗时" : "Runtime"}</div>
+          <div style={valueStyle}>{formatDurationMs(run.runtime_ms, locale)}</div>
         </div>
       </div>
 

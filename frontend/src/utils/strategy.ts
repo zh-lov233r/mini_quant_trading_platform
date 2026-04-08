@@ -191,6 +191,47 @@ export function formatPercent(value: number | null, digits = 0): string {
   return `${(value * 100).toFixed(digits)}%`;
 }
 
+export function formatDurationMs(
+  value?: number | null,
+  locale: string = "zh-CN"
+): string {
+  if (typeof value !== "number" || Number.isNaN(value) || value < 0) {
+    return "-";
+  }
+
+  const totalMs = Math.round(value);
+  if (totalMs < 1000) {
+    return locale === "zh-CN" ? `${totalMs}毫秒` : `${totalMs} ms`;
+  }
+
+  const totalSeconds = Math.floor(totalMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (locale === "zh-CN") {
+    const parts: string[] = [];
+    if (hours > 0) {
+      parts.push(`${hours}小时`);
+    }
+    if (minutes > 0 || hours > 0) {
+      parts.push(`${minutes}分`);
+    }
+    parts.push(`${seconds}秒`);
+    return parts.join("");
+  }
+
+  const parts: string[] = [];
+  if (hours > 0) {
+    parts.push(`${hours}h`);
+  }
+  if (minutes > 0 || hours > 0) {
+    parts.push(`${minutes}m`);
+  }
+  parts.push(`${seconds}s`);
+  return parts.join(" ");
+}
+
 export function getRuntimeFieldText(
   runtime: StrategyRuntimeOut | null,
   section: string,

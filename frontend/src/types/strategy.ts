@@ -111,6 +111,8 @@ export interface DoubleBottomStrategyParams {
   signal: {
     downtrend_lookback: number;
     downtrend_min_drop_pct: number;
+    downtrend_max_up_day_ratio: number;
+    downtrend_min_r_squared: number;
     min_bottom_spacing: number;
     max_bottom_spacing: number;
     left_bottom_before_bars: number;

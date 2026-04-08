@@ -44,6 +44,7 @@ class BacktestRunOut(BaseModel):
     requested_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
+    runtime_ms: Optional[int] = None
     window_start: Optional[date] = None
     window_end: Optional[date] = None
     initial_cash: Optional[float] = None
@@ -466,6 +467,7 @@ def _to_backtest_run_out(run: StrategyRun, strategy_name: str | None = None) -> 
         requested_at=run.requested_at,
         started_at=run.started_at,
         finished_at=run.finished_at,
+        runtime_ms=_compute_run_runtime_ms(run.started_at, run.finished_at),
         window_start=run.window_start,
         window_end=run.window_end,
         initial_cash=float(run.initial_cash) if run.initial_cash is not None else None,
@@ -476,6 +478,16 @@ def _to_backtest_run_out(run: StrategyRun, strategy_name: str | None = None) -> 
         created_at=run.created_at,
         updated_at=run.updated_at,
     )
+
+
+def _compute_run_runtime_ms(
+    started_at: datetime | None,
+    finished_at: datetime | None,
+) -> int | None:
+    if started_at is None or finished_at is None:
+        return None
+    elapsed_ms = int((finished_at - started_at).total_seconds() * 1000)
+    return max(elapsed_ms, 0)
 
 
 def _to_backtest_detail_out(
