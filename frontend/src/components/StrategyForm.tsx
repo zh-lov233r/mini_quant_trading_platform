@@ -196,6 +196,63 @@ export default function StrategyForm({
   const [islandTakeProfitAtr, setIslandTakeProfitAtr] = useState(
     toFiniteNumber(initialRisk.take_profit_atr, 3.0)
   );
+  const [doubleBottomDowntrendLookback, setDoubleBottomDowntrendLookback] = useState(
+    toFiniteNumber(initialSignal.downtrend_lookback, 60)
+  );
+  const [doubleBottomDowntrendMinDropPct, setDoubleBottomDowntrendMinDropPct] = useState(
+    toFiniteNumber(initialSignal.downtrend_min_drop_pct, 0.2)
+  );
+  const [minBottomSpacing, setMinBottomSpacing] = useState(
+    toFiniteNumber(initialSignal.min_bottom_spacing, 5)
+  );
+  const [maxBottomSpacing, setMaxBottomSpacing] = useState(
+    toFiniteNumber(initialSignal.max_bottom_spacing, 30)
+  );
+  const [leftBottomBeforeBars, setLeftBottomBeforeBars] = useState(
+    toFiniteNumber(initialSignal.left_bottom_before_bars, 1)
+  );
+  const [leftBottomAfterBars, setLeftBottomAfterBars] = useState(
+    toFiniteNumber(initialSignal.left_bottom_after_bars, 1)
+  );
+  const [bottomTolerancePct, setBottomTolerancePct] = useState(
+    toFiniteNumber(initialSignal.bottom_tolerance_pct, 0.03)
+  );
+  const [necklineMinReboundPct, setNecklineMinReboundPct] = useState(
+    toFiniteNumber(initialSignal.neckline_min_rebound_pct, 0.06)
+  );
+  const [reboundUpDayRatioMin, setReboundUpDayRatioMin] = useState(
+    toFiniteNumber(initialSignal.rebound_up_day_ratio_min, 0.6)
+  );
+  const [secondBottomVolumeRatioMax, setSecondBottomVolumeRatioMax] = useState(
+    toFiniteNumber(initialSignal.second_bottom_volume_ratio_max, 0.9)
+  );
+  const [breakoutVolumeRatioMin, setBreakoutVolumeRatioMin] = useState(
+    toFiniteNumber(initialSignal.breakout_volume_ratio_min, 1.5)
+  );
+  const [maxBreakoutBarsAfterRightBottom, setMaxBreakoutBarsAfterRightBottom] = useState(
+    toFiniteNumber(initialSignal.max_breakout_bars_after_right_bottom, 40)
+  );
+  const [breakoutBufferPct, setBreakoutBufferPct] = useState(
+    toFiniteNumber(initialSignal.breakout_buffer_pct, 0.005)
+  );
+  const [doubleBottomRetestWindow, setDoubleBottomRetestWindow] = useState(
+    toFiniteNumber(initialSignal.retest_window, 10)
+  );
+  const [doubleBottomRetestVolumeRatioMax, setDoubleBottomRetestVolumeRatioMax] = useState(
+    toFiniteNumber(initialSignal.retest_volume_ratio_max, 0.8)
+  );
+  const [doubleBottomSupportTolerancePct, setDoubleBottomSupportTolerancePct] = useState(
+    toFiniteNumber(initialSignal.support_tolerance_pct, 0.02)
+  );
+  const [doubleBottomStopLossAtr, setDoubleBottomStopLossAtr] = useState(
+    toFiniteNumber(initialRisk.stop_loss_atr, 1.5)
+  );
+  const [doubleBottomMaxLossPct, setDoubleBottomMaxLossPct] = useState(
+    toFiniteNumber(initialRisk.max_loss_pct, 0.08)
+  );
+  const [doubleBottomTakeProfitAtr, setDoubleBottomTakeProfitAtr] = useState(
+    toFiniteNumber(initialRisk.take_profit_atr, 3.0)
+  );
   const [rawJson, setRawJson] = useState(
     initialStrategy
       ? JSON.stringify(initialStrategy.params, null, 2)
@@ -238,6 +295,7 @@ export default function StrategyForm({
     if (
       strategyType === "trend"
       || strategyType === "island_reversal"
+      || strategyType === "double_bottom"
       || catalog.length === 0
     ) {
       return;
@@ -306,6 +364,46 @@ export default function StrategyForm({
     setIslandStopLossAtr(toFiniteNumber(risk.stop_loss_atr, 1.5));
     setIslandMaxLossPct(toFiniteNumber(risk.max_loss_pct, 0.1));
     setIslandTakeProfitAtr(toFiniteNumber(risk.take_profit_atr, 3.0));
+    setRebalance(toStringValue(execution.rebalance, "daily"));
+    setRunAt(toStringValue(execution.run_at, "close"));
+  }, [isEditMode, selectedTemplate, strategyType]);
+
+  useEffect(() => {
+    if (isEditMode) {
+      return;
+    }
+    if (strategyType !== "double_bottom" || !selectedTemplate) {
+      return;
+    }
+
+    const defaults = toRecord(selectedTemplate.defaults);
+    const signal = toRecord(defaults.signal);
+    const universe = toRecord(defaults.universe);
+    const risk = toRecord(defaults.risk);
+    const execution = toRecord(defaults.execution);
+
+    setDoubleBottomDowntrendLookback(toFiniteNumber(signal.downtrend_lookback, 60));
+    setDoubleBottomDowntrendMinDropPct(toFiniteNumber(signal.downtrend_min_drop_pct, 0.2));
+    setMinBottomSpacing(toFiniteNumber(signal.min_bottom_spacing, 5));
+    setMaxBottomSpacing(toFiniteNumber(signal.max_bottom_spacing, 30));
+    setLeftBottomBeforeBars(toFiniteNumber(signal.left_bottom_before_bars, 1));
+    setLeftBottomAfterBars(toFiniteNumber(signal.left_bottom_after_bars, 1));
+    setBottomTolerancePct(toFiniteNumber(signal.bottom_tolerance_pct, 0.03));
+    setNecklineMinReboundPct(toFiniteNumber(signal.neckline_min_rebound_pct, 0.06));
+    setReboundUpDayRatioMin(toFiniteNumber(signal.rebound_up_day_ratio_min, 0.6));
+    setSecondBottomVolumeRatioMax(toFiniteNumber(signal.second_bottom_volume_ratio_max, 0.9));
+    setBreakoutVolumeRatioMin(toFiniteNumber(signal.breakout_volume_ratio_min, 1.5));
+    setMaxBreakoutBarsAfterRightBottom(toFiniteNumber(signal.max_breakout_bars_after_right_bottom, 40));
+    setBreakoutBufferPct(toFiniteNumber(signal.breakout_buffer_pct, 0.005));
+    setDoubleBottomRetestWindow(toFiniteNumber(signal.retest_window, 10));
+    setDoubleBottomRetestVolumeRatioMax(toFiniteNumber(signal.retest_volume_ratio_max, 0.8));
+    setDoubleBottomSupportTolerancePct(toFiniteNumber(signal.support_tolerance_pct, 0.02));
+    setSymbols(toSymbolText(universe.symbols));
+    setMaxPositions(toFiniteNumber(risk.max_positions, 6));
+    setPositionSizePct(toFiniteNumber(risk.position_size_pct, 0.15));
+    setDoubleBottomStopLossAtr(toFiniteNumber(risk.stop_loss_atr, 1.5));
+    setDoubleBottomMaxLossPct(toFiniteNumber(risk.max_loss_pct, 0.08));
+    setDoubleBottomTakeProfitAtr(toFiniteNumber(risk.take_profit_atr, 3.0));
     setRebalance(toStringValue(execution.rebalance, "daily"));
     setRunAt(toStringValue(execution.run_at, "close"));
   }, [isEditMode, selectedTemplate, strategyType]);
@@ -525,6 +623,83 @@ export default function StrategyForm({
     ]
   );
 
+  const doubleBottomParams = useMemo(
+    () => {
+      const parsedSymbols = symbols
+        .split(",")
+        .map((item) => item.trim().toUpperCase())
+        .filter(Boolean);
+
+      return {
+        signal: {
+          downtrend_lookback: Number(doubleBottomDowntrendLookback),
+          downtrend_min_drop_pct: Number(doubleBottomDowntrendMinDropPct),
+          min_bottom_spacing: Number(minBottomSpacing),
+          max_bottom_spacing: Number(maxBottomSpacing),
+          left_bottom_before_bars: Number(leftBottomBeforeBars),
+          left_bottom_after_bars: Number(leftBottomAfterBars),
+          bottom_tolerance_pct: Number(bottomTolerancePct),
+          neckline_min_rebound_pct: Number(necklineMinReboundPct),
+          rebound_up_day_ratio_min: Number(reboundUpDayRatioMin),
+          second_bottom_volume_ratio_max: Number(secondBottomVolumeRatioMax),
+          breakout_volume_ratio_min: Number(breakoutVolumeRatioMin),
+          max_breakout_bars_after_right_bottom: Number(maxBreakoutBarsAfterRightBottom),
+          breakout_buffer_pct: Number(breakoutBufferPct),
+          retest_window: Number(doubleBottomRetestWindow),
+          retest_volume_ratio_max: Number(doubleBottomRetestVolumeRatioMax),
+          support_tolerance_pct: Number(doubleBottomSupportTolerancePct),
+        },
+        universe: {
+          symbols: parsedSymbols,
+          selection_mode: parsedSymbols.length > 0 ? "manual" : "all_common_stock",
+        },
+        risk: {
+          max_positions: Number(maxPositions),
+          position_size_pct: Number(positionSizePct),
+          stop_loss_atr: Number(doubleBottomStopLossAtr),
+          max_loss_pct: Number(doubleBottomMaxLossPct),
+          take_profit_atr: Number(doubleBottomTakeProfitAtr),
+        },
+        execution: {
+          timeframe: "1d",
+          rebalance,
+          run_at: runAt,
+        },
+        metadata: {
+          description,
+          schema_version: 1,
+        },
+      };
+    },
+    [
+      bottomTolerancePct,
+      breakoutBufferPct,
+      breakoutVolumeRatioMin,
+      description,
+      doubleBottomDowntrendLookback,
+      doubleBottomDowntrendMinDropPct,
+      doubleBottomMaxLossPct,
+      doubleBottomRetestVolumeRatioMax,
+      doubleBottomRetestWindow,
+      doubleBottomStopLossAtr,
+      doubleBottomSupportTolerancePct,
+      doubleBottomTakeProfitAtr,
+      leftBottomAfterBars,
+      leftBottomBeforeBars,
+      maxBottomSpacing,
+      maxBreakoutBarsAfterRightBottom,
+      maxPositions,
+      minBottomSpacing,
+      necklineMinReboundPct,
+      positionSizePct,
+      reboundUpDayRatioMin,
+      rebalance,
+      runAt,
+      secondBottomVolumeRatioMax,
+      symbols,
+    ]
+  );
+
   const previewPayload = useMemo<StrategyCreate>(() => {
     if (strategyType === "trend") {
       return {
@@ -553,6 +728,15 @@ export default function StrategyForm({
         params: islandReversalParams,
       };
     }
+    if (strategyType === "double_bottom") {
+      return {
+        name,
+        description,
+        strategy_type: strategyType,
+        status,
+        params: doubleBottomParams,
+      };
+    }
 
     try {
       return {
@@ -571,7 +755,7 @@ export default function StrategyForm({
         params: {},
       };
     }
-  }, [description, islandReversalParams, meanReversionParams, name, rawJson, status, strategyType, trendParams]);
+  }, [description, doubleBottomParams, islandReversalParams, meanReversionParams, name, rawJson, status, strategyType, trendParams]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -712,6 +896,83 @@ export default function StrategyForm({
           strategy_type: strategyType,
           status,
           params: islandReversalParams,
+        };
+      } else if (strategyType === "double_bottom") {
+        if (!(Number(doubleBottomDowntrendLookback) > 0)) {
+          throw new Error(isZh ? "下跌回看窗口必须 > 0" : "Downtrend lookback must be > 0");
+        }
+        if (!(Number(doubleBottomDowntrendMinDropPct) > 0 && Number(doubleBottomDowntrendMinDropPct) <= 1)) {
+          throw new Error(isZh ? "最低下跌幅度必须在 (0, 1] 之间" : "Min downtrend drop must be within (0, 1]");
+        }
+        if (!(Number(minBottomSpacing) > 0)) {
+          throw new Error(isZh ? "双底最小间距必须 > 0" : "Min bottom spacing must be > 0");
+        }
+        if (!(Number(maxBottomSpacing) >= Number(minBottomSpacing))) {
+          throw new Error(isZh ? "双底最大间距不能小于最小间距" : "Max bottom spacing cannot be less than min bottom spacing");
+        }
+        if (!(Number(leftBottomBeforeBars) > 0)) {
+          throw new Error(isZh ? "左底前置 K 线数必须 > 0" : "Left-bottom bars before must be > 0");
+        }
+        if (!(Number(leftBottomAfterBars) > 0)) {
+          throw new Error(isZh ? "左底后置 K 线数必须 > 0" : "Left-bottom bars after must be > 0");
+        }
+        if (!(Number(bottomTolerancePct) > 0 && Number(bottomTolerancePct) <= 1)) {
+          throw new Error(isZh ? "双底价差容忍度必须在 (0, 1] 之间" : "Bottom tolerance pct must be within (0, 1]");
+        }
+        if (!(Number(necklineMinReboundPct) > 0 && Number(necklineMinReboundPct) <= 1)) {
+          throw new Error(isZh ? "颈线最小反弹幅度必须在 (0, 1] 之间" : "Neckline min rebound pct must be within (0, 1]");
+        }
+        if (!(Number(reboundUpDayRatioMin) > 0 && Number(reboundUpDayRatioMin) <= 1)) {
+          throw new Error(
+            isZh
+              ? "左底到右底上涨天数占比必须在 (0, 1] 之间"
+              : "Left-to-right-bottom up-day ratio must be within (0, 1]"
+          );
+        }
+        if (!(Number(secondBottomVolumeRatioMax) > 0)) {
+          throw new Error(isZh ? "底部缩量上限必须 > 0" : "Bottom volume ratio max must be > 0");
+        }
+        if (!(Number(breakoutVolumeRatioMin) > 0)) {
+          throw new Error(isZh ? "突破放量下限必须 > 0" : "Breakout volume ratio min must be > 0");
+        }
+        if (!(Number(maxBreakoutBarsAfterRightBottom) > 0)) {
+          throw new Error(
+            isZh ? "右底后最大等待突破 K 线数必须 > 0" : "Max breakout wait after the right bottom must be > 0"
+          );
+        }
+        if (!(Number(breakoutBufferPct) > 0 && Number(breakoutBufferPct) <= 1)) {
+          throw new Error(isZh ? "突破缓冲必须在 (0, 1] 之间" : "Breakout buffer pct must be within (0, 1]");
+        }
+        if (!(Number(doubleBottomRetestWindow) > 0)) {
+          throw new Error(isZh ? "回踩观察窗口必须 > 0" : "Retest window must be > 0");
+        }
+        if (!(Number(doubleBottomRetestVolumeRatioMax) > 0)) {
+          throw new Error(isZh ? "回踩缩量上限必须 > 0" : "Retest volume ratio max must be > 0");
+        }
+        if (!(Number(doubleBottomSupportTolerancePct) > 0 && Number(doubleBottomSupportTolerancePct) <= 1)) {
+          throw new Error(isZh ? "颈线支撑容差必须在 (0, 1] 之间" : "Support tolerance pct must be within (0, 1]");
+        }
+        if (!(Number(maxPositions) > 0)) {
+          throw new Error(isZh ? "最大持仓数必须 > 0" : "Max positions must be > 0");
+        }
+        if (!(Number(positionSizePct) > 0 && Number(positionSizePct) <= 1)) {
+          throw new Error(isZh ? "单票仓位比例必须在 (0, 1] 之间" : "Position size percentage must be within (0, 1]");
+        }
+        if (!(Number(doubleBottomStopLossAtr) > 0)) {
+          throw new Error(isZh ? "ATR 止损倍数必须 > 0" : "ATR stop loss must be > 0");
+        }
+        if (!(Number(doubleBottomMaxLossPct) > 0 && Number(doubleBottomMaxLossPct) <= 1)) {
+          throw new Error(isZh ? "最大亏损强平比例必须在 (0, 1] 之间" : "Max loss pct must be within (0, 1]");
+        }
+        if (!(Number(doubleBottomTakeProfitAtr) > 0)) {
+          throw new Error(isZh ? "ATR 止盈倍数必须 > 0" : "ATR take profit must be > 0");
+        }
+        payload = {
+          name: name.trim(),
+          description: description.trim(),
+          strategy_type: strategyType,
+          status,
+          params: doubleBottomParams,
         };
       } else {
         payload = {
@@ -1021,7 +1282,7 @@ export default function StrategyForm({
                   <input
                     type="number"
                     min={0.1}
-                    step="0.1"
+                    step="any"
                     style={inputStyle}
                     value={atrMul}
                     onChange={(e) => setAtrMul(Number(e.target.value))}
@@ -1044,7 +1305,7 @@ export default function StrategyForm({
                   <input
                     type="number"
                     min={0.1}
-                    step="0.1"
+                    step="any"
                     style={inputStyle}
                     value={trendTakeProfitAtr}
                     onChange={(e) => setTrendTakeProfitAtr(Number(e.target.value))}
@@ -1414,7 +1675,7 @@ export default function StrategyForm({
                   <input
                     type="number"
                     min={0.1}
-                    step="0.1"
+                    step="any"
                     style={inputStyle}
                     value={islandStopLossAtr}
                     onChange={(e) => setIslandStopLossAtr(Number(e.target.value))}
@@ -1437,7 +1698,7 @@ export default function StrategyForm({
                   <input
                     type="number"
                     min={0.1}
-                    step="0.1"
+                    step="any"
                     style={inputStyle}
                     value={islandTakeProfitAtr}
                     onChange={(e) => setIslandTakeProfitAtr(Number(e.target.value))}
@@ -1462,6 +1723,302 @@ export default function StrategyForm({
                 {isZh
                   ? "股票池留空时，会在全部 common stock 中扫描岛形反转形态。"
                   : "If the universe is empty, the strategy scans for island reversal setups across all common stocks."}
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                <div style={boxStyle}>
+                  <label>{isZh ? "最大持仓数" : "Max Positions"}</label>
+                  <input
+                    type="number"
+                    min={1}
+                    style={inputStyle}
+                    value={maxPositions}
+                    onChange={(e) => setMaxPositions(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "单票仓位比例" : "Position Size Pct"}</label>
+                  <input
+                    type="number"
+                    min={0.01}
+                    max={1}
+                    step="0.01"
+                    style={inputStyle}
+                    value={positionSizePct}
+                    onChange={(e) => setPositionSizePct(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "调仓频率" : "Rebalance Frequency"}</label>
+                  <select
+                    style={inputStyle}
+                    value={rebalance}
+                    onChange={(e) => setRebalance(e.target.value)}
+                  >
+                    <option value="daily">daily</option>
+                    <option value="weekly">weekly</option>
+                    <option value="monthly">monthly</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style={boxStyle}>
+                <label>{isZh ? "运行时机" : "Run Timing"}</label>
+                <select
+                  style={inputStyle}
+                  value={runAt}
+                  onChange={(e) => setRunAt(e.target.value)}
+                >
+                  <option value="close">close</option>
+                  <option value="open">open</option>
+                </select>
+              </div>
+            </section>
+          ) : strategyType === "double_bottom" ? (
+            <section style={cardStyle}>
+              <h3 style={{ marginTop: 0 }}>{isZh ? "双底形态参数" : "Double Bottom Parameters"}</h3>
+              <div style={{ marginBottom: 14, color: "rgba(148, 163, 184, 0.88)", fontSize: 13, lineHeight: 1.6 }}>
+                {isZh
+                  ? "这是保守版双底：重点交易放量突破颈线，以及突破后的缩量回踩。所有百分比字段均使用小数表示，例如 0.03 = 3%。"
+                  : "This is the conservative double-bottom setup: it trades a volume-backed neckline breakout and a low-volume retest. Percent-style fields use decimals, for example 0.03 = 3%."}
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div style={boxStyle}>
+                  <label>{isZh ? "下跌回看窗口" : "Downtrend Lookback"}</label>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    style={inputStyle}
+                    value={doubleBottomDowntrendLookback}
+                    onChange={(e) => setDoubleBottomDowntrendLookback(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "最低下跌幅度" : "Min Downtrend Drop"}</label>
+                  <input
+                    type="number"
+                    min={0.01}
+                    max={1}
+                    step="any"
+                    style={inputStyle}
+                    value={doubleBottomDowntrendMinDropPct}
+                    onChange={(e) => setDoubleBottomDowntrendMinDropPct(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "双底最小间距" : "Min Bottom Spacing"}</label>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    style={inputStyle}
+                    value={minBottomSpacing}
+                    onChange={(e) => setMinBottomSpacing(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "双底最大间距" : "Max Bottom Spacing"}</label>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    style={inputStyle}
+                    value={maxBottomSpacing}
+                    onChange={(e) => setMaxBottomSpacing(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "左底前置 K 线数" : "Left-Bottom Bars Before"}</label>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    style={inputStyle}
+                    value={leftBottomBeforeBars}
+                    onChange={(e) => setLeftBottomBeforeBars(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "左底后置 K 线数" : "Left-Bottom Bars After"}</label>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    style={inputStyle}
+                    value={leftBottomAfterBars}
+                    onChange={(e) => setLeftBottomAfterBars(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "双底容差" : "Bottom Tolerance Pct"}</label>
+                  <input
+                    type="number"
+                    min={0.001}
+                    max={1}
+                    step="any"
+                    style={inputStyle}
+                    value={bottomTolerancePct}
+                    onChange={(e) => setBottomTolerancePct(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "颈线最小反弹幅度" : "Neckline Min Rebound"}</label>
+                  <input
+                    type="number"
+                    min={0.001}
+                    max={1}
+                    step="any"
+                    style={inputStyle}
+                    value={necklineMinReboundPct}
+                    onChange={(e) => setNecklineMinReboundPct(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "左底到右底上涨天数占比下限" : "Left-to-Right Up-Day Ratio Min"}</label>
+                  <input
+                    type="number"
+                    min={0.01}
+                    max={1}
+                    step="any"
+                    style={inputStyle}
+                    value={reboundUpDayRatioMin}
+                    onChange={(e) => setReboundUpDayRatioMin(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "底部缩量上限" : "Bottom Volume Max"}</label>
+                  <input
+                    type="number"
+                    min={0.1}
+                    step="0.1"
+                    style={inputStyle}
+                    value={secondBottomVolumeRatioMax}
+                    onChange={(e) => setSecondBottomVolumeRatioMax(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "突破放量下限" : "Breakout Volume Min"}</label>
+                  <input
+                    type="number"
+                    min={0.1}
+                    step="0.1"
+                    style={inputStyle}
+                    value={breakoutVolumeRatioMin}
+                    onChange={(e) => setBreakoutVolumeRatioMin(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "右底后最大等待突破 K 线数" : "Max Bars To Break After Right Bottom"}</label>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    style={inputStyle}
+                    value={maxBreakoutBarsAfterRightBottom}
+                    onChange={(e) => setMaxBreakoutBarsAfterRightBottom(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "突破缓冲" : "Breakout Buffer Pct"}</label>
+                  <input
+                    type="number"
+                    min={0.001}
+                    max={1}
+                    step="any"
+                    style={inputStyle}
+                    value={breakoutBufferPct}
+                    onChange={(e) => setBreakoutBufferPct(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "回踩观察窗口" : "Retest Window"}</label>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    style={inputStyle}
+                    value={doubleBottomRetestWindow}
+                    onChange={(e) => setDoubleBottomRetestWindow(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "回踩缩量上限" : "Retest Volume Ratio Max"}</label>
+                  <input
+                    type="number"
+                    min={0.1}
+                    step="0.1"
+                    style={inputStyle}
+                    value={doubleBottomRetestVolumeRatioMax}
+                    onChange={(e) => setDoubleBottomRetestVolumeRatioMax(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "颈线支撑容差" : "Support Tolerance Pct"}</label>
+                  <input
+                    type="number"
+                    min={0.001}
+                    max={1}
+                    step="any"
+                    style={inputStyle}
+                    value={doubleBottomSupportTolerancePct}
+                    onChange={(e) => setDoubleBottomSupportTolerancePct(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "ATR 止损倍数" : "ATR Stop Loss"}</label>
+                  <input
+                    type="number"
+                    min={0.1}
+                    step="any"
+                    style={inputStyle}
+                    value={doubleBottomStopLossAtr}
+                    onChange={(e) => setDoubleBottomStopLossAtr(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "最大亏损强平比例" : "Max Loss Exit Pct"}</label>
+                  <input
+                    type="number"
+                    min={0.001}
+                    max={1}
+                    step="any"
+                    style={inputStyle}
+                    value={doubleBottomMaxLossPct}
+                    onChange={(e) => setDoubleBottomMaxLossPct(Number(e.target.value))}
+                  />
+                </div>
+                <div style={boxStyle}>
+                  <label>{isZh ? "ATR 止盈倍数" : "ATR Take Profit"}</label>
+                  <input
+                    type="number"
+                    min={0.1}
+                    step="any"
+                    style={inputStyle}
+                    value={doubleBottomTakeProfitAtr}
+                    onChange={(e) => setDoubleBottomTakeProfitAtr(Number(e.target.value))}
+                  />
+                </div>
+              </div>
+
+              <div style={boxStyle}>
+                <label>{isZh ? "股票池" : "Universe"}</label>
+                <input
+                  style={inputStyle}
+                  value={symbols}
+                  onChange={(e) => setSymbols(e.target.value)}
+                  placeholder={
+                    isZh
+                      ? "留空则默认绑定全部 common stock；也可以手动输入 AAPL,MSFT,NVDA"
+                      : "Leave empty to use all common stocks by default, or enter symbols like AAPL,MSFT,NVDA"
+                  }
+                />
+              </div>
+              <div style={{ color: "rgba(148, 163, 184, 0.88)", fontSize: 13, lineHeight: 1.6 }}>
+                {isZh
+                  ? "股票池留空时，会在全部 common stock 中扫描双底形态。"
+                  : "If the universe is empty, the strategy scans for double-bottom setups across all common stocks."}
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>

@@ -113,11 +113,14 @@ export interface DoubleBottomStrategyParams {
     downtrend_min_drop_pct: number;
     min_bottom_spacing: number;
     max_bottom_spacing: number;
+    left_bottom_before_bars: number;
+    left_bottom_after_bars: number;
     bottom_tolerance_pct: number;
     neckline_min_rebound_pct: number;
     rebound_up_day_ratio_min: number;
     second_bottom_volume_ratio_max: number;
     breakout_volume_ratio_min: number;
+    max_breakout_bars_after_right_bottom: number;
     breakout_buffer_pct: number;
     retest_window: number;
     retest_volume_ratio_max: number;

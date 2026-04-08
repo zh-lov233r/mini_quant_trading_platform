@@ -63,6 +63,7 @@ class VirtualPosition:
     avg_entry_price: float
     current_price: float = 0.0
     entry_trade_date: date | None = None
+    entry_signal_features: dict[str, Any] | None = None
 
     @property
     def market_value(self) -> float:
@@ -553,6 +554,11 @@ def _rebuild_virtual_subportfolio_state(
             price=float(txn.price),
             fee=float(txn.fee or 0),
             trade_date=_transaction_trade_date(txn),
+            entry_signal_features=(
+                (txn.meta or {}).get("entry_signal_features")
+                if isinstance((txn.meta or {}).get("entry_signal_features"), dict)
+                else None
+            ),
         )
 
     return _mark_virtual_subportfolio_to_market(state, price_lookup)
@@ -749,6 +755,7 @@ def _execute_paper_orders(
                 price=fill_price,
                 fee=0.0,
                 trade_date=trade_date,
+                entry_signal_features=event.metadata if isinstance(event.metadata, dict) else None,
             )
             projected_sleeve = _mark_virtual_subportfolio_to_market(
                 projected_sleeve,
@@ -825,13 +832,14 @@ def _submit_paper_order(
             price=broker_price,
             fee=0,
             order_id=order_id,
-            meta={
-                "source": "alpaca_paper",
-                "reason": event.reason,
-                "signal_ts": event.ts.isoformat(),
-                "execution_trade_date": trade_date.isoformat(),
-                "client_order_id": client_order_id,
-                "broker_status": broker_status,
+                meta={
+                    "source": "alpaca_paper",
+                    "reason": event.reason,
+                    "signal_ts": event.ts.isoformat(),
+                    "entry_signal_features": event.metadata if event.action == "BUY" and isinstance(event.metadata, dict) else None,
+                    "execution_trade_date": trade_date.isoformat(),
+                    "client_order_id": client_order_id,
+                    "broker_status": broker_status,
                 "reference_price": reference_price,
                 "requested_qty": qty,
                 "filled_qty": _to_float(order.get("filled_qty")),
@@ -866,12 +874,14 @@ def _apply_virtual_fill(
     price: float,
     fee: float,
     trade_date: date | None = None,
+    entry_signal_features: dict[str, Any] | None = None,
 ) -> None:
     normalized_symbol = symbol.upper()
     position = state.positions_by_symbol.get(normalized_symbol)
     current_qty = position.qty if position is not None else 0.0
     current_avg = position.avg_entry_price if position is not None else 0.0
     current_entry_trade_date = position.entry_trade_date if position is not None else None
+    current_entry_signal_features = position.entry_signal_features if position is not None else None
 
     if side.upper() == "BUY":
         total_cost = (qty * price) + fee
@@ -887,6 +897,7 @@ def _apply_virtual_fill(
             avg_entry_price=avg_entry,
             current_price=price,
             entry_trade_date=current_entry_trade_date or trade_date,
+            entry_signal_features=entry_signal_features or current_entry_signal_features,
         )
         return
 
@@ -902,6 +913,7 @@ def _apply_virtual_fill(
         avg_entry_price=current_avg,
         current_price=price,
         entry_trade_date=current_entry_trade_date,
+        entry_signal_features=current_entry_signal_features,
     )
 
 
@@ -919,6 +931,7 @@ def _mark_virtual_subportfolio_to_market(
             avg_entry_price=position.avg_entry_price,
             current_price=current_price,
             entry_trade_date=position.entry_trade_date,
+            entry_signal_features=position.entry_signal_features,
         )
         market_value = state.positions_by_symbol[symbol].market_value
         gross_exposure += abs(market_value)
@@ -942,6 +955,7 @@ def _clone_virtual_state(state: VirtualSubportfolioState) -> VirtualSubportfolio
                 avg_entry_price=position.avg_entry_price,
                 current_price=position.current_price,
                 entry_trade_date=position.entry_trade_date,
+                entry_signal_features=position.entry_signal_features,
             )
             for symbol, position in state.positions_by_symbol.items()
         },
@@ -958,6 +972,7 @@ def _inject_virtual_positions(
         snapshot["position"] = position.qty if position is not None else 0.0
         snapshot["avg_entry_price"] = position.avg_entry_price if position is not None else None
         snapshot["entry_trade_date"] = position.entry_trade_date if position is not None else None
+        snapshot["entry_signal_features"] = position.entry_signal_features if position is not None else None
         snapshot["position_holding_days"] = (
             max((trade_date - position.entry_trade_date).days, 0)
             if position is not None and position.entry_trade_date is not None
@@ -1008,6 +1023,7 @@ def _serialize_virtual_positions(
             "entry_trade_date": (
                 position.entry_trade_date.isoformat() if position.entry_trade_date is not None else None
             ),
+            "entry_signal_features": position.entry_signal_features,
             "current_price": position.current_price,
             "market_value": position.market_value,
             "latest_signal": getattr(signal, "action", None),

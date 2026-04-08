@@ -112,11 +112,14 @@ DOUBLE_BOTTOM_DEFAULTS: Dict[str, Any] = {
         "downtrend_min_drop_pct": 0.20,
         "min_bottom_spacing": 5,
         "max_bottom_spacing": 30,
+        "left_bottom_before_bars": 1,
+        "left_bottom_after_bars": 1,
         "bottom_tolerance_pct": 0.03,
         "neckline_min_rebound_pct": 0.06,
         "rebound_up_day_ratio_min": 0.60,
         "second_bottom_volume_ratio_max": 0.90,
         "breakout_volume_ratio_min": 1.50,
+        "max_breakout_bars_after_right_bottom": 40,
         "breakout_buffer_pct": 0.005,
         "retest_window": 10,
         "retest_volume_ratio_max": 0.80,
@@ -732,11 +735,14 @@ def _normalize_double_bottom_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         "downtrend_min_drop_pct",
         "min_bottom_spacing",
         "max_bottom_spacing",
+        "left_bottom_before_bars",
+        "left_bottom_after_bars",
         "bottom_tolerance_pct",
         "neckline_min_rebound_pct",
         "rebound_up_day_ratio_min",
         "second_bottom_volume_ratio_max",
         "breakout_volume_ratio_min",
+        "max_breakout_bars_after_right_bottom",
         "breakout_buffer_pct",
         "retest_window",
         "retest_volume_ratio_max",
@@ -782,6 +788,14 @@ def _normalize_double_bottom_params(raw: Dict[str, Any]) -> Dict[str, Any]:
     )
     if normalized["signal"]["min_bottom_spacing"] > normalized["signal"]["max_bottom_spacing"]:
         raise ValueError("signal.min_bottom_spacing cannot exceed signal.max_bottom_spacing")
+    normalized["signal"]["left_bottom_before_bars"] = _positive_int(
+        normalized["signal"].get("left_bottom_before_bars"),
+        "signal.left_bottom_before_bars",
+    )
+    normalized["signal"]["left_bottom_after_bars"] = _positive_int(
+        normalized["signal"].get("left_bottom_after_bars"),
+        "signal.left_bottom_after_bars",
+    )
     normalized["signal"]["bottom_tolerance_pct"] = _fraction(
         normalized["signal"].get("bottom_tolerance_pct"),
         "signal.bottom_tolerance_pct",
@@ -801,6 +815,10 @@ def _normalize_double_bottom_params(raw: Dict[str, Any]) -> Dict[str, Any]:
     normalized["signal"]["breakout_volume_ratio_min"] = _positive_float(
         normalized["signal"].get("breakout_volume_ratio_min"),
         "signal.breakout_volume_ratio_min",
+    )
+    normalized["signal"]["max_breakout_bars_after_right_bottom"] = _positive_int(
+        normalized["signal"].get("max_breakout_bars_after_right_bottom"),
+        "signal.max_breakout_bars_after_right_bottom",
     )
     normalized["signal"]["breakout_buffer_pct"] = _fraction(
         normalized["signal"].get("breakout_buffer_pct"),

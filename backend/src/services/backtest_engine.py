@@ -335,6 +335,7 @@ def run_backtest(
         avg_entry_prices: dict[str, float] = {}
         entry_trade_dates: dict[str, date] = {}
         entry_day_indices: dict[str, int] = {}
+        entry_signal_features: dict[str, dict[str, Any]] = {}
         last_prices: dict[str, float] = {}
         trade_count = 0
         signal_count = 0
@@ -385,6 +386,7 @@ def run_backtest(
                 avg_entry_prices=avg_entry_prices,
                 entry_trade_dates=entry_trade_dates,
                 entry_day_indices=entry_day_indices,
+                entry_signal_features=entry_signal_features,
                 execution_prices=execution_prices,
                 execution_snapshots=day_snapshots,
                 cash_ref=cash_state,
@@ -407,6 +409,7 @@ def run_backtest(
                 avg_entry_prices=avg_entry_prices,
                 entry_trade_dates=entry_trade_dates,
                 entry_day_indices=entry_day_indices,
+                entry_signal_features=entry_signal_features,
                 execution_prices=execution_prices,
                 execution_snapshots=day_snapshots,
                 cash_ref=cash_state,
@@ -428,6 +431,7 @@ def run_backtest(
                 avg_entry_prices,
                 entry_trade_dates,
                 entry_day_indices,
+                entry_signal_features,
                 trade_day,
                 trade_day_index,
             )
@@ -512,6 +516,7 @@ def run_backtest(
                         holdings,
                         avg_entry_prices,
                         entry_trade_dates,
+                        entry_signal_features,
                         last_prices,
                         signal_by_symbol,
                     ),
@@ -805,6 +810,7 @@ def _inject_backtest_positions(
     avg_entry_prices: dict[str, float],
     entry_trade_dates: dict[str, date],
     entry_day_indices: dict[str, int],
+    entry_signal_features: dict[str, dict[str, Any]],
     trade_day: date,
     trade_day_index: int,
 ) -> None:
@@ -813,6 +819,7 @@ def _inject_backtest_positions(
         snapshot["position"] = float(holdings.get(symbol, 0.0))
         snapshot["avg_entry_price"] = avg_entry_prices.get(symbol)
         snapshot["entry_trade_date"] = entry_trade_dates.get(symbol)
+        snapshot["entry_signal_features"] = entry_signal_features.get(symbol)
         entry_day_index = entry_day_indices.get(symbol)
         snapshot["position_holding_days"] = (
             max(trade_day_index - entry_day_index, 0) if entry_day_index is not None else None
@@ -978,6 +985,7 @@ def _apply_sell_signals(
     avg_entry_prices: dict[str, float],
     entry_trade_dates: dict[str, date],
     entry_day_indices: dict[str, int],
+    entry_signal_features: dict[str, dict[str, Any]],
     execution_prices: dict[str, float],
     execution_snapshots: dict[str, dict[str, Any]],
     cash_ref: dict[str, float],
@@ -1004,6 +1012,7 @@ def _apply_sell_signals(
         avg_entry_prices.pop(event.symbol, None)
         entry_trade_dates.pop(event.symbol, None)
         entry_day_indices.pop(event.symbol, None)
+        entry_signal_features.pop(event.symbol, None)
         stats.trade_count += 1
         stats.total_fees += fee
         stats.total_slippage += slippage_cost
@@ -1044,6 +1053,7 @@ def _apply_buy_signals(
     avg_entry_prices: dict[str, float],
     entry_trade_dates: dict[str, date],
     entry_day_indices: dict[str, int],
+    entry_signal_features: dict[str, dict[str, Any]],
     execution_prices: dict[str, float],
     execution_snapshots: dict[str, dict[str, Any]],
     cash_ref: dict[str, float],
@@ -1089,6 +1099,7 @@ def _apply_buy_signals(
         avg_entry_prices[event.symbol] = execution_price
         entry_trade_dates[event.symbol] = trade_day
         entry_day_indices[event.symbol] = trade_day_index
+        entry_signal_features[event.symbol] = event.metadata if isinstance(event.metadata, dict) else {}
         stats.trade_count += 1
         stats.total_fees += fee
         stats.total_slippage += slippage_cost
@@ -1107,6 +1118,7 @@ def _apply_buy_signals(
                     "reason": event.reason,
                     "source": "backtest",
                     "signal_ts": event.ts.isoformat(),
+                    "entry_signal_features": event.metadata if isinstance(event.metadata, dict) else {},
                     "execution_trade_date": _execution_trade_date(execution_snapshot),
                     "reference_price": float(price),
                     "slippage_bps": cost_config.slippage_bps,
@@ -1146,9 +1158,10 @@ def _serialize_positions(
     holdings: dict[str, float],
     avg_entry_prices: dict[str, float],
     entry_trade_dates: dict[str, date],
+    entry_signal_features: dict[str, dict[str, Any]],
     last_prices: dict[str, float],
     signal_by_symbol: dict[str, Any],
-) -> dict[str, dict[str, float | str | None]]:
+) -> dict[str, dict[str, Any]]:
     """Persist a lightweight position snapshot for later review and debugging."""
     payload: dict[str, dict[str, float | str | None]] = {}
     for symbol, qty in holdings.items():
@@ -1160,6 +1173,7 @@ def _serialize_positions(
             "entry_trade_date": (
                 entry_trade_dates[symbol].isoformat() if entry_trade_dates.get(symbol) is not None else None
             ),
+            "entry_signal_features": entry_signal_features.get(symbol),
             "close": close_px,
             "market_value": float(qty) * close_px,
             "latest_signal": getattr(event, "action", None),

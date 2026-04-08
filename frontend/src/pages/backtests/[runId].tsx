@@ -295,12 +295,34 @@ type PositionLifecycleRow = {
 
 type PositionLifecyclePnlFilter = "all" | "profit" | "loss" | "flat";
 
+type PositionLifecycleSortKey =
+  | "symbol"
+  | "entryTime"
+  | "endTime"
+  | "qty"
+  | "entryPrice"
+  | "endPrice"
+  | "pnl"
+  | "returnPct"
+  | "holdingDays";
+
+type PositionLifecycleSortDirection = "asc" | "desc";
+
 type LifecycleChartMarker = {
   key: string;
   label: string;
   date: string;
   price: number | null;
-  tone: "buy" | "buy_signal" | "sell" | "sell_signal" | "mark";
+  tone:
+    | "buy"
+    | "buy_signal"
+    | "sell"
+    | "sell_signal"
+    | "mark"
+    | "neckline"
+    | "breakout"
+    | "left_bottom"
+    | "right_bottom";
   description: string;
 };
 
@@ -311,6 +333,20 @@ type IslandReversalGapSetup = {
   breakoutGapLow: number;
   leftGapPct: number | null;
   breakoutGapPct: number | null;
+};
+
+type DoubleBottomSetup = {
+  leftBottomTradeDate: string;
+  rightBottomTradeDate: string;
+  leftBottomLow: number;
+  rightBottomLow: number;
+  necklineTradeDate: string | null;
+  necklinePrice: number | null;
+  breakoutTradeDate: string | null;
+  breakoutClose: number | null;
+  breakoutWaitBars: number | null;
+  breakoutVolumeRatio: number | null;
+  bottomDistancePct: number | null;
 };
 
 type LifecycleGapOverlay = {
@@ -375,6 +411,37 @@ function toTradeDateKey(value?: string | null): string | null {
     return null;
   }
   return parsed.toISOString().slice(0, 10);
+}
+
+function formatTradeDate(value?: string | null, locale = "en-US"): string {
+  const tradeDate = toTradeDateKey(value);
+  if (!tradeDate) {
+    return "-";
+  }
+
+  const [year, month, day] = tradeDate.split("-").map((part) => Number(part));
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (Number.isNaN(parsed.getTime())) {
+    return tradeDate;
+  }
+
+  return new Intl.DateTimeFormat(locale, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: "UTC",
+  }).format(parsed);
+}
+
+function formatLifecycleEventMoment(
+  ts: string | null | undefined,
+  tradeDate: string | null | undefined,
+  locale = "en-US"
+): string {
+  if (tradeDate) {
+    return formatTradeDate(tradeDate, locale);
+  }
+  return formatDateTime(ts, locale);
 }
 
 function normalizePositionPayload(value: unknown): { qty: number; close: number; marketValue: number } | null {
@@ -624,6 +691,111 @@ function buildPositionLifecycleRows(run: BacktestDetailOut): PositionLifecycleRo
     }
     return left.symbol.localeCompare(right.symbol);
   });
+}
+
+function getLifecycleDisplayEndTs(row: PositionLifecycleRow): string | null {
+  return row.exitTs || row.markTs || null;
+}
+
+function getLifecycleDisplayEndPrice(row: PositionLifecycleRow): number | null {
+  return row.exitPrice ?? row.markPrice;
+}
+
+function getLifecycleSortFallbackTime(row: PositionLifecycleRow): number | null {
+  return toTimeValue(getLifecycleDisplayEndTs(row) || row.entryTs);
+}
+
+function defaultLifecycleSortDirection(
+  key: PositionLifecycleSortKey
+): PositionLifecycleSortDirection {
+  return key === "symbol" ? "asc" : "desc";
+}
+
+function compareNullableNumbers(
+  left: number | null | undefined,
+  right: number | null | undefined,
+  direction: PositionLifecycleSortDirection
+): number {
+  const leftValue = typeof left === "number" && Number.isFinite(left) ? left : null;
+  const rightValue = typeof right === "number" && Number.isFinite(right) ? right : null;
+
+  if (leftValue == null && rightValue == null) {
+    return 0;
+  }
+  if (leftValue == null) {
+    return 1;
+  }
+  if (rightValue == null) {
+    return -1;
+  }
+  return direction === "asc" ? leftValue - rightValue : rightValue - leftValue;
+}
+
+function compareStrings(
+  left: string,
+  right: string,
+  direction: PositionLifecycleSortDirection
+): number {
+  return direction === "asc" ? left.localeCompare(right) : right.localeCompare(left);
+}
+
+function comparePositionLifecycleRows(
+  left: PositionLifecycleRow,
+  right: PositionLifecycleRow,
+  sortKey: PositionLifecycleSortKey,
+  sortDirection: PositionLifecycleSortDirection
+): number {
+  let result = 0;
+
+  switch (sortKey) {
+    case "symbol":
+      result = compareStrings(left.symbol, right.symbol, sortDirection);
+      break;
+    case "entryTime":
+      result = compareNullableNumbers(toTimeValue(left.entryTs), toTimeValue(right.entryTs), sortDirection);
+      break;
+    case "endTime":
+      result = compareNullableNumbers(getLifecycleSortFallbackTime(left), getLifecycleSortFallbackTime(right), sortDirection);
+      break;
+    case "qty":
+      result = compareNullableNumbers(left.qty, right.qty, sortDirection);
+      break;
+    case "entryPrice":
+      result = compareNullableNumbers(left.entryPrice, right.entryPrice, sortDirection);
+      break;
+    case "endPrice":
+      result = compareNullableNumbers(getLifecycleDisplayEndPrice(left), getLifecycleDisplayEndPrice(right), sortDirection);
+      break;
+    case "pnl":
+      result = compareNullableNumbers(left.pnl, right.pnl, sortDirection);
+      break;
+    case "returnPct":
+      result = compareNullableNumbers(left.returnPct, right.returnPct, sortDirection);
+      break;
+    case "holdingDays":
+      result = compareNullableNumbers(left.holdingDays, right.holdingDays, sortDirection);
+      break;
+  }
+
+  if (result !== 0) {
+    return result;
+  }
+
+  const fallbackByRecentEnd = compareNullableNumbers(
+    getLifecycleSortFallbackTime(left),
+    getLifecycleSortFallbackTime(right),
+    "desc"
+  );
+  if (fallbackByRecentEnd !== 0) {
+    return fallbackByRecentEnd;
+  }
+
+  const fallbackBySymbol = left.symbol.localeCompare(right.symbol);
+  if (fallbackBySymbol !== 0) {
+    return fallbackBySymbol;
+  }
+
+  return left.sequence - right.sequence;
 }
 
 function buildSymbolPnlRows(run: BacktestDetailOut): SymbolPnlRow[] {
@@ -1939,7 +2111,11 @@ function buildLifecycleChartMarkers(
       date: row.entrySignalTradeDate,
       price: row.entryPrice,
       tone: "buy_signal",
-      description: `${isZh ? "买入信号" : "Buy Signal"} ${row.symbol} · ${formatDateTime(row.entrySignalTs, locale)}${
+      description: `${isZh ? "买入信号" : "Buy Signal"} ${row.symbol} · ${formatLifecycleEventMoment(
+        row.entrySignalTs,
+        row.entrySignalTradeDate,
+        locale
+      )}${
         row.entryPrice != null ? ` · ${formatCurrency(row.entryPrice, locale)}` : ""
       }`,
     });
@@ -1952,7 +2128,11 @@ function buildLifecycleChartMarkers(
       date: row.entryTradeDate,
       price: row.entryPrice,
       tone: "buy",
-      description: `${isZh ? "买入" : "Buy"} ${row.symbol} · ${formatDateTime(row.entryTs, locale)} · ${formatCurrency(row.entryPrice, locale)}`,
+      description: `${isZh ? "买入" : "Buy"} ${row.symbol} · ${formatLifecycleEventMoment(
+        row.entryTs,
+        row.entryTradeDate,
+        locale
+      )} · ${formatCurrency(row.entryPrice, locale)}`,
     });
   }
 
@@ -1963,7 +2143,11 @@ function buildLifecycleChartMarkers(
       date: row.exitSignalTradeDate,
       price: row.exitPrice ?? row.markPrice ?? row.entryPrice,
       tone: "sell_signal",
-      description: `${isZh ? "卖出信号" : "Sell Signal"} ${row.symbol} · ${formatDateTime(row.exitSignalTs, locale)}${
+      description: `${isZh ? "卖出信号" : "Sell Signal"} ${row.symbol} · ${formatLifecycleEventMoment(
+        row.exitSignalTs,
+        row.exitSignalTradeDate,
+        locale
+      )}${
         row.exitPrice != null
           ? ` · ${formatCurrency(row.exitPrice, locale)}`
           : row.markPrice != null
@@ -1980,7 +2164,11 @@ function buildLifecycleChartMarkers(
       date: row.exitTradeDate,
       price: row.exitPrice,
       tone: "sell",
-      description: `${isZh ? "卖出" : "Sell"} ${row.symbol} · ${formatDateTime(row.exitTs, locale)} · ${formatCurrency(row.exitPrice, locale)}`,
+      description: `${isZh ? "卖出" : "Sell"} ${row.symbol} · ${formatLifecycleEventMoment(
+        row.exitTs,
+        row.exitTradeDate,
+        locale
+      )} · ${formatCurrency(row.exitPrice, locale)}`,
     });
   } else if (row.markTradeDate && row.markPrice != null) {
     markers.push({
@@ -1989,7 +2177,11 @@ function buildLifecycleChartMarkers(
       date: row.markTradeDate,
       price: row.markPrice,
       tone: "mark",
-      description: `${isZh ? "标记价格" : "Marked Price"} ${row.symbol} · ${formatDateTime(row.markTs, locale)} · ${formatCurrency(row.markPrice, locale)}`,
+      description: `${isZh ? "标记价格" : "Marked Price"} ${row.symbol} · ${formatLifecycleEventMoment(
+        row.markTs,
+        row.markTradeDate,
+        locale
+      )} · ${formatCurrency(row.markPrice, locale)}`,
     });
   }
 
@@ -2053,6 +2245,132 @@ function extractIslandReversalGapSetup(signal: BacktestSignalOut | null): Island
     leftGapPct: getRecordNumber(setup, "left_gap_pct"),
     breakoutGapPct: getRecordNumber(setup, "breakout_gap_pct"),
   };
+}
+
+function extractDoubleBottomSetup(signal: BacktestSignalOut | null): DoubleBottomSetup | null {
+  const features = getObjectValue(signal?.features);
+  const setup = getObjectValue(features?.setup);
+  if (!setup) {
+    return null;
+  }
+
+  const leftBottomTradeDate = getRecordText(setup, "left_bottom_trade_date");
+  const necklineTradeDate = getRecordText(setup, "neckline_trade_date");
+  const rightBottomTradeDate = getRecordText(setup, "right_bottom_trade_date");
+  const breakoutTradeDate = getRecordText(setup, "breakout_trade_date");
+  const leftBottomLow = getRecordNumber(setup, "left_bottom_low");
+  const rightBottomLow = getRecordNumber(setup, "right_bottom_low");
+
+  if (!leftBottomTradeDate || !rightBottomTradeDate || leftBottomLow == null || rightBottomLow == null) {
+    return null;
+  }
+
+  return {
+    leftBottomTradeDate,
+    rightBottomTradeDate,
+    leftBottomLow,
+    rightBottomLow,
+    necklineTradeDate,
+    necklinePrice: getRecordNumber(setup, "neckline_price"),
+    breakoutTradeDate,
+    breakoutClose: getRecordNumber(setup, "breakout_close"),
+    breakoutWaitBars: getRecordNumber(setup, "breakout_wait_bars"),
+    breakoutVolumeRatio: getRecordNumber(setup, "breakout_volume_ratio"),
+    bottomDistancePct: getRecordNumber(setup, "bottom_distance_pct"),
+  };
+}
+
+function buildDoubleBottomSetupMarkers(
+  setup: DoubleBottomSetup | null,
+  locale: string,
+  isZh: boolean
+): LifecycleChartMarker[] {
+  if (!setup) {
+    return [];
+  }
+
+  const sharedParts = [
+    setup.bottomDistancePct != null
+      ? `${isZh ? "底部价差" : "Bottom Spread"} ${formatPercent(setup.bottomDistancePct, 2)}`
+      : null,
+    setup.necklinePrice != null
+      ? `${isZh ? "颈线" : "Neckline"} ${formatCurrency(setup.necklinePrice, locale)}`
+      : null,
+  ].filter(Boolean);
+
+  const markers: LifecycleChartMarker[] = [
+    {
+      key: `left-bottom-${setup.leftBottomTradeDate}`,
+      label: isZh ? "左底" : "Left Bottom",
+      date: setup.leftBottomTradeDate,
+      price: setup.leftBottomLow,
+      tone: "left_bottom",
+      description: [
+        isZh ? "双底左底" : "Double-Bottom Left Low",
+        setup.leftBottomTradeDate,
+        formatCurrency(setup.leftBottomLow, locale),
+        ...sharedParts,
+      ].join(" · "),
+    },
+    {
+      key: `right-bottom-${setup.rightBottomTradeDate}`,
+      label: isZh ? "右底" : "Right Bottom",
+      date: setup.rightBottomTradeDate,
+      price: setup.rightBottomLow,
+      tone: "right_bottom",
+      description: [
+        isZh ? "双底右底" : "Double-Bottom Right Low",
+        setup.rightBottomTradeDate,
+        formatCurrency(setup.rightBottomLow, locale),
+        ...sharedParts,
+      ].join(" · "),
+    },
+  ];
+
+  if (setup.necklineTradeDate && setup.necklinePrice != null) {
+    markers.push({
+      key: `neckline-${setup.necklineTradeDate}`,
+      label: isZh ? "颈线" : "Neckline",
+      date: setup.necklineTradeDate,
+      price: setup.necklinePrice,
+      tone: "neckline",
+      description: [
+        isZh ? "双底颈线" : "Double-Bottom Neckline",
+        setup.necklineTradeDate,
+        formatCurrency(setup.necklinePrice, locale),
+        setup.bottomDistancePct != null
+          ? `${isZh ? "底部价差" : "Bottom Spread"} ${formatPercent(setup.bottomDistancePct, 2)}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    });
+  }
+
+  if (setup.breakoutTradeDate) {
+    markers.push({
+      key: `breakout-${setup.breakoutTradeDate}`,
+      label: isZh ? "突破" : "Breakout",
+      date: setup.breakoutTradeDate,
+      price: setup.breakoutClose ?? setup.necklinePrice,
+      tone: "breakout",
+      description: [
+        isZh ? "双底突破确认" : "Double-Bottom Breakout",
+        setup.breakoutTradeDate,
+        setup.breakoutClose != null ? formatCurrency(setup.breakoutClose, locale) : null,
+        setup.breakoutWaitBars != null
+          ? `${isZh ? "右底后" : "After Right Bottom"} ${Math.round(setup.breakoutWaitBars)} ${isZh ? "根K线" : "bars"}`
+          : null,
+        setup.breakoutVolumeRatio != null
+          ? `${isZh ? "放量倍数" : "Volume Ratio"} ${setup.breakoutVolumeRatio.toFixed(2)}x`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    });
+  }
+
+  return markers;
 }
 
 function buildLifecycleGapOverlays(
@@ -2326,6 +2644,26 @@ function LifecycleCandlestickChart({
       stroke: "#38bdf8",
       fill: "#38bdf8",
       bubble: "rgba(8, 47, 73, 0.94)",
+    },
+    neckline: {
+      stroke: "#94a3b8",
+      fill: "#94a3b8",
+      bubble: "rgba(30, 41, 59, 0.94)",
+    },
+    breakout: {
+      stroke: "#f97316",
+      fill: "#f97316",
+      bubble: "rgba(124, 45, 18, 0.94)",
+    },
+    left_bottom: {
+      stroke: "#eab308",
+      fill: "#eab308",
+      bubble: "rgba(113, 63, 18, 0.94)",
+    },
+    right_bottom: {
+      stroke: "#14b8a6",
+      fill: "#14b8a6",
+      bubble: "rgba(17, 94, 89, 0.94)",
     },
   };
   const gapOverlayPalette: Record<
@@ -2794,14 +3132,33 @@ function LifecycleDetailPanel({
 }) {
   const { locale } = useI18n();
   const isZh = locale === "zh-CN";
+  const resolvedEntryTradeDate = row.entryTradeDate || toTradeDateKey(row.entryTs);
+  const initialEntrySignal = findLifecycleSignal(signals, row, "BUY");
+  const initialDoubleBottomSetup = extractDoubleBottomSetup(initialEntrySignal);
+  const initialLookbackDays = (() => {
+    if (!initialDoubleBottomSetup || !resolvedEntryTradeDate) {
+      return LIFECYCLE_PRE_ENTRY_LOOKBACK_TRADING_DAYS;
+    }
+
+    const leftBottomTime = Date.parse(`${initialDoubleBottomSetup.leftBottomTradeDate}T00:00:00Z`);
+    const entryTime = Date.parse(`${resolvedEntryTradeDate}T00:00:00Z`);
+    if (!Number.isFinite(leftBottomTime) || !Number.isFinite(entryTime) || entryTime <= leftBottomTime) {
+      return LIFECYCLE_PRE_ENTRY_LOOKBACK_TRADING_DAYS;
+    }
+
+    const calendarDaySpan = Math.ceil((entryTime - leftBottomTime) / 86_400_000) + 5;
+    return normalizeLifecycleLookbackDays(
+      Math.max(LIFECYCLE_PRE_ENTRY_LOOKBACK_TRADING_DAYS, calendarDaySpan)
+    );
+  })();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [series, setSeries] = useState<CandleSeriesOut | null>(null);
   const [lookbackTradingDays, setLookbackTradingDays] = useState(
-    LIFECYCLE_PRE_ENTRY_LOOKBACK_TRADING_DAYS
+    initialLookbackDays
   );
   const [lookbackInput, setLookbackInput] = useState(
-    String(LIFECYCLE_PRE_ENTRY_LOOKBACK_TRADING_DAYS)
+    String(initialLookbackDays)
   );
   const [postExitTradingDays, setPostExitTradingDays] = useState(
     LIFECYCLE_POST_EXIT_LOOKAHEAD_DAYS
@@ -2824,12 +3181,19 @@ function LifecycleDetailPanel({
     row.status === "closed" && exitTradeDate && fetchForwardBufferDays > 0
       ? shiftDateKey(exitTradeDate, fetchForwardBufferDays) || baseEndDate
       : baseEndDate;
-  const markers = useMemo(
-    () => buildLifecycleChartMarkers(row, locale, isZh),
-    [isZh, locale, row]
-  );
   const entrySignal = useMemo(() => findLifecycleSignal(signals, row, "BUY"), [row, signals]);
   const exitSignal = useMemo(() => findLifecycleSignal(signals, row, "SELL"), [row, signals]);
+  const doubleBottomSetup = useMemo(
+    () => extractDoubleBottomSetup(entrySignal) || extractDoubleBottomSetup(exitSignal),
+    [entrySignal, exitSignal]
+  );
+  const markers = useMemo(
+    () => [
+      ...buildLifecycleChartMarkers(row, locale, isZh),
+      ...buildDoubleBottomSetupMarkers(doubleBottomSetup, locale, isZh),
+    ],
+    [doubleBottomSetup, isZh, locale, row]
+  );
 
   function applyLookbackDays(nextValue: number) {
     const normalized = normalizeLifecycleLookbackDays(nextValue);
@@ -2920,10 +3284,41 @@ function LifecycleDetailPanel({
     () => extractIslandReversalGapSetup(entrySignal) || extractIslandReversalGapSetup(exitSignal),
     [entrySignal, exitSignal]
   );
+  const requiredDoubleBottomLookback = useMemo(() => {
+    if (!doubleBottomSetup || !entryTradeDate || !series?.bars?.length) {
+      return null;
+    }
+
+    const leftBottomIndex = series.bars.findIndex(
+      (bar) => bar.trade_date === doubleBottomSetup.leftBottomTradeDate
+    );
+    const entryIndex = series.bars.findIndex(
+      (bar) => bar.trade_date >= entryTradeDate
+    );
+    if (leftBottomIndex < 0 || entryIndex < 0 || entryIndex <= leftBottomIndex) {
+      return null;
+    }
+
+    return normalizeLifecycleLookbackDays(
+      Math.max(LIFECYCLE_PRE_ENTRY_LOOKBACK_TRADING_DAYS, entryIndex - leftBottomIndex + 3)
+    );
+  }, [doubleBottomSetup, entryTradeDate, series?.bars]);
   const gapOverlays = useMemo(
     () => buildLifecycleGapOverlays(bars, gapSetup, locale, isZh),
     [bars, gapSetup, isZh, locale]
   );
+
+  useEffect(() => {
+    if (
+      requiredDoubleBottomLookback == null
+      || lookbackTradingDays !== initialLookbackDays
+      || requiredDoubleBottomLookback <= lookbackTradingDays
+    ) {
+      return;
+    }
+
+    applyLookbackDays(requiredDoubleBottomLookback);
+  }, [initialLookbackDays, lookbackTradingDays, requiredDoubleBottomLookback]);
 
   return (
     <div style={lifecycleDetailPanelStyle}>
@@ -2945,10 +3340,10 @@ function LifecycleDetailPanel({
             {isZh
               ? `${visibleStartDate || "-"} -> ${visibleEndDate || "-"}，当前额外包含买入前 ${lookbackTradingDays} 个交易日${
                   row.status === "closed" ? `、卖出后 ${postExitTradingDays} 个交易日` : ""
-                }的走势，并标出买卖信号、实际买卖，以及岛形反转的左右跳空缺口。`
+                }的走势，并标出买卖信号、实际买卖，以及形态关键位置，例如岛形反转缺口或双底的左右底、颈线与突破日。`
               : `${visibleStartDate || "-"} -> ${visibleEndDate || "-"}, currently including ${lookbackTradingDays} trading days before entry${
                   row.status === "closed" ? ` and ${postExitTradingDays} trading days after exit` : ""
-                } so you can see signal-generation points, actual fills, and the left/right gap zones for island-reversal setups.`}
+                } so you can see signal-generation points, actual fills, and key pattern landmarks such as island-reversal gaps or a double bottom's two lows, neckline, and breakout day.`}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -3111,12 +3506,16 @@ function LifecycleDetailPanel({
         }}
       >
         <div style={miniMetricStyle}>
-          <div style={labelStyle}>{isZh ? "买入时间" : "Buy Time"}</div>
-          <div style={miniMetricValueStyle}>{formatDateTime(row.entryTs, locale)}</div>
+          <div style={labelStyle}>{isZh ? "买入交易日" : "Buy Trade Date"}</div>
+          <div style={miniMetricValueStyle}>
+            {formatLifecycleEventMoment(row.entryTs, row.entryTradeDate, locale)}
+          </div>
         </div>
         <div style={miniMetricStyle}>
-          <div style={labelStyle}>{isZh ? "卖出 / 标记时间" : "Sell / Mark Time"}</div>
-          <div style={miniMetricValueStyle}>{formatDateTime(row.exitTs || row.markTs, locale)}</div>
+          <div style={labelStyle}>{isZh ? "卖出 / 标记交易日" : "Sell / Mark Trade Date"}</div>
+          <div style={miniMetricValueStyle}>
+            {formatLifecycleEventMoment(row.exitTs || row.markTs, row.exitTradeDate || row.markTradeDate, locale)}
+          </div>
         </div>
         <div style={miniMetricStyle}>
           <div style={labelStyle}>{isZh ? "买入价" : "Buy Price"}</div>
@@ -3190,6 +3589,14 @@ function LifecycleDetailPanel({
                           ? "#ef4444"
                           : marker.tone === "sell_signal"
                             ? "#f59e0b"
+                            : marker.tone === "neckline"
+                              ? "#94a3b8"
+                              : marker.tone === "breakout"
+                                ? "#f97316"
+                            : marker.tone === "left_bottom"
+                              ? "#eab308"
+                              : marker.tone === "right_bottom"
+                                ? "#14b8a6"
                             : "#38bdf8",
                   }}
                 />
@@ -3209,6 +3616,8 @@ function PositionLifecycleCard({ run }: { run: BacktestDetailOut }) {
   const [showAllRows, setShowAllRows] = useState(false);
   const [expandedRowKey, setExpandedRowKey] = useState<string | null>(null);
   const [pnlFilter, setPnlFilter] = useState<PositionLifecyclePnlFilter>("all");
+  const [sortKey, setSortKey] = useState<PositionLifecycleSortKey>("endTime");
+  const [sortDirection, setSortDirection] = useState<PositionLifecycleSortDirection>("desc");
   const rows = useMemo(() => buildPositionLifecycleRows(run), [run]);
 
   const closedRows = rows.filter((row) => row.status === "closed");
@@ -3236,7 +3645,52 @@ function PositionLifecycleCard({ run }: { run: BacktestDetailOut }) {
     }
     return rows.filter((row) => classifyLifecyclePnl(row) === pnlFilter);
   }, [pnlFilter, rows]);
-  const visibleRows = showAllRows ? filteredRows : filteredRows.slice(0, 12);
+  const sortedRows = useMemo(
+    () => [...filteredRows].sort((left, right) => comparePositionLifecycleRows(left, right, sortKey, sortDirection)),
+    [filteredRows, sortDirection, sortKey]
+  );
+  const visibleRows = showAllRows ? sortedRows : sortedRows.slice(0, 12);
+
+  const lifecycleSortLabels: Record<PositionLifecycleSortKey, string> = {
+    symbol: isZh ? "标的" : "symbol",
+    entryTime: isZh ? "入场时间" : "entry time",
+    endTime: isZh ? "出场 / 标记时间" : "exit / mark time",
+    qty: isZh ? "股数" : "quantity",
+    entryPrice: isZh ? "入场价" : "entry price",
+    endPrice: isZh ? "出场 / 标记价" : "exit / mark price",
+    pnl: isZh ? "盈亏" : "PnL",
+    returnPct: isZh ? "收益率" : "return",
+    holdingDays: isZh ? "持有天数" : "days held",
+  };
+
+  const lifecycleColumns: Array<{
+    key: string;
+    label: string;
+    sortKey?: PositionLifecycleSortKey;
+  }> = [
+    { key: "symbol", label: isZh ? "标的" : "Symbol", sortKey: "symbol" },
+    { key: "sequence", label: isZh ? "周期" : "Cycle" },
+    { key: "status", label: isZh ? "状态" : "Status" },
+    { key: "entryTime", label: isZh ? "入场时间" : "Entry Time", sortKey: "entryTime" },
+    { key: "endTime", label: isZh ? "出场 / 标记时间" : "Exit / Mark Time", sortKey: "endTime" },
+    { key: "qty", label: isZh ? "股数" : "Qty", sortKey: "qty" },
+    { key: "entryPrice", label: isZh ? "入场价" : "Entry Px", sortKey: "entryPrice" },
+    { key: "endPrice", label: isZh ? "出场 / 标记价" : "Exit / Mark Px", sortKey: "endPrice" },
+    { key: "pnl", label: isZh ? "盈亏" : "PnL", sortKey: "pnl" },
+    { key: "returnPct", label: isZh ? "收益率" : "Return", sortKey: "returnPct" },
+    { key: "holdingDays", label: isZh ? "持有天数" : "Days Held", sortKey: "holdingDays" },
+    { key: "entryReason", label: isZh ? "入场原因" : "Entry Reason" },
+    { key: "exitReason", label: isZh ? "出场原因" : "Exit Reason" },
+  ];
+
+  const toggleSort = (nextSortKey: PositionLifecycleSortKey) => {
+    if (sortKey === nextSortKey) {
+      setSortDirection((current) => (current === "desc" ? "asc" : "desc"));
+      return;
+    }
+    setSortKey(nextSortKey);
+    setSortDirection(defaultLifecycleSortDirection(nextSortKey));
+  };
 
   useEffect(() => {
     if (!expandedRowKey) {
@@ -3388,10 +3842,12 @@ function PositionLifecycleCard({ run }: { run: BacktestDetailOut }) {
               {isZh
                 ? `当前显示 ${visibleRows.length} / ${filteredRows.length} 段生命周期${
                     pnlFilter === "all" ? "" : `（总计 ${rows.length} 段）`
-                  }，按最近结束或最近标记时间倒序。`
+                  }，按${lifecycleSortLabels[sortKey]}${sortDirection === "desc" ? "降序" : "升序"}排列，可点击表头切换。`
                 : `Showing ${visibleRows.length} / ${filteredRows.length} lifecycles${
                     pnlFilter === "all" ? "" : ` (${rows.length} total)`
-                  }, ordered by the most recent close or mark time.`}
+                  }, sorted by ${lifecycleSortLabels[sortKey]} in ${
+                    sortDirection === "desc" ? "descending" : "ascending"
+                  } order. Click a sortable header to reorder.`}
             </div>
           </div>
 
@@ -3419,12 +3875,18 @@ function PositionLifecycleCard({ run }: { run: BacktestDetailOut }) {
                     textAlign: "left",
                   }}
                 >
-                  {(isZh
-                    ? ["标的", "周期", "状态", "入场时间", "出场 / 标记时间", "股数", "入场价", "出场 / 标记价", "盈亏", "收益率", "持有天数", "入场原因", "出场原因"]
-                    : ["Symbol", "Cycle", "Status", "Entry Time", "Exit / Mark Time", "Qty", "Entry Px", "Exit / Mark Px", "PnL", "Return", "Days Held", "Entry Reason", "Exit Reason"]
-                  ).map((label) => (
+                  {lifecycleColumns.map((column) => (
                     <th
-                      key={label}
+                      key={column.key}
+                      aria-sort={
+                        column.sortKey
+                          ? sortKey === column.sortKey
+                            ? sortDirection === "asc"
+                              ? "ascending"
+                              : "descending"
+                            : "none"
+                          : undefined
+                      }
                       style={{
                         ...stickyTableHeaderCellStyle,
                         padding: "12px 14px",
@@ -3434,15 +3896,28 @@ function PositionLifecycleCard({ run }: { run: BacktestDetailOut }) {
                         textTransform: "uppercase",
                       }}
                     >
-                      {label}
+                      {column.sortKey ? (
+                        <button
+                          type="button"
+                          onClick={() => toggleSort(column.sortKey!)}
+                          style={lifecycleSortButtonStyle(sortKey === column.sortKey)}
+                        >
+                          <span>{column.label}</span>
+                          <span style={lifecycleSortIndicatorStyle(sortKey === column.sortKey)}>
+                            {sortKey === column.sortKey ? (sortDirection === "desc" ? "↓" : "↑") : "↕"}
+                          </span>
+                        </button>
+                      ) : (
+                        column.label
+                      )}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {visibleRows.map((row) => {
-                  const displayEndTs = row.exitTs || row.markTs;
-                  const displayEndPrice = row.exitPrice ?? row.markPrice;
+                  const displayEndTs = getLifecycleDisplayEndTs(row);
+                  const displayEndPrice = getLifecycleDisplayEndPrice(row);
                   const pnlTone = (row.pnl ?? 0) >= 0 ? "#15803d" : "#b91c1c";
                   const statusLabel =
                     row.status === "closed"
@@ -4035,6 +4510,33 @@ const lifecycleExpandedCellStyle = {
   padding: "0 14px 16px",
   background: "rgba(8, 15, 24, 0.68)",
 };
+
+function lifecycleSortButtonStyle(active: boolean) {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    gap: 6,
+    width: "100%",
+    padding: 0,
+    border: "none",
+    background: "transparent",
+    color: active ? "#e2e8f0" : "rgba(148, 163, 184, 0.88)",
+    cursor: "pointer",
+    font: "inherit",
+    letterSpacing: "inherit",
+    textTransform: "inherit" as const,
+    textAlign: "left" as const,
+  };
+}
+
+function lifecycleSortIndicatorStyle(active: boolean) {
+  return {
+    color: active ? "#67e8f9" : "rgba(100, 116, 139, 0.85)",
+    fontSize: 11,
+    lineHeight: 1,
+  } as const;
+}
 
 const lifecycleDetailPanelStyle = {
   padding: 18,
