@@ -4,6 +4,7 @@ export interface StrategyAllocationUpsert {
   allocation_pct: number;
   capital_base?: number | null;
   allow_fractional?: boolean;
+  auto_run_enabled?: boolean;
   notes?: string | null;
   status?: string;
 }
@@ -18,6 +19,7 @@ export interface StrategyAllocationOut {
   allocation_pct: number;
   capital_base?: number | null;
   allow_fractional: boolean;
+  auto_run_enabled: boolean;
   notes?: string | null;
   status: string;
   created_at?: string | null;

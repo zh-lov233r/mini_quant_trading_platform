@@ -41,6 +41,7 @@ class StrategyAllocationOverview:
     allocation_pct: float
     capital_base: float | None
     allow_fractional: bool
+    auto_run_enabled: bool
     allocation_status: str
     notes: str | None
     latest_run_id: str | None
@@ -440,6 +441,7 @@ def build_paper_account_overview(
                         else None
                     ),
                     "allow_fractional": bool(allocation.allow_fractional),
+                    "auto_run_enabled": bool(allocation.auto_run_enabled),
                     "allocation_status": allocation.status,
                     "notes": allocation.notes,
                     "latest_run_id": str(strategy_run.id) if strategy_run is not None else None,

@@ -77,7 +77,7 @@ class DoubleBottomStateMachineTests(unittest.TestCase):
         },
     }
 
-    def test_breakout_bar_still_emits_breakout_buy(self) -> None:
+    def test_breakout_bar_waits_for_retest_buy(self) -> None:
         bars = self._primary_pattern_bars()
 
         pattern = _find_latest_double_bottom_pattern(bars, self.signal_cfg)
@@ -94,15 +94,35 @@ class DoubleBottomStateMachineTests(unittest.TestCase):
                 risk_cfg=self.risk_cfg,
                 position=0.0,
             ),
-            (
-                "BUY",
-                "confirmed the double bottom with a volume-backed neckline breakout",
-                "breakout",
-            ),
+            (None, None, None),
         )
 
     def test_breakout_pattern_still_supports_low_volume_retest_buy(self) -> None:
         bars = self._primary_pattern_bars()
+        bars.append(_build_bar(9, 113, 114, 111, 113, 100))
+
+        pattern = _find_latest_double_bottom_pattern(bars, self.signal_cfg)
+
+        self.assertIsNotNone(pattern)
+        self.assertEqual(pattern.breakout_idx, 8)
+        self.assertEqual(
+            _resolve_double_bottom_action(
+                recent_bars=bars,
+                pattern=pattern,
+                signal_cfg=self.signal_cfg,
+                risk_cfg=self.risk_cfg,
+                position=0.0,
+            ),
+            (
+                "BUY",
+                "low-volume retest held the neckline after the double-bottom breakout",
+                "retest",
+            ),
+        )
+
+    def test_intraday_wick_above_neckline_still_confirms_breakout(self) -> None:
+        bars = self._primary_pattern_bars()
+        bars[-1] = _build_bar(8, 113, 115, 111, 112, 160)
         bars.append(_build_bar(9, 113, 114, 111, 113, 100))
 
         pattern = _find_latest_double_bottom_pattern(bars, self.signal_cfg)
@@ -146,7 +166,7 @@ class DoubleBottomStateMachineTests(unittest.TestCase):
         self.assertEqual(pattern.right_bottom_idx, 17)
         self.assertEqual(pattern.breakout_idx, 18)
 
-    def test_stateful_backtest_runner_keeps_candidates_across_warmup_and_trading(self) -> None:
+    def test_stateful_backtest_runner_waits_for_retest_after_trading_breakout(self) -> None:
         state = build_stateful_backtest_signal_state(self.runtime_strategy)
         self.assertIsNotNone(state)
 
@@ -166,9 +186,18 @@ class DoubleBottomStateMachineTests(unittest.TestCase):
             emit_signals=True,
         )
 
-        self.assertEqual(len(breakout_signals), 1)
-        self.assertEqual(breakout_signals[0].action, "BUY")
-        self.assertEqual(breakout_signals[0].metadata.get("setup", {}).get("stage"), "breakout")
+        self.assertEqual(breakout_signals, [])
+
+        retest_signals = generate_stateful_backtest_signals(
+            self.runtime_strategy,
+            {"TEST": self._snapshot_from_bar(_build_bar(9, 113, 114, 111, 113, 100))},
+            state,
+            emit_signals=True,
+        )
+
+        self.assertEqual(len(retest_signals), 1)
+        self.assertEqual(retest_signals[0].action, "BUY")
+        self.assertEqual(retest_signals[0].metadata.get("setup", {}).get("stage"), "retest")
 
     def test_stateful_backtest_runner_supports_retest_after_warmup_breakout(self) -> None:
         state = build_stateful_backtest_signal_state(self.runtime_strategy)

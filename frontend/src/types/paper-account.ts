@@ -66,6 +66,7 @@ export interface PortfolioStrategyOverviewOut {
   allocation_pct: number;
   capital_base?: number | null;
   allow_fractional: boolean;
+  auto_run_enabled: boolean;
   allocation_status: string;
   notes?: string | null;
   latest_run_id?: string | null;

@@ -1142,6 +1142,10 @@ export default function StrategyForm({
     gap: 8,
     margin: "0 0 12px",
   };
+  const groupedBoxStyle: React.CSSProperties = {
+    ...boxStyle,
+    margin: 0,
+  };
   const inputStyle: React.CSSProperties = {
     padding: 12,
     border: "1px solid rgba(71, 85, 105, 0.34)",
@@ -1158,6 +1162,36 @@ export default function StrategyForm({
     background: "linear-gradient(180deg, rgba(8,15,24,0.92), rgba(15,23,42,0.88))",
     color: "#e2e8f0",
     boxShadow: "0 18px 44px rgba(2, 6, 23, 0.22)",
+  };
+  const groupedPanelStyle: React.CSSProperties = {
+    padding: 18,
+    borderRadius: 20,
+    border: "1px solid rgba(71, 85, 105, 0.24)",
+    background: "linear-gradient(180deg, rgba(15,23,42,0.64), rgba(8,15,24,0.52))",
+  };
+  const groupedPanelTitleStyle: React.CSSProperties = {
+    margin: "0 0 6px",
+    fontSize: 12,
+    fontWeight: 700,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    color: "rgba(125, 211, 252, 0.92)",
+  };
+  const groupedPanelHintStyle: React.CSSProperties = {
+    margin: "0 0 14px",
+    color: "rgba(148, 163, 184, 0.82)",
+    fontSize: 13,
+    lineHeight: 1.55,
+  };
+  const groupedGridStyle: React.CSSProperties = {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gap: 12,
+  };
+  const groupedCompactGridStyle: React.CSSProperties = {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+    gap: 12,
   };
 
   return (
@@ -1929,319 +1963,361 @@ export default function StrategyForm({
               <h3 style={{ marginTop: 0 }}>{isZh ? "双底形态参数" : "Double Bottom Parameters"}</h3>
               <div style={{ marginBottom: 14, color: "rgba(148, 163, 184, 0.88)", fontSize: 13, lineHeight: 1.6 }}>
                 {isZh
-                  ? "这是保守版双底：重点交易放量突破颈线，以及突破后的缩量回踩。左底前会额外检查下跌是否足够平滑。所有百分比字段均使用小数表示，例如 0.03 = 3%。"
-                  : "This is the conservative double-bottom setup: it trades a volume-backed neckline breakout and a low-volume retest. The left bottom also requires a smooth downtrend. Percent-style fields use decimals, for example 0.03 = 3%."}
+                  ? "这是保守版双底：先用放量突破确认形态，再等待后续缩量回踩颈线时买入。左底前会额外检查下跌是否足够平滑。所有百分比字段均使用小数表示，例如 0.03 = 3%。"
+                  : "This is the conservative double-bottom setup: it uses the breakout to confirm the pattern, then waits for a later low-volume retest of the neckline before buying. The left bottom also requires a smooth downtrend. Percent-style fields use decimals, for example 0.03 = 3%."}
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <div style={boxStyle}>
-                  <label>{isZh ? "下跌回看窗口" : "Downtrend Lookback"}</label>
-                  <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    style={inputStyle}
-                    value={doubleBottomDowntrendLookback}
-                    onChange={(e) => setDoubleBottomDowntrendLookback(Number(e.target.value))}
-                  />
+              <div style={{ display: "grid", gap: 14 }}>
+                <div style={groupedPanelStyle}>
+                  <div style={groupedPanelTitleStyle}>{isZh ? "趋势背景" : "Downtrend Context"}</div>
+                  <p style={groupedPanelHintStyle}>
+                    {isZh
+                      ? "定义左底出现前需要有多长、多深、且多平滑的下跌。"
+                      : "Defines how long, how deep, and how smooth the pre-bottom decline must be."}
+                  </p>
+                  <div style={groupedGridStyle}>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "下跌回看窗口" : "Downtrend Lookback"}</label>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        style={inputStyle}
+                        value={doubleBottomDowntrendLookback}
+                        onChange={(e) => setDoubleBottomDowntrendLookback(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "最低下跌幅度" : "Min Downtrend Drop"}</label>
+                      <input
+                        type="number"
+                        min={0.01}
+                        max={1}
+                        step="any"
+                        style={inputStyle}
+                        value={doubleBottomDowntrendMinDropPct}
+                        onChange={(e) => setDoubleBottomDowntrendMinDropPct(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "上涨天数占比上限" : "Downtrend Max Up-Day Ratio"}</label>
+                      <input
+                        type="number"
+                        min={0.001}
+                        max={1}
+                        step="any"
+                        style={inputStyle}
+                        value={doubleBottomDowntrendMaxUpDayRatio}
+                        onChange={(e) => setDoubleBottomDowntrendMaxUpDayRatio(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "下跌最小线性拟合度" : "Downtrend Min R-Squared"}</label>
+                      <input
+                        type="number"
+                        min={0.001}
+                        max={1}
+                        step="any"
+                        style={inputStyle}
+                        value={doubleBottomDowntrendMinRSquared}
+                        onChange={(e) => setDoubleBottomDowntrendMinRSquared(Number(e.target.value))}
+                      />
+                    </div>
+                  </div>
                 </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "最低下跌幅度" : "Min Downtrend Drop"}</label>
-                  <input
-                    type="number"
-                    min={0.01}
-                    max={1}
-                    step="any"
-                    style={inputStyle}
-                    value={doubleBottomDowntrendMinDropPct}
-                    onChange={(e) => setDoubleBottomDowntrendMinDropPct(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "下跌上涨天数占比上限" : "Downtrend Max Up-Day Ratio"}</label>
-                  <input
-                    type="number"
-                    min={0.001}
-                    max={1}
-                    step="any"
-                    style={inputStyle}
-                    value={doubleBottomDowntrendMaxUpDayRatio}
-                    onChange={(e) => setDoubleBottomDowntrendMaxUpDayRatio(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "下跌最小线性拟合度" : "Downtrend Min R-Squared"}</label>
-                  <input
-                    type="number"
-                    min={0.001}
-                    max={1}
-                    step="any"
-                    style={inputStyle}
-                    value={doubleBottomDowntrendMinRSquared}
-                    onChange={(e) => setDoubleBottomDowntrendMinRSquared(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "双底最小间距" : "Min Bottom Spacing"}</label>
-                  <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    style={inputStyle}
-                    value={minBottomSpacing}
-                    onChange={(e) => setMinBottomSpacing(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "双底最大间距" : "Max Bottom Spacing"}</label>
-                  <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    style={inputStyle}
-                    value={maxBottomSpacing}
-                    onChange={(e) => setMaxBottomSpacing(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "左底前置 K 线数" : "Left-Bottom Bars Before"}</label>
-                  <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    style={inputStyle}
-                    value={leftBottomBeforeBars}
-                    onChange={(e) => setLeftBottomBeforeBars(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "左底后置 K 线数" : "Left-Bottom Bars After"}</label>
-                  <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    style={inputStyle}
-                    value={leftBottomAfterBars}
-                    onChange={(e) => setLeftBottomAfterBars(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "双底容差" : "Bottom Tolerance Pct"}</label>
-                  <input
-                    type="number"
-                    min={0.001}
-                    max={1}
-                    step="any"
-                    style={inputStyle}
-                    value={bottomTolerancePct}
-                    onChange={(e) => setBottomTolerancePct(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "颈线最小反弹幅度" : "Neckline Min Rebound"}</label>
-                  <input
-                    type="number"
-                    min={0.001}
-                    max={1}
-                    step="any"
-                    style={inputStyle}
-                    value={necklineMinReboundPct}
-                    onChange={(e) => setNecklineMinReboundPct(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "左底到右底上涨天数占比下限" : "Left-to-Right Up-Day Ratio Min"}</label>
-                  <input
-                    type="number"
-                    min={0.01}
-                    max={1}
-                    step="any"
-                    style={inputStyle}
-                    value={reboundUpDayRatioMin}
-                    onChange={(e) => setReboundUpDayRatioMin(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "底部缩量上限" : "Bottom Volume Max"}</label>
-                  <input
-                    type="number"
-                    min={0.1}
-                    step="any"
-                    style={inputStyle}
-                    value={secondBottomVolumeRatioMax}
-                    onChange={(e) => setSecondBottomVolumeRatioMax(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "突破放量下限" : "Breakout Volume Min"}</label>
-                  <input
-                    type="number"
-                    min={0.1}
-                    step="any"
-                    style={inputStyle}
-                    value={breakoutVolumeRatioMin}
-                    onChange={(e) => setBreakoutVolumeRatioMin(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "右底后最大等待突破 K 线数" : "Max Bars To Break After Right Bottom"}</label>
-                  <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    style={inputStyle}
-                    value={maxBreakoutBarsAfterRightBottom}
-                    onChange={(e) => setMaxBreakoutBarsAfterRightBottom(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "突破缓冲" : "Breakout Buffer Pct"}</label>
-                  <input
-                    type="number"
-                    min={0.001}
-                    max={1}
-                    step="any"
-                    style={inputStyle}
-                    value={breakoutBufferPct}
-                    onChange={(e) => setBreakoutBufferPct(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "回踩观察窗口" : "Retest Window"}</label>
-                  <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    style={inputStyle}
-                    value={doubleBottomRetestWindow}
-                    onChange={(e) => setDoubleBottomRetestWindow(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "回踩缩量上限" : "Retest Volume Ratio Max"}</label>
-                  <input
-                    type="number"
-                    min={0.1}
-                    step="any"
-                    style={inputStyle}
-                    value={doubleBottomRetestVolumeRatioMax}
-                    onChange={(e) => setDoubleBottomRetestVolumeRatioMax(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "颈线支撑容差" : "Support Tolerance Pct"}</label>
-                  <input
-                    type="number"
-                    min={0.001}
-                    max={1}
-                    step="any"
-                    style={inputStyle}
-                    value={doubleBottomSupportTolerancePct}
-                    onChange={(e) => setDoubleBottomSupportTolerancePct(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "ATR 止损倍数" : "ATR Stop Loss"}</label>
-                  <input
-                    type="number"
-                    min={0.1}
-                    step="any"
-                    style={inputStyle}
-                    value={doubleBottomStopLossAtr}
-                    onChange={(e) => setDoubleBottomStopLossAtr(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "最大亏损强平比例" : "Max Loss Exit Pct"}</label>
-                  <input
-                    type="number"
-                    min={0.001}
-                    max={1}
-                    step="any"
-                    style={inputStyle}
-                    value={doubleBottomMaxLossPct}
-                    onChange={(e) => setDoubleBottomMaxLossPct(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "ATR 止盈倍数" : "ATR Take Profit"}</label>
-                  <input
-                    type="number"
-                    min={0.1}
-                    step="any"
-                    style={inputStyle}
-                    value={doubleBottomTakeProfitAtr}
-                    onChange={(e) => setDoubleBottomTakeProfitAtr(Number(e.target.value))}
-                  />
-                </div>
-              </div>
 
-              <div style={boxStyle}>
-                <label>{isZh ? "股票池" : "Universe"}</label>
-                <input
-                  style={inputStyle}
-                  value={symbols}
-                  onChange={(e) => setSymbols(e.target.value)}
-                  placeholder={
-                    isZh
-                      ? "留空则默认绑定全部 common stock；也可以手动输入 AAPL,MSFT,NVDA"
-                      : "Leave empty to use all common stocks by default, or enter symbols like AAPL,MSFT,NVDA"
-                  }
-                />
-              </div>
-              <div style={{ color: "rgba(148, 163, 184, 0.88)", fontSize: 13, lineHeight: 1.6 }}>
-                {isZh
-                  ? "股票池留空时，会在全部 common stock 中扫描双底形态。"
-                  : "If the universe is empty, the strategy scans for double-bottom setups across all common stocks."}
-              </div>
+                <div style={groupedPanelStyle}>
+                  <div style={groupedPanelTitleStyle}>{isZh ? "形态结构" : "Pattern Structure"}</div>
+                  <p style={groupedPanelHintStyle}>
+                    {isZh
+                      ? "控制左右底之间的距离、局部低点确认方式，以及中间反弹结构。"
+                      : "Controls bottom spacing, local-minimum confirmation, and the rebound structure between the two lows."}
+                  </p>
+                  <div style={groupedGridStyle}>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "双底最小间距" : "Min Bottom Spacing"}</label>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        style={inputStyle}
+                        value={minBottomSpacing}
+                        onChange={(e) => setMinBottomSpacing(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "双底最大间距" : "Max Bottom Spacing"}</label>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        style={inputStyle}
+                        value={maxBottomSpacing}
+                        onChange={(e) => setMaxBottomSpacing(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "左底前置 K 线数" : "Left-Bottom Bars Before"}</label>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        style={inputStyle}
+                        value={leftBottomBeforeBars}
+                        onChange={(e) => setLeftBottomBeforeBars(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "左底后置 K 线数" : "Left-Bottom Bars After"}</label>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        style={inputStyle}
+                        value={leftBottomAfterBars}
+                        onChange={(e) => setLeftBottomAfterBars(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "双底容差" : "Bottom Tolerance Pct"}</label>
+                      <input
+                        type="number"
+                        min={0.001}
+                        max={1}
+                        step="any"
+                        style={inputStyle}
+                        value={bottomTolerancePct}
+                        onChange={(e) => setBottomTolerancePct(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "颈线最小反弹幅度" : "Neckline Min Rebound"}</label>
+                      <input
+                        type="number"
+                        min={0.001}
+                        max={1}
+                        step="any"
+                        style={inputStyle}
+                        value={necklineMinReboundPct}
+                        onChange={(e) => setNecklineMinReboundPct(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "左底到右底上涨天数占比下限" : "Left-to-Right Up-Day Ratio Min"}</label>
+                      <input
+                        type="number"
+                        min={0.01}
+                        max={1}
+                        step="any"
+                        style={inputStyle}
+                        value={reboundUpDayRatioMin}
+                        onChange={(e) => setReboundUpDayRatioMin(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "底部缩量上限" : "Bottom Volume Max"}</label>
+                      <input
+                        type="number"
+                        min={0.1}
+                        step="any"
+                        style={inputStyle}
+                        value={secondBottomVolumeRatioMax}
+                        onChange={(e) => setSecondBottomVolumeRatioMax(Number(e.target.value))}
+                      />
+                    </div>
+                  </div>
+                </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-                <div style={boxStyle}>
-                  <label>{isZh ? "最大持仓数" : "Max Positions"}</label>
-                  <input
-                    type="number"
-                    min={1}
-                    style={inputStyle}
-                    value={maxPositions}
-                    onChange={(e) => setMaxPositions(Number(e.target.value))}
-                  />
+                <div style={groupedPanelStyle}>
+                  <div style={groupedPanelTitleStyle}>{isZh ? "突破与回踩" : "Breakout And Retest"}</div>
+                  <p style={groupedPanelHintStyle}>
+                    {isZh
+                      ? "管理右底之后的突破等待、放量确认条件，以及突破后回踩买点。"
+                      : "Controls breakout timing after the right bottom, volume confirmation, and the post-breakout retest entry."}
+                  </p>
+                  <div style={groupedGridStyle}>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "突破放量下限" : "Breakout Volume Min"}</label>
+                      <input
+                        type="number"
+                        min={0.1}
+                        step="any"
+                        style={inputStyle}
+                        value={breakoutVolumeRatioMin}
+                        onChange={(e) => setBreakoutVolumeRatioMin(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "右底后最大等待突破 K 线数" : "Max Bars To Break After Right Bottom"}</label>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        style={inputStyle}
+                        value={maxBreakoutBarsAfterRightBottom}
+                        onChange={(e) => setMaxBreakoutBarsAfterRightBottom(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "突破缓冲" : "Breakout Buffer Pct"}</label>
+                      <input
+                        type="number"
+                        min={0.001}
+                        max={1}
+                        step="any"
+                        style={inputStyle}
+                        value={breakoutBufferPct}
+                        onChange={(e) => setBreakoutBufferPct(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "回踩观察窗口" : "Retest Window"}</label>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        style={inputStyle}
+                        value={doubleBottomRetestWindow}
+                        onChange={(e) => setDoubleBottomRetestWindow(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "回踩缩量上限" : "Retest Volume Ratio Max"}</label>
+                      <input
+                        type="number"
+                        min={0.1}
+                        step="any"
+                        style={inputStyle}
+                        value={doubleBottomRetestVolumeRatioMax}
+                        onChange={(e) => setDoubleBottomRetestVolumeRatioMax(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "颈线支撑容差" : "Support Tolerance Pct"}</label>
+                      <input
+                        type="number"
+                        min={0.001}
+                        max={1}
+                        step="any"
+                        style={inputStyle}
+                        value={doubleBottomSupportTolerancePct}
+                        onChange={(e) => setDoubleBottomSupportTolerancePct(Number(e.target.value))}
+                      />
+                    </div>
+                  </div>
                 </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "单票仓位比例" : "Position Size Pct"}</label>
-                  <input
-                    type="number"
-                    min={0.01}
-                    max={1}
-                    step="0.01"
-                    style={inputStyle}
-                    value={positionSizePct}
-                    onChange={(e) => setPositionSizePct(Number(e.target.value))}
-                  />
-                </div>
-                <div style={boxStyle}>
-                  <label>{isZh ? "调仓频率" : "Rebalance Frequency"}</label>
-                  <select
-                    style={inputStyle}
-                    value={rebalance}
-                    onChange={(e) => setRebalance(e.target.value)}
-                  >
-                    <option value="daily">daily</option>
-                    <option value="weekly">weekly</option>
-                    <option value="monthly">monthly</option>
-                  </select>
-                </div>
-              </div>
 
-              <div style={boxStyle}>
-                <label>{isZh ? "运行时机" : "Run Timing"}</label>
-                <select
-                  style={inputStyle}
-                  value={runAt}
-                  onChange={(e) => setRunAt(e.target.value)}
-                >
-                  <option value="close">close</option>
-                  <option value="open">open</option>
-                </select>
+                <div style={groupedPanelStyle}>
+                  <div style={groupedPanelTitleStyle}>{isZh ? "风险与执行" : "Risk And Execution"}</div>
+                  <p style={groupedPanelHintStyle}>
+                    {isZh
+                      ? "统一管理仓位规模、止损止盈，以及运行频率。"
+                      : "Groups position sizing, exit thresholds, and execution cadence in one place."}
+                  </p>
+                  <div style={groupedCompactGridStyle}>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "最大持仓数" : "Max Positions"}</label>
+                      <input
+                        type="number"
+                        min={1}
+                        style={inputStyle}
+                        value={maxPositions}
+                        onChange={(e) => setMaxPositions(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "单票仓位比例" : "Position Size Pct"}</label>
+                      <input
+                        type="number"
+                        min={0.01}
+                        max={1}
+                        step="0.01"
+                        style={inputStyle}
+                        value={positionSizePct}
+                        onChange={(e) => setPositionSizePct(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "ATR 止损倍数" : "ATR Stop Loss"}</label>
+                      <input
+                        type="number"
+                        min={0.1}
+                        step="any"
+                        style={inputStyle}
+                        value={doubleBottomStopLossAtr}
+                        onChange={(e) => setDoubleBottomStopLossAtr(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "最大亏损强平比例" : "Max Loss Exit Pct"}</label>
+                      <input
+                        type="number"
+                        min={0.001}
+                        max={1}
+                        step="any"
+                        style={inputStyle}
+                        value={doubleBottomMaxLossPct}
+                        onChange={(e) => setDoubleBottomMaxLossPct(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "ATR 止盈倍数" : "ATR Take Profit"}</label>
+                      <input
+                        type="number"
+                        min={0.1}
+                        step="any"
+                        style={inputStyle}
+                        value={doubleBottomTakeProfitAtr}
+                        onChange={(e) => setDoubleBottomTakeProfitAtr(Number(e.target.value))}
+                      />
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "调仓频率" : "Rebalance Frequency"}</label>
+                      <select
+                        style={inputStyle}
+                        value={rebalance}
+                        onChange={(e) => setRebalance(e.target.value)}
+                      >
+                        <option value="daily">daily</option>
+                        <option value="weekly">weekly</option>
+                        <option value="monthly">monthly</option>
+                      </select>
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "运行时机" : "Run Timing"}</label>
+                      <select
+                        style={inputStyle}
+                        value={runAt}
+                        onChange={(e) => setRunAt(e.target.value)}
+                      >
+                        <option value="close">close</option>
+                        <option value="open">open</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={groupedPanelStyle}>
+                  <div style={groupedPanelTitleStyle}>{isZh ? "股票池" : "Universe"}</div>
+                  <p style={groupedPanelHintStyle}>
+                    {isZh
+                      ? "限制双底扫描范围；留空时默认遍历全部 common stock。"
+                      : "Narrows the scan universe for double-bottom setups; leave it empty to scan all common stocks."}
+                  </p>
+                  <div style={groupedBoxStyle}>
+                    <label>{isZh ? "股票池" : "Universe"}</label>
+                    <input
+                      style={inputStyle}
+                      value={symbols}
+                      onChange={(e) => setSymbols(e.target.value)}
+                      placeholder={
+                        isZh
+                          ? "留空则默认绑定全部 common stock；也可以手动输入 AAPL,MSFT,NVDA"
+                          : "Leave empty to use all common stocks by default, or enter symbols like AAPL,MSFT,NVDA"
+                      }
+                    />
+                  </div>
+                </div>
               </div>
             </section>
           ) : (

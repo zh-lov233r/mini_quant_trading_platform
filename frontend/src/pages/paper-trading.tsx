@@ -1,5 +1,6 @@
 import type { CSSProperties, FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 
 import {
   createPaperAccount,
@@ -107,6 +108,7 @@ export default function PaperTradingPage() {
   const [executionError, setExecutionError] = useState<string | null>(null);
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
   const [allocationDrafts, setAllocationDrafts] = useState<Record<string, string>>({});
+  const [autoRunDrafts, setAutoRunDrafts] = useState<Record<string, boolean>>({});
   const [allocationErrors, setAllocationErrors] = useState<Record<string, string>>({});
   const [savingPortfolioId, setSavingPortfolioId] = useState<string | null>(null);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
@@ -624,6 +626,30 @@ export default function PaperTradingPage() {
     }));
   };
 
+  const getAutoRunDraftValue = useCallback(
+    (portfolioId: string, strategyId: string, autoRunEnabled: boolean) => {
+      const key = getAllocationDraftKey(portfolioId, strategyId);
+      return autoRunDrafts[key] ?? autoRunEnabled;
+    },
+    [autoRunDrafts, getAllocationDraftKey]
+  );
+
+  const handleAutoRunDraftChange = (
+    portfolioId: string,
+    strategyId: string,
+    value: boolean
+  ) => {
+    const key = getAllocationDraftKey(portfolioId, strategyId);
+    setAutoRunDrafts((current) => ({
+      ...current,
+      [key]: value,
+    }));
+    setAllocationErrors((current) => ({
+      ...current,
+      [portfolioId]: "",
+    }));
+  };
+
   const getPortfolioDraftTotal = useCallback(
     (portfolio: StrategyPortfolioWorkspaceOut) =>
       portfolio.strategies.reduce((sum, item) => {
@@ -632,6 +658,17 @@ export default function PaperTradingPage() {
         return sum + (Number.isFinite(parsed) ? parsed : 0);
       }, 0),
     [getAllocationDraftValue]
+  );
+
+  const getPortfolioAutoRunEnabledCount = useCallback(
+    (portfolio: StrategyPortfolioWorkspaceOut) =>
+      portfolio.strategies.reduce(
+        (count, item) =>
+          count +
+          (getAutoRunDraftValue(portfolio.id, item.strategy_id, item.auto_run_enabled) ? 1 : 0),
+        0
+      ),
+    [getAutoRunDraftValue]
   );
 
   const handleSavePortfolioAllocations = async (
@@ -674,12 +711,24 @@ export default function PaperTradingPage() {
           allocation_pct: parsed / 100,
           capital_base: item.capital_base ?? null,
           allow_fractional: item.allow_fractional,
+          auto_run_enabled: getAutoRunDraftValue(
+            portfolio.id,
+            item.strategy_id,
+            item.auto_run_enabled
+          ),
           notes: item.notes ?? null,
           status: item.allocation_status || "active",
         });
       }
 
       setAllocationDrafts((current) => {
+        const next = { ...current };
+        for (const item of portfolio.strategies) {
+          delete next[getAllocationDraftKey(portfolio.id, item.strategy_id)];
+        }
+        return next;
+      });
+      setAutoRunDrafts((current) => {
         const next = { ...current };
         for (const item of portfolio.strategies) {
           delete next[getAllocationDraftKey(portfolio.id, item.strategy_id)];
@@ -1435,6 +1484,21 @@ export default function PaperTradingPage() {
                             </p>
                           </div>
                           <div style={buttonRowStyle}>
+                            <Link
+                              href={{
+                                pathname: "/paper-trading/portfolios/[portfolioId]",
+                                query: {
+                                  portfolioId: portfolio.id,
+                                  accountId: portfolio.paper_account_id,
+                                },
+                              }}
+                              style={{
+                                ...smallSecondaryButtonStyle,
+                                textDecoration: "none",
+                              }}
+                            >
+                              {txt("查看详情", "View Details")}
+                            </Link>
                             <button
                               type="button"
                               onClick={() => {
@@ -1468,6 +1532,12 @@ export default function PaperTradingPage() {
                           ) : null}
                           <Badge tone="info">{formatPercent(portfolio.active_allocation_pct_total, 0)}</Badge>
                           <Badge>{txt(`${portfolio.active_allocation_count} 条 active allocations`, `${portfolio.active_allocation_count} active allocations`)}</Badge>
+                          <Badge tone="info">
+                            {txt(
+                              `${getPortfolioAutoRunEnabledCount(portfolio)} 条日调度开启`,
+                              `${getPortfolioAutoRunEnabledCount(portfolio)} daily auto-run enabled`
+                            )}
+                          </Badge>
                         </div>
                         <div style={detailGridStyle}>
                           <DetailItem
@@ -1511,6 +1581,12 @@ export default function PaperTradingPage() {
                                   {formatNumber(getPortfolioDraftTotal(portfolio), 2)}%
                                 </strong>
                               </div>
+                              <div style={mutedTextStyle}>
+                                {txt(
+                                  "日调度开关只影响每日 scheduler，不影响手动 Run Single / Run Multi。",
+                                  "Daily auto-run only affects the scheduler, not manual Run Single / Run Multi."
+                                )}
+                              </div>
                               <button
                                 type="button"
                                 onClick={() => void handleSavePortfolioAllocations(portfolio)}
@@ -1530,30 +1606,57 @@ export default function PaperTradingPage() {
                                 <div style={{ flex: "1 1 220px" }}>
                                   <div style={strategyNameStyle}>{item.strategy_name}</div>
                                   <div style={mutedTextStyle}>
-                                    {item.strategy_type} · {item.allocation_status}
-                                  </div>
-                                </div>
-                                <div style={allocationEditorStyle}>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    max="100"
-                                    step="0.01"
-                                    value={getAllocationDraftValue(
+                                    {item.strategy_type} · {item.allocation_status} ·{" "}
+                                    {getAutoRunDraftValue(
                                       portfolio.id,
                                       item.strategy_id,
-                                      item.allocation_pct
-                                    )}
-                                    onChange={(event) =>
-                                      handleAllocationDraftChange(
+                                      item.auto_run_enabled
+                                    )
+                                      ? txt("日调度开启", "Daily Auto-Run On")
+                                      : txt("日调度关闭", "Daily Auto-Run Off")}
+                                  </div>
+                                </div>
+                                <div style={strategyControlsStyle}>
+                                  <label style={autoRunToggleStyle}>
+                                    <input
+                                      type="checkbox"
+                                      checked={getAutoRunDraftValue(
                                         portfolio.id,
                                         item.strategy_id,
-                                        event.target.value
-                                      )
-                                    }
-                                    style={allocationInputStyle}
-                                  />
-                                  <span style={allocationSuffixStyle}>%</span>
+                                        item.auto_run_enabled
+                                      )}
+                                      onChange={(event) =>
+                                        handleAutoRunDraftChange(
+                                          portfolio.id,
+                                          item.strategy_id,
+                                          event.target.checked
+                                        )
+                                      }
+                                    />
+                                    <span>{txt("每日自动跑", "Daily Auto-Run")}</span>
+                                  </label>
+                                  <div style={allocationEditorStyle}>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      max="100"
+                                      step="0.01"
+                                      value={getAllocationDraftValue(
+                                        portfolio.id,
+                                        item.strategy_id,
+                                        item.allocation_pct
+                                      )}
+                                      onChange={(event) =>
+                                        handleAllocationDraftChange(
+                                          portfolio.id,
+                                          item.strategy_id,
+                                          event.target.value
+                                        )
+                                      }
+                                      style={allocationInputStyle}
+                                    />
+                                    <span style={allocationSuffixStyle}>%</span>
+                                  </div>
                                 </div>
                               </div>
                             ))}
@@ -2134,6 +2237,7 @@ const strategyRowStyle: CSSProperties = {
   justifyContent: "space-between",
   gap: 10,
   alignItems: "center",
+  flexWrap: "wrap",
   padding: 12,
   borderRadius: 16,
   background: "rgba(15, 23, 42, 0.62)",
@@ -2147,11 +2251,29 @@ const strategyNameStyle: CSSProperties = {
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
 
+const strategyControlsStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  flexWrap: "wrap",
+  justifyContent: "flex-end",
+};
+
 const allocationEditorStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 8,
   flex: "0 0 auto",
+};
+
+const autoRunToggleStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  color: "#cbd5e1",
+  fontSize: 13,
+  fontWeight: 600,
+  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
 
 const allocationInputStyle: CSSProperties = {

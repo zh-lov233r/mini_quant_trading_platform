@@ -16,7 +16,7 @@ from src.api.paper_trading import router as paper_trading_router
 from src.api.stock_baskets import router as stock_baskets_router
 from src.api.strategy_allocations import router as strategy_allocations_router
 from src.api.strategies import router as strategies_router
-from src.core.db import SessionLocal, ensure_extensions
+from src.core.db import SessionLocal, ensure_extensions, ensure_strategy_allocation_schema
 from src.services.paper_trading_scheduler import PaperTradingDailyScheduler
 from src.services.stock_basket_service import ensure_default_common_stock_basket
 
@@ -64,6 +64,7 @@ app.include_router(paper_trading_router)
 @app.on_event("startup")
 async def on_startup():
     ensure_extensions()
+    ensure_strategy_allocation_schema()
     db = SessionLocal()
     try:
         ensure_default_common_stock_basket(db)

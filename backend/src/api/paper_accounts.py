@@ -100,6 +100,7 @@ class PortfolioStrategyOverviewOut(BaseModel):
     allocation_pct: float
     capital_base: float | None = None
     allow_fractional: bool
+    auto_run_enabled: bool
     allocation_status: str
     notes: str | None = None
     latest_run_id: str | None = None
@@ -462,6 +463,7 @@ def create_strategy_portfolio(payload: StrategyPortfolioCreate, db: Session = De
                 allocation_pct=equal_weight,
                 capital_base=None,
                 allow_fractional=1,
+                auto_run_enabled=True,
                 notes="Auto-created when strategy portfolio was initialized",
                 status="active",
             )

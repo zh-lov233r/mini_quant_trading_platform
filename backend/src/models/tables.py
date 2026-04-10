@@ -4,6 +4,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import (
+    Boolean,
     JSON,
     CheckConstraint,
     Column,
@@ -184,6 +185,7 @@ class StrategyAllocation(Base):
     allocation_pct = Column(Numeric(12, 8), nullable=False, default=0)
     capital_base = Column(Numeric(20, 8))
     allow_fractional = Column(Integer, nullable=False, default=1)
+    auto_run_enabled = Column(Boolean, nullable=False, default=True)
     notes = Column(Text)
     status = Column(String(16), nullable=False, default="active")
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

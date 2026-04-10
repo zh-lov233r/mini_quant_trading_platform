@@ -21,6 +21,7 @@ class AllocationSummary:
     allocation_pct: float
     capital_base: float | None
     allow_fractional: bool
+    auto_run_enabled: bool
     status: str
 
 
@@ -78,16 +79,20 @@ def list_allocated_strategies(
     db: Session,
     *,
     portfolio_name: str | None = None,
+    auto_run_enabled: bool | None = None,
 ) -> list[tuple[Strategy, StrategyAllocation]]:
     normalized_portfolio = normalize_portfolio_name(portfolio_name)
-    rows = db.execute(
+    stmt = (
         select(Strategy, StrategyAllocation)
         .join(StrategyAllocation, StrategyAllocation.strategy_id == Strategy.id)
         .where(Strategy.status == "active")
         .where(StrategyAllocation.status == "active")
         .where(StrategyAllocation.portfolio_name == normalized_portfolio)
         .order_by(StrategyAllocation.created_at.asc(), Strategy.created_at.asc())
-    ).all()
+    )
+    if auto_run_enabled is not None:
+        stmt = stmt.where(StrategyAllocation.auto_run_enabled == auto_run_enabled)
+    rows = db.execute(stmt).all()
     return [(strategy, allocation) for strategy, allocation in rows]
 
 
@@ -120,5 +125,6 @@ def to_allocation_summary(
             else None
         ),
         allow_fractional=bool(allocation.allow_fractional),
+        auto_run_enabled=bool(allocation.auto_run_enabled),
         status=allocation.status,
     )

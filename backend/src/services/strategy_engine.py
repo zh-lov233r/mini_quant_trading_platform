@@ -1106,7 +1106,7 @@ def _mean_reversion_handler(
 
 # Evaluate island-reversal setups using recent OHLCV history and position-aware exit logic.
 # Input: runtime strategy payload plus the symbol -> snapshot map with recent_bars populated.
-# Output: BUY/SELL SignalEvent objects for breakout, retest, or exit conditions.
+# Output: BUY/SELL SignalEvent objects for retest-only entries or exit conditions.
 def _island_reversal_handler(
     runtime_strategy: RuntimeStrategy,
     market_data_by_symbol: MarketDataBySymbol,
@@ -1552,7 +1552,7 @@ def _double_bottom_backtest_handler(
 
 # Evaluate conservative double-bottom setups using recent OHLCV history and position-aware exits.
 # Input: runtime strategy payload plus the symbol -> snapshot map with recent_bars populated.
-# Output: BUY/SELL SignalEvent objects for breakout, retest, or exit conditions.
+# Output: BUY/SELL SignalEvent objects for retest-only entries or exit conditions.
 def _double_bottom_handler(
     runtime_strategy: RuntimeStrategy,
     market_data_by_symbol: MarketDataBySymbol,
@@ -2409,21 +2409,19 @@ def _match_double_bottom_breakout_bar(
     breakout_volume_ratio_min: float,
 ) -> tuple[float, float, float] | None:
     breakout_threshold = neckline_price * (1.0 + breakout_buffer_pct)
+    high = _safe_float_or_none(bar.get("high"))
     close = _safe_float_or_none(bar.get("close"))
-    open_price = _safe_float_or_none(bar.get("open"))
     volume = _safe_float_or_none(bar.get("volume"))
     avg_volume = _safe_float_or_none(bar.get("volume_sma_20"))
     if (
-        close is None
-        or open_price is None
+        high is None
+        or close is None
         or volume is None
         or avg_volume is None
         or avg_volume <= 0
     ):
         return None
-    if close <= breakout_threshold:
-        return None
-    if close <= open_price:
+    if high <= breakout_threshold:
         return None
     if volume / avg_volume < breakout_volume_ratio_min:
         return None
@@ -2482,9 +2480,6 @@ def _resolve_double_bottom_action(
             risk_cfg=risk_cfg,
             avg_entry_price=avg_entry_price,
         )
-
-    if current_idx == pattern.breakout_idx:
-        return "BUY", "confirmed the double bottom with a volume-backed neckline breakout", "breakout"
 
     if current_idx <= pattern.breakout_idx:
         return None, None, None

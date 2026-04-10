@@ -202,7 +202,7 @@ def build_strategy_catalog() -> list[Dict[str, Any]]:
         {
             "strategy_type": "double_bottom",
             "label": "Double Bottom",
-            "description": "保守版双底形态策略，确认长期下跌后的双底、放量突破颈线与缩量回踩。",
+            "description": "保守版双底形态策略，确认长期下跌后的双底，等待放量突破后的缩量回踩再买入。",
             "engine_ready": True,
             "defaults": copy.deepcopy(DOUBLE_BOTTOM_DEFAULTS),
         },

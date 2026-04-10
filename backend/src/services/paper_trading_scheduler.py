@@ -107,25 +107,29 @@ class PaperTradingDailyScheduler:
 
     def _poll_once(self) -> None:
         now_ny = datetime.now(NEW_YORK)
-        trade_date = now_ny.date()
-        scheduled_at = datetime.combine(trade_date, self.config.run_time_ny, tzinfo=NEW_YORK)
-        if now_ny < scheduled_at:
+        latest_ready_trade_date = _latest_ready_daily_features_trade_date(now_ny.date())
+        if latest_ready_trade_date is None:
+            if self._last_no_data_log_date != now_ny.date():
+                log.info(
+                    "Daily scheduler is waiting for complete daily_features coverage on or before %s before running paper trading portfolios",
+                    now_ny.date().isoformat(),
+                )
+                self._last_no_data_log_date = now_ny.date()
             return
 
-        if not _has_daily_features_for_date(trade_date):
-            if self._last_no_data_log_date != trade_date:
-                log.info(
-                    "Daily scheduler is waiting for daily_features on %s before running paper trading portfolios",
-                    trade_date.isoformat(),
-                )
-                self._last_no_data_log_date = trade_date
+        trade_date = latest_ready_trade_date
+        scheduled_at = datetime.combine(trade_date, self.config.run_time_ny, tzinfo=NEW_YORK)
+        if now_ny < scheduled_at:
             return
 
         self._last_no_data_log_date = None
         targets = _load_schedulable_portfolios()
         if not targets:
             if self._last_summary_log_date != trade_date:
-                log.info("Daily scheduler found no active portfolios with active allocations for %s", trade_date.isoformat())
+                log.info(
+                    "Daily scheduler found no active portfolios with auto-run-enabled allocations for %s",
+                    trade_date.isoformat(),
+                )
                 self._last_summary_log_date = trade_date
             return
 
@@ -146,6 +150,7 @@ class PaperTradingDailyScheduler:
                         portfolio_name=target.portfolio_name,
                         submit_orders=self.config.submit_orders,
                         continue_on_error=self.config.continue_on_error,
+                        auto_run_only=True,
                         trigger=PAPER_TRADING_TRIGGER_SCHEDULER,
                     )
                 completed += 1
@@ -190,7 +195,11 @@ def _load_schedulable_portfolios() -> list[SchedulablePortfolio]:
 
         targets: list[SchedulablePortfolio] = []
         for portfolio, account in rows:
-            allocated = list_allocated_strategies(db, portfolio_name=portfolio.name)
+            allocated = list_allocated_strategies(
+                db,
+                portfolio_name=portfolio.name,
+                auto_run_enabled=True,
+            )
             if not allocated:
                 continue
             targets.append(
@@ -203,13 +212,28 @@ def _load_schedulable_portfolios() -> list[SchedulablePortfolio]:
         return targets
 
 
-def _has_daily_features_for_date(trade_date: date) -> bool:
+def _latest_ready_daily_features_trade_date(max_trade_date: date) -> date | None:
     with SessionLocal() as db:
         row = db.execute(
-            text("SELECT 1 FROM daily_features WHERE dt_ny = :trade_date LIMIT 1"),
-            {"trade_date": trade_date},
+            text(
+                """
+                SELECT MAX(ready_dates.trade_date)
+                FROM (
+                    SELECT e.dt_ny AS trade_date
+                    FROM eod_bars e
+                    LEFT JOIN daily_features f
+                      ON f.instrument_id = e.instrument_id
+                     AND f.dt_ny = e.dt_ny
+                    WHERE e.dt_ny <= :max_trade_date
+                    GROUP BY e.dt_ny
+                    HAVING COUNT(*) > 0
+                       AND COUNT(f.instrument_id) = COUNT(*)
+                ) AS ready_dates
+                """
+            ),
+            {"max_trade_date": max_trade_date},
         ).scalar()
-    return row is not None
+    return row
 
 
 def _has_scheduler_run_for_trade_date(portfolio_name: str, trade_date: date) -> bool:

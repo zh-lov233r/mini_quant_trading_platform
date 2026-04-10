@@ -26,6 +26,7 @@ class StrategyAllocationUpsert(BaseModel):
     allocation_pct: float = Field(..., ge=0, le=1, description="该策略占组合的虚拟资金比例")
     capital_base: float | None = Field(default=None, ge=0, description="可选固定虚拟本金")
     allow_fractional: bool = Field(default=True)
+    auto_run_enabled: bool = Field(default=True, description="是否参与每日自动调度")
     notes: str | None = Field(default=None, max_length=500)
     status: str = Field(default="active")
 
@@ -40,6 +41,7 @@ class StrategyAllocationOut(BaseModel):
     allocation_pct: float
     capital_base: float | None = None
     allow_fractional: bool
+    auto_run_enabled: bool
     notes: str | None = None
     status: str
     created_at: datetime | None = None
@@ -69,6 +71,7 @@ def _to_allocation_out(
         allocation_pct=float(allocation.allocation_pct or 0),
         capital_base=float(allocation.capital_base) if allocation.capital_base is not None else None,
         allow_fractional=bool(allocation.allow_fractional),
+        auto_run_enabled=bool(allocation.auto_run_enabled),
         notes=allocation.notes,
         status=allocation.status,
         created_at=allocation.created_at,
@@ -122,6 +125,7 @@ def upsert_strategy_allocation(payload: StrategyAllocationUpsert, db: Session = 
             allocation_pct=payload.allocation_pct,
             capital_base=payload.capital_base,
             allow_fractional=1 if payload.allow_fractional else 0,
+            auto_run_enabled=payload.auto_run_enabled,
             notes=(payload.notes or "").strip() or None,
             status=payload.status,
         )
@@ -130,6 +134,7 @@ def upsert_strategy_allocation(payload: StrategyAllocationUpsert, db: Session = 
         existing.allocation_pct = payload.allocation_pct
         existing.capital_base = payload.capital_base
         existing.allow_fractional = 1 if payload.allow_fractional else 0
+        existing.auto_run_enabled = payload.auto_run_enabled
         existing.notes = (payload.notes or "").strip() or None
         existing.status = payload.status
         allocation = existing

@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os
 from typing import Generator
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, Session
 
 
@@ -69,6 +69,32 @@ def ensure_extensions() -> None:
     except Exception:
         # 如果非 Postgres 或无权限，静默跳过；也可改为记录日志
         pass
+
+
+def ensure_strategy_allocation_schema() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("strategy_allocations"):
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("strategy_allocations")}
+    with engine.begin() as conn:
+        if "auto_run_enabled" not in existing_columns:
+            conn.execute(
+                text(
+                    """
+                    ALTER TABLE strategy_allocations
+                    ADD COLUMN auto_run_enabled BOOLEAN NOT NULL DEFAULT TRUE
+                    """
+                )
+            )
+        conn.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS idx_strategy_allocations_portfolio_status_auto_run
+                ON strategy_allocations (portfolio_name, status, auto_run_enabled)
+                """
+            )
+        )
 
 
 # === 可选：开发期一键建表（生产用 Alembic 迁移） ===

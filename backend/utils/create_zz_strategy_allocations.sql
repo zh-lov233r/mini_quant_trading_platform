@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS strategy_allocations (
     allocation_pct NUMERIC(12,8) NOT NULL DEFAULT 0,
     capital_base NUMERIC(20,8),
     allow_fractional INTEGER NOT NULL DEFAULT 1,
+    auto_run_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     notes TEXT,
     status VARCHAR(16) NOT NULL DEFAULT 'active',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -24,3 +25,6 @@ CREATE INDEX IF NOT EXISTS idx_strategy_allocations_portfolio_status
 
 CREATE INDEX IF NOT EXISTS idx_strategy_allocations_strategy_status
     ON strategy_allocations (strategy_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_allocations_portfolio_status_auto_run
+    ON strategy_allocations (portfolio_name, status, auto_run_enabled);

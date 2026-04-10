@@ -379,11 +379,20 @@ def run_multi_strategy_paper_trading(
     portfolio_name: str | None = None,
     submit_orders: bool = True,
     continue_on_error: bool = False,
+    auto_run_only: bool = False,
     trigger: str = PAPER_TRADING_TRIGGER_MANUAL,
 ) -> MultiStrategyPaperTradingResult:
     normalized_portfolio = normalize_portfolio_name(portfolio_name)
-    allocated = list_allocated_strategies(db, portfolio_name=normalized_portfolio)
+    allocated = list_allocated_strategies(
+        db,
+        portfolio_name=normalized_portfolio,
+        auto_run_enabled=True if auto_run_only else None,
+    )
     if not allocated:
+        if auto_run_only:
+            raise ValueError(
+                f"no active auto-run strategy allocations found for portfolio '{normalized_portfolio}'"
+            )
         raise ValueError(f"no active strategy allocations found for portfolio '{normalized_portfolio}'")
 
     validate_portfolio_allocations([allocation for _, allocation in allocated])
