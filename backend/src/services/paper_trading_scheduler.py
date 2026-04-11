@@ -1,5 +1,20 @@
 from __future__ import annotations
 
+"""Daily scheduler for portfolio-level paper trading runs.
+
+This module is responsible for turning the paper-trading service into a
+background daily job:
+
+1. Wait until feature data for a trade date is fully materialized.
+2. Wait until the configured New York run time has passed.
+3. Find active portfolios that opted into auto-run.
+4. Trigger one multi-strategy paper-trading run per eligible portfolio.
+
+The scheduler is intentionally conservative. It will not run if the feature
+pipeline is only partially loaded, and it will skip a portfolio that already
+has a scheduler-triggered run recorded for the same trade date.
+"""
+
 import asyncio
 import contextlib
 import logging
@@ -25,6 +40,13 @@ NEW_YORK = ZoneInfo("America/New_York")
 
 @dataclass(slots=True)
 class PaperTradingSchedulerConfig:
+    """Runtime configuration for the background scheduler.
+
+    These values are typically loaded from environment variables at process
+    startup so operators can control when the scheduler runs and whether it
+    should place real paper orders or remain in dry-run mode.
+    """
+
     enabled: bool
     run_time_ny: time
     poll_seconds: float
@@ -33,6 +55,7 @@ class PaperTradingSchedulerConfig:
 
     @classmethod
     def from_env(cls) -> "PaperTradingSchedulerConfig":
+        """Build scheduler config from environment variables."""
         return cls(
             enabled=_env_bool("PAPER_TRADING_SCHEDULER_ENABLED", default=True),
             run_time_ny=_env_time("PAPER_TRADING_SCHEDULER_RUN_TIME_NY", default=time(hour=23, minute=30)),
@@ -44,13 +67,22 @@ class PaperTradingSchedulerConfig:
 
 @dataclass(slots=True)
 class SchedulablePortfolio:
+    """Minimal payload describing a portfolio the scheduler can run."""
+
     account_id: str
     account_name: str
     portfolio_name: str
 
 
 class PaperTradingDailyScheduler:
+    """Background loop that runs eligible paper-trading portfolios once per day.
+
+    The scheduler polls on a short interval, but it only performs real work when
+    all gating conditions are satisfied for a given trade date.
+    """
+
     def __init__(self, config: PaperTradingSchedulerConfig | None = None) -> None:
+        """Initialize scheduler state and remember the effective configuration."""
         self.config = config or PaperTradingSchedulerConfig.from_env()
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
@@ -58,6 +90,7 @@ class PaperTradingDailyScheduler:
         self._last_summary_log_date: date | None = None
 
     async def start(self) -> None:
+        """Start the background polling task if the scheduler is enabled."""
         if not self.config.enabled:
             log.info("Paper trading daily scheduler disabled")
             return
@@ -78,6 +111,7 @@ class PaperTradingDailyScheduler:
         )
 
     async def stop(self) -> None:
+        """Stop the polling task and wait briefly for it to exit cleanly."""
         task = self._task
         if task is None:
             return
@@ -94,6 +128,11 @@ class PaperTradingDailyScheduler:
             log.info("Paper trading daily scheduler stopped")
 
     async def _run_loop(self) -> None:
+        """Poll scheduler state until asked to stop.
+
+        The heavy work is delegated to `_poll_once()` on a worker thread so the
+        async app event loop stays responsive.
+        """
         while not self._stop_event.is_set():
             try:
                 await asyncio.to_thread(self._poll_once)
@@ -106,6 +145,13 @@ class PaperTradingDailyScheduler:
                 continue
 
     def _poll_once(self) -> None:
+        """Evaluate the current scheduler state and trigger due portfolio runs.
+
+        This method is intentionally idempotent across repeated polls:
+        - it waits for a fully ready trade date
+        - it waits until the configured run time
+        - it skips portfolios already run by the scheduler for that trade date
+        """
         now_ny = datetime.now(NEW_YORK)
         latest_ready_trade_date = _latest_ready_daily_features_trade_date(now_ny.date())
         if latest_ready_trade_date is None:
@@ -118,6 +164,9 @@ class PaperTradingDailyScheduler:
             return
 
         trade_date = latest_ready_trade_date
+        # Use the trade date's scheduled wall-clock time in New York so a
+        # late-arriving feature load can still trigger the missed date once the
+        # configured run time has already passed.
         scheduled_at = datetime.combine(trade_date, self.config.run_time_ny, tzinfo=NEW_YORK)
         if now_ny < scheduled_at:
             return
@@ -184,6 +233,12 @@ class PaperTradingDailyScheduler:
 
 
 def _load_schedulable_portfolios() -> list[SchedulablePortfolio]:
+    """Return active portfolios that have at least one auto-run allocation.
+
+    The scheduler operates at the portfolio level, so this helper filters out
+    archived accounts, archived portfolios, and portfolios whose strategies have
+    not opted into automatic daily execution.
+    """
     with SessionLocal() as db:
         rows = db.execute(
             select(StrategyPortfolio, PaperTradingAccount)
@@ -213,6 +268,12 @@ def _load_schedulable_portfolios() -> list[SchedulablePortfolio]:
 
 
 def _latest_ready_daily_features_trade_date(max_trade_date: date) -> date | None:
+    """Find the newest trade date whose feature coverage is complete.
+
+    A date is considered ready only when every `eod_bars` row for that date has
+    a matching `daily_features` row. This prevents the scheduler from running on
+    partially populated feature snapshots.
+    """
     with SessionLocal() as db:
         row = db.execute(
             text(
@@ -237,6 +298,11 @@ def _latest_ready_daily_features_trade_date(max_trade_date: date) -> date | None
 
 
 def _has_scheduler_run_for_trade_date(portfolio_name: str, trade_date: date) -> bool:
+    """Check whether a portfolio already has a scheduler-triggered run that day.
+
+    This dedupes repeated polls so the scheduler can wake up many times without
+    submitting duplicate orders for the same portfolio and trade date.
+    """
     normalized_portfolio = normalize_portfolio_name(portfolio_name)
     with SessionLocal() as db:
         runs = db.execute(
@@ -259,6 +325,7 @@ def _has_scheduler_run_for_trade_date(portfolio_name: str, trade_date: date) -> 
 
 
 def _env_bool(name: str, *, default: bool) -> bool:
+    """Parse a boolean environment variable with a safe fallback."""
     value = os.getenv(name, "").strip().lower()
     if not value:
         return default
@@ -266,6 +333,7 @@ def _env_bool(name: str, *, default: bool) -> bool:
 
 
 def _env_float(name: str, *, default: float, minimum: float) -> float:
+    """Parse a positive-ish float environment variable with validation."""
     value = os.getenv(name, "").strip()
     if not value:
         return default
@@ -281,6 +349,7 @@ def _env_float(name: str, *, default: float, minimum: float) -> float:
 
 
 def _env_time(name: str, *, default: time) -> time:
+    """Parse an `HH:MM` or `HH:MM:SS` environment variable into a `time`."""
     value = os.getenv(name, "").strip()
     if not value:
         return default
