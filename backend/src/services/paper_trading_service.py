@@ -41,7 +41,15 @@ from src.services.strategy_engine import (
 from src.services.strategy_registry import build_runtime_payload
 
 
-PAPER_TRANSACTION_SOURCES = {"alpaca_paper", "alpaca_live", "manual_virtual"}
+PAPER_BROKER_ORDER_SOURCE = "alpaca_paper"
+PAPER_BROKER_TERMINAL_STATUSES = {
+    "canceled",
+    "cancelled",
+    "expired",
+    "filled",
+    "rejected",
+}
+PAPER_TRANSACTION_SOURCES = {PAPER_BROKER_ORDER_SOURCE, "alpaca_live", "manual_virtual"}
 PAPER_TRADING_TRIGGER_MANUAL = "manual"
 PAPER_TRADING_TRIGGER_SCHEDULER = "scheduler"
 
@@ -92,6 +100,7 @@ class PaperTradingOrderOutcome:
     client_order_id: str | None = None
     order_id: str | None = None
     qty: float | None = None
+    filled_qty: float | None = None
     reference_price: float | None = None
     execution_price: float | None = None
     broker_status: str | None = None
@@ -207,6 +216,14 @@ def run_paper_trading(
             },
         }
         db.flush()
+
+        if submit_orders:
+            _sync_strategy_pending_orders(
+                db,
+                strategy_id=strategy.id,
+                portfolio_name=allocation_cfg.portfolio_name,
+                client=client,
+            )
 
         broker_positions_before = client.list_positions()
         open_orders = client.list_orders(status="open") if submit_orders else []
@@ -334,6 +351,7 @@ def run_paper_trading(
                     "client_order_id": item.client_order_id,
                     "order_id": item.order_id,
                     "qty": item.qty,
+                    "filled_qty": item.filled_qty,
                     "reference_price": item.reference_price,
                     "execution_price": item.execution_price,
                     "broker_status": item.broker_status,
@@ -555,6 +573,8 @@ def _rebuild_virtual_subportfolio_state(
             continue
         if txn_portfolio is None and allocation_cfg.portfolio_name != DEFAULT_PORTFOLIO_NAME:
             continue
+        if not _transaction_represents_virtual_fill(txn):
+            continue
         _apply_virtual_fill(
             state,
             symbol=txn.symbol,
@@ -670,22 +690,23 @@ def _execute_paper_orders(
             )
             outcomes.append(outcome)
             if outcome.status == "submitted":
-                fill_qty = outcome.qty or current_qty
+                fill_qty = outcome.filled_qty or 0.0
                 fill_price = outcome.execution_price or reference_price
-                projected_broker_cash += fill_qty * fill_price
-                _apply_virtual_fill(
-                    projected_sleeve,
-                    symbol=symbol,
-                    side="SELL",
-                    qty=fill_qty,
-                    price=fill_price,
-                    fee=0.0,
-                    trade_date=trade_date,
-                )
-                projected_sleeve = _mark_virtual_subportfolio_to_market(
-                    projected_sleeve,
-                    {symbol: fill_price},
-                )
+                if fill_qty > 0 and fill_price > 0:
+                    projected_broker_cash += fill_qty * fill_price
+                    _apply_virtual_fill(
+                        projected_sleeve,
+                        symbol=symbol,
+                        side="SELL",
+                        qty=fill_qty,
+                        price=fill_price,
+                        fee=0.0,
+                        trade_date=trade_date,
+                    )
+                    projected_sleeve = _mark_virtual_subportfolio_to_market(
+                        projected_sleeve,
+                        {symbol: fill_price},
+                    )
                 open_order_keys.add(open_order_key)
             continue
 
@@ -753,23 +774,24 @@ def _execute_paper_orders(
         )
         outcomes.append(outcome)
         if outcome.status == "submitted":
-            fill_qty = outcome.qty or qty
+            fill_qty = outcome.filled_qty or 0.0
             fill_price = outcome.execution_price or reference_price
-            projected_broker_cash = max(projected_broker_cash - (fill_qty * fill_price), 0.0)
-            _apply_virtual_fill(
-                projected_sleeve,
-                symbol=symbol,
-                side="BUY",
-                qty=fill_qty,
-                price=fill_price,
-                fee=0.0,
-                trade_date=trade_date,
-                entry_signal_features=event.metadata if isinstance(event.metadata, dict) else None,
-            )
-            projected_sleeve = _mark_virtual_subportfolio_to_market(
-                projected_sleeve,
-                {symbol: fill_price},
-            )
+            if fill_qty > 0 and fill_price > 0:
+                projected_broker_cash = max(projected_broker_cash - (fill_qty * fill_price), 0.0)
+                _apply_virtual_fill(
+                    projected_sleeve,
+                    symbol=symbol,
+                    side="BUY",
+                    qty=fill_qty,
+                    price=fill_price,
+                    fee=0.0,
+                    trade_date=trade_date,
+                    entry_signal_features=event.metadata if isinstance(event.metadata, dict) else None,
+                )
+                projected_sleeve = _mark_virtual_subportfolio_to_market(
+                    projected_sleeve,
+                    {symbol: fill_price},
+                )
             open_order_keys.add(open_order_key)
 
     return outcomes, projected_sleeve, projected_broker_cash
@@ -821,45 +843,31 @@ def _submit_paper_order(
             reference_price=reference_price,
         )
 
-    broker_qty = _to_float(order.get("filled_qty")) or _to_float(order.get("qty")) or qty
-    broker_price = (
-        _to_float(order.get("filled_avg_price"))
-        or _to_float(order.get("limit_price"))
-        or reference_price
-    )
     order_id = str(order.get("id")) if order.get("id") else None
     broker_status = str(order.get("status")) if order.get("status") else None
-
-    db.add(
-        Transaction(
-            strategy_id=strategy.id,
-            run_id=run.id,
-            ts=datetime.now(timezone.utc),
-            symbol=event.symbol.upper(),
-            side=event.action,
-            qty=broker_qty,
-            price=broker_price,
-            fee=0,
-            order_id=order_id,
-                meta={
-                    "source": "alpaca_paper",
-                    "reason": event.reason,
-                    "signal_ts": event.ts.isoformat(),
-                    "entry_signal_features": event.metadata if event.action == "BUY" and isinstance(event.metadata, dict) else None,
-                    "execution_trade_date": trade_date.isoformat(),
-                    "client_order_id": client_order_id,
-                    "broker_status": broker_status,
-                "reference_price": reference_price,
-                "requested_qty": qty,
-                "filled_qty": _to_float(order.get("filled_qty")),
-                "filled_avg_price": _to_float(order.get("filled_avg_price")),
-                "portfolio_name": portfolio_name,
-                "allocation_pct": allocation_pct,
-                "virtual_subportfolio": True,
-                "submitted_order": order,
-            },
-        )
+    transaction = _upsert_paper_broker_order_transaction(
+        db,
+        strategy_id=strategy.id,
+        run_id=run.id,
+        symbol=event.symbol.upper(),
+        side=event.action,
+        trade_date=trade_date,
+        reason=event.reason,
+        signal_ts=event.ts,
+        entry_signal_features=(
+            event.metadata if event.action == "BUY" and isinstance(event.metadata, dict) else None
+        ),
+        order=order,
+        requested_qty=qty,
+        reference_price=reference_price,
+        client_order_id=client_order_id,
+        portfolio_name=portfolio_name,
+        allocation_pct=allocation_pct,
     )
+    db.commit()
+
+    filled_qty = _to_float((transaction.meta or {}).get("filled_qty"))
+    execution_price = float(transaction.price) if _transaction_represents_virtual_fill(transaction) else None
     return PaperTradingOrderOutcome(
         symbol=event.symbol.upper(),
         action=event.action,
@@ -867,11 +875,249 @@ def _submit_paper_order(
         reason=event.reason,
         client_order_id=client_order_id,
         order_id=order_id,
-        qty=broker_qty,
+        qty=qty,
+        filled_qty=filled_qty,
         reference_price=reference_price,
-        execution_price=broker_price,
+        execution_price=execution_price,
         broker_status=broker_status,
     )
+
+
+def _sync_strategy_pending_orders(
+    db: Session,
+    *,
+    strategy_id: UUID,
+    portfolio_name: str,
+    client: AlpacaClient,
+) -> None:
+    pending_transactions = [
+        txn
+        for txn in db.execute(
+            select(Transaction)
+            .where(Transaction.strategy_id == strategy_id)
+            .order_by(Transaction.ts.asc(), Transaction.id.asc())
+        ).scalars().all()
+        if _transaction_portfolio_name(txn) == portfolio_name and _transaction_needs_broker_sync(txn)
+    ]
+
+    if not pending_transactions:
+        return
+
+    for txn in pending_transactions:
+        if not txn.order_id:
+            continue
+        order = client.get_order(str(txn.order_id))
+        meta = txn.meta or {}
+        signal_ts = _parse_iso_datetime(meta.get("signal_ts"))
+        _upsert_paper_broker_order_transaction(
+            db,
+            strategy_id=txn.strategy_id,
+            run_id=txn.run_id,
+            symbol=txn.symbol,
+            side=txn.side,
+            trade_date=_transaction_trade_date(txn),
+            reason=str(meta.get("reason") or ""),
+            signal_ts=signal_ts,
+            entry_signal_features=(
+                meta.get("entry_signal_features")
+                if isinstance(meta.get("entry_signal_features"), dict)
+                else None
+            ),
+            order=order,
+            requested_qty=_requested_transaction_qty(txn),
+            reference_price=_to_float(meta.get("reference_price")),
+            client_order_id=str(meta.get("client_order_id") or "") or None,
+            portfolio_name=portfolio_name,
+            allocation_pct=_to_float(meta.get("allocation_pct")),
+            existing_txn=txn,
+        )
+
+    db.commit()
+
+
+def _upsert_paper_broker_order_transaction(
+    db: Session,
+    *,
+    strategy_id: UUID,
+    run_id: UUID | None,
+    symbol: str,
+    side: str,
+    trade_date: date,
+    reason: str,
+    signal_ts: datetime | None,
+    entry_signal_features: dict[str, Any] | None,
+    order: dict[str, Any],
+    requested_qty: float,
+    reference_price: float,
+    client_order_id: str | None,
+    portfolio_name: str,
+    allocation_pct: float,
+    existing_txn: Transaction | None = None,
+) -> Transaction:
+    raw_order_id = order.get("id")
+    if raw_order_id:
+        order_id = str(raw_order_id)
+    elif existing_txn is not None and existing_txn.order_id:
+        order_id = str(existing_txn.order_id)
+    else:
+        order_id = None
+    broker_status = str(order.get("status") or "").strip().lower() or None
+    filled_qty = _to_float(order.get("filled_qty"))
+    if filled_qty <= 0 and broker_status == "filled":
+        filled_qty = _to_float(order.get("qty")) or requested_qty
+    filled_avg_price = _to_float(order.get("filled_avg_price"))
+    fill_applied = filled_qty > 0
+    executed_price = (
+        filled_avg_price
+        or _to_float(order.get("limit_price"))
+        or reference_price
+    ) if fill_applied else 0.0
+
+    order_meta = dict(existing_txn.meta or {}) if existing_txn is not None else {}
+    if not client_order_id:
+        client_order_id = str(order.get("client_order_id") or order_meta.get("client_order_id") or "") or None
+    if requested_qty <= 0:
+        requested_qty = (
+            _to_float(order_meta.get("requested_qty"))
+            or _to_float(order.get("qty"))
+            or _to_float(existing_txn.qty if existing_txn is not None else 0)
+        )
+    if reference_price <= 0:
+        reference_price = _to_float(order_meta.get("reference_price"))
+    if not reason:
+        reason = str(order_meta.get("reason") or "")
+    if signal_ts is None:
+        signal_ts = _parse_iso_datetime(order_meta.get("signal_ts"))
+    if entry_signal_features is None and isinstance(order_meta.get("entry_signal_features"), dict):
+        entry_signal_features = order_meta.get("entry_signal_features")
+    if allocation_pct <= 0:
+        allocation_pct = _to_float(order_meta.get("allocation_pct"))
+
+    meta = {
+        **order_meta,
+        "source": PAPER_BROKER_ORDER_SOURCE,
+        "reason": reason,
+        "signal_ts": signal_ts.isoformat() if signal_ts is not None else order_meta.get("signal_ts"),
+        "entry_signal_features": entry_signal_features,
+        "execution_trade_date": trade_date.isoformat(),
+        "client_order_id": client_order_id,
+        "broker_status": broker_status,
+        "reference_price": reference_price,
+        "requested_qty": requested_qty,
+        "filled_qty": filled_qty,
+        "filled_avg_price": filled_avg_price or None,
+        "portfolio_name": portfolio_name,
+        "allocation_pct": allocation_pct,
+        "virtual_subportfolio": True,
+        "paper_fill_applied": fill_applied,
+        "paper_reconciled_at": datetime.now(timezone.utc).isoformat(),
+        "submitted_order": order,
+    }
+
+    transaction_ts = _broker_order_timestamp(order)
+    if existing_txn is None:
+        existing_txn = Transaction(
+            strategy_id=strategy_id,
+            run_id=run_id,
+            ts=transaction_ts,
+            symbol=symbol.upper(),
+            side=side.upper(),
+            qty=filled_qty if fill_applied else requested_qty,
+            price=executed_price,
+            fee=0,
+            order_id=order_id,
+            meta=meta,
+        )
+        db.add(existing_txn)
+        return existing_txn
+
+    existing_txn.ts = transaction_ts
+    existing_txn.qty = filled_qty if fill_applied else requested_qty
+    existing_txn.price = executed_price
+    existing_txn.fee = 0
+    existing_txn.order_id = order_id or existing_txn.order_id
+    existing_txn.meta = meta
+    return existing_txn
+
+
+def _transaction_represents_virtual_fill(txn: Transaction) -> bool:
+    meta = txn.meta or {}
+    explicit = meta.get("paper_fill_applied")
+    if isinstance(explicit, bool):
+        return explicit
+
+    source = str(meta.get("source") or "").strip().lower()
+    if source in {"alpaca_live", "manual_virtual"}:
+        return True
+    if source != PAPER_BROKER_ORDER_SOURCE:
+        return source in PAPER_TRANSACTION_SOURCES and source != "backtest"
+
+    filled_qty = _to_float(meta.get("filled_qty"))
+    if filled_qty > 0:
+        return True
+
+    broker_status = str(meta.get("broker_status") or "").strip().lower()
+    if broker_status in {"accepted", "new", "pending_new", "accepted_for_bidding"}:
+        return False
+    if broker_status in {"canceled", "cancelled", "expired", "rejected"}:
+        return False
+    if broker_status == "filled":
+        return True
+
+    return float(txn.price or 0) > 0
+
+
+def _transaction_needs_broker_sync(txn: Transaction) -> bool:
+    meta = txn.meta or {}
+    source = str(meta.get("source") or "").strip().lower()
+    if source != PAPER_BROKER_ORDER_SOURCE or not txn.order_id:
+        return False
+
+    broker_status = str(meta.get("broker_status") or "").strip().lower()
+    if not broker_status:
+        return True
+    return broker_status not in PAPER_BROKER_TERMINAL_STATUSES
+
+
+def _requested_transaction_qty(txn: Transaction) -> float:
+    requested_qty = _to_float((txn.meta or {}).get("requested_qty"))
+    if requested_qty > 0:
+        return requested_qty
+    return _to_float(txn.qty)
+
+
+def _transaction_portfolio_name(txn: Transaction) -> str | None:
+    value = str((txn.meta or {}).get("portfolio_name") or "").strip()
+    if not value:
+        return None
+    return normalize_portfolio_name(value)
+
+
+def _broker_order_timestamp(order: dict[str, Any]) -> datetime:
+    for field in ("filled_at", "updated_at", "submitted_at", "created_at"):
+        parsed = _parse_iso_datetime(order.get(field))
+        if parsed is not None:
+            return parsed
+    return datetime.now(timezone.utc)
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    if not isinstance(value, str):
+        return None
+
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 def _apply_virtual_fill(

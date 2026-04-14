@@ -889,6 +889,9 @@ def _transaction_portfolio_name(transaction: Transaction) -> str | None:
 
 
 def _transaction_net_cash_flow(transaction: Transaction) -> float:
+    if not _transaction_fill_applied(transaction):
+        return 0.0
+
     qty = float(transaction.qty)
     price = float(transaction.price)
     fee = float(transaction.fee or 0)
@@ -896,6 +899,33 @@ def _transaction_net_cash_flow(transaction: Transaction) -> float:
     if str(transaction.side).upper() == "SELL":
         return gross - fee
     return -gross - fee
+
+
+def _transaction_fill_applied(transaction: Transaction) -> bool:
+    meta = transaction.meta or {}
+    explicit = meta.get("paper_fill_applied")
+    if isinstance(explicit, bool):
+        return explicit
+
+    source = str(meta.get("source") or "").strip().lower()
+    if source in {"alpaca_live", "manual_virtual"}:
+        return True
+    if source != "alpaca_paper":
+        return source in {"alpaca_paper", "alpaca_live", "manual_virtual"} and source != "backtest"
+
+    filled_qty = _safe_float(meta.get("filled_qty")) or 0.0
+    if filled_qty > 0:
+        return True
+
+    broker_status = str(meta.get("broker_status") or "").strip().lower()
+    if broker_status in {"accepted", "new", "pending_new", "accepted_for_bidding"}:
+        return False
+    if broker_status in {"canceled", "cancelled", "expired", "rejected"}:
+        return False
+    if broker_status == "filled":
+        return True
+
+    return float(transaction.price or 0) > 0
 
 
 def _safe_float(value: Any) -> float | None:

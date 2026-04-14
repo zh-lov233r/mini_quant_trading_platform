@@ -1,6 +1,6 @@
 # Quant Trading System
 
-[English](README.en.md) | [中文](README.zh-CN.md)
+[English](README.md) | [中文](README.zh-CN.md)
 
 一个面向股票量化研究与交易执行的全栈项目，覆盖了策略定义、特征数据准备、回测、paper trading、组合分配，以及基于 Alpaca 的定时自动下单链路。
 
