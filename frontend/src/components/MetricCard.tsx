@@ -3,6 +3,9 @@ interface MetricCardProps {
   value: string;
   hint: string;
   accent?: string;
+  labelFontSize?: number;
+  valueFontSize?: number;
+  hintFontSize?: number;
 }
 
 export default function MetricCard({
@@ -10,6 +13,9 @@ export default function MetricCard({
   value,
   hint,
   accent = "#0f766e",
+  labelFontSize = 13,
+  valueFontSize = 36,
+  hintFontSize = 15,
 }: MetricCardProps) {
   return (
     <article
@@ -30,7 +36,7 @@ export default function MetricCard({
           borderRadius: 999,
           background: `${accent}22`,
           color: accent,
-          fontSize: 13,
+          fontSize: labelFontSize,
           fontWeight: 700,
           fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
           letterSpacing: "0.04em",
@@ -39,7 +45,7 @@ export default function MetricCard({
       >
         {label}
       </div>
-      <div style={{ marginBottom: 10, fontSize: 36, fontWeight: 700, color: "#f8fafc" }}>
+      <div style={{ marginBottom: 10, fontSize: valueFontSize, fontWeight: 700, color: "#f8fafc" }}>
         {value}
       </div>
       <p
@@ -47,7 +53,7 @@ export default function MetricCard({
           margin: 0,
           color: "rgba(203, 213, 225, 0.74)",
           lineHeight: 1.6,
-          fontSize: 15,
+          fontSize: hintFontSize,
           fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
         }}
       >

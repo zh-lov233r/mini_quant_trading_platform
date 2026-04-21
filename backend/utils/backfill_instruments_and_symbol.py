@@ -67,6 +67,22 @@ WHERE instrument_id = %(iid)s
 """
 
 
+# When a new active identity takes over a symbol, close any still-open owner on
+# other instruments first. This prevents the same raw symbol from staying open
+# on multiple instrument ids and breaking downstream symbol -> instrument
+# resolution for market-data imports.
+SQL_CLOSE_CONFLICTING_SYMBOL_OWNERS = """
+UPDATE symbol_history
+SET valid_to = CASE
+    WHEN %(start_date)s::date > valid_from THEN %(start_date)s::date - 1
+    ELSE valid_from
+END
+WHERE instrument_id <> %(iid)s
+  AND valid_to IS NULL
+  AND symbol = %(symbol)s;
+"""
+
+
 # 开新区间（如果当前没有同样的 open 匹配）
 SQL_OPEN_NEW = """
 INSERT INTO symbol_history (
@@ -76,8 +92,19 @@ SELECT
   %(iid)s,
   %(exchange)s,
   %(symbol)s,
-  %(start_date)s,
-  %(valid_from_precision)s,
+  CASE
+    WHEN latest_same_symbol.latest_valid_to IS NOT NULL
+      AND %(start_date)s::date <= latest_same_symbol.latest_valid_to
+      THEN latest_same_symbol.latest_valid_to + 1
+    ELSE %(start_date)s::date
+  END,
+  CASE
+    WHEN latest_same_symbol.latest_valid_to IS NOT NULL
+      AND %(start_date)s::date <= latest_same_symbol.latest_valid_to
+      AND %(valid_from_precision)s <> 'exact'
+      THEN 'inferred'
+    ELSE %(valid_from_precision)s
+  END,
   NOT EXISTS (
     SELECT 1 FROM symbol_history sh_primary
     WHERE sh_primary.instrument_id = %(iid)s
@@ -85,6 +112,13 @@ SELECT
       AND sh_primary.is_primary
   ),
   'massive'
+FROM (
+  SELECT MAX(valid_to) AS latest_valid_to
+  FROM symbol_history
+  WHERE exchange = %(exchange)s
+    AND symbol = %(symbol)s
+    AND valid_to IS NOT NULL
+) latest_same_symbol
 WHERE NOT EXISTS (
   SELECT 1 FROM symbol_history
   WHERE instrument_id = %(iid)s
@@ -95,8 +129,8 @@ WHERE NOT EXISTS (
 AND NOT EXISTS (
   SELECT 1 FROM symbol_history sh_conflict
   WHERE sh_conflict.valid_to IS NULL
-    AND sh_conflict.exchange = %(exchange)s
     AND sh_conflict.symbol = %(symbol)s
+    AND sh_conflict.instrument_id <> %(iid)s
 );
 """
 
@@ -145,6 +179,21 @@ def is_supported_benchmark_proxy(row: dict) -> bool:
         and row["market"] == "stocks"
         and row["locale"] == "us"
     )
+
+
+def build_symbol_history_params(row: dict, *, instrument_id: int) -> dict[str, object]:
+    start_date = row["list_date"] or UNKNOWN_VALID_FROM
+    return {
+        "iid": instrument_id,
+        "exchange": row["exchange"],
+        "symbol": row["ticker"],
+        "start_date": start_date,
+        "valid_from_precision": "exact" if row["list_date"] else "unknown",
+    }
+
+
+def should_close_conflicting_symbol_owners(row: dict) -> bool:
+    return bool(row.get("active"))
 
 async def backfill():
     if not API or not URL:
@@ -200,14 +249,9 @@ async def backfill():
                                 kept += 1
 
                                 # 2. symbol_history 维护“当前区间”
-                                start_date = row["list_date"] or UNKNOWN_VALID_FROM
-                                params = {
-                                    "iid": iid,
-                                    "exchange": row["exchange"],
-                                    "symbol": row["ticker"],
-                                    "start_date": start_date,
-                                    "valid_from_precision": "exact" if row["list_date"] else "unknown",
-                                }
+                                params = build_symbol_history_params(row, instrument_id=iid)
+                                if should_close_conflicting_symbol_owners(row):
+                                    cur.execute(SQL_CLOSE_CONFLICTING_SYMBOL_OWNERS, params)
                                 cur.execute(SQL_CLOSE_OLD, params)
                                 cur.execute(SQL_OPEN_NEW, params)
 

@@ -2,7 +2,13 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 
-import { deleteStrategy, getStrategyCatalog, listStrategies } from "@/api/strategies";
+import {
+  deleteStrategy,
+  extractStrategyDeleteConflictMessage,
+  getStrategyCatalog,
+  isStrategyDeleteCloseRequired,
+  listStrategies,
+} from "@/api/strategies";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
@@ -76,7 +82,36 @@ export default function StrategiesPage() {
       await deleteStrategy(item.id);
       setItems((current) => current.filter((candidate) => candidate.id !== item.id));
     } catch (err: any) {
-      setDeleteError(err?.message || (isZh ? "删除策略失败" : "Failed to delete the strategy"));
+      if (isStrategyDeleteCloseRequired(err?.detail)) {
+        const conflictMessage = extractStrategyDeleteConflictMessage(err?.detail);
+        const closeConfirmed = window.confirm(
+          isZh
+            ? `检测到 Alpaca 上还有这条策略的持仓：${conflictMessage}\n\n如果继续删除，系统会先尝试市价平仓，再删除策略。是否继续？`
+            : `Alpaca still has open positions for this strategy: ${conflictMessage}\n\nIf you continue, the system will try to flatten them first and then delete the strategy. Continue?`
+        );
+        if (!closeConfirmed) {
+          return;
+        }
+
+        try {
+          await deleteStrategy(item.id, { closePositions: true });
+          setItems((current) => current.filter((candidate) => candidate.id !== item.id));
+          return;
+        } catch (retryErr: any) {
+          setDeleteError(
+            extractStrategyDeleteConflictMessage(retryErr?.detail) ||
+              retryErr?.message ||
+              (isZh ? "删除策略失败" : "Failed to delete the strategy")
+          );
+          return;
+        }
+      }
+
+      setDeleteError(
+        extractStrategyDeleteConflictMessage(err?.detail) ||
+          err?.message ||
+          (isZh ? "删除策略失败" : "Failed to delete the strategy")
+      );
     } finally {
       setDeletingStrategyId(null);
     }

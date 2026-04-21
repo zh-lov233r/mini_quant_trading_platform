@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import re
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -30,6 +32,23 @@ ENV_FALLBACKS: dict[str, tuple[str, ...]] = {
     "ALPACA_API_KEY": ("ALPACA_KEY",),
     "ALPACA_SECRET_KEY": ("ALPACA_SECRET",),
 }
+PAPER_BROKER_ORDER_SOURCE = "alpaca_paper"
+BROKER_ORDER_TERMINAL_STATUSES = {
+    "canceled",
+    "cancelled",
+    "expired",
+    "filled",
+    "rejected",
+}
+BROKER_QTY_TOLERANCE = 1e-6
+PAPER_SYSTEM_CLIENT_ORDER_ID_PATTERN = re.compile(
+    r"^paper-(?P<portfolio_token>.+)-(?P<strategy_token>[0-9a-f]{8})-(?P<trade_date>\d{8})-(?P<symbol>[A-Z0-9.\-]+)-(?P<action>buy|sell)$",
+    re.IGNORECASE,
+)
+PAPER_SYSTEM_CLEANUP_CLIENT_ORDER_ID_PATTERN = re.compile(
+    r"^paper-cleanup-(?P<strategy_token>[0-9a-f]{8})-(?P<symbol>[A-Z0-9.\-]+)-(?P<side>buy|sell)-(?P<timestamp>\d{8}T\d{6})$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(slots=True)
@@ -375,6 +394,318 @@ def build_alpaca_client_for_account(account: PaperTradingAccount) -> AlpacaClien
     )
 
 
+def build_broker_account_isolation_report(
+    db: Session,
+    account: PaperTradingAccount,
+    *,
+    raw_positions: list[dict[str, Any]],
+    raw_orders: list[dict[str, Any]],
+) -> dict[str, Any]:
+    portfolio_names = {
+        portfolio.name
+        for portfolio in list_strategy_portfolios(db, paper_account_id=account.id)
+    }
+    token_lookup = _portfolio_token_lookup(portfolio_names)
+    local_index = _build_local_broker_tracking_index(db, portfolio_names)
+
+    annotated_orders: list[dict[str, Any]] = []
+    recent_external_order_count = 0
+    recent_system_untracked_order_count = 0
+    active_external_order_count = 0
+    active_system_untracked_order_count = 0
+    active_cleanup_order_count = 0
+
+    for raw_order in raw_orders:
+        order_id = str(raw_order.get("id") or "").strip() or None
+        client_order_id = str(raw_order.get("client_order_id") or "").strip() or None
+        tracked_locally = (
+            (order_id in local_index["order_ids"] if order_id else False)
+            or (client_order_id in local_index["client_order_ids"] if client_order_id else False)
+        )
+        is_cleanup_order = _parse_cleanup_client_order_id(client_order_id) is not None
+        managed_by_system = (
+            is_cleanup_order or _parse_system_client_order_id(client_order_id) is not None
+        )
+        status = str(raw_order.get("status") or "").strip().lower() or None
+        is_open = _broker_order_is_open(status)
+        portfolio_name = (
+            local_index["order_id_to_portfolio"].get(order_id or "")
+            or local_index["client_order_id_to_portfolio"].get(client_order_id or "")
+            or _portfolio_name_from_client_order_id(client_order_id, token_lookup)
+        )
+
+        if tracked_locally:
+            origin = "local_system"
+        elif is_cleanup_order:
+            origin = "system_cleanup"
+        elif managed_by_system:
+            origin = "system_untracked"
+        else:
+            origin = "external_api"
+
+        if origin == "external_api":
+            recent_external_order_count += 1
+            if is_open:
+                active_external_order_count += 1
+        elif origin == "system_untracked":
+            recent_system_untracked_order_count += 1
+            if is_open:
+                active_system_untracked_order_count += 1
+        elif origin == "system_cleanup" and is_open:
+            active_cleanup_order_count += 1
+
+        annotated_orders.append(
+            {
+                **raw_order,
+                "origin": origin,
+                "tracked_locally": tracked_locally,
+                "managed_by_system": managed_by_system,
+                "portfolio_name": portfolio_name,
+                "is_open": is_open,
+            }
+        )
+
+    annotated_positions: list[dict[str, Any]] = []
+    active_external_position_count = 0
+    position_mismatch_count = 0
+
+    for raw_position in raw_positions:
+        symbol = str(raw_position.get("symbol") or "").strip().upper()
+        broker_qty = _signed_position_qty(raw_position)
+        local_qty = float(local_index["net_qty_by_symbol"].get(symbol, 0.0))
+        tracked_locally = not _qty_is_zero(local_qty)
+
+        if tracked_locally and _qty_equal(broker_qty, local_qty):
+            origin = "local_system"
+        elif tracked_locally:
+            origin = "qty_mismatch"
+            position_mismatch_count += 1
+        else:
+            origin = "external_api"
+            if not _qty_is_zero(broker_qty):
+                active_external_position_count += 1
+
+        annotated_positions.append(
+            {
+                **raw_position,
+                "origin": origin,
+                "tracked_locally": tracked_locally,
+                "local_qty": local_qty if tracked_locally else None,
+                "qty_delta": broker_qty - local_qty,
+                "portfolio_names": sorted(local_index["symbol_portfolios"].get(symbol, set())),
+            }
+        )
+
+    warnings: list[str] = []
+    if active_external_order_count > 0:
+        warnings.append(
+            f"{active_external_order_count} open Alpaca orders do not match this local paper-trading ledger."
+        )
+    if active_system_untracked_order_count > 0:
+        warnings.append(
+            f"{active_system_untracked_order_count} open Alpaca orders look system-generated but are missing from the local database."
+        )
+    if active_cleanup_order_count > 0:
+        warnings.append(
+            f"{active_cleanup_order_count} strategy-delete cleanup orders are still open on Alpaca."
+        )
+    if active_external_position_count > 0:
+        warnings.append(
+            f"{active_external_position_count} live Alpaca positions are not backed by local paper-trading fills."
+        )
+    if position_mismatch_count > 0:
+        warnings.append(
+            f"{position_mismatch_count} live Alpaca positions have quantity mismatches versus the local paper ledger."
+        )
+    if recent_external_order_count > 0:
+        warnings.append(
+            f"{recent_external_order_count} recent Alpaca orders were submitted without this system's client_order_id format."
+        )
+    if recent_system_untracked_order_count > 0:
+        warnings.append(
+            f"{recent_system_untracked_order_count} recent Alpaca orders use this system's client_order_id pattern but are not present in the local database."
+        )
+
+    has_external_activity = any(
+        value > 0
+        for value in (
+            active_external_order_count,
+            active_system_untracked_order_count,
+            active_cleanup_order_count,
+            active_external_position_count,
+            position_mismatch_count,
+            recent_external_order_count,
+            recent_system_untracked_order_count,
+        )
+    )
+    if any(
+        value > 0
+        for value in (
+            active_external_order_count,
+            active_system_untracked_order_count,
+            active_cleanup_order_count,
+            active_external_position_count,
+            position_mismatch_count,
+        )
+    ):
+        status = "blocked"
+    elif has_external_activity:
+        status = "warning"
+    else:
+        status = "clean"
+
+    return {
+        "status": status,
+        "checked_at": datetime.now(UTC),
+        "has_external_activity": has_external_activity,
+        "active_external_order_count": active_external_order_count,
+        "active_system_untracked_order_count": active_system_untracked_order_count,
+        "active_cleanup_order_count": active_cleanup_order_count,
+        "active_external_position_count": active_external_position_count,
+        "position_mismatch_count": position_mismatch_count,
+        "recent_external_order_count": recent_external_order_count,
+        "recent_system_untracked_order_count": recent_system_untracked_order_count,
+        "warnings": warnings,
+        "error": None,
+        "orders": annotated_orders,
+        "positions": annotated_positions,
+    }
+
+
+def _build_local_broker_tracking_index(
+    db: Session,
+    portfolio_names: set[str],
+) -> dict[str, Any]:
+    order_ids: set[str] = set()
+    client_order_ids: set[str] = set()
+    order_id_to_portfolio: dict[str, str] = {}
+    client_order_id_to_portfolio: dict[str, str] = {}
+    net_qty_by_symbol: dict[str, float] = defaultdict(float)
+    symbol_portfolios: dict[str, set[str]] = defaultdict(set)
+
+    if not portfolio_names:
+        return {
+            "order_ids": order_ids,
+            "client_order_ids": client_order_ids,
+            "order_id_to_portfolio": order_id_to_portfolio,
+            "client_order_id_to_portfolio": client_order_id_to_portfolio,
+            "net_qty_by_symbol": net_qty_by_symbol,
+            "symbol_portfolios": symbol_portfolios,
+        }
+
+    transactions = db.execute(
+        select(Transaction).order_by(Transaction.ts.asc(), Transaction.id.asc())
+    ).scalars().all()
+
+    for transaction in transactions:
+        portfolio_name = _transaction_portfolio_name(transaction)
+        if portfolio_name not in portfolio_names:
+            continue
+
+        meta = transaction.meta or {}
+        source = str(meta.get("source") or "").strip().lower()
+        if source != PAPER_BROKER_ORDER_SOURCE:
+            continue
+
+        if transaction.order_id:
+            order_id = str(transaction.order_id)
+            order_ids.add(order_id)
+            order_id_to_portfolio[order_id] = portfolio_name
+
+        client_order_id = str(meta.get("client_order_id") or "").strip() or None
+        if client_order_id:
+            client_order_ids.add(client_order_id)
+            client_order_id_to_portfolio[client_order_id] = portfolio_name
+
+        if not _transaction_fill_applied(transaction):
+            continue
+
+        symbol = str(transaction.symbol or "").strip().upper()
+        qty = float(transaction.qty or 0)
+        if not symbol or _qty_is_zero(qty):
+            continue
+
+        signed_qty = -qty if str(transaction.side).upper() == "SELL" else qty
+        net_qty_by_symbol[symbol] += signed_qty
+        if _qty_is_zero(net_qty_by_symbol[symbol]):
+            net_qty_by_symbol.pop(symbol, None)
+        else:
+            symbol_portfolios[symbol].add(portfolio_name)
+
+    return {
+        "order_ids": order_ids,
+        "client_order_ids": client_order_ids,
+        "order_id_to_portfolio": order_id_to_portfolio,
+        "client_order_id_to_portfolio": client_order_id_to_portfolio,
+        "net_qty_by_symbol": net_qty_by_symbol,
+        "symbol_portfolios": symbol_portfolios,
+    }
+
+
+def _portfolio_token_lookup(portfolio_names: set[str]) -> dict[str, str | None]:
+    token_lookup: dict[str, str | None] = {}
+    for portfolio_name in portfolio_names:
+        token = _portfolio_client_order_token(portfolio_name)
+        existing = token_lookup.get(token)
+        token_lookup[token] = portfolio_name if existing in {None, portfolio_name} else None
+    return token_lookup
+
+
+def _portfolio_client_order_token(portfolio_name: str | None) -> str:
+    return normalize_portfolio_name(portfolio_name).replace(" ", "-").lower()[:20]
+
+
+def _parse_system_client_order_id(client_order_id: str | None) -> dict[str, str] | None:
+    candidate = str(client_order_id or "").strip()
+    if not candidate:
+        return None
+    match = PAPER_SYSTEM_CLIENT_ORDER_ID_PATTERN.match(candidate)
+    if not match:
+        return None
+    return {key: str(value) for key, value in match.groupdict().items()}
+
+
+def _parse_cleanup_client_order_id(client_order_id: str | None) -> dict[str, str] | None:
+    candidate = str(client_order_id or "").strip()
+    if not candidate:
+        return None
+    match = PAPER_SYSTEM_CLEANUP_CLIENT_ORDER_ID_PATTERN.match(candidate)
+    if not match:
+        return None
+    return {key: str(value) for key, value in match.groupdict().items()}
+
+
+def _portfolio_name_from_client_order_id(
+    client_order_id: str | None,
+    token_lookup: dict[str, str | None],
+) -> str | None:
+    parsed = _parse_system_client_order_id(client_order_id)
+    if parsed is None:
+        return None
+    return token_lookup.get(parsed["portfolio_token"]) or None
+
+
+def _broker_order_is_open(status: str | None) -> bool:
+    normalized = str(status or "").strip().lower()
+    if not normalized:
+        return False
+    return normalized not in BROKER_ORDER_TERMINAL_STATUSES
+
+
+def _signed_position_qty(position: dict[str, Any]) -> float:
+    qty = _safe_float(position.get("qty")) or 0.0
+    side = str(position.get("side") or "").strip().lower()
+    return -qty if side == "short" else qty
+
+
+def _qty_equal(left: float, right: float) -> bool:
+    return abs(left - right) <= BROKER_QTY_TOLERANCE
+
+
+def _qty_is_zero(value: float) -> bool:
+    return abs(value) <= BROKER_QTY_TOLERANCE
+
+
 def build_paper_account_overview(
     db: Session,
     account_id: UUID | str,
@@ -617,12 +948,25 @@ def build_paper_account_workspace(
 
     broker_sync = {
         "status": "ok",
-        "fetched_at": datetime.utcnow(),
+        "fetched_at": datetime.now(UTC),
         "error": None,
     }
     broker_account = None
     broker_clock = None
     broker_portfolio_history = None
+    broker_isolation = {
+        "status": "unknown",
+        "checked_at": None,
+        "has_external_activity": False,
+        "active_external_order_count": 0,
+        "active_system_untracked_order_count": 0,
+        "active_external_position_count": 0,
+        "position_mismatch_count": 0,
+        "recent_external_order_count": 0,
+        "recent_system_untracked_order_count": 0,
+        "warnings": [],
+        "error": None,
+    }
     broker_positions: list[dict[str, Any]] = []
     recent_orders: list[dict[str, Any]] = []
 
@@ -633,6 +977,12 @@ def build_paper_account_workspace(
         history_start_at, history_range = _portfolio_history_window(account.created_at)
         raw_positions = client.list_positions()
         raw_orders = client.list_orders(status="all", limit=order_limit)
+        broker_isolation = build_broker_account_isolation_report(
+            db,
+            account,
+            raw_positions=raw_positions,
+            raw_orders=raw_orders,
+        )
 
         broker_account = {
             "broker_account_id": str(raw_account.get("id") or "") or None,
@@ -687,8 +1037,17 @@ def build_paper_account_workspace(
                 "unrealized_plpc": _safe_float(item.get("unrealized_plpc")),
                 "current_price": _safe_float(item.get("current_price")),
                 "change_today": _safe_float(item.get("change_today")),
+                "origin": str(item.get("origin") or "") or None,
+                "tracked_locally": _safe_bool(item.get("tracked_locally")),
+                "local_qty": _safe_float(item.get("local_qty")),
+                "qty_delta": _safe_float(item.get("qty_delta")),
+                "portfolio_names": [
+                    str(value)
+                    for value in (item.get("portfolio_names") or [])
+                    if str(value).strip()
+                ],
             }
-            for item in raw_positions
+            for item in broker_isolation["positions"]
         ]
         recent_orders = [
             {
@@ -707,13 +1066,23 @@ def build_paper_account_workspace(
                 "submitted_at": item.get("submitted_at"),
                 "filled_at": item.get("filled_at"),
                 "canceled_at": item.get("canceled_at"),
+                "origin": str(item.get("origin") or "") or None,
+                "tracked_locally": _safe_bool(item.get("tracked_locally")),
+                "managed_by_system": _safe_bool(item.get("managed_by_system")),
+                "portfolio_name": str(item.get("portfolio_name") or "") or None,
+                "is_open": _safe_bool(item.get("is_open")),
             }
-            for item in raw_orders
+            for item in broker_isolation["orders"]
         ]
     except Exception as exc:
         broker_sync = {
             "status": "error",
-            "fetched_at": datetime.utcnow(),
+            "fetched_at": datetime.now(UTC),
+            "error": str(exc),
+        }
+        broker_isolation = {
+            **broker_isolation,
+            "checked_at": datetime.now(UTC),
             "error": str(exc),
         }
 
@@ -723,6 +1092,7 @@ def build_paper_account_workspace(
         "broker_account": broker_account,
         "broker_clock": broker_clock,
         "portfolio_history": broker_portfolio_history,
+        "broker_isolation": broker_isolation,
         "positions": broker_positions,
         "recent_orders": recent_orders,
         "recent_transactions": recent_transactions,

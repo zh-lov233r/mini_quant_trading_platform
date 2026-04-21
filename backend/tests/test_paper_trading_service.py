@@ -140,20 +140,21 @@ class PaperTradingServiceTests(unittest.TestCase):
             )
         )
 
-        outcome = _submit_paper_order(
-            db=self.db,
-            strategy=self.strategy,
-            run=self.run,
-            trade_date=date(2026, 4, 14),
-            client=client,
-            event=self._buy_event(),
-            submit_orders=True,
-            qty=5,
-            reference_price=10,
-            client_order_id="client-order-filled",
-            portfolio_name="default",
-            allocation_pct=1.0,
-        )
+        with self.assertLogs("paper_trading", level="INFO") as captured:
+            outcome = _submit_paper_order(
+                db=self.db,
+                strategy=self.strategy,
+                run=self.run,
+                trade_date=date(2026, 4, 14),
+                client=client,
+                event=self._buy_event(),
+                submit_orders=True,
+                qty=5,
+                reference_price=10,
+                client_order_id="client-order-filled",
+                portfolio_name="default",
+                allocation_pct=1.0,
+            )
 
         txn = self._single_transaction()
         self.assertEqual(outcome.filled_qty, 5.0)
@@ -169,6 +170,14 @@ class PaperTradingServiceTests(unittest.TestCase):
         self.assertIn("AAPL", sleeve.positions_by_symbol)
         self.assertAlmostEqual(sleeve.positions_by_symbol["AAPL"].qty, 5.0)
         self.assertAlmostEqual(sleeve.positions_by_symbol["AAPL"].avg_entry_price, 10.0)
+        self.assertTrue(
+            any(
+                "Paper trading transaction event=submitted" in message
+                and "client_order_id=client-order-filled" in message
+                and "broker_status=filled" in message
+                for message in captured.output
+            )
+        )
 
     def test_sync_pending_order_promotes_fill_without_duplicate_transaction(self) -> None:
         submit_client = StubAlpacaClient(
@@ -210,12 +219,13 @@ class PaperTradingServiceTests(unittest.TestCase):
                 )
             }
         )
-        _sync_strategy_pending_orders(
-            self.db,
-            strategy_id=self.strategy.id,
-            portfolio_name="default",
-            client=sync_client,
-        )
+        with self.assertLogs("paper_trading", level="INFO") as captured:
+            _sync_strategy_pending_orders(
+                self.db,
+                strategy_id=self.strategy.id,
+                portfolio_name="default",
+                client=sync_client,
+            )
 
         transactions = self.db.execute(select(Transaction)).scalars().all()
         self.assertEqual(len(transactions), 1)
@@ -231,6 +241,14 @@ class PaperTradingServiceTests(unittest.TestCase):
         self.assertAlmostEqual(sleeve.equity, 1000.0)
         self.assertIn("AAPL", sleeve.positions_by_symbol)
         self.assertAlmostEqual(sleeve.positions_by_symbol["AAPL"].qty, 3.0)
+        self.assertTrue(
+            any(
+                "Paper trading transaction event=reconciled" in message
+                and "order_id=order-later-fill" in message
+                and "broker_status=filled" in message
+                for message in captured.output
+            )
+        )
 
     def test_legacy_pending_alpaca_rows_do_not_count_as_fills(self) -> None:
         legacy_txn = Transaction(

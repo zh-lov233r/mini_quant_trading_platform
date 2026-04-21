@@ -6,9 +6,11 @@ import { useEffect, useMemo, useState } from "react";
 import { getBacktest, listBacktests } from "@/api/backtests";
 import {
   deleteStrategy,
+  extractStrategyDeleteConflictMessage,
   getStrategy,
   getStrategyCatalog,
   getStrategyRuntime,
+  isStrategyDeleteCloseRequired,
   renameStrategy,
 } from "@/api/strategies";
 import AppShell from "@/components/AppShell";
@@ -334,7 +336,36 @@ export default function StrategyDetailPage() {
       await deleteStrategy(strategy.id);
       await router.push("/strategies");
     } catch (err: any) {
-      setDeleteError(err?.message || (isZh ? "删除策略失败" : "Failed to delete the strategy"));
+      if (isStrategyDeleteCloseRequired(err?.detail)) {
+        const conflictMessage = extractStrategyDeleteConflictMessage(err?.detail);
+        const closeConfirmed = window.confirm(
+          isZh
+            ? `检测到 Alpaca 上还有这条策略的持仓：${conflictMessage}\n\n如果继续删除，系统会先尝试市价平仓，再删除策略。是否继续？`
+            : `Alpaca still has open positions for this strategy: ${conflictMessage}\n\nIf you continue, the system will try to flatten them first and then delete the strategy. Continue?`
+        );
+        if (!closeConfirmed) {
+          return;
+        }
+
+        try {
+          await deleteStrategy(strategy.id, { closePositions: true });
+          await router.push("/strategies");
+          return;
+        } catch (retryErr: any) {
+          setDeleteError(
+            extractStrategyDeleteConflictMessage(retryErr?.detail) ||
+              retryErr?.message ||
+              (isZh ? "删除策略失败" : "Failed to delete the strategy")
+          );
+          return;
+        }
+      }
+
+      setDeleteError(
+        extractStrategyDeleteConflictMessage(err?.detail) ||
+          err?.message ||
+          (isZh ? "删除策略失败" : "Failed to delete the strategy")
+      );
     } finally {
       setDeleteSaving(false);
     }

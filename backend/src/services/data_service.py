@@ -62,6 +62,8 @@ JOIN instruments instr
   ON instr.id = sh.instrument_id
 WHERE sh.valid_from <= %(trade_date)s::date
   AND (sh.valid_to IS NULL OR sh.valid_to >= %(trade_date)s::date)
+  AND sh.is_primary
+  AND instr.is_active = TRUE
   AND (
     instr.asset_type = 'CS'
     OR (

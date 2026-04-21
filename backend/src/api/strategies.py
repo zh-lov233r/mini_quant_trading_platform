@@ -12,6 +12,14 @@ from sqlalchemy.orm import Session
 
 from src.core.db import get_db
 from src.models.tables import PortfolioSnapshot, Signal, Strategy, StrategyAllocation, StrategyRun, Transaction
+from src.services.alpaca_services import AlpacaClientError
+from src.services.strategy_delete_service import (
+    StrategyDeleteCloseError,
+    build_strategy_delete_manual_reconcile_message,
+    build_strategy_delete_position_close_message,
+    inspect_strategy_delete_broker_positions,
+    close_strategy_delete_broker_positions,
+)
 from src.services.strategy_registry import (
     build_runtime_payload,
     build_strategy_catalog,
@@ -473,11 +481,60 @@ def update_strategy_config(
 @router.delete("/{strategy_id}", response_model=StrategyDeleteOut)
 def delete_strategy(
     strategy_id: UUID,
+    close_positions: bool = Query(
+        default=False,
+        description="If true, first flatten any matching Alpaca positions before deleting the strategy",
+    ),
     db: Session = Depends(get_db),
 ):
     obj = db.get(Strategy, strategy_id)
     if not obj:
         raise HTTPException(status_code=404, detail="strategy not found")
+
+    try:
+        broker_positions = inspect_strategy_delete_broker_positions(db, strategy_id)
+    except AlpacaClientError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"could not verify Alpaca positions before deleting strategy: {exc}",
+        ) from exc
+
+    unsafe_positions = [item for item in broker_positions if not item.can_close]
+    if unsafe_positions:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=build_strategy_delete_manual_reconcile_message(
+                strategy_name=obj.name,
+                broker_positions=unsafe_positions,
+            ),
+        )
+
+    if broker_positions and not close_positions:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=build_strategy_delete_position_close_message(
+                strategy_name=obj.name,
+                broker_positions=broker_positions,
+            ),
+        )
+
+    if broker_positions:
+        try:
+            close_strategy_delete_broker_positions(
+                db,
+                strategy_id,
+                broker_positions=broker_positions,
+            )
+        except AlpacaClientError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"failed to close Alpaca positions before deleting strategy: {exc}",
+            ) from exc
+        except StrategyDeleteCloseError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
 
     delete_summary = _build_delete_summary(db, strategy_id)
     strategy_name = obj.name

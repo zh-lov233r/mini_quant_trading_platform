@@ -6,6 +6,7 @@ import type {
   PaperTradingAccountOverviewOut,
   PaperTradingAccountUpdate,
   PaperTradingWorkspaceOut,
+  StrategyPortfolioActivationOut,
   StrategyPortfolioCreate,
   StrategyPortfolioOut,
   StrategyPortfolioRename,
@@ -113,6 +114,17 @@ export function archiveStrategyPortfolio(
 ): Promise<StrategyPortfolioOut> {
   return http<StrategyPortfolioOut>(
     `/api/strategy-portfolios/${portfolioId}/archive`,
+    {
+      method: "PATCH",
+    }
+  );
+}
+
+export function activateStrategyPortfolio(
+  portfolioId: string
+): Promise<StrategyPortfolioActivationOut> {
+  return http<StrategyPortfolioActivationOut>(
+    `/api/strategy-portfolios/${portfolioId}/activate`,
     {
       method: "PATCH",
     }

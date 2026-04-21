@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any
@@ -9,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.models.tables import (
+    PaperTradingAccount,
     PortfolioSnapshot,
     Signal,
     Strategy,
@@ -18,7 +20,9 @@ from src.models.tables import (
 )
 from src.services.alpaca_services import AlpacaAPIError, AlpacaClient
 from src.services.paper_account_service import (
+    build_broker_account_isolation_report,
     build_alpaca_client_for_portfolio,
+    require_strategy_portfolio_by_name,
 )
 from src.services.stock_basket_service import (
     DEFAULT_COMMON_STOCK_BASKET_NAME,
@@ -41,6 +45,7 @@ from src.services.strategy_engine import (
 from src.services.strategy_registry import build_runtime_payload
 
 
+log = logging.getLogger("paper_trading")
 PAPER_BROKER_ORDER_SOURCE = "alpaca_paper"
 PAPER_BROKER_TERMINAL_STATUSES = {
     "canceled",
@@ -227,6 +232,33 @@ def run_paper_trading(
 
         broker_positions_before = client.list_positions()
         open_orders = client.list_orders(status="open") if submit_orders else []
+        broker_isolation_summary = None
+        if submit_orders:
+            portfolio = require_strategy_portfolio_by_name(db, allocation_cfg.portfolio_name)
+            account = db.get(PaperTradingAccount, portfolio.paper_account_id)
+            if account is None:
+                raise ValueError(
+                    f"paper account not found for portfolio: {allocation_cfg.portfolio_name}"
+                )
+            broker_isolation = build_broker_account_isolation_report(
+                db,
+                account,
+                raw_positions=broker_positions_before,
+                raw_orders=open_orders,
+            )
+            broker_isolation_summary = {
+                "status": broker_isolation["status"],
+                "active_external_order_count": broker_isolation["active_external_order_count"],
+                "active_system_untracked_order_count": broker_isolation["active_system_untracked_order_count"],
+                "active_external_position_count": broker_isolation["active_external_position_count"],
+                "position_mismatch_count": broker_isolation["position_mismatch_count"],
+                "warnings": list(broker_isolation["warnings"]),
+            }
+            if broker_isolation["status"] == "blocked":
+                reason = "; ".join(broker_isolation["warnings"][:3]) or "active broker state does not match the local paper ledger"
+                raise ValueError(
+                    f"paper account isolation blocked live trading for portfolio '{allocation_cfg.portfolio_name}': {reason}"
+                )
 
         recent_bar_count = required_recent_bar_count_for_runtime(runtime)
         recent_bar_lookback_days = required_recent_bar_lookback_days(recent_bar_count)
@@ -336,6 +368,7 @@ def run_paper_trading(
             "account_status": account_after.get("status"),
             "broker_cash": _account_cash(account_after),
             "broker_equity": _account_equity(account_after),
+            "broker_isolation": broker_isolation_summary,
             "virtual_cash_before": sleeve_before.cash,
             "virtual_equity_before": sleeve_before.equity,
             "virtual_cash_after": sleeve_after.cash,
@@ -361,6 +394,22 @@ def run_paper_trading(
         }
         db.commit()
         db.refresh(run)
+        _log_paper_trading_run_summary(
+            strategy_id=str(strategy.id),
+            strategy_name=strategy.name,
+            run_id=str(run.id),
+            portfolio_name=allocation_cfg.portfolio_name,
+            trade_date=trade_date,
+            trigger=trigger,
+            submit_orders=submit_orders,
+            signal_count=len(signals),
+            order_count=len(order_outcomes),
+            submitted_order_count=submitted_count,
+            skipped_order_count=skipped_count,
+            failed_order_count=failed_count,
+            final_cash=sleeve_after.cash,
+            final_equity=sleeve_after.equity,
+        )
 
         return PaperTradingResult(
             run_id=str(run.id),
@@ -386,6 +435,16 @@ def run_paper_trading(
             failed_run.finished_at = datetime.now(timezone.utc)
             failed_run.error_message = str(exc)
             db.commit()
+        log.exception(
+            "Paper trading run failed strategy_id=%s strategy_name=%s run_id=%s portfolio=%s trade_date=%s trigger=%s submit_orders=%s",
+            str(strategy.id),
+            strategy.name,
+            str(run.id),
+            normalized_portfolio,
+            trade_date.isoformat(),
+            trigger,
+            submit_orders,
+        )
         raise
 
 
@@ -797,6 +856,81 @@ def _execute_paper_orders(
     return outcomes, projected_sleeve, projected_broker_cash
 
 
+def _log_paper_trading_run_summary(
+    *,
+    strategy_id: str,
+    strategy_name: str,
+    run_id: str,
+    portfolio_name: str,
+    trade_date: date,
+    trigger: str,
+    submit_orders: bool,
+    signal_count: int,
+    order_count: int,
+    submitted_order_count: int,
+    skipped_order_count: int,
+    failed_order_count: int,
+    final_cash: float,
+    final_equity: float,
+) -> None:
+    log.info(
+        "Paper trading run completed strategy_id=%s strategy_name=%s run_id=%s portfolio=%s trade_date=%s trigger=%s submit_orders=%s signals=%s orders=%s submitted=%s skipped=%s failed=%s final_cash=%.4f final_equity=%.4f",
+        strategy_id,
+        strategy_name,
+        run_id,
+        portfolio_name,
+        trade_date.isoformat(),
+        trigger,
+        submit_orders,
+        signal_count,
+        order_count,
+        submitted_order_count,
+        skipped_order_count,
+        failed_order_count,
+        final_cash,
+        final_equity,
+    )
+
+
+def _log_paper_trading_transaction_event(
+    *,
+    event_name: str,
+    strategy_id: str,
+    strategy_name: str | None,
+    run_id: str | None,
+    portfolio_name: str | None,
+    trade_date: date | None,
+    transaction: Transaction,
+    requested_qty: float | None = None,
+    reference_price: float | None = None,
+    reason: str | None = None,
+) -> None:
+    meta = transaction.meta or {}
+    fill_applied = _transaction_represents_virtual_fill(transaction)
+    log.info(
+        "Paper trading transaction event=%s strategy_id=%s strategy_name=%s run_id=%s portfolio=%s trade_date=%s symbol=%s side=%s ts=%s order_id=%s client_order_id=%s broker_status=%s requested_qty=%s filled_qty=%s qty=%s execution_price=%s reference_price=%s fill_applied=%s reason=%s",
+        event_name,
+        strategy_id,
+        strategy_name or "-",
+        run_id or "-",
+        portfolio_name or "-",
+        trade_date.isoformat() if trade_date is not None else "-",
+        transaction.symbol,
+        transaction.side,
+        transaction.ts.isoformat() if transaction.ts is not None else "-",
+        transaction.order_id or "-",
+        str(meta.get("client_order_id") or "") or "-",
+        str(meta.get("broker_status") or "") or "-",
+        requested_qty,
+        _to_float(meta.get("filled_qty")),
+        float(transaction.qty or 0),
+        float(transaction.price or 0),
+        reference_price,
+        fill_applied,
+        reason or str(meta.get("reason") or "") or "-",
+    )
+
+
 def _submit_paper_order(
     *,
     db: Session,
@@ -833,6 +967,20 @@ def _submit_paper_order(
             client_order_id=client_order_id,
         )
     except AlpacaAPIError as exc:
+        log.warning(
+            "Paper trading order submission failed strategy_id=%s strategy_name=%s run_id=%s portfolio=%s trade_date=%s symbol=%s side=%s client_order_id=%s qty=%s reference_price=%s error=%s",
+            str(strategy.id),
+            strategy.name,
+            str(run.id),
+            portfolio_name,
+            trade_date.isoformat(),
+            event.symbol.upper(),
+            event.action,
+            client_order_id,
+            qty,
+            reference_price,
+            str(exc),
+        )
         return PaperTradingOrderOutcome(
             symbol=event.symbol.upper(),
             action=event.action,
@@ -865,6 +1013,18 @@ def _submit_paper_order(
         allocation_pct=allocation_pct,
     )
     db.commit()
+    _log_paper_trading_transaction_event(
+        event_name="submitted",
+        strategy_id=str(strategy.id),
+        strategy_name=strategy.name,
+        run_id=str(run.id),
+        portfolio_name=portfolio_name,
+        trade_date=trade_date,
+        transaction=transaction,
+        requested_qty=qty,
+        reference_price=reference_price,
+        reason=event.reason,
+    )
 
     filled_qty = _to_float((transaction.meta or {}).get("filled_qty"))
     execution_price = float(transaction.price) if _transaction_represents_virtual_fill(transaction) else None
@@ -903,13 +1063,19 @@ def _sync_strategy_pending_orders(
     if not pending_transactions:
         return
 
+    reconciliation_events: list[tuple[Transaction, float, float | None, str | None]] = []
     for txn in pending_transactions:
         if not txn.order_id:
             continue
         order = client.get_order(str(txn.order_id))
         meta = txn.meta or {}
+        previous_broker_status = str(meta.get("broker_status") or "").strip().lower() or None
+        previous_filled_qty = _to_float(meta.get("filled_qty"))
+        previous_execution_price = float(txn.price or 0)
         signal_ts = _parse_iso_datetime(meta.get("signal_ts"))
-        _upsert_paper_broker_order_transaction(
+        requested_qty = _requested_transaction_qty(txn)
+        reference_price = _to_float(meta.get("reference_price"))
+        updated_txn = _upsert_paper_broker_order_transaction(
             db,
             strategy_id=txn.strategy_id,
             run_id=txn.run_id,
@@ -924,15 +1090,45 @@ def _sync_strategy_pending_orders(
                 else None
             ),
             order=order,
-            requested_qty=_requested_transaction_qty(txn),
-            reference_price=_to_float(meta.get("reference_price")),
+            requested_qty=requested_qty,
+            reference_price=reference_price,
             client_order_id=str(meta.get("client_order_id") or "") or None,
             portfolio_name=portfolio_name,
             allocation_pct=_to_float(meta.get("allocation_pct")),
             existing_txn=txn,
         )
+        updated_meta = updated_txn.meta or {}
+        updated_broker_status = str(updated_meta.get("broker_status") or "").strip().lower() or None
+        updated_filled_qty = _to_float(updated_meta.get("filled_qty"))
+        updated_execution_price = float(updated_txn.price or 0)
+        if (
+            previous_broker_status != updated_broker_status
+            or abs(updated_filled_qty - previous_filled_qty) > 1e-9
+            or abs(updated_execution_price - previous_execution_price) > 1e-9
+        ):
+            reconciliation_events.append(
+                (
+                    updated_txn,
+                    requested_qty,
+                    reference_price,
+                    str(updated_meta.get("reason") or "") or None,
+                )
+            )
 
     db.commit()
+    for transaction, requested_qty, reference_price, reason in reconciliation_events:
+        _log_paper_trading_transaction_event(
+            event_name="reconciled",
+            strategy_id=str(transaction.strategy_id),
+            strategy_name=None,
+            run_id=str(transaction.run_id) if transaction.run_id else None,
+            portfolio_name=portfolio_name,
+            trade_date=_transaction_trade_date(transaction),
+            transaction=transaction,
+            requested_qty=requested_qty,
+            reference_price=reference_price,
+            reason=reason,
+        )
 
 
 def _upsert_paper_broker_order_transaction(

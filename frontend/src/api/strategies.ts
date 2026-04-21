@@ -10,6 +10,11 @@ import type {
   StrategyRuntimeOut,
 } from "@/types/strategy";
 
+export const STRATEGY_DELETE_CLOSE_REQUIRED_PREFIX =
+  "strategy_delete_requires_position_close:";
+export const STRATEGY_DELETE_MANUAL_RECONCILE_PREFIX =
+  "strategy_delete_requires_manual_reconcile:";
+
 export async function createStrategy(
   payload: StrategyCreate,
   idempotencyKey?: string
@@ -75,8 +80,39 @@ export function updateStrategyConfig(
   });
 }
 
-export function deleteStrategy(strategyId: string): Promise<StrategyDeleteOut> {
-  return http<StrategyDeleteOut>(`/api/strategies/${strategyId}`, {
+export function deleteStrategy(
+  strategyId: string,
+  options?: { closePositions?: boolean }
+): Promise<StrategyDeleteOut> {
+  const params = new URLSearchParams();
+  if (options?.closePositions) {
+    params.set("close_positions", "true");
+  }
+  const query = params.toString();
+  return http<StrategyDeleteOut>(`/api/strategies/${strategyId}${query ? `?${query}` : ""}`, {
     method: "DELETE",
   });
+}
+
+export function isStrategyDeleteCloseRequired(detail?: string | null): boolean {
+  return String(detail || "")
+    .trim()
+    .toLowerCase()
+    .startsWith(STRATEGY_DELETE_CLOSE_REQUIRED_PREFIX);
+}
+
+export function extractStrategyDeleteConflictMessage(detail?: string | null): string {
+  const raw = String(detail || "").trim();
+  if (!raw) {
+    return "";
+  }
+
+  const lower = raw.toLowerCase();
+  if (lower.startsWith(STRATEGY_DELETE_CLOSE_REQUIRED_PREFIX)) {
+    return raw.slice(STRATEGY_DELETE_CLOSE_REQUIRED_PREFIX.length).trim();
+  }
+  if (lower.startsWith(STRATEGY_DELETE_MANUAL_RECONCILE_PREFIX)) {
+    return raw.slice(STRATEGY_DELETE_MANUAL_RECONCILE_PREFIX.length).trim();
+  }
+  return raw;
 }

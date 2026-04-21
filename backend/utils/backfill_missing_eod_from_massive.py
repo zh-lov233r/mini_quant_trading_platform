@@ -47,6 +47,12 @@ WITH symbol_map AS (
       ON instr.id = sh.instrument_id
     WHERE sh.valid_from <= %(trade_date)s::date
       AND (sh.valid_to IS NULL OR sh.valid_to >= %(trade_date)s::date)
+      -- Gap fills should only target the current primary alias for securities
+      -- that are still active in the security master. Without this guard the
+      -- job treats stale aliases and inactive tickers as same-day market-data
+      -- gaps, which inflates still-missing counts dramatically.
+      AND sh.is_primary
+      AND instr.is_active = TRUE
       AND (
         instr.asset_type = 'CS'
         OR (

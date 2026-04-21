@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 from uuid import UUID
 
@@ -28,6 +28,12 @@ from src.services.paper_account_service import (
     normalize_account_name,
     rename_strategy_portfolio,
     update_paper_account,
+)
+from src.services.paper_portfolio_activation_service import (
+    PAPER_TRADING_TRIGGER_ACTIVATION,
+    PortfolioActivationResult,
+    activate_portfolio_for_live_trading,
+    run_live_paper_trading_for_portfolio,
 )
 from src.services.strategy_allocation_service import validate_portfolio_allocations
 
@@ -90,6 +96,20 @@ class StrategyPortfolioOut(BaseModel):
     status: str
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+class StrategyPortfolioActivationExecutionOut(BaseModel):
+    portfolio_name: str
+    trade_date: date
+    total_runs: int
+    completed_runs: int
+    failed_runs: int
+    run_ids: list[str] = Field(default_factory=list)
+
+
+class StrategyPortfolioActivationOut(BaseModel):
+    portfolio: StrategyPortfolioOut
+    execution: StrategyPortfolioActivationExecutionOut
 
 
 class PortfolioStrategyOverviewOut(BaseModel):
@@ -197,6 +217,11 @@ class BrokerPositionOut(BaseModel):
     unrealized_plpc: float | None = None
     current_price: float | None = None
     change_today: float | None = None
+    origin: str | None = None
+    tracked_locally: bool | None = None
+    local_qty: float | None = None
+    qty_delta: float | None = None
+    portfolio_names: list[str] = Field(default_factory=list)
 
 
 class BrokerOrderOut(BaseModel):
@@ -215,6 +240,25 @@ class BrokerOrderOut(BaseModel):
     submitted_at: str | None = None
     filled_at: str | None = None
     canceled_at: str | None = None
+    origin: str | None = None
+    tracked_locally: bool | None = None
+    managed_by_system: bool | None = None
+    portfolio_name: str | None = None
+    is_open: bool | None = None
+
+
+class BrokerIsolationOut(BaseModel):
+    status: str
+    checked_at: datetime | None = None
+    has_external_activity: bool = False
+    active_external_order_count: int = 0
+    active_system_untracked_order_count: int = 0
+    active_external_position_count: int = 0
+    position_mismatch_count: int = 0
+    recent_external_order_count: int = 0
+    recent_system_untracked_order_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    error: str | None = None
 
 
 class PaperAccountTransactionOut(BaseModel):
@@ -258,6 +302,7 @@ class PaperTradingWorkspaceOut(BaseModel):
     broker_account: BrokerAccountSummaryOut | None = None
     broker_clock: BrokerClockOut | None = None
     portfolio_history: BrokerPortfolioHistoryOut | None = None
+    broker_isolation: BrokerIsolationOut
     positions: list[BrokerPositionOut]
     recent_orders: list[BrokerOrderOut]
     recent_transactions: list[PaperAccountTransactionOut]
@@ -305,6 +350,36 @@ def _to_portfolio_out(
         created_at=portfolio.created_at,
         updated_at=portfolio.updated_at,
     )
+
+
+def _to_portfolio_activation_out(
+    result: PortfolioActivationResult,
+    *,
+    paper_account_name: str | None = None,
+) -> StrategyPortfolioActivationOut:
+    return StrategyPortfolioActivationOut(
+        portfolio=_to_portfolio_out(result.portfolio, paper_account_name=paper_account_name),
+        execution=StrategyPortfolioActivationExecutionOut(
+            portfolio_name=result.execution.portfolio_name,
+            trade_date=result.execution.trade_date,
+            total_runs=result.execution.total_runs,
+            completed_runs=result.execution.completed_runs,
+            failed_runs=result.execution.failed_runs,
+            run_ids=[item.run_id for item in result.execution.results],
+        ),
+    )
+
+
+def _portfolio_activation_status_code(message: str) -> int:
+    if message == "strategy portfolio not found":
+        return 404
+    if message in {
+        "paper account not found",
+        "paper account must be active before live paper trading can run",
+        "strategy portfolio already active",
+    }:
+        return 409
+    return 422
 
 
 @router.get("/paper-accounts", response_model=list[PaperTradingAccountOut])
@@ -477,6 +552,27 @@ def create_strategy_portfolio(payload: StrategyPortfolioCreate, db: Session = De
 
     db.commit()
     db.refresh(portfolio)
+
+    if portfolio.status == "active":
+        try:
+            run_live_paper_trading_for_portfolio(
+                db,
+                str(portfolio.id),
+                trigger=PAPER_TRADING_TRIGGER_ACTIVATION,
+            )
+            db.refresh(portfolio)
+        except ValueError as exc:
+            detail = str(exc)
+            raise HTTPException(
+                status_code=_portfolio_activation_status_code(detail),
+                detail=f"portfolio created, but immediate live paper trading failed: {detail}",
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"portfolio created, but immediate live paper trading failed: {exc}",
+            ) from exc
+
     return _to_portfolio_out(portfolio, paper_account_name=account.name)
 
 
@@ -517,6 +613,26 @@ def archive_portfolio(
     account = db.get(PaperTradingAccount, portfolio.paper_account_id)
     return _to_portfolio_out(
         portfolio,
+        paper_account_name=account.name if account is not None else None,
+    )
+
+
+@router.patch("/strategy-portfolios/{portfolio_id}/activate", response_model=StrategyPortfolioActivationOut)
+def activate_portfolio(
+    portfolio_id: UUID,
+    db: Session = Depends(get_db),
+):
+    try:
+        result = activate_portfolio_for_live_trading(db, str(portfolio_id))
+    except ValueError as exc:
+        detail = str(exc)
+        raise HTTPException(status_code=_portfolio_activation_status_code(detail), detail=detail) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"portfolio activation failed: {exc}") from exc
+
+    account = db.get(PaperTradingAccount, result.portfolio.paper_account_id)
+    return _to_portfolio_activation_out(
+        result,
         paper_account_name=account.name if account is not None else None,
     )
 

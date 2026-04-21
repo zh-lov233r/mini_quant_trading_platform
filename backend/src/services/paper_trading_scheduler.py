@@ -60,7 +60,7 @@ class PaperTradingSchedulerConfig:
             enabled=_env_bool("PAPER_TRADING_SCHEDULER_ENABLED", default=True),
             run_time_ny=_env_time("PAPER_TRADING_SCHEDULER_RUN_TIME_NY", default=time(hour=23, minute=30)),
             poll_seconds=_env_float("PAPER_TRADING_SCHEDULER_POLL_SECONDS", default=60.0, minimum=5.0),
-            submit_orders=_env_bool("PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS", default=False),
+            submit_orders=_env_bool("PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS", default=True),
             continue_on_error=_env_bool("PAPER_TRADING_SCHEDULER_CONTINUE_ON_ERROR", default=True),
         )
 

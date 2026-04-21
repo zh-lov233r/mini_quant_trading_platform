@@ -58,6 +58,20 @@ export interface StrategyPortfolioOut {
   updated_at?: string | null;
 }
 
+export interface StrategyPortfolioActivationExecutionOut {
+  portfolio_name: string;
+  trade_date: string;
+  total_runs: number;
+  completed_runs: number;
+  failed_runs: number;
+  run_ids: string[];
+}
+
+export interface StrategyPortfolioActivationOut {
+  portfolio: StrategyPortfolioOut;
+  execution: StrategyPortfolioActivationExecutionOut;
+}
+
 export interface PortfolioStrategyOverviewOut {
   strategy_id: string;
   strategy_name: string;
@@ -163,6 +177,11 @@ export interface BrokerPositionOut {
   unrealized_plpc?: number | null;
   current_price?: number | null;
   change_today?: number | null;
+  origin?: string | null;
+  tracked_locally?: boolean | null;
+  local_qty?: number | null;
+  qty_delta?: number | null;
+  portfolio_names: string[];
 }
 
 export interface BrokerOrderOut {
@@ -181,6 +200,25 @@ export interface BrokerOrderOut {
   submitted_at?: string | null;
   filled_at?: string | null;
   canceled_at?: string | null;
+  origin?: string | null;
+  tracked_locally?: boolean | null;
+  managed_by_system?: boolean | null;
+  portfolio_name?: string | null;
+  is_open?: boolean | null;
+}
+
+export interface BrokerIsolationOut {
+  status: string;
+  checked_at?: string | null;
+  has_external_activity: boolean;
+  active_external_order_count: number;
+  active_system_untracked_order_count: number;
+  active_external_position_count: number;
+  position_mismatch_count: number;
+  recent_external_order_count: number;
+  recent_system_untracked_order_count: number;
+  warnings: string[];
+  error?: string | null;
 }
 
 export interface PaperAccountTransactionOut {
@@ -224,6 +262,7 @@ export interface PaperTradingWorkspaceOut {
   broker_account?: BrokerAccountSummaryOut | null;
   broker_clock?: BrokerClockOut | null;
   portfolio_history?: BrokerPortfolioHistoryOut | null;
+  broker_isolation: BrokerIsolationOut;
   positions: BrokerPositionOut[];
   recent_orders: BrokerOrderOut[];
   recent_transactions: PaperAccountTransactionOut[];

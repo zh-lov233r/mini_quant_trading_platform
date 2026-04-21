@@ -49,6 +49,12 @@ function toDateInputValue(dt: Date): string {
 
 const TODAY_INPUT_VALUE = toDateInputValue(new Date());
 const LAST_SELECTED_PAPER_ACCOUNT_KEY = "paper-trading:last-selected-account-id";
+const LIVE_WORKSPACE_REFRESH_MS = 15_000;
+const DASHBOARD_METRIC_CARD_PROPS = {
+  labelFontSize: 12,
+  valueFontSize: 31,
+  hintFontSize: 14,
+} as const;
 
 type WorkbenchPage = "account" | "portfolios";
 
@@ -95,8 +101,8 @@ export default function PaperTradingPage() {
   const [selectedStrategyId, setSelectedStrategyId] = useState("");
   const [singleTradeDate, setSingleTradeDate] = useState(TODAY_INPUT_VALUE);
   const [multiTradeDate, setMultiTradeDate] = useState(TODAY_INPUT_VALUE);
-  const [submitSingleOrders, setSubmitSingleOrders] = useState(false);
-  const [submitMultiOrders, setSubmitMultiOrders] = useState(false);
+  const [submitSingleOrders, setSubmitSingleOrders] = useState(true);
+  const [submitMultiOrders, setSubmitMultiOrders] = useState(true);
   const [continueOnError, setContinueOnError] = useState(false);
   const [latestTradeDate, setLatestTradeDate] = useState<string | null>(null);
   const [latestSingleRun, setLatestSingleRun] = useState<PaperTradingRunOut | null>(null);
@@ -112,18 +118,30 @@ export default function PaperTradingPage() {
   const [allocationErrors, setAllocationErrors] = useState<Record<string, string>>({});
   const [savingPortfolioId, setSavingPortfolioId] = useState<string | null>(null);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
+  const workspaceRequestIdRef = useRef(0);
+  const immediateWorkspaceRefreshAccountRef = useRef<string | null>(null);
 
   const activeStrategies = useMemo(
     () => strategies.filter((item) => item.status === "active" && item.engine_ready),
     [strategies]
   );
   const currentPortfolios = useMemo(
-    () => workspace?.portfolios ?? [],
-    [workspace?.portfolios]
+    () =>
+      workspace && workspace.account.id === selectedAccountId
+        ? workspace.portfolios ?? []
+        : [],
+    [selectedAccountId, workspace]
   );
   const currentAccount = useMemo(
     () => accounts.find((item) => item.id === selectedAccountId) ?? null,
     [accounts, selectedAccountId]
+  );
+  const displayedWorkspace = useMemo(
+    () =>
+      workspace && workspace.account.id === selectedAccountId
+        ? workspace
+        : null,
+    [selectedAccountId, workspace]
   );
   const runnablePortfolios = useMemo(
     () => currentPortfolios.filter((item) => item.status === "active"),
@@ -144,6 +162,28 @@ export default function PaperTradingPage() {
     },
     [locale]
   );
+
+  const formatSignedMoney = useCallback(
+    (value?: number | null, currency = "USD") => {
+      if (typeof value !== "number" || Number.isNaN(value)) {
+        return "-";
+      }
+      const formatted = formatMoney(Math.abs(value), currency);
+      if (formatted === "-") {
+        return formatted;
+      }
+      return `${value > 0 ? "+" : value < 0 ? "-" : ""}${formatted}`;
+    },
+    [formatMoney]
+  );
+
+  const formatSignedPercent = useCallback((value?: number | null, digits = 2) => {
+    if (typeof value !== "number" || Number.isNaN(value)) {
+      return "-";
+    }
+    const formatted = formatPercent(Math.abs(value), digits);
+    return `${value > 0 ? "+" : value < 0 ? "-" : ""}${formatted}`;
+  }, []);
 
   const formatNumber = useCallback(
     (value?: number | null, digits = 2) => {
@@ -224,30 +264,59 @@ export default function PaperTradingPage() {
   );
 
   const refreshWorkspace = useCallback(
-    async (accountId: string) => {
+    async (
+      accountId: string,
+      options?: { silent?: boolean; resetWorkspace?: boolean }
+    ) => {
+      const requestId = workspaceRequestIdRef.current + 1;
+      workspaceRequestIdRef.current = requestId;
+
       if (!accountId) {
         setWorkspace(null);
         return;
       }
 
       try {
-        setWorkspaceLoading(true);
+        if (options?.resetWorkspace) {
+          setWorkspace(null);
+        }
+        if (!options?.silent) {
+          setWorkspaceLoading(true);
+        }
         setError(null);
         const payload = await getPaperAccountWorkspace(accountId);
+        if (requestId !== workspaceRequestIdRef.current) {
+          return;
+        }
         setWorkspace(payload);
       } catch (err: any) {
+        if (requestId !== workspaceRequestIdRef.current) {
+          return;
+        }
         setError(
           err?.message ||
             txt(
               "加载 Paper Trading 工作台失败，请检查账户配置或后端日志。",
               "Failed to load the paper trading workspace. Check the account setup or backend logs."
-            )
+          )
         );
       } finally {
-        setWorkspaceLoading(false);
+        if (!options?.silent && requestId === workspaceRequestIdRef.current) {
+          setWorkspaceLoading(false);
+        }
       }
     },
     [txt]
+  );
+
+  const handleSelectAccount = useCallback(
+    (accountId: string) => {
+      immediateWorkspaceRefreshAccountRef.current = accountId;
+      setSelectedAccountId(accountId);
+      setAccountMenuOpen(false);
+      void refreshWorkspace(accountId, { resetWorkspace: true });
+    },
+    [refreshWorkspace]
   );
 
   useEffect(() => {
@@ -283,7 +352,38 @@ export default function PaperTradingPage() {
       setWorkspace(null);
       return;
     }
+    if (immediateWorkspaceRefreshAccountRef.current === selectedAccountId) {
+      immediateWorkspaceRefreshAccountRef.current = null;
+      return;
+    }
     void refreshWorkspace(selectedAccountId);
+  }, [refreshWorkspace, selectedAccountId]);
+
+  useEffect(() => {
+    if (!selectedAccountId || typeof window === "undefined") {
+      return;
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      void refreshWorkspace(selectedAccountId, { silent: true });
+    };
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      void refreshWorkspace(selectedAccountId, { silent: true });
+    }, LIVE_WORKSPACE_REFRESH_MS);
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [refreshWorkspace, selectedAccountId]);
 
   useEffect(() => {
@@ -593,9 +693,46 @@ export default function PaperTradingPage() {
     }
   };
 
-  const brokerAccount = workspace?.broker_account;
+  const brokerAccount = displayedWorkspace?.broker_account;
   const brokerCurrency = brokerAccount?.currency || "USD";
-  const portfolioHistory = workspace?.portfolio_history || null;
+  const portfolioHistory = displayedWorkspace?.portfolio_history || null;
+  const brokerIsolation = displayedWorkspace?.broker_isolation || null;
+  const liveOpenPnL = useMemo(
+    () =>
+      (displayedWorkspace?.positions || []).reduce(
+        (sum, item) => sum + (typeof item.unrealized_pl === "number" ? item.unrealized_pl : 0),
+        0
+      ),
+    [displayedWorkspace?.positions]
+  );
+  const liveOpenCostBasis = useMemo(
+    () =>
+      (displayedWorkspace?.positions || []).reduce(
+        (sum, item) => sum + (typeof item.cost_basis === "number" ? item.cost_basis : 0),
+        0
+      ),
+    [displayedWorkspace?.positions]
+  );
+  const liveMarketValue = useMemo(
+    () =>
+      (displayedWorkspace?.positions || []).reduce(
+        (sum, item) => sum + (typeof item.market_value === "number" ? item.market_value : 0),
+        0
+      ),
+    [displayedWorkspace?.positions]
+  );
+  const liveOpenReturnPct =
+    liveOpenCostBasis > 0 ? liveOpenPnL / liveOpenCostBasis : null;
+  const liveDailyPnL =
+    typeof brokerAccount?.equity === "number" && typeof brokerAccount?.last_equity === "number"
+      ? brokerAccount.equity - brokerAccount.last_equity
+      : null;
+  const liveDailyReturnPct =
+    typeof brokerAccount?.equity === "number" &&
+    typeof brokerAccount?.last_equity === "number" &&
+    brokerAccount.last_equity > 0
+      ? (brokerAccount.equity / brokerAccount.last_equity) - 1
+      : null;
 
   const getAllocationDraftKey = useCallback(
     (portfolioId: string, strategyId: string) => `${portfolioId}:${strategyId}`,
@@ -856,22 +993,27 @@ export default function PaperTradingPage() {
             <div style={toolbarRowStyle}>
               <div>
                 <div style={eyebrowStyle}>{txt("当前账户", "Current Account")}</div>
-                <h2 style={sectionHeroTitleStyle}>{workspace?.account.name || "-"}</h2>
+                <h2 style={sectionHeroTitleStyle}>
+                  {currentAccount?.name || displayedWorkspace?.account.name || "-"}
+                </h2>
                 <p style={heroMetaStyle}>
                   {txt("支持切换账户、查看实时账户状态和本地工作台数据。", "Switch accounts and inspect both live broker data and local workspace records.")}
                 </p>
               </div>
               <div style={toolbarActionsStyle}>
-                <Badge tone={workspace?.broker_sync.status === "ok" ? "success" : "warning"}>
-                  {workspace?.broker_sync.status === "ok"
+                <Badge tone={displayedWorkspace?.broker_sync.status === "ok" ? "success" : "warning"}>
+                  {displayedWorkspace?.broker_sync.status === "ok"
                     ? txt("Alpaca 已同步", "Alpaca Synced")
                     : txt("Alpaca 同步失败", "Alpaca Sync Failed")}
                 </Badge>
-                {workspace?.broker_sync.fetched_at ? (
+                {displayedWorkspace?.broker_sync.fetched_at ? (
                   <span style={mutedTextStyle}>
-                    {txt("最近同步", "Last sync")} {formatDateTime(workspace.broker_sync.fetched_at, locale)}
+                    {txt("最近同步", "Last sync")} {formatDateTime(displayedWorkspace.broker_sync.fetched_at, locale)}
                   </span>
                 ) : null}
+                <span style={mutedTextStyle}>
+                  {txt("市场价格与收益每 15 秒自动刷新", "Market prices and P/L refresh every 15 seconds")}
+                </span>
                 <div style={accountSwitcherWrapStyle} ref={accountMenuRef}>
                   <button
                     type="button"
@@ -894,10 +1036,7 @@ export default function PaperTradingPage() {
                           <button
                             key={item.id}
                             type="button"
-                            onClick={() => {
-                              setSelectedAccountId(item.id);
-                              setAccountMenuOpen(false);
-                            }}
+                            onClick={() => handleSelectAccount(item.id)}
                             style={accountMenuItemStyle(item.id === selectedAccountId)}
                           >
                             {item.name}
@@ -926,8 +1065,8 @@ export default function PaperTradingPage() {
                 </button>
               </div>
             </div>
-            {workspace?.broker_sync.error ? (
-              <div style={warningStripStyle}>{workspace.broker_sync.error}</div>
+            {displayedWorkspace?.broker_sync.error ? (
+              <div style={warningStripStyle}>{displayedWorkspace.broker_sync.error}</div>
             ) : null}
           </section>
 
@@ -952,26 +1091,60 @@ export default function PaperTradingPage() {
             <>
               <section style={metricGridStyle}>
                 <MetricCard
+                  {...DASHBOARD_METRIC_CARD_PROPS}
                   label={txt("账户权益", "Account Equity")}
                   value={formatMoney(brokerAccount?.equity, brokerCurrency)}
                   hint={txt("来自 Alpaca 实时账户的 equity。", "Live equity from the Alpaca account.")}
                   accent="#0f766e"
                 />
                 <MetricCard
+                  {...DASHBOARD_METRIC_CARD_PROPS}
+                  label={txt("实时浮盈", "Live Unrealized P/L")}
+                  value={formatSignedMoney(liveOpenPnL, brokerCurrency)}
+                  hint={txt(
+                    `按当前市场价格汇总全部持仓的未实现盈亏。当前收益率 ${formatSignedPercent(liveOpenReturnPct, 2)}。`,
+                    `Aggregated unrealized P/L across all open positions at current market prices. Current return ${formatSignedPercent(liveOpenReturnPct, 2)}.`
+                  )}
+                  accent={liveOpenPnL >= 0 ? "#22c55e" : "#f97316"}
+                />
+                <MetricCard
+                  {...DASHBOARD_METRIC_CARD_PROPS}
+                  label={txt("今日权益变化", "Today's Equity Change")}
+                  value={formatSignedMoney(liveDailyPnL, brokerCurrency)}
+                  hint={txt(
+                    `相对上一笔 equity 快照的账户级变化，当前为 ${formatSignedPercent(liveDailyReturnPct, 2)}。`,
+                    `Account-level change versus the last equity snapshot, currently ${formatSignedPercent(liveDailyReturnPct, 2)}.`
+                  )}
+                  accent={typeof liveDailyPnL === "number" && liveDailyPnL >= 0 ? "#38bdf8" : "#fb7185"}
+                />
+                <MetricCard
+                  {...DASHBOARD_METRIC_CARD_PROPS}
+                  label={txt("实时持仓市值", "Live Position Value")}
+                  value={formatMoney(liveMarketValue, brokerCurrency)}
+                  hint={txt(
+                    "按 Alpaca 当前市场价格计算的全部持仓市值。",
+                    "Combined market value of all open positions using current Alpaca prices."
+                  )}
+                  accent="#7c3aed"
+                />
+                <MetricCard
+                  {...DASHBOARD_METRIC_CARD_PROPS}
                   label={txt("可用现金", "Cash")}
                   value={formatMoney(brokerAccount?.cash, brokerCurrency)}
                   hint={txt("可用现金会直接影响后续 paper order 的可执行性。", "Available cash directly affects what can be submitted next.")}
                   accent="#ea580c"
                 />
                 <MetricCard
+                  {...DASHBOARD_METRIC_CARD_PROPS}
                   label={txt("Buying Power", "Buying Power")}
                   value={formatMoney(brokerAccount?.buying_power, brokerCurrency)}
                   hint={txt("当前账户 buying power。", "Current account buying power.")}
                   accent="#0284c7"
                 />
                 <MetricCard
+                  {...DASHBOARD_METRIC_CARD_PROPS}
                   label={txt("当前 portfolios", "Current Portfolios")}
-                  value={String(workspace?.stats.portfolio_count || 0)}
+                  value={String(displayedWorkspace?.stats.portfolio_count || 0)}
                   hint={txt("这是当前账户下挂接的 portfolio 数量。", "Number of portfolios attached to this account.")}
                   accent="#7c3aed"
                 />
@@ -1024,6 +1197,69 @@ export default function PaperTradingPage() {
                 )}
               </section>
 
+              {brokerIsolation ? (
+                <section
+                  style={{
+                    ...panelStyle,
+                    borderColor:
+                      brokerIsolation.status === "clean"
+                        ? "rgba(45, 212, 191, 0.18)"
+                        : "rgba(251, 191, 36, 0.28)",
+                  }}
+                >
+                  <div style={sectionTitleRowStyle}>
+                    <h3 style={sectionTitleStyle}>{txt("账户隔离状态", "Broker Isolation")}</h3>
+                    <Badge
+                      tone={brokerIsolation.status === "clean" ? "success" : "warning"}
+                    >
+                      {brokerIsolationStatusLabel(brokerIsolation.status, txt)}
+                    </Badge>
+                  </div>
+                  <div style={detailGridStyle}>
+                    <DetailItem
+                      label={txt("历史外部订单", "Recent External Orders")}
+                      value={String(brokerIsolation.recent_external_order_count)}
+                    />
+                    <DetailItem
+                      label={txt("历史未落库系统单", "Recent Untracked System Orders")}
+                      value={String(brokerIsolation.recent_system_untracked_order_count)}
+                    />
+                    <DetailItem
+                      label={txt("活跃外部订单", "Active External Orders")}
+                      value={String(brokerIsolation.active_external_order_count)}
+                    />
+                    <DetailItem
+                      label={txt("活跃未落库系统单", "Active Untracked System Orders")}
+                      value={String(brokerIsolation.active_system_untracked_order_count)}
+                    />
+                    <DetailItem
+                      label={txt("外部持仓", "External Positions")}
+                      value={String(brokerIsolation.active_external_position_count)}
+                    />
+                    <DetailItem
+                      label={txt("持仓数量不一致", "Position Mismatches")}
+                      value={String(brokerIsolation.position_mismatch_count)}
+                    />
+                  </div>
+                  {brokerIsolation.warnings.length > 0 ? (
+                    <div style={{ display: "grid", gap: 10, marginTop: 16 }}>
+                      {brokerIsolation.warnings.map((warning) => (
+                        <div key={warning} style={mutedTextStyle}>
+                          {warning}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ ...mutedTextStyle, marginTop: 16 }}>
+                      {txt(
+                        "当前没有发现会影响本地 paper ledger 的外部订单或持仓。",
+                        "No broker-side activity outside the local paper ledger was detected."
+                      )}
+                    </div>
+                  )}
+                </section>
+              ) : null}
+
               <div style={workspaceGridStyle}>
                 <div style={{ display: "grid", gap: 18 }}>
                   <section style={panelStyle}>
@@ -1039,16 +1275,16 @@ export default function PaperTradingPage() {
                       <DetailItem label={txt("Short Market Value", "Short Market Value")} value={formatMoney(brokerAccount?.short_market_value, brokerCurrency)} />
                       <DetailItem label={txt("Last Equity", "Last Equity")} value={formatMoney(brokerAccount?.last_equity, brokerCurrency)} />
                       <DetailItem label={txt("Day Trade Count", "Day Trade Count")} value={String(brokerAccount?.daytrade_count ?? "-")} />
-                      <DetailItem label={txt("Clock", "Clock")} value={workspace?.broker_clock?.is_open ? txt("开市", "Open") : txt("休市", "Closed")} />
-                      <DetailItem label={txt("下次开市", "Next Open")} value={formatDateTime(workspace?.broker_clock?.next_open, locale)} />
-                      <DetailItem label={txt("下次收市", "Next Close")} value={formatDateTime(workspace?.broker_clock?.next_close, locale)} />
+                      <DetailItem label={txt("Clock", "Clock")} value={displayedWorkspace?.broker_clock?.is_open ? txt("开市", "Open") : txt("休市", "Closed")} />
+                      <DetailItem label={txt("下次开市", "Next Open")} value={formatDateTime(displayedWorkspace?.broker_clock?.next_open, locale)} />
+                      <DetailItem label={txt("下次收市", "Next Close")} value={formatDateTime(displayedWorkspace?.broker_clock?.next_close, locale)} />
                     </div>
                   </section>
 
                   <section style={panelStyle}>
                     <div style={sectionTitleRowStyle}>
                       <h3 style={sectionTitleStyle}>{txt("本地交易明细", "Local Transaction History")}</h3>
-                      <Badge>{String(workspace?.recent_transactions.length || 0)}</Badge>
+                      <Badge>{String(displayedWorkspace?.recent_transactions.length || 0)}</Badge>
                     </div>
                     <DataTable
                       columns={[
@@ -1061,7 +1297,7 @@ export default function PaperTradingPage() {
                         txt("价格", "Price"),
                         txt("净现金流", "Net Cash Flow"),
                       ]}
-                      rows={(workspace?.recent_transactions || []).map((item) => [
+                      rows={(displayedWorkspace?.recent_transactions || []).map((item) => [
                         formatDateTime(item.ts, locale),
                         item.portfolio_name || "-",
                         item.strategy_name || item.strategy_id,
@@ -1088,22 +1324,29 @@ export default function PaperTradingPage() {
                   <section style={panelStyle}>
                     <div style={sectionTitleRowStyle}>
                       <h3 style={sectionTitleStyle}>{txt("Alpaca 持仓", "Alpaca Positions")}</h3>
-                      <Badge>{String(workspace?.positions.length || 0)}</Badge>
+                      <Badge>{String(displayedWorkspace?.positions.length || 0)}</Badge>
                     </div>
                     <DataTable
                       columns={[
                         txt("标的", "Symbol"),
+                        txt("跟踪状态", "Tracking"),
                         txt("方向", "Side"),
                         txt("数量", "Qty"),
+                        txt("成本价", "Avg Entry"),
                         txt("现价", "Current"),
+                        txt("成本市值", "Cost Basis"),
                         txt("市值", "Market Value"),
                         txt("未实现盈亏", "Unrealized P/L"),
+                        txt("收益率", "Return"),
                       ]}
-                      rows={(workspace?.positions || []).map((item: BrokerPositionOut) => [
+                      rows={(displayedWorkspace?.positions || []).map((item: BrokerPositionOut) => [
                         item.symbol,
+                        brokerPositionOriginLabel(item, txt),
                         item.side || "-",
                         formatNumber(item.qty, 4),
+                        formatMoney(item.avg_entry_price, brokerCurrency),
                         formatMoney(item.current_price, brokerCurrency),
+                        formatMoney(item.cost_basis, brokerCurrency),
                         formatMoney(item.market_value, brokerCurrency),
                         <span
                           key={`${item.symbol}-pl`}
@@ -1114,6 +1357,15 @@ export default function PaperTradingPage() {
                         >
                           {formatMoney(item.unrealized_pl, brokerCurrency)}
                         </span>,
+                        <span
+                          key={`${item.symbol}-plpc`}
+                          style={{
+                            color: (item.unrealized_plpc || 0) >= 0 ? "#22c55e" : "#f97316",
+                            fontWeight: 700,
+                          }}
+                        >
+                          {formatSignedPercent(item.unrealized_plpc ?? null, 2)}
+                        </span>,
                       ])}
                       emptyText={txt("当前没有 Alpaca 持仓。", "There are no Alpaca positions right now.")}
                     />
@@ -1122,20 +1374,22 @@ export default function PaperTradingPage() {
                   <section style={panelStyle}>
                     <div style={sectionTitleRowStyle}>
                       <h3 style={sectionTitleStyle}>{txt("最近订单", "Recent Orders")}</h3>
-                      <Badge>{String(workspace?.recent_orders.length || 0)}</Badge>
+                      <Badge>{String(displayedWorkspace?.recent_orders.length || 0)}</Badge>
                     </div>
                     <DataTable
                       columns={[
                         txt("时间", "Time"),
                         txt("标的", "Symbol"),
+                        txt("来源", "Origin"),
                         txt("方向", "Side"),
                         txt("状态", "Status"),
                         txt("数量", "Qty"),
                         txt("成交均价", "Fill Avg"),
                       ]}
-                      rows={(workspace?.recent_orders || []).map((item: BrokerOrderOut) => [
+                      rows={(displayedWorkspace?.recent_orders || []).map((item: BrokerOrderOut) => [
                         formatDateTime(item.submitted_at, locale),
                         item.symbol || "-",
+                        brokerOrderOriginLabel(item, txt),
                         item.side || "-",
                         item.status || "-",
                         formatNumber(item.qty, 4),
@@ -1391,7 +1645,7 @@ export default function PaperTradingPage() {
                       )}
                     </p>
                   </div>
-                  <Badge tone="info">{workspace?.account.name || "-"}</Badge>
+                  <Badge tone="info">{currentAccount?.name || displayedWorkspace?.account.name || "-"}</Badge>
                 </div>
                 <form onSubmit={handleCreatePortfolio} style={formGridStyle}>
                   <label style={fieldStyle}>
@@ -1745,7 +1999,7 @@ function AccountBalanceChart({
   const paddingLeft = 18;
   const paddingRight = 18;
   const paddingTop = 18;
-  const paddingBottom = 34;
+  const paddingBottom = 54;
   const values = history.points.map((item) => item.equity);
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -1770,6 +2024,52 @@ function AccountBalanceChart({
     : "";
 
   const tickValues = [max, max - yRange / 2, min];
+  const dateLabelFormatter = new Intl.DateTimeFormat(locale, {
+    month: "short",
+    day: "numeric",
+  });
+  const dateLabelWithYearFormatter = new Intl.DateTimeFormat(locale, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+  const startDate = history.points[0] ? new Date(history.points[0].ts) : null;
+  const endDate = history.points[history.points.length - 1]
+    ? new Date(history.points[history.points.length - 1].ts)
+    : null;
+  const showYearOnAxis =
+    startDate !== null &&
+    endDate !== null &&
+    startDate.getFullYear() !== endDate.getFullYear();
+  const xAxisTickIndices = Array.from(
+    new Set(
+      [0, Math.floor((history.points.length - 1) / 2), history.points.length - 1].filter(
+        (index) => index >= 0 && index < history.points.length
+      )
+    )
+  );
+  const xAxisTicks = xAxisTickIndices.map((index) => {
+    const point = points[index];
+    const timestamp = new Date(point.ts);
+    const label = showYearOnAxis
+      ? dateLabelWithYearFormatter.format(timestamp)
+      : dateLabelFormatter.format(timestamp);
+
+    let textAnchor: "start" | "middle" | "end" = "middle";
+    if (index === 0) {
+      textAnchor = "start";
+    } else if (index === history.points.length - 1) {
+      textAnchor = "end";
+    }
+
+    return {
+      index,
+      point,
+      label,
+      textAnchor,
+    };
+  });
+  const xAxisY = height - paddingBottom;
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
@@ -1835,6 +2135,38 @@ function AccountBalanceChart({
               <circle cx={points[points.length - 1].x} cy={points[points.length - 1].y} r="4.5" fill="#2dd4bf" />
             </>
           ) : null}
+          {xAxisTicks.length ? (
+            <>
+              <line
+                x1={paddingLeft}
+                x2={width - paddingRight}
+                y1={xAxisY}
+                y2={xAxisY}
+                stroke="rgba(148, 163, 184, 0.18)"
+              />
+              {xAxisTicks.map((tick) => (
+                <g key={`${tick.index}-${tick.label}`}>
+                  <line
+                    x1={tick.point.x}
+                    x2={tick.point.x}
+                    y1={xAxisY}
+                    y2={xAxisY + 6}
+                    stroke="rgba(148, 163, 184, 0.32)"
+                  />
+                  <text
+                    x={tick.point.x}
+                    y={xAxisY + 22}
+                    textAnchor={tick.textAnchor}
+                    fill="rgba(203, 213, 225, 0.72)"
+                    fontSize="12"
+                    fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
+                  >
+                    {tick.label}
+                  </text>
+                </g>
+              ))}
+            </>
+          ) : null}
         </svg>
       </div>
       <div style={chartFooterStyle}>
@@ -1847,6 +2179,68 @@ function AccountBalanceChart({
           {text("样本点", "Points")}: {numberFormatter(history.points.length, 0)}
         </div>
       </div>
+    </div>
+  );
+}
+
+function brokerIsolationStatusLabel(
+  status: string | null | undefined,
+  text: (zh: string, en: string) => string
+): string {
+  switch (status) {
+    case "blocked":
+      return text("存在活跃冲突", "Active Conflict");
+    case "warning":
+      return text("发现历史异常", "Historical Warning");
+    case "clean":
+      return text("隔离正常", "Clean");
+    default:
+      return text("未知", "Unknown");
+  }
+}
+
+function brokerOrderOriginLabel(
+  order: BrokerOrderOut,
+  text: (zh: string, en: string) => string
+): JSX.Element {
+  let label = text("本地已跟踪", "Tracked Locally");
+  if (order.origin === "system_untracked") {
+    label = text("系统风格但未落库", "System, Untracked");
+  } else if (order.origin === "system_cleanup") {
+    label = text("系统清仓", "System Cleanup");
+  } else if (order.origin === "external_api") {
+    label = text("外部 API", "External API");
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 4 }}>
+      <span>{label}</span>
+      {order.portfolio_name ? (
+        <span style={mutedTextStyle}>{order.portfolio_name}</span>
+      ) : null}
+    </div>
+  );
+}
+
+function brokerPositionOriginLabel(
+  position: BrokerPositionOut,
+  text: (zh: string, en: string) => string
+): JSX.Element {
+  let label = text("本地已跟踪", "Tracked Locally");
+  if (position.origin === "qty_mismatch") {
+    label = text("数量不一致", "Qty Mismatch");
+  } else if (position.origin === "external_api") {
+    label = text("外部持仓", "External Position");
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 4 }}>
+      <span>{label}</span>
+      {typeof position.local_qty === "number" ? (
+        <span style={mutedTextStyle}>
+          {text("本地数量", "Local Qty")}: {position.local_qty.toFixed(4)}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -1893,7 +2287,7 @@ const emptyHeroStyle: CSSProperties = {
 
 const heroTitleStyle: CSSProperties = {
   margin: "0 0 10px",
-  fontSize: 38,
+  fontSize: 34,
   lineHeight: 1.05,
   color: "#f8fafc",
 };
@@ -1902,7 +2296,7 @@ const heroBodyStyle: CSSProperties = {
   margin: 0,
   color: "rgba(226, 232, 240, 0.82)",
   lineHeight: 1.8,
-  fontSize: 16,
+  fontSize: 15,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
 
@@ -1918,7 +2312,7 @@ const eyebrowStyle: CSSProperties = {
 
 const sectionHeroTitleStyle: CSSProperties = {
   margin: "0 0 8px",
-  fontSize: 28,
+  fontSize: 25,
   color: "#f8fafc",
 };
 
@@ -1926,6 +2320,7 @@ const heroMetaStyle: CSSProperties = {
   margin: 0,
   color: "rgba(226, 232, 240, 0.76)",
   lineHeight: 1.7,
+  fontSize: 14,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
 
@@ -2060,7 +2455,7 @@ const sectionTitleRowStyle: CSSProperties = {
 
 const sectionTitleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 22,
+  fontSize: 20,
   color: "#f8fafc",
 };
 
@@ -2080,7 +2475,7 @@ const chartSummaryStyle: CSSProperties = {
 
 const chartHeadlineStyle: CSSProperties = {
   color: "#f8fafc",
-  fontSize: 28,
+  fontSize: 25,
   fontWeight: 700,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
@@ -2141,7 +2536,7 @@ const detailLabelStyle: CSSProperties = {
 
 const detailValueStyle: CSSProperties = {
   color: "#f8fafc",
-  fontSize: 18,
+  fontSize: 16,
   fontWeight: 700,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
@@ -2149,7 +2544,7 @@ const detailValueStyle: CSSProperties = {
 const mutedTextStyle: CSSProperties = {
   color: "rgba(203, 213, 225, 0.74)",
   lineHeight: 1.6,
-  fontSize: 14,
+  fontSize: 13,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
 
@@ -2202,7 +2597,7 @@ const portfolioCardStyle: CSSProperties = {
 
 const portfolioTitleStyle: CSSProperties = {
   margin: "0 0 6px",
-  fontSize: 20,
+  fontSize: 18,
   color: "#f8fafc",
 };
 
@@ -2210,6 +2605,7 @@ const portfolioBodyStyle: CSSProperties = {
   margin: 0,
   color: "rgba(203, 213, 225, 0.76)",
   lineHeight: 1.6,
+  fontSize: 14,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
 
@@ -2313,6 +2709,7 @@ const fieldStyle: CSSProperties = {
 const fieldLabelStyle: CSSProperties = {
   color: "#f8fafc",
   fontWeight: 700,
+  fontSize: 14,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
 
@@ -2323,6 +2720,7 @@ const inputStyle: CSSProperties = {
   border: "1px solid rgba(148, 163, 184, 0.18)",
   background: "rgba(15, 23, 42, 0.84)",
   color: "#f8fafc",
+  fontSize: 14,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
 
@@ -2391,6 +2789,7 @@ const emptyBlockStyle: CSSProperties = {
   background: "rgba(15, 23, 42, 0.7)",
   color: "rgba(203, 213, 225, 0.78)",
   lineHeight: 1.7,
+  fontSize: 14,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
 
@@ -2419,7 +2818,7 @@ const tableCellStyle: CSSProperties = {
   padding: "14px 10px",
   borderBottom: "1px solid rgba(148, 163, 184, 0.08)",
   color: "#f8fafc",
-  fontSize: 14,
+  fontSize: 13,
   lineHeight: 1.5,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
   verticalAlign: "top",
