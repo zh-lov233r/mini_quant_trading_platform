@@ -405,16 +405,3 @@ This separation makes it easier to:
 - [backend/src/services/strategy_registry.py](backend/src/services/strategy_registry.py)
 - [frontend/src/pages/paper-trading.tsx](frontend/src/pages/paper-trading.tsx)
 
-## What This README Covers
-
-This README focuses on:
-
-- what the repository can do today
-- how the project structure maps to the feature set
-- how to start it locally or with Docker
-- how data backfills connect to the paper-trading scheduler
-
-If useful, the next step could be a second layer of documentation:
-
-- a teammate onboarding guide
-- a deployment / operations guide
