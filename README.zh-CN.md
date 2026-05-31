@@ -233,7 +233,7 @@ FRONTEND_ORIGIN=http://localhost:3000
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 ```
 
-如果你要用 Massive 或 Alpaca，再补充：
+如果要用 Massive 或 Alpaca，再补充：
 
 ```env
 MASSIVE_API_KEY=
@@ -335,9 +335,6 @@ make backfill-daily BACKFILL_ARGS="--start-date 2026-04-01 --end-date 2026-04-10
   - 只执行 `auto_run_enabled=true` 的 strategy allocation
 
 ### Scheduler 当前执行逻辑
-
-当前 scheduler 的逻辑是：
-
 1. 轮询当前纽约时间
 2. 查找 `<= 今天` 的最新 ready trade date
 3. ready trade date 的定义是：
@@ -346,12 +343,6 @@ make backfill-daily BACKFILL_ARGS="--start-date 2026-04-01 --end-date 2026-04-10
 4. 只有在特征完整落库后，scheduler 才允许执行
 5. 到达 `PAPER_TRADING_SCHEDULER_RUN_TIME_NY` 后，才会真正跑 portfolio
 6. 同一 `portfolio + trade_date + trigger=scheduler` 只会执行一次
-
-这样做的目的是避免：
-
-- `daily_features` 只落了一部分就抢跑
-- 同一天重复下单
-- 数据晚到时直接错过原本应该执行的 trade date
 
 ### Scheduler 相关环境变量
 
@@ -372,7 +363,7 @@ PAPER_TRADING_SCHEDULER_CONTINUE_ON_ERROR=true
 
 - 这里的自动下单面向 Alpaca paper account
 - 真实提交订单后，会在 Alpaca paper 账户里留下真实的 paper position / order state
-- 如果你在联调期间做过测试下单，记得清理 paper 持仓和挂单，避免影响后续策略判断
+- 如果在联调期间做过测试下单，记得清理 paper 持仓和挂单，避免影响后续策略判断
 
 ## 数据模型概览
 
@@ -391,7 +382,7 @@ PaperTradingAccount
       -> Strategy
 ```
 
-这套模型把“策略定义”“策略执行结果”“组合分配”“券商账户映射”拆开了，便于：
+这套模型将“策略定义”“策略执行结果”“组合分配”“券商账户映射”拆开，便于：
 
 - 一套策略挂多个 portfolio
 - 一个 paper account 管多个 portfolio
@@ -406,16 +397,3 @@ PaperTradingAccount
 - [backend/src/services/strategy_registry.py](backend/src/services/strategy_registry.py)
 - [frontend/src/pages/paper-trading.tsx](frontend/src/pages/paper-trading.tsx)
 
-## 当前 README 的定位
-
-这份 README 重点覆盖：
-
-- 这个仓库现在能做什么
-- 项目结构如何对应功能
-- 本地开发 / Docker 如何启动
-- 数据回填与 scheduler 如何衔接
-
-如果后面你希望，我可以继续把它往两种方向再补一层：
-
-- 面向新同事的“上手流程版”
-- 面向部署的“运维与生产配置版”
