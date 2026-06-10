@@ -1,6 +1,6 @@
-import { zhCNMessages } from "./zh-CN";
+import type { MessageSchema } from "./zh-CN";
 
-export const enUSMessages: typeof zhCNMessages = {
+export const enUSMessages: MessageSchema = {
   common: {
     appName: "Quant Strategy Workspace",
     language: "Language",

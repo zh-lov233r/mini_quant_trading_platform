@@ -267,3 +267,9 @@ export const zhCNMessages = {
     },
   },
 } as const;
+
+type WidenMessageValues<T> = {
+  [K in keyof T]: T[K] extends string ? string : WidenMessageValues<T[K]>;
+};
+
+export type MessageSchema = WidenMessageValues<typeof zhCNMessages>;

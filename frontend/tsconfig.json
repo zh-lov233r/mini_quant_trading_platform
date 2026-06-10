@@ -3,7 +3,7 @@
       "target": "ES2022",
       "lib": ["DOM", "DOM.Iterable", "ES2022"],
       "module": "ESNext",
-      "moduleResolution": "Node",
+      "moduleResolution": "Bundler",
       "jsx": "preserve",
       "resolveJsonModule": true,
       "allowJs": true,
@@ -15,12 +15,10 @@
       "strict": true,
       "skipLibCheck": true,
       "incremental": true,
-      "baseUrl": "./src",
       "paths": {
-        "@/*": ["*"]
+        "@/*": ["./src/*"]
       }
     },
     "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
     "exclude": ["node_modules"]
   }
-  

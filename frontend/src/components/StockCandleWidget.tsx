@@ -116,22 +116,23 @@ export default function StockCandleWidget() {
       return;
     }
 
+    const activeGesture = gesture;
     const previousUserSelect = document.body.style.userSelect;
     const previousCursor = document.body.style.cursor;
     document.body.style.userSelect = "none";
-    document.body.style.cursor = gesture.mode === "drag" ? "grabbing" : "nwse-resize";
+    document.body.style.cursor = activeGesture.mode === "drag" ? "grabbing" : "nwse-resize";
 
     function handlePointerMove(event: PointerEvent) {
       event.preventDefault();
-      const deltaX = event.clientX - gesture.originX;
-      const deltaY = event.clientY - gesture.originY;
+      const deltaX = event.clientX - activeGesture.originX;
+      const deltaY = event.clientY - activeGesture.originY;
 
-      if (gesture.mode === "drag") {
+      if (activeGesture.mode === "drag") {
         setPanelLayout(
           clampPanelLayout({
-            ...gesture.startLayout,
-            x: gesture.startLayout.x + deltaX,
-            y: gesture.startLayout.y + deltaY,
+            ...activeGesture.startLayout,
+            x: activeGesture.startLayout.x + deltaX,
+            y: activeGesture.startLayout.y + deltaY,
           })
         );
         return;
@@ -139,9 +140,9 @@ export default function StockCandleWidget() {
 
       setPanelLayout(
         clampPanelLayout({
-          ...gesture.startLayout,
-          width: gesture.startLayout.width + deltaX,
-          height: gesture.startLayout.height + deltaY,
+          ...activeGesture.startLayout,
+          width: activeGesture.startLayout.width + deltaX,
+          height: activeGesture.startLayout.height + deltaY,
         })
       );
     }
