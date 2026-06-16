@@ -40,6 +40,10 @@
   - scheduler 只会跑 `auto_run_enabled=true` 的 active portfolio allocation
   - 可以配置为 dry run，也可以配置为直接提交 Alpaca paper orders
 
+## 策略研究笔记
+
+- [趋势跟踪策略改进建议](docs/trend-following-improvement-notes.zh-CN.md)
+
 ## 技术栈
 
 - Backend
@@ -396,4 +400,3 @@ PaperTradingAccount
 - [backend/src/services/strategy_engine.py](backend/src/services/strategy_engine.py)
 - [backend/src/services/strategy_registry.py](backend/src/services/strategy_registry.py)
 - [frontend/src/pages/paper-trading.tsx](frontend/src/pages/paper-trading.tsx)
-
