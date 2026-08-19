@@ -67,11 +67,13 @@ class SymbolIdentityResolutionTests(unittest.TestCase):
         self.assertIn("THEN latest_same_symbol.latest_valid_to + 1", module.SQL_OPEN_NEW)
         self.assertIn("THEN 'inferred'", module.SQL_OPEN_NEW)
 
-    def test_supported_symbol_map_only_uses_active_primary_intervals(self) -> None:
+    def test_supported_symbol_map_uses_point_in_time_primary_intervals(self) -> None:
         from src.services import data_service
 
         self.assertIn("AND sh.is_primary", data_service.SUPPORTED_SYMBOL_MAP_SQL)
-        self.assertIn("AND instr.is_active = TRUE", data_service.SUPPORTED_SYMBOL_MAP_SQL)
+        self.assertIn("sh.valid_from <= %(trade_date)s::date", data_service.SUPPORTED_SYMBOL_MAP_SQL)
+        self.assertIn("sh.valid_to IS NULL OR sh.valid_to >= %(trade_date)s::date", data_service.SUPPORTED_SYMBOL_MAP_SQL)
+        self.assertNotIn("instr.is_active = TRUE", data_service.SUPPORTED_SYMBOL_MAP_SQL)
 
 
 if __name__ == "__main__":

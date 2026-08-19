@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
         description=(
             "Run the daily market-data catch-up flow: fill missing eod_bars rows first, "
             "then sync corporate actions, recompute adjusted prices, and refresh daily_features "
-            "for the same window."
+            "for the same window, followed by read-only integrity checks."
         )
     )
     parser.add_argument(
@@ -89,6 +89,16 @@ def parse_args() -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help="Inspect the eod gap-fill step without writing rows.",
+    )
+    parser.add_argument(
+        "--skip-quality-check",
+        action="store_true",
+        help="Skip the final read-only market-data integrity gate.",
+    )
+    parser.add_argument(
+        "--strict-quality-check",
+        action="store_true",
+        help="Treat quality-check warnings as failures.",
     )
     return parser.parse_args()
 
@@ -168,6 +178,19 @@ def _run_corporate_action_sync(shared_args: list[str]) -> None:
     _run_step("sync-corporate-actions", action_script, shared_args)
 
 
+def _run_quality_check(database_url: str, as_of_date: date, *, strict: bool) -> None:
+    quality_script = REPO_ROOT / "backend" / "utils" / "check_market_data_quality.py"
+    quality_args = [
+        "--database-url",
+        database_url,
+        "--as-of-date",
+        as_of_date.isoformat(),
+    ]
+    if strict:
+        quality_args.append("--strict")
+    _run_step("check-market-data-quality", quality_script, quality_args)
+
+
 def main() -> None:
     load_dotenv(REPO_ROOT / ".env")
     args = parse_args()
@@ -243,6 +266,14 @@ def main() -> None:
         f"latest_feature_date={final_coverage.latest_feature_date}",
         flush=True,
     )
+    if args.skip_quality_check:
+        print("Skipping market-data quality check by request.", flush=True)
+    else:
+        _run_quality_check(
+            args.database_url,
+            end_date,
+            strict=args.strict_quality_check,
+        )
 
 
 if __name__ == "__main__":

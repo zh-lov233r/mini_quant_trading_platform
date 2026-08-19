@@ -281,6 +281,7 @@ make dev
 make dev-backend
 make dev-frontend
 make backfill-daily
+make check-data
 make docker-build
 make docker-up
 make docker-down
@@ -296,7 +297,7 @@ make docker-logs
 
 - `run_daily_market_backfill.py`
   - 每日市场数据 catch-up 总入口
-  - 顺序执行缺失 EOD 检查、公司行为同步、复权价格刷新、`daily_features` 刷新
+  - 顺序执行缺失 EOD 检查、公司行为同步、复权价格刷新、`daily_features` 刷新和最终完整性门禁
 
 - `backfill_missing_eod_from_massive.py`
   - 用 Massive 补缺失的日线行情
@@ -306,6 +307,9 @@ make docker-logs
 
 - `backfill_daily_features.py`
   - 基于 `eod_bars` 计算并回写 `daily_features`
+
+- `check_market_data_quality.py`
+  - 以只读方式检查价格/特征缺口、非法数值、重复证券身份、代码历史重叠、active 标的陈旧数据和最新交易日是否完整
 
 通过 Makefile 触发每日回填：
 
@@ -317,6 +321,13 @@ make backfill-daily
 
 ```bash
 make backfill-daily BACKFILL_ARGS="--start-date 2026-04-01 --end-date 2026-04-10"
+```
+
+运行数据质量门禁（默认 warning 不会导致失败）：
+
+```bash
+make check-data
+make check-data CHECK_DATA_ARGS="--strict --json"
 ```
 
 ## Paper Trading 与 Scheduler

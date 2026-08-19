@@ -249,6 +249,7 @@ class RollingStats:
         self.values: deque[float] = deque()
         self.sum = 0.0
         self.sum_sq = 0.0
+        self.evictions = 0
 
     def push(self, value: float | None) -> None:
         if value is None or math.isnan(value):
@@ -258,8 +259,24 @@ class RollingStats:
         self.sum_sq += value * value
         while len(self.values) > self.window:
             old = self.values.popleft()
+            sum_before_eviction = self.sum
             self.sum -= old
             self.sum_sq -= old * old
+            self.evictions += 1
+
+            # Sliding sums can lose the entire low-order remainder when a very
+            # large split-era observation leaves a window of much smaller
+            # values. Rebase around severe cancellation and periodically during
+            # long histories. This keeps the O(1) common path while preventing
+            # impossible negative price/volume/true-range means.
+            cancellation_scale = abs(sum_before_eviction) + abs(old)
+            severe_cancellation = (
+                cancellation_scale > 0
+                and abs(self.sum) <= cancellation_scale * 1e-12
+            )
+            if severe_cancellation or self.evictions % 1024 == 0:
+                self.sum = math.fsum(self.values)
+                self.sum_sq = math.fsum(value * value for value in self.values)
 
     def mean(self) -> float | None:
         if len(self.values) < self.window:

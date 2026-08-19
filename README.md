@@ -280,6 +280,7 @@ make dev
 make dev-backend
 make dev-frontend
 make backfill-daily
+make check-data
 make docker-build
 make docker-up
 make docker-down
@@ -295,7 +296,7 @@ make docker-logs
 
 - `run_daily_market_backfill.py`
   - Main daily market-data catch-up entrypoint
-  - Runs missing EOD checks, corporate action sync, adjusted-price refresh, and `daily_features` refresh
+  - Runs missing EOD checks, corporate action sync, adjusted-price refresh, `daily_features` refresh, and the final integrity gate
 
 - `backfill_missing_eod_from_massive.py`
   - Fill missing daily bars from Massive
@@ -305,6 +306,9 @@ make docker-logs
 
 - `backfill_daily_features.py`
   - Recompute and upsert `daily_features` from `eod_bars`
+
+- `check_market_data_quality.py`
+  - Run read-only checks for price/feature gaps, invalid values, duplicate identities, symbol-history overlaps, stale active instruments, and partial latest sessions
 
 Run the daily backfill flow through Make:
 
@@ -316,6 +320,13 @@ Pass extra arguments like this:
 
 ```bash
 make backfill-daily BACKFILL_ARGS="--start-date 2026-04-01 --end-date 2026-04-10"
+```
+
+Run the integrity gate (warnings do not fail by default):
+
+```bash
+make check-data
+make check-data CHECK_DATA_ARGS="--strict --json"
 ```
 
 ## Paper Trading and Scheduler

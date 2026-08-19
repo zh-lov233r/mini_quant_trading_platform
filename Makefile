@@ -5,7 +5,7 @@ BACKEND_DIR := $(ROOT_DIR)/backend
 FRONTEND_DIR := $(ROOT_DIR)/frontend
 PYTHON := $(ROOT_DIR)/.venv/bin/python
 
-.PHONY: help dev dev-backend dev-frontend backfill-daily docker-build docker-up docker-down docker-logs
+.PHONY: help dev dev-backend dev-frontend backfill-daily check-data docker-build docker-up docker-down docker-logs
 
 help:
 	@echo "Available targets:"
@@ -13,6 +13,7 @@ help:
 	@echo "  make dev-backend  Start FastAPI backend only"
 	@echo "  make dev-frontend Start Next.js frontend only"
 	@echo "  make backfill-daily Run the daily market-data catch-up flow"
+	@echo "  make check-data     Run read-only market-data integrity checks"
 	@echo "  make docker-build Build all Docker images"
 	@echo "  make docker-up    Start the full Docker stack in background"
 	@echo "  make docker-down  Stop the Docker stack"
@@ -32,6 +33,9 @@ dev-frontend:
 
 backfill-daily:
 	@cd "$(ROOT_DIR)" && "$(PYTHON)" backend/utils/run_daily_market_backfill.py $(BACKFILL_ARGS)
+
+check-data:
+	@cd "$(ROOT_DIR)" && "$(PYTHON)" backend/utils/check_market_data_quality.py $(CHECK_DATA_ARGS)
 
 docker-build:
 	@docker compose --env-file .env.docker build
