@@ -24,7 +24,12 @@ from src.services.strategy_engine import (
     required_recent_bar_count_for_runtime,
     required_recent_bar_lookback_days,
 )
-from src.services.strategy_registry import build_runtime_payload
+from src.services.strategy_registry import (
+    build_runtime_payload,
+    extract_description,
+    is_engine_ready,
+    normalize_strategy_params,
+)
 
 DEFAULT_COMPARISON_SYMBOLS = ("SPY", "QQQ")
 
@@ -200,6 +205,7 @@ def run_backtest(
     universe_symbols: list[str] | None = None,
     universe_metadata: dict[str, Any] | None = None,
     existing_run_id: UUID | str | None = None,
+    runtime_params_override: dict[str, Any] | None = None,
 ) -> BacktestResult:
     """Run a long-only daily backtest and persist signals, fills, and equity snapshots.
 
@@ -224,6 +230,14 @@ def run_backtest(
         raise ValueError("initial_cash must be positive")
 
     runtime = build_runtime_payload(strategy)
+    if runtime_params_override is not None:
+        normalized_override = normalize_strategy_params(
+            strategy.strategy_type,
+            runtime_params_override,
+            extract_description(runtime_params_override),
+        )
+        runtime["params"] = normalized_override
+        runtime["engine_ready"] = is_engine_ready(strategy.strategy_type, normalized_override)
     if universe_symbols is not None:
         normalized_symbols = _normalize_symbol_universe(universe_symbols)
         runtime["params"]["universe"]["symbols"] = normalized_symbols

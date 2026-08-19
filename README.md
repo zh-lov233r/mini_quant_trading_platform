@@ -398,10 +398,11 @@ This separation makes it easier to:
 
 ## Good Files to Read Next
 
+For Agent-driven draft strategies, research experiments, safe joint startup, schema rollout, and recovery semantics, see [docs/agent-research-integration.md](docs/agent-research-integration.md).
+
 - [backend/src/main.py](backend/src/main.py)
 - [backend/src/services/paper_trading_service.py](backend/src/services/paper_trading_service.py)
 - [backend/src/services/paper_trading_scheduler.py](backend/src/services/paper_trading_scheduler.py)
 - [backend/src/services/strategy_engine.py](backend/src/services/strategy_engine.py)
 - [backend/src/services/strategy_registry.py](backend/src/services/strategy_registry.py)
 - [frontend/src/pages/paper-trading.tsx](frontend/src/pages/paper-trading.tsx)
-

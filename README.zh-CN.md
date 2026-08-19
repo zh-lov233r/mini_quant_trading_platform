@@ -390,10 +390,11 @@ PaperTradingAccount
 
 ## README 之外值得先看的文件
 
+Agent 研发与研究实验的联合启动、安全开关、数据库升级和恢复语义见 [docs/agent-research-integration.md](docs/agent-research-integration.md)。
+
 - [backend/src/main.py](backend/src/main.py)
 - [backend/src/services/paper_trading_service.py](backend/src/services/paper_trading_service.py)
 - [backend/src/services/paper_trading_scheduler.py](backend/src/services/paper_trading_scheduler.py)
 - [backend/src/services/strategy_engine.py](backend/src/services/strategy_engine.py)
 - [backend/src/services/strategy_registry.py](backend/src/services/strategy_registry.py)
 - [frontend/src/pages/paper-trading.tsx](frontend/src/pages/paper-trading.tsx)
-

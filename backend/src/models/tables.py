@@ -59,7 +59,7 @@ class Strategy(Base):
     cur_position = Column(JSON_VARIANT, default=dict)
     status = Column(String(16), nullable=False, default="draft")
     version = Column(Integer, nullable=False, default=1)
-    idempotency_key = Column(String(64), unique=True)
+    idempotency_key = Column(String(128), unique=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -257,6 +257,93 @@ class StrategyRun(Base):
         passive_deletes=True,
         order_by="PortfolioSnapshot.ts",
     )
+
+
+class ResearchExperiment(Base):
+    __tablename__ = "research_experiments"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_research_experiments_idempotency_key"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'completed', 'partially_failed', "
+            "'failed', 'cancel_requested', 'cancelled', 'data_changed')",
+            name="ck_research_experiments_status",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workflow_run_id = Column(String(64), nullable=False, index=True)
+    idempotency_key = Column(String(128), nullable=False)
+    status = Column(String(24), nullable=False, default="queued", index=True)
+    spec = Column(JSON_VARIANT, nullable=False, default=dict)
+    run_manifest = Column(JSON_VARIANT, nullable=False, default=dict)
+    progress = Column(JSON_VARIANT, nullable=False, default=dict)
+    report = Column(JSON_VARIANT, nullable=False, default=dict)
+    error_code = Column(String(64))
+    error_message = Column(Text)
+    started_at = Column(DateTime(timezone=True))
+    finished_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    trials = relationship(
+        "ExperimentTrial",
+        back_populates="experiment",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ExperimentTrial.ordinal",
+    )
+
+
+class ExperimentTrial(Base):
+    __tablename__ = "experiment_trials"
+    __table_args__ = (
+        UniqueConstraint("experiment_id", "trial_key", name="uq_experiment_trials_key"),
+        UniqueConstraint("experiment_id", "ordinal", name="uq_experiment_trials_ordinal"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'completed', 'failed', 'cancelled')",
+            name="ck_experiment_trials_status",
+        ),
+        CheckConstraint(
+            "sample_kind IN ('in_sample', 'out_of_sample')",
+            name="ck_experiment_trials_sample_kind",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    experiment_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("research_experiments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    backtest_run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("strategy_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    trial_key = Column(String(64), nullable=False)
+    ordinal = Column(Integer, nullable=False)
+    status = Column(String(16), nullable=False, default="queued", index=True)
+    sample_kind = Column(String(16), nullable=False)
+    cost_scenario = Column(String(64), nullable=False)
+    params = Column(JSON_VARIANT, nullable=False, default=dict)
+    params_hash = Column(String(64), nullable=False)
+    window_start = Column(Date, nullable=False)
+    window_end = Column(Date, nullable=False)
+    cost_config = Column(JSON_VARIANT, nullable=False, default=dict)
+    data_fingerprint = Column(String(64))
+    metrics = Column(JSON_VARIANT, nullable=False, default=dict)
+    attempt = Column(Integer, nullable=False, default=0)
+    error_code = Column(String(64))
+    error_message = Column(Text)
+    started_at = Column(DateTime(timezone=True))
+    finished_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    experiment = relationship("ResearchExperiment", back_populates="trials")
+    backtest_run = relationship("StrategyRun")
 
 
 class Signal(Base):

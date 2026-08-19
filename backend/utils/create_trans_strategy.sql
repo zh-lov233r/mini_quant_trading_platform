@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS strategies (
     cur_position JSONB DEFAULT '{}'::jsonb,   -- legacy runtime field; prefer portfolio snapshots for new code
     status VARCHAR(16) NOT NULL DEFAULT 'draft',
     version INTEGER NOT NULL DEFAULT 1,
-    idempotency_key VARCHAR(64) UNIQUE,
+    idempotency_key VARCHAR(128) UNIQUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

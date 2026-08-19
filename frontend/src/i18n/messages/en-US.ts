@@ -14,6 +14,7 @@ export const enUSMessages: MessageSchema = {
     stockBaskets: "Stock Baskets",
     newStrategy: "New Strategy",
     backtests: "Backtests",
+    research: "Agent Research",
     paperTrading: "Paper Trading",
   },
   marketViewer: {

@@ -23,6 +23,7 @@ export default function AppShell({
     { href: "/stock-baskets", label: messages.nav.stockBaskets },
     { href: "/strategies/new", label: messages.nav.newStrategy },
     { href: "/backtests", label: messages.nav.backtests },
+    { href: "/research", label: messages.nav.research },
     { href: "/paper-trading", label: messages.nav.paperTrading },
   ];
 

@@ -13,11 +13,15 @@ from src.api.backtests import router as backtests_router
 from src.api.market_data import router as market_data_router
 from src.api.paper_accounts import router as paper_accounts_router
 from src.api.paper_trading import router as paper_trading_router
+from src.api.research import agent_router as agent_research_router
+from src.api.research import router as research_router
 from src.api.stock_baskets import router as stock_baskets_router
 from src.api.strategy_allocations import router as strategy_allocations_router
+from src.api.strategies import agent_router as agent_strategies_router
 from src.api.strategies import router as strategies_router
 from src.core.db import SessionLocal, ensure_extensions, ensure_strategy_allocation_schema
 from src.services.paper_trading_scheduler import PaperTradingDailyScheduler
+from src.services.research_experiment_service import ResearchExperimentWorker
 from src.services.stock_basket_service import ensure_default_common_stock_basket
 
 # -----------------------------
@@ -51,12 +55,15 @@ app.add_middleware(
 
 # 挂载你的业务路由
 app.include_router(strategies_router)
+app.include_router(agent_strategies_router)
 app.include_router(backtests_router)
 app.include_router(market_data_router)
 app.include_router(stock_baskets_router)
 app.include_router(paper_accounts_router)
 app.include_router(strategy_allocations_router)
 app.include_router(paper_trading_router)
+app.include_router(research_router)
+app.include_router(agent_research_router)
 
 # -----------------------------
 # 启动/停止事件
@@ -73,6 +80,10 @@ async def on_startup():
     scheduler = PaperTradingDailyScheduler()
     app.state.paper_trading_scheduler = scheduler
     await scheduler.start()
+    research_worker = ResearchExperimentWorker()
+    app.state.research_experiment_worker = research_worker
+    if os.getenv("RESEARCH_WORKER_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+        await research_worker.start()
     log.info("App started")
 
 @app.on_event("shutdown")
@@ -80,6 +91,9 @@ async def on_shutdown():
     scheduler = getattr(app.state, "paper_trading_scheduler", None)
     if scheduler is not None:
         await scheduler.stop()
+    research_worker = getattr(app.state, "research_experiment_worker", None)
+    if research_worker is not None:
+        await research_worker.stop()
     log.info("App stopped")
 
 # -----------------------------

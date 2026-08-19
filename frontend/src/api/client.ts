@@ -70,6 +70,13 @@ export async function readApiError(res: Response, path: string): Promise<ApiErro
       const parsed = JSON.parse(detail) as { detail?: unknown };
       if (typeof parsed.detail === "string" && parsed.detail.trim()) {
         detail = parsed.detail.trim();
+      } else if (
+        parsed.detail &&
+        typeof parsed.detail === "object" &&
+        "message" in parsed.detail &&
+        typeof parsed.detail.message === "string"
+      ) {
+        detail = parsed.detail.message.trim();
       }
     } catch {
       // keep original response text

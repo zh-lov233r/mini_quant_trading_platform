@@ -11,6 +11,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from src.core.db import get_db
+from src.core.agent_auth import require_agent_service
 from src.models.tables import PortfolioSnapshot, Signal, Strategy, StrategyAllocation, StrategyRun, Transaction
 from src.services.alpaca_services import AlpacaClientError
 from src.services.strategy_delete_service import (
@@ -28,6 +29,12 @@ from src.services.strategy_registry import (
     is_engine_ready,
     json_signature,
     normalize_strategy_params,
+)
+from src.services.strategy_service import (
+    StrategyCreateConflictError,
+    create_strategy_version,
+    load_feature_support,
+    validate_strategy_params,
 )
 
 
@@ -96,6 +103,31 @@ class StrategyRuntimeOut(BaseModel):
     params: Dict[str, Any]
 
 
+class StrategyValidationOut(BaseModel):
+    valid: bool = True
+    strategy_type: str
+    normalized_params: Dict[str, Any]
+    engine_ready: bool
+
+
+class StrategyParameterOverride(BaseModel):
+    path: str = Field(min_length=1, max_length=120)
+    value: Any
+
+
+class StrategyProposal(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=500)
+    strategy_type: Literal["trend", "mean_reversion", "island_reversal", "double_bottom"]
+    overrides: list[StrategyParameterOverride] = Field(default_factory=list, max_length=30)
+    symbols: list[str] = Field(min_length=1, max_length=500)
+
+
+class StrategyProposalValidationOut(BaseModel):
+    valid: bool = True
+    strategy: StrategyCreate
+
+
 class StrategyDeleteOut(BaseModel):
     strategy_id: UUID
     strategy_name: str
@@ -109,6 +141,7 @@ class StrategyDeleteOut(BaseModel):
 
 
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
+agent_router = APIRouter(prefix="/api/agent", tags=["agent-integration"])
 
 
 def _to_strategy_out(obj: Strategy) -> StrategyOut:
@@ -148,24 +181,11 @@ def _load_supported_daily_feature_columns(db: Session) -> set[str]:
 
 
 def _build_feature_support_payload(db: Session) -> StrategyFeatureSupportOut:
-    available_columns = _load_supported_daily_feature_columns(db)
-    engine_supported = get_trend_engine_supported_windows()
-
-    ema_windows = [
-        window
-        for window in engine_supported["ema"]
-        if f"ema_{window}" in available_columns
-    ]
-    sma_windows = [
-        window
-        for window in engine_supported["sma"]
-        if f"sma_{window}" in available_columns
-    ]
-
+    support = load_feature_support(db)["trend"]
     return StrategyFeatureSupportOut(
         trend=TrendIndicatorSupportOut(
-            ema_windows=ema_windows,
-            sma_windows=sma_windows,
+            ema_windows=support["ema_windows"],
+            sma_windows=support["sma_windows"],
         )
     )
 
@@ -266,6 +286,76 @@ def get_strategy_feature_support(db: Session = Depends(get_db)):
     return _build_feature_support_payload(db)
 
 
+@router.post("/validate", response_model=StrategyValidationOut)
+def validate_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
+    try:
+        normalized = validate_strategy_params(
+            db,
+            strategy_type=payload.strategy_type,
+            params=payload.params,
+            description=payload.description,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"code": "invalid_strategy", "message": str(exc)}) from exc
+    return StrategyValidationOut(
+        strategy_type=payload.strategy_type,
+        normalized_params=normalized,
+        engine_ready=True,
+    )
+
+
+@router.post("/proposals/validate", response_model=StrategyProposalValidationOut)
+def validate_strategy_proposal(payload: StrategyProposal, db: Session = Depends(get_db)):
+    catalog_item = next(
+        (item for item in build_strategy_catalog() if item["strategy_type"] == payload.strategy_type),
+        None,
+    )
+    if catalog_item is None or not catalog_item["engine_ready"]:
+        raise HTTPException(status_code=422, detail={"code": "invalid_strategy", "message": "strategy is not engine-ready"})
+    params = catalog_item["defaults"]
+    override_paths = [item.path for item in payload.overrides]
+    if len(override_paths) != len(set(override_paths)):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_strategy", "message": "override paths must be unique"},
+        )
+    for override in sorted(payload.overrides, key=lambda item: item.path):
+        if not override.path.startswith(("signal.", "risk.")):
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "invalid_strategy", "message": f"override path is not allowed: {override.path}"},
+            )
+        current: Any = params
+        parts = override.path.split(".")
+        for part in parts[:-1]:
+            if not isinstance(current, dict) or part not in current:
+                raise HTTPException(status_code=422, detail={"code": "invalid_strategy", "message": f"override path does not exist: {override.path}"})
+            current = current[part]
+        if not isinstance(current, dict) or parts[-1] not in current:
+            raise HTTPException(status_code=422, detail={"code": "invalid_strategy", "message": f"override path does not exist: {override.path}"})
+        current[parts[-1]] = override.value
+    params["universe"]["symbols"] = sorted({symbol.strip().upper() for symbol in payload.symbols if symbol.strip()})
+    params["universe"]["selection_mode"] = "manual"
+    try:
+        normalized = validate_strategy_params(
+            db,
+            strategy_type=payload.strategy_type,
+            params=params,
+            description=payload.description,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"code": "invalid_strategy", "message": str(exc)}) from exc
+    return StrategyProposalValidationOut(
+        strategy=StrategyCreate(
+            name=payload.name,
+            description=payload.description,
+            strategy_type=payload.strategy_type,
+            params=normalized,
+            status="draft",
+        )
+    )
+
+
 @router.get("", response_model=list[StrategyOut])
 def list_strategies(
     db: Session = Depends(get_db),
@@ -294,78 +384,52 @@ def create_strategy(
     db: Session = Depends(get_db),
     idem_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
-    if idem_key:
-        existed = db.execute(
-            select(Strategy).where(Strategy.idempotency_key == idem_key)
-        ).scalars().first()
-        if existed:
-            return _to_strategy_out(existed)
-
     try:
-        normalized_params = normalize_strategy_params(
-            payload.strategy_type,
-            payload.params,
-            payload.description,
-        )
-        _validate_feature_support(
+        obj = create_strategy_version(
             db,
+            name=payload.name,
             strategy_type=payload.strategy_type,
-            params=normalized_params,
+            params=payload.params,
+            description=payload.description,
+            status=payload.status,
+            idempotency_key=idem_key,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-
-    latest_same_name = db.execute(
-        select(Strategy)
-        .where(Strategy.name == payload.name.strip())
-        .order_by(Strategy.version.desc())
-    ).scalars().first()
-
-    if latest_same_name:
-        existing_normalized = normalize_strategy_params(
-            latest_same_name.strategy_type,
-            latest_same_name.params,
-            extract_description(latest_same_name.params),
-        )
-        if (
-            latest_same_name.strategy_type == payload.strategy_type
-            and latest_same_name.status == payload.status
-            and json_signature(existing_normalized) == json_signature(normalized_params)
-        ):
-            return _to_strategy_out(latest_same_name)
-        strategy_key = latest_same_name.strategy_key
-        latest_same_family = db.execute(
-            select(Strategy)
-            .where(Strategy.strategy_key == strategy_key)
-            .order_by(Strategy.version.desc())
-        ).scalars().first()
-        next_version = (latest_same_family.version if latest_same_family else latest_same_name.version) + 1
-    else:
-        strategy_key = payload.name.strip()
-        next_version = 1
-
-    obj = Strategy(
-        strategy_key=strategy_key,
-        name=payload.name.strip(),
-        strategy_type=payload.strategy_type,
-        params=normalized_params,
-        status=payload.status,
-        version=next_version,
-        idempotency_key=idem_key,
-    )
-    db.add(obj)
-
-    try:
-        db.commit()
-    except Exception as exc:
-        db.rollback()
+    except StrategyCreateConflictError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"create strategy failed: {str(exc)}",
+            detail="create strategy failed",
         ) from exc
-
-    db.refresh(obj)
     return _to_strategy_out(obj)
+
+
+@agent_router.post(
+    "/strategies",
+    response_model=StrategyOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_agent_service)],
+)
+def create_agent_strategy(
+    payload: StrategyCreate,
+    db: Session = Depends(get_db),
+    idem_key: str = Header(..., alias="Idempotency-Key", min_length=1, max_length=128),
+):
+    try:
+        strategy = create_strategy_version(
+            db,
+            name=payload.name,
+            strategy_type=payload.strategy_type,
+            params=payload.params,
+            description=payload.description,
+            status="draft",
+            idempotency_key=idem_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"code": "invalid_strategy", "message": str(exc)}) from exc
+    except StrategyCreateConflictError as exc:
+        raise HTTPException(status_code=409, detail={"code": "strategy_conflict", "message": str(exc)}) from exc
+    return _to_strategy_out(strategy)
 
 
 @router.get("/{strategy_id}/runtime", response_model=StrategyRuntimeOut)
