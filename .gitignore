@@ -19,6 +19,9 @@ dist/
 build/
 *.egg-info/
 
-# ignore the frontend dependencies
-frontend/node_modules
-.next
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/.next/
+
+# Local raw market-data downloads
+data/massive/
