@@ -22,3 +22,6 @@ build/
 # ignore the frontend dependencies
 frontend/node_modules
 .next
+
+# Vendor market-data archives are reproducible local inputs, not source code.
+/data/massive/**/*.csv.gz
