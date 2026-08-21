@@ -12,10 +12,11 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.models.tables import PortfolioSnapshot, Signal, Strategy, StrategyRun, Transaction
+from src.services.backtest_engine import FEATURE_RANGE_SQL
 from src.services.backtest_engine import STRATEGY_HANDLERS as BACKTEST_HANDLERS
 from src.services.backtest_engine import run_backtest
 from src.services.paper_trading_service import STRATEGY_HANDLERS as PAPER_HANDLERS
-from src.services.strategy_engine import STRATEGY_HANDLERS
+from src.services.strategy_engine import FEATURE_SNAPSHOT_SQL, STRATEGY_HANDLERS
 from src.services.strategy_registry import (
     MOMENTUM_BREAKOUT_DEFAULTS,
     build_strategy_catalog,
@@ -118,6 +119,28 @@ class MomentumBreakoutStrategyTests(unittest.TestCase):
             ["close", "sma_20", "ret_20d", "volume", "volume_sma_20"],
             required_feature_keys("momentum_breakout", normalized),
         )
+        self.assertEqual(
+            {"timeframe": "1d", "rebalance": "daily", "run_at": "close"},
+            normalized["execution"],
+        )
+        for field, invalid_value, expected_message in (
+            ("timeframe", "1h", "execution.timeframe must be 1d for momentum_breakout"),
+            ("run_at", "open", "execution.run_at must be close for momentum_breakout"),
+        ):
+            with self.subTest(field=field):
+                invalid = copy.deepcopy(normalized)
+                invalid["execution"][field] = invalid_value
+                with self.assertRaisesRegex(ValueError, expected_message):
+                    normalize_strategy_params("momentum_breakout", invalid)
+
+    def test_market_data_paths_prefer_forward_adjusted_ohlc_with_unadjusted_fallback(self) -> None:
+        for query in (FEATURE_SNAPSHOT_SQL, FEATURE_RANGE_SQL):
+            with self.subTest(query=query[:24]):
+                for price_field in ("open", "high", "low", "close"):
+                    self.assertIn(
+                        f"COALESCE(bars.{price_field}_fa, bars.{price_field}_u) AS {price_field}",
+                        query,
+                    )
 
     def test_shared_handler_is_deterministic_timezone_aware_and_used_by_both_consumers(self) -> None:
         runtime = _runtime(symbols=["ZZZ", "AAPL"])
@@ -165,6 +188,33 @@ class MomentumBreakoutStrategyTests(unittest.TestCase):
         )
         self.assertAlmostEqual(1.75, backtest_events[0].score)
 
+    def test_missing_timestamp_uses_timezone_aware_new_york_close(self) -> None:
+        runtime = _runtime(symbols=["AAPL"])
+
+        expected_by_date = {
+            date(2026, 1, 5): datetime(2026, 1, 5, 21, tzinfo=UTC),
+            date(2026, 7, 6): datetime(2026, 7, 6, 20, tzinfo=UTC),
+        }
+        for trade_date, expected_ts in expected_by_date.items():
+            with self.subTest(trade_date=trade_date):
+                snapshot = _snapshot(
+                    "AAPL",
+                    trade_date,
+                    open_price=100.0,
+                    close=103.0,
+                    sma_20=100.0,
+                    ret_20d=0.12,
+                    volume=160.0,
+                    volume_sma_20=100.0,
+                )
+                snapshot["ts"] = None
+
+                events = STRATEGY_HANDLERS["momentum_breakout"](runtime, {"AAPL": snapshot})
+
+                self.assertEqual(1, len(events))
+                self.assertEqual(expected_ts, events[0].ts)
+                self.assertIsNotNone(events[0].ts.tzinfo)
+
     def test_backtest_uses_day_t_signals_t_plus_one_open_fills_and_explicit_costs(self) -> None:
         strategy_params = _runtime(symbols=["AAPL"])["params"]
         strategy_params["risk"]["position_size_pct"] = 0.50
@@ -178,10 +228,22 @@ class MomentumBreakoutStrategyTests(unittest.TestCase):
             strategy_type="momentum_breakout",
             params=strategy_params,
         )
-        first_day = date(2026, 1, 5)
-        second_day = date(2026, 1, 6)
-        third_day = date(2026, 1, 7)
+        first_day = date(2026, 1, 2)
+        second_day = date(2026, 1, 5)
+        third_day = date(2026, 1, 6)
         snapshots = {
+            third_day: {
+                "AAPL": _snapshot(
+                    "AAPL",
+                    third_day,
+                    open_price=120.0,
+                    close=120.0,
+                    sma_20=110.0,
+                    ret_20d=-0.01,
+                    volume=90.0,
+                    volume_sma_20=100.0,
+                )
+            },
             first_day: {
                 "AAPL": _snapshot(
                     "AAPL",
@@ -203,18 +265,6 @@ class MomentumBreakoutStrategyTests(unittest.TestCase):
                     sma_20=103.0,
                     ret_20d=0.15,
                     volume=170.0,
-                    volume_sma_20=100.0,
-                )
-            },
-            third_day: {
-                "AAPL": _snapshot(
-                    "AAPL",
-                    third_day,
-                    open_price=120.0,
-                    close=120.0,
-                    sma_20=110.0,
-                    ret_20d=-0.01,
-                    volume=90.0,
                     volume_sma_20=100.0,
                 )
             },
@@ -241,8 +291,8 @@ class MomentumBreakoutStrategyTests(unittest.TestCase):
         self.assertEqual(["BUY", "SELL"], [signal.signal for signal in db.signals])
         self.assertEqual(
             [
+                datetime(2026, 1, 2, 21, tzinfo=UTC),
                 datetime(2026, 1, 5, 21, tzinfo=UTC),
-                datetime(2026, 1, 6, 21, tzinfo=UTC),
             ],
             [signal.ts for signal in db.signals],
         )

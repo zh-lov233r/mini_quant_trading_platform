@@ -7,8 +7,9 @@ strategy handlers and their supporting pattern-detection utilities.
 """
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Callable, Dict, Literal
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import bindparam, delete, select, text
 from sqlalchemy.orm import Session
@@ -27,6 +28,7 @@ RECENT_BAR_COUNT = 40
 RECENT_BAR_LOOKBACK_DAYS = 90
 ISLAND_REVERSAL_STOP_ATR_WINDOW = 20
 DOUBLE_BOTTOM_STOP_ATR_WINDOW = 20
+NEW_YORK_TZ = ZoneInfo("America/New_York")
 
 FEATURE_SNAPSHOT_SQL = """
 SELECT
@@ -689,11 +691,16 @@ def _safe_date_or_none(value: Any) -> date | None:
 
 def _signal_timestamp_utc(snapshot: MarketSnapshot) -> datetime:
     timestamp = snapshot.get("ts")
-    if not isinstance(timestamp, datetime):
-        return datetime.now(timezone.utc)
-    if timestamp.tzinfo is None:
-        return timestamp.replace(tzinfo=timezone.utc)
-    return timestamp.astimezone(timezone.utc)
+    if isinstance(timestamp, datetime):
+        if timestamp.tzinfo is None:
+            return timestamp.replace(tzinfo=timezone.utc)
+        return timestamp.astimezone(timezone.utc)
+
+    trade_date = _safe_date_or_none(snapshot.get("dt_ny"))
+    if trade_date is None:
+        raise ValueError("daily strategy snapshot requires ts or dt_ny")
+    market_close_ny = datetime.combine(trade_date, time(hour=16), tzinfo=NEW_YORK_TZ)
+    return market_close_ny.astimezone(timezone.utc)
 
 
 def _resolve_position_holding_days(snapshot: MarketSnapshot) -> int | None:

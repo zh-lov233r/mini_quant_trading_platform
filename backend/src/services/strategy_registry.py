@@ -722,6 +722,10 @@ def _normalize_momentum_breakout_params(raw: Dict[str, Any]) -> Dict[str, Any]:
     normalized["execution"]["timeframe"] = str(normalized["execution"].get("timeframe", "1d"))
     normalized["execution"]["rebalance"] = str(normalized["execution"].get("rebalance", "daily"))
     normalized["execution"]["run_at"] = str(normalized["execution"].get("run_at", "close"))
+    if normalized["execution"]["timeframe"] != "1d":
+        raise ValueError("execution.timeframe must be 1d for momentum_breakout")
+    if normalized["execution"]["run_at"] != "close":
+        raise ValueError("execution.run_at must be close for momentum_breakout")
     normalized["metadata"]["description"] = str(normalized["metadata"].get("description", "")).strip()
     normalized["metadata"]["schema_version"] = _positive_int(
         normalized["metadata"].get("schema_version", 1),

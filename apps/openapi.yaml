@@ -1141,7 +1141,7 @@ components:
               exclusiveMinimum: 0
               maximum: 1
         execution:
-          $ref: "#/components/schemas/ExecutionConfig"
+          $ref: "#/components/schemas/MomentumBreakoutExecutionConfig"
         metadata:
           $ref: "#/components/schemas/MetadataConfig"
 
@@ -1307,6 +1307,33 @@ components:
               type: number
             slippage_bps:
               type: number
+
+    MomentumBreakoutExecutionConfig:
+      type: object
+      description: Fixed daily-close signal timing for next-session-open execution.
+      required: [timeframe, rebalance, run_at]
+      properties:
+        timeframe:
+          type: string
+          enum: [1d]
+        rebalance:
+          type: string
+          example: daily
+        run_at:
+          type: string
+          enum: [close]
+        backtest:
+          type: object
+          properties:
+            commission_bps:
+              type: number
+              minimum: 0
+            commission_min:
+              type: number
+              minimum: 0
+            slippage_bps:
+              type: number
+              minimum: 0
 
     MetadataConfig:
       type: object

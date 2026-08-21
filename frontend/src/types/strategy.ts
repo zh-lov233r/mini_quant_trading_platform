@@ -94,6 +94,11 @@ export interface MomentumBreakoutStrategyParams {
     timeframe: "1d";
     rebalance: string;
     run_at: "close";
+    backtest?: {
+      commission_bps?: number;
+      commission_min?: number;
+      slippage_bps?: number;
+    };
   };
   metadata: {
     description: string;
