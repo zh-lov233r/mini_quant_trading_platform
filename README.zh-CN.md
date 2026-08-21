@@ -14,8 +14,9 @@
 - 策略管理
   - 创建、查看、更新、归档策略
   - 获取策略 catalog 和 normalized runtime payload
-  - 当前策略类型包含 `trend`、`mean_reversion`、`island_reversal`、`double_bottom`、`custom`
-  - 当前 engine-ready 的执行型策略以 `trend`、`mean_reversion`、`island_reversal`、`double_bottom` 为主
+  - 当前策略类型包含 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`、`custom`
+  - 当前 engine-ready 的执行型策略包含 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`
+  - `momentum_breakout` 只使用现有优先前复权的日线收盘价、SMA20、20 日收益和成交量特征；T 日收盘信号继续在下一交易日开盘成交
 
 - 市场数据与特征工程
   - 维护 instruments、EOD bars、adjusted prices、daily features

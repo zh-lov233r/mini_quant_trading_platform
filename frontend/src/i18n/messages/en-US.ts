@@ -17,6 +17,12 @@ export const enUSMessages: MessageSchema = {
     research: "Agent Research",
     paperTrading: "Paper Trading",
   },
+  strategyTemplates: {
+    momentumBreakout: {
+      label: "Momentum Breakout",
+      description: "Confirms daily breakouts with forward-adjusted-when-available close, 20-day return, SMA20, and volume; signals form at the day-T close for next-session open execution.",
+    },
+  },
   marketViewer: {
     trigger: "Market",
     title: "Stock Candles",

@@ -3,6 +3,8 @@ import type {
   StrategyOut,
   StrategyRuntimeOut,
 } from "@/types/strategy";
+import { enUSMessages } from "@/i18n/messages/en-US";
+import { zhCNMessages } from "@/i18n/messages/zh-CN";
 
 export function getUniverseSymbols(strategy: StrategyOut): string[] {
   const maybeUniverse = (strategy.params as Record<string, unknown>)?.universe;
@@ -77,6 +79,12 @@ export function getStrategyTemplateCopy(
           ? "均值回归配置模板，基于 z-score / ATR / 流动性特征做日线信号。"
           : "Mean reversion template using z-score, ATR, and liquidity features to generate daily signals.",
       };
+    case "momentum_breakout": {
+      const copy = isZh
+        ? zhCNMessages.strategyTemplates.momentumBreakout
+        : enUSMessages.strategyTemplates.momentumBreakout;
+      return copy;
+    }
     case "island_reversal":
       return {
         label: isZh ? "岛形反转底" : "Island Reversal Bottom",

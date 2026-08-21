@@ -6,7 +6,13 @@ import re
 from typing import Any, Dict, Iterable
 
 
-ENGINE_SUPPORTED_TYPES = {"trend", "mean_reversion", "island_reversal", "double_bottom"}
+ENGINE_SUPPORTED_TYPES = {
+    "trend",
+    "mean_reversion",
+    "momentum_breakout",
+    "island_reversal",
+    "double_bottom",
+}
 _INDICATOR_PATTERN = re.compile(r"^(EMA|SMA)(\d+)$", re.IGNORECASE)
 MEAN_REVERSION_SUPPORTED_LOOKBACK_WINDOWS = (5, 10, 20)
 
@@ -58,6 +64,35 @@ MEAN_REVERSION_DEFAULTS: Dict[str, Any] = {
         "stop_loss_pct": 0.10,
         "take_profit_pct": 0.10,
         "max_holding_days": 0,
+    },
+    "execution": {
+        "timeframe": "1d",
+        "rebalance": "daily",
+        "run_at": "close",
+    },
+    "metadata": {
+        "description": "",
+        "schema_version": 1,
+    },
+}
+
+MOMENTUM_BREAKOUT_DEFAULTS: Dict[str, Any] = {
+    "signal": {
+        "minimum_return_20d": 0.10,
+        "breakout_buffer_pct": 0.02,
+        "volume_multiplier": 1.5,
+        "exit_return_20d": 0.0,
+        "price_field": "close",
+    },
+    "universe": {
+        "symbols": [],
+        "selection_mode": "all_common_stock",
+    },
+    "risk": {
+        "max_positions": 10,
+        "position_size_pct": 0.1,
+        "stop_loss_pct": 0.08,
+        "take_profit_pct": 0.20,
     },
     "execution": {
         "timeframe": "1d",
@@ -193,6 +228,13 @@ def build_strategy_catalog() -> list[Dict[str, Any]]:
             "defaults": copy.deepcopy(MEAN_REVERSION_DEFAULTS),
         },
         {
+            "strategy_type": "momentum_breakout",
+            "label": "Momentum Breakout",
+            "description": "动量突破策略，使用 20 日收益、20 日均线和成交量确认日线突破。",
+            "engine_ready": True,
+            "defaults": copy.deepcopy(MOMENTUM_BREAKOUT_DEFAULTS),
+        },
+        {
             "strategy_type": "island_reversal",
             "label": "Island Reversal Bottom",
             "description": "底部岛形反转策略，识别缩量向下衰竭缺口、放量向上突破缺口和缩量回踩缺口。",
@@ -234,6 +276,8 @@ def normalize_strategy_params(
         normalized = _normalize_trend_params(raw)
     elif strategy_type == "mean_reversion":
         normalized = _normalize_mean_reversion_params(raw)
+    elif strategy_type == "momentum_breakout":
+        normalized = _normalize_momentum_breakout_params(raw)
     elif strategy_type == "island_reversal":
         normalized = _normalize_island_reversal_params(raw)
     elif strategy_type == "double_bottom":
@@ -275,6 +319,12 @@ def is_engine_ready(strategy_type: str, params: Dict[str, Any]) -> bool:
             signal.get("lookback_window")
             and signal.get("zscore_entry")
             and signal.get("zscore_exit")
+        )
+    if strategy_type == "momentum_breakout":
+        return bool(
+            signal.get("minimum_return_20d")
+            and signal.get("breakout_buffer_pct")
+            and signal.get("volume_multiplier")
         )
     if strategy_type == "island_reversal":
         return bool(
@@ -342,6 +392,14 @@ def required_feature_keys(strategy_type: str, params: Dict[str, Any]) -> list[st
             f"zscore_{lookback}",
             "rsi_14",
             "atr_14",
+            "volume_sma_20",
+        ]
+    if strategy_type == "momentum_breakout":
+        return [
+            "close",
+            "sma_20",
+            "ret_20d",
+            "volume",
             "volume_sma_20",
         ]
     if strategy_type == "island_reversal":
@@ -576,6 +634,94 @@ def _normalize_mean_reversion_params(raw: Dict[str, Any]) -> Dict[str, Any]:
     normalized["execution"]["run_at"] = str(
         normalized["execution"].get("run_at", MEAN_REVERSION_DEFAULTS["execution"]["run_at"])
     )
+    normalized["metadata"]["description"] = str(normalized["metadata"].get("description", "")).strip()
+    normalized["metadata"]["schema_version"] = _positive_int(
+        normalized["metadata"].get("schema_version", 1),
+        "metadata.schema_version",
+    )
+    return normalized
+
+
+def _normalize_momentum_breakout_params(raw: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = copy.deepcopy(MOMENTUM_BREAKOUT_DEFAULTS)
+    normalized["signal"] = _merge_nested_section(normalized["signal"], raw.get("signal"))
+    normalized["universe"] = _merge_nested_section(
+        normalized["universe"],
+        raw.get("universe"),
+        symbols=raw.get("symbols") or raw.get("universe_symbols"),
+    )
+    normalized["risk"] = _merge_nested_section(normalized["risk"], raw.get("risk"))
+    normalized["execution"] = _merge_nested_section(normalized["execution"], raw.get("execution"))
+    normalized["metadata"] = _merge_nested_section(normalized["metadata"], raw.get("metadata"))
+
+    for field in (
+        "minimum_return_20d",
+        "breakout_buffer_pct",
+        "volume_multiplier",
+        "exit_return_20d",
+        "price_field",
+    ):
+        if field in raw:
+            normalized["signal"][field] = raw[field]
+    for field in ("max_positions", "position_size_pct", "stop_loss_pct", "take_profit_pct"):
+        if field in raw:
+            normalized["risk"][field] = raw[field]
+    for field in ("rebalance", "timeframe", "run_at"):
+        if field in raw:
+            normalized["execution"][field] = raw[field]
+    if "description" in raw:
+        normalized["metadata"]["description"] = raw["description"]
+
+    normalized["signal"]["minimum_return_20d"] = _fraction(
+        normalized["signal"].get("minimum_return_20d"),
+        "signal.minimum_return_20d",
+    )
+    normalized["signal"]["breakout_buffer_pct"] = _fraction(
+        normalized["signal"].get("breakout_buffer_pct"),
+        "signal.breakout_buffer_pct",
+    )
+    normalized["signal"]["volume_multiplier"] = _positive_float(
+        normalized["signal"].get("volume_multiplier"),
+        "signal.volume_multiplier",
+    )
+    try:
+        normalized["signal"]["exit_return_20d"] = float(
+            normalized["signal"].get("exit_return_20d", 0.0)
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("signal.exit_return_20d must be a number") from exc
+    if not -1 <= normalized["signal"]["exit_return_20d"] <= 1:
+        raise ValueError("signal.exit_return_20d must be within [-1, 1]")
+    normalized["signal"]["price_field"] = str(
+        normalized["signal"].get("price_field", "close")
+    )
+    if normalized["signal"]["price_field"] != "close":
+        raise ValueError("signal.price_field must be close")
+
+    normalized["universe"]["symbols"] = _normalize_symbols(normalized["universe"].get("symbols", []))
+    normalized["universe"]["selection_mode"] = _normalize_selection_mode(
+        normalized["universe"].get("selection_mode"),
+        normalized["universe"]["symbols"],
+    )
+    normalized["risk"]["max_positions"] = _positive_int(
+        normalized["risk"].get("max_positions"),
+        "risk.max_positions",
+    )
+    normalized["risk"]["position_size_pct"] = _fraction(
+        normalized["risk"].get("position_size_pct"),
+        "risk.position_size_pct",
+    )
+    normalized["risk"]["stop_loss_pct"] = _fraction(
+        normalized["risk"].get("stop_loss_pct"),
+        "risk.stop_loss_pct",
+    )
+    normalized["risk"]["take_profit_pct"] = _fraction(
+        normalized["risk"].get("take_profit_pct"),
+        "risk.take_profit_pct",
+    )
+    normalized["execution"]["timeframe"] = str(normalized["execution"].get("timeframe", "1d"))
+    normalized["execution"]["rebalance"] = str(normalized["execution"].get("rebalance", "daily"))
+    normalized["execution"]["run_at"] = str(normalized["execution"].get("run_at", "close"))
     normalized["metadata"]["description"] = str(normalized["metadata"].get("description", "")).strip()
     normalized["metadata"]["schema_version"] = _positive_int(
         normalized["metadata"].get("schema_version", 1),

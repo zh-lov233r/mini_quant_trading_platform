@@ -41,7 +41,14 @@ from src.services.strategy_service import (
 class StrategyCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128, description="策略名称")
     description: Optional[str] = Field(default=None, max_length=500, description="策略说明")
-    strategy_type: Literal["trend", "mean_reversion", "island_reversal", "double_bottom", "custom"] = Field(..., description="策略类型")
+    strategy_type: Literal[
+        "trend",
+        "mean_reversion",
+        "momentum_breakout",
+        "island_reversal",
+        "double_bottom",
+        "custom",
+    ] = Field(..., description="策略类型")
     params: Dict[str, Any] = Field(..., description="策略参数 (JSON 对象)")
     status: Literal["draft", "active", "archived"] = "draft"
 
@@ -118,7 +125,13 @@ class StrategyParameterOverride(BaseModel):
 class StrategyProposal(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=500)
-    strategy_type: Literal["trend", "mean_reversion", "island_reversal", "double_bottom"]
+    strategy_type: Literal[
+        "trend",
+        "mean_reversion",
+        "momentum_breakout",
+        "island_reversal",
+        "double_bottom",
+    ]
     overrides: list[StrategyParameterOverride] = Field(default_factory=list, max_length=30)
     symbols: list[str] = Field(min_length=1, max_length=500)
 

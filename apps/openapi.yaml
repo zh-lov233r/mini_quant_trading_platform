@@ -1020,7 +1020,7 @@ components:
 
     StrategyType:
       type: string
-      enum: [trend, mean_reversion, island_reversal, double_bottom, custom]
+      enum: [trend, mean_reversion, momentum_breakout, island_reversal, double_bottom, custom]
 
     StrategyStatus:
       type: string
@@ -1137,6 +1137,64 @@ components:
               type: integer
               minimum: 1
             position_size_pct:
+              type: number
+              exclusiveMinimum: 0
+              maximum: 1
+        execution:
+          $ref: "#/components/schemas/ExecutionConfig"
+        metadata:
+          $ref: "#/components/schemas/MetadataConfig"
+
+    MomentumBreakoutStrategyParams:
+      type: object
+      description: >-
+        Daily momentum breakout parameters using existing forward-adjusted-when-available
+        (otherwise unadjusted) close, SMA20, 20-day return, and volume features. Signals are evaluated at the
+        day-T close and backtest fills occur at the next available session open.
+      required: [signal, universe, risk, execution, metadata]
+      properties:
+        signal:
+          type: object
+          required:
+            [minimum_return_20d, breakout_buffer_pct, volume_multiplier,
+             exit_return_20d, price_field]
+          properties:
+            minimum_return_20d:
+              type: number
+              exclusiveMinimum: 0
+              maximum: 1
+            breakout_buffer_pct:
+              type: number
+              exclusiveMinimum: 0
+              maximum: 1
+            volume_multiplier:
+              type: number
+              exclusiveMinimum: 0
+            exit_return_20d:
+              type: number
+              minimum: -1
+              maximum: 1
+            price_field:
+              type: string
+              enum: [close]
+        universe:
+          $ref: "#/components/schemas/UniverseConfig"
+        risk:
+          type: object
+          required: [max_positions, position_size_pct, stop_loss_pct, take_profit_pct]
+          properties:
+            max_positions:
+              type: integer
+              minimum: 1
+            position_size_pct:
+              type: number
+              exclusiveMinimum: 0
+              maximum: 1
+            stop_loss_pct:
+              type: number
+              exclusiveMinimum: 0
+              maximum: 1
+            take_profit_pct:
               type: number
               exclusiveMinimum: 0
               maximum: 1
@@ -1276,6 +1334,7 @@ components:
           oneOf:
             - $ref: "#/components/schemas/TrendStrategyParams"
             - $ref: "#/components/schemas/MeanReversionStrategyParams"
+            - $ref: "#/components/schemas/MomentumBreakoutStrategyParams"
             - $ref: "#/components/schemas/IslandReversalStrategyParams"
             - $ref: "#/components/schemas/FreeFormObject"
 
@@ -1297,6 +1356,7 @@ components:
           oneOf:
             - $ref: "#/components/schemas/TrendStrategyParams"
             - $ref: "#/components/schemas/MeanReversionStrategyParams"
+            - $ref: "#/components/schemas/MomentumBreakoutStrategyParams"
             - $ref: "#/components/schemas/IslandReversalStrategyParams"
             - $ref: "#/components/schemas/FreeFormObject"
         status:
@@ -1358,7 +1418,7 @@ components:
         description: {type: [string, "null"], maxLength: 500}
         strategy_type:
           type: string
-          enum: [trend, mean_reversion, island_reversal, double_bottom]
+          enum: [trend, mean_reversion, momentum_breakout, island_reversal, double_bottom]
         overrides:
           type: array
           maxItems: 30

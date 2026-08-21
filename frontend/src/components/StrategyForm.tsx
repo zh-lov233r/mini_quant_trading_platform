@@ -48,6 +48,7 @@ function isStrategyType(value: unknown): value is StrategyType {
   return (
     value === "trend"
     || value === "mean_reversion"
+    || value === "momentum_breakout"
     || value === "island_reversal"
     || value === "double_bottom"
     || value === "custom"

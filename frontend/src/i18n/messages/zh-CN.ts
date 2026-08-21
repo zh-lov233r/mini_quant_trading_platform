@@ -15,6 +15,12 @@ export const zhCNMessages = {
     research: "Agent 研究",
     paperTrading: "Paper Trading",
   },
+  strategyTemplates: {
+    momentumBreakout: {
+      label: "动量突破",
+      description: "使用优先前复权的收盘价、20 日收益、20 日均线与成交量确认日线突破；T 日收盘生成信号，下一交易日开盘执行。",
+    },
+  },
   marketViewer: {
     trigger: "行情窗",
     title: "股票蜡烛图",

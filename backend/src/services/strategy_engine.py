@@ -687,6 +687,15 @@ def _safe_date_or_none(value: Any) -> date | None:
     return None
 
 
+def _signal_timestamp_utc(snapshot: MarketSnapshot) -> datetime:
+    timestamp = snapshot.get("ts")
+    if not isinstance(timestamp, datetime):
+        return datetime.now(timezone.utc)
+    if timestamp.tzinfo is None:
+        return timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.astimezone(timezone.utc)
+
+
 def _resolve_position_holding_days(snapshot: MarketSnapshot) -> int | None:
     raw_holding_days = snapshot.get("position_holding_days")
     if raw_holding_days is not None:
@@ -1100,6 +1109,120 @@ def _mean_reversion_handler(
                     },
                 )
             )
+
+    return signals
+
+
+# Evaluate daily momentum breakouts using only existing adjusted snapshot fields.
+# Input: runtime strategy payload plus the symbol -> daily-feature snapshot map.
+# Output: deterministically ordered BUY/SELL SignalEvent objects for day-T close evaluation.
+def _momentum_breakout_handler(
+    runtime_strategy: RuntimeStrategy,
+    market_data_by_symbol: MarketDataBySymbol,
+) -> list[SignalEvent]:
+    params = runtime_strategy["params"]
+    signal_cfg = params["signal"]
+    risk_cfg = params["risk"]
+    universe = sorted(set(_resolve_strategy_universe(params["universe"], market_data_by_symbol)))
+
+    minimum_return_20d = float(signal_cfg["minimum_return_20d"])
+    breakout_buffer_pct = float(signal_cfg["breakout_buffer_pct"])
+    volume_multiplier = float(signal_cfg["volume_multiplier"])
+    exit_return_20d = float(signal_cfg["exit_return_20d"])
+    stop_loss_pct = float(risk_cfg["stop_loss_pct"])
+    take_profit_pct = float(risk_cfg["take_profit_pct"])
+
+    signals: list[SignalEvent] = []
+    for symbol in universe:
+        snapshot = market_data_by_symbol.get(symbol)
+        if not snapshot:
+            continue
+
+        close_price = _safe_float_or_none(snapshot.get("close"))
+        sma_20 = _safe_float_or_none(snapshot.get("sma_20"))
+        return_20d = _safe_float_or_none(snapshot.get("ret_20d"))
+        volume = _safe_float_or_none(snapshot.get("volume"))
+        average_volume = _safe_float_or_none(snapshot.get("volume_sma_20"))
+        if (
+            close_price is None
+            or sma_20 is None
+            or sma_20 <= 0
+            or return_20d is None
+            or volume is None
+            or average_volume is None
+            or average_volume <= 0
+        ):
+            continue
+
+        position = float(snapshot.get("position", 0) or 0)
+        avg_entry_price = _safe_float_or_none(snapshot.get("avg_entry_price"))
+        breakout_threshold = sma_20 * (1.0 + breakout_buffer_pct)
+        volume_ratio = volume / average_volume
+        action: Literal["BUY", "SELL", "HOLD"] | None = None
+        reason: str | None = None
+
+        if (
+            position > 0
+            and avg_entry_price is not None
+            and avg_entry_price > 0
+            and close_price <= avg_entry_price * (1.0 - stop_loss_pct)
+        ):
+            action = "SELL"
+            reason = f"price fell below the {stop_loss_pct:.1%} stop-loss threshold"
+        elif (
+            position > 0
+            and avg_entry_price is not None
+            and avg_entry_price > 0
+            and close_price >= avg_entry_price * (1.0 + take_profit_pct)
+        ):
+            action = "SELL"
+            reason = f"price reached the {take_profit_pct:.1%} take-profit threshold"
+        elif position > 0 and (close_price < sma_20 or return_20d <= exit_return_20d):
+            action = "SELL"
+            reason = "20-day momentum or SMA20 support failed"
+        elif (
+            position <= 0
+            and close_price >= breakout_threshold
+            and return_20d >= minimum_return_20d
+            and volume_ratio >= volume_multiplier
+        ):
+            action = "BUY"
+            reason = "adjusted close confirmed a volume-backed 20-day momentum breakout"
+
+        if action is None or reason is None:
+            continue
+
+        price_extension = (close_price / sma_20) - 1.0
+        signals.append(
+            SignalEvent(
+                strategy_id=runtime_strategy["strategy_id"],
+                ts=_signal_timestamp_utc(snapshot),
+                symbol=symbol,
+                action=action,
+                reason=reason,
+                score=return_20d + price_extension + volume_ratio,
+                metadata={
+                    "close": close_price,
+                    "sma_20": sma_20,
+                    "ret_20d": return_20d,
+                    "volume": volume,
+                    "volume_sma_20": average_volume,
+                    "volume_ratio": volume_ratio,
+                    "breakout_threshold": breakout_threshold,
+                    "position": position,
+                    "avg_entry_price": avg_entry_price,
+                    "price_semantics": "forward_adjusted_fallback_unadjusted",
+                    "config": {
+                        "minimum_return_20d": minimum_return_20d,
+                        "breakout_buffer_pct": breakout_buffer_pct,
+                        "volume_multiplier": volume_multiplier,
+                        "exit_return_20d": exit_return_20d,
+                        "stop_loss_pct": stop_loss_pct,
+                        "take_profit_pct": take_profit_pct,
+                    },
+                },
+            )
+        )
 
     return signals
 
@@ -2510,6 +2633,7 @@ def _resolve_double_bottom_action(
 STRATEGY_HANDLERS: dict[str, StrategyHandler] = {
     "trend": _trend_following_handler,
     "mean_reversion": _mean_reversion_handler,
+    "momentum_breakout": _momentum_breakout_handler,
     "island_reversal": _island_reversal_handler,
     "double_bottom": _double_bottom_handler,
 }

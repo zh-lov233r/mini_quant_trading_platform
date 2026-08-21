@@ -14,8 +14,9 @@ The repository currently has two main parts:
 - Strategy management
   - Create, inspect, update, and archive strategies
   - Expose a strategy catalog and normalized runtime payloads
-  - Current strategy types include `trend`, `mean_reversion`, `island_reversal`, `double_bottom`, and `custom`
-  - Engine-ready execution currently focuses on `trend`, `mean_reversion`, `island_reversal`, and `double_bottom`
+  - Current strategy types include `trend`, `mean_reversion`, `momentum_breakout`, `island_reversal`, `double_bottom`, and `custom`
+  - Engine-ready execution currently supports `trend`, `mean_reversion`, `momentum_breakout`, `island_reversal`, and `double_bottom`
+  - `momentum_breakout` uses existing forward-adjusted-when-available daily close, SMA20, 20-day return, and volume features; day-T close signals retain next-session open backtest fills
 
 - Market data and feature engineering
   - Maintain instruments, EOD bars, adjusted prices, and daily features

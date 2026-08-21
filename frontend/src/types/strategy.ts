@@ -1,6 +1,7 @@
 export type StrategyType =
   | "trend"
   | "mean_reversion"
+  | "momentum_breakout"
   | "island_reversal"
   | "double_bottom"
   | "custom";
@@ -64,6 +65,35 @@ export interface TrendStrategyParams {
     timeframe: string;
     rebalance: string;
     run_at: string;
+  };
+  metadata: {
+    description: string;
+    schema_version: number;
+  };
+}
+
+export interface MomentumBreakoutStrategyParams {
+  signal: {
+    minimum_return_20d: number;
+    breakout_buffer_pct: number;
+    volume_multiplier: number;
+    exit_return_20d: number;
+    price_field: "close";
+  };
+  universe: {
+    symbols: string[];
+    selection_mode: string;
+  };
+  risk: {
+    max_positions: number;
+    position_size_pct: number;
+    stop_loss_pct: number;
+    take_profit_pct: number;
+  };
+  execution: {
+    timeframe: "1d";
+    rebalance: string;
+    run_at: "close";
   };
   metadata: {
     description: string;
@@ -153,6 +183,7 @@ export interface DoubleBottomStrategyParams {
 export type StrategyParams =
   | TrendStrategyParams
   | MeanReversionStrategyParams
+  | MomentumBreakoutStrategyParams
   | IslandReversalStrategyParams
   | DoubleBottomStrategyParams
   | Record<string, unknown>;
