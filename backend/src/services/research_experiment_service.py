@@ -703,13 +703,32 @@ def _finalize_if_ready(db: Session, experiment: ResearchExperiment) -> None:
     experiment.report = build_experiment_report(db, experiment)
 
 
+def _commit_trial_and_finalize_experiment(db: Session, experiment: ResearchExperiment) -> None:
+    """Make this worker's trial terminal before computing cross-worker progress."""
+    experiment_id = experiment.id
+    db.commit()
+    db.expire_all()
+    current = db.get(ResearchExperiment, experiment_id)
+    if current is not None:
+        _finalize_if_ready(db, current)
+    db.commit()
+
+
 def recover_orphaned_trials() -> int:
     db = SessionLocal()
     try:
+        affected_experiment_ids = set(
+            db.execute(
+                select(ResearchExperiment.id).where(
+                    ResearchExperiment.status.in_(
+                        {"queued", "running", "cancel_requested", "data_changed"}
+                    )
+                )
+            ).scalars()
+        )
         trials = list(
             db.execute(select(ExperimentTrial).where(ExperimentTrial.status == "running")).scalars()
         )
-        affected_experiment_ids: set[UUID] = set()
         for trial in trials:
             experiment = db.get(ResearchExperiment, trial.experiment_id)
             affected_experiment_ids.add(trial.experiment_id)
@@ -736,7 +755,7 @@ def recover_orphaned_trials() -> int:
         db.flush()
         for experiment_id in affected_experiment_ids:
             experiment = db.get(ResearchExperiment, experiment_id)
-            if experiment is not None and experiment.status in {"cancel_requested", "data_changed"}:
+            if experiment is not None:
                 _finalize_if_ready(db, experiment)
         db.commit()
         return len(trials)
@@ -863,6 +882,7 @@ def process_next_trial() -> bool:
                         finished_at=datetime.now(UTC),
                     )
                 )
+                db.flush()
                 _refresh_progress(db, experiment)
                 experiment.report = {
                     "disclaimer": "Research evidence only; this is not a profitability or live-trading safety guarantee.",
@@ -937,8 +957,9 @@ def process_next_trial() -> bool:
                 experiment.error_message = "One or more research trials failed."
             log.exception("Research trial failed", extra={"trial_id": str(trial.id) if trial else None})
         if experiment is not None:
-            _finalize_if_ready(db, experiment)
-        db.commit()
+            _commit_trial_and_finalize_experiment(db, experiment)
+        else:
+            db.commit()
         return True
     finally:
         db.close()

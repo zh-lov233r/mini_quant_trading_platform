@@ -17,7 +17,7 @@ from src.core.agent_auth import require_agent_service
 from src.api.research import agent_router as research_agent_router
 from src.api.strategies import agent_router as strategy_agent_router
 from src.schemas.research import ExperimentSpec
-from src.services.research_experiment_service import expand_experiment
+from src.services.research_experiment_service import _commit_trial_and_finalize_experiment, expand_experiment
 from src.services.strategy_service import StrategyCreateConflictError, create_strategy_version
 from src.services.strategy_registry import MEAN_REVERSION_DEFAULTS, TREND_DEFAULTS
 
@@ -118,6 +118,28 @@ class ResearchExperimentServiceTests(unittest.TestCase):
         spec = ExperimentSpec.model_validate(experiment_payload(values=[1.5]))
         with self.assertRaisesRegex(ValueError, "risk.position_size_pct"):
             expand_experiment(self.db, spec)
+
+    @patch("src.services.research_experiment_service._finalize_if_ready")
+    def test_worker_commits_terminal_trial_before_cross_worker_finalize(self, finalize):
+        events = []
+        experiment = SimpleNamespace(id=uuid.uuid4())
+
+        class FinalizeSession:
+            def commit(self):
+                events.append("commit")
+
+            def expire_all(self):
+                events.append("expire")
+
+            def get(self, model, object_id):
+                events.append("reload")
+                return experiment
+
+        finalize.side_effect = lambda _db, _experiment: events.append("finalize")
+
+        _commit_trial_and_finalize_experiment(FinalizeSession(), experiment)
+
+        self.assertEqual(["commit", "expire", "reload", "finalize", "commit"], events)
 
 
 class AgentAuthTests(unittest.TestCase):

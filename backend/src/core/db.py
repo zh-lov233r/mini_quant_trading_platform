@@ -7,11 +7,11 @@ from sqlalchemy.orm import sessionmaker, Session
 
 
 # === 1) 数据库 URL ===
-# 优先用环境变量 DATABASE_URL；示例：
-# postgresql+psycopg2://user:password@localhost:5432/hzy
+# 优先使用环境变量 DATABASE_URL。默认值仅用于无凭证的本地开发；用户名、
+# 密码和完整的部署连接串不得写入源码。
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+psycopg2://hzy:5041899@localhost:5432/hzy",
+    "postgresql+psycopg2://localhost:5432/hzy",
 )
 
 # === 2) 引擎与连接池 ===
