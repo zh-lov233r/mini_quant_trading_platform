@@ -391,7 +391,7 @@ PaperTradingAccount
 
 ## README 之外值得先看的文件
 
-Agent 研发与研究实验的联合启动、安全开关、数据库升级和恢复语义见 [docs/agent-research-integration.md](docs/agent-research-integration.md)。
+Agent 研发与研究实验的联合启动、安全开关、数据库升级和恢复语义见 [docs/agent-research-integration.md](docs/agent-research-integration.md)。本次本地全流程联调证据与交付状态记录在 [docs/agent-research-e2e-delivery-2026-08-19.md](docs/agent-research-e2e-delivery-2026-08-19.md)。
 
 - [backend/src/main.py](backend/src/main.py)
 - [backend/src/services/paper_trading_service.py](backend/src/services/paper_trading_service.py)
