@@ -399,7 +399,7 @@ This separation makes it easier to:
 
 ## Good Files to Read Next
 
-For Agent-driven draft strategies, research experiments, safe joint startup, schema rollout, and recovery semantics, see [docs/agent-research-integration.md](docs/agent-research-integration.md). The executed local E2E evidence and delivery status are recorded in [docs/agent-research-e2e-delivery-2026-08-19.md](docs/agent-research-e2e-delivery-2026-08-19.md).
+For Agent-driven draft strategies, research experiments, safe joint startup, schema rollout, and recovery semantics, see [docs/agent-research-integration.md](docs/agent-research-integration.md). After both repositories have dependencies installed, start the complete safe local stack with `make dev-agent-all`. The executed local E2E evidence and delivery status are recorded in [docs/agent-research-e2e-delivery-2026-08-19.md](docs/agent-research-e2e-delivery-2026-08-19.md).
 
 - [backend/src/main.py](backend/src/main.py)
 - [backend/src/services/paper_trading_service.py](backend/src/services/paper_trading_service.py)

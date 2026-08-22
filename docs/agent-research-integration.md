@@ -26,6 +26,35 @@ psql "$DATABASE_URL" -f backend/utils/create_zzzzz_research_experiments.sql
 
 ## 启动顺序
 
+### 一键启动（推荐）
+
+两个仓库已经安装依赖后，在 Quant 仓库执行：
+
+```bash
+make dev-agent-all
+```
+
+macOS 也可以在 Finder 中双击仓库根目录的 `start-agent-platform.command`。启动器会自动：
+
+1. 查找相邻的 Coding Agent 仓库（也可用 `CODING_AGENT_REPO=/absolute/path` 指定）。
+2. 启动 AgentOps PostgreSQL 并执行 Alembic migration。
+3. 启动 `:8100` Control Plane，创建或更新 Quant Project，并发布三套工作流。
+4. 启动 Quant Backend `:8000`、研究 worker 和 Frontend `:3000`。
+5. 临时生成共享 service token；不写入磁盘或日志。
+6. 强制将 paper scheduler 和订单提交设为 `false`。
+
+默认 `GITHUB_DELIVERY_MODE=mock`，不会创建真实 PR。如需真实 Draft PR，必须显式设置 `GITHUB_DELIVERY_MODE=gh`，并提前确认 `gh auth status`；工作流仍会停在交付审批节点。按 `Ctrl+C` 会停止本次启动的三个应用进程，但保留 AgentOps PostgreSQL 和已有数据。
+
+若 Coding Agent 不在自动查找的位置：
+
+```bash
+CODING_AGENT_REPO=/absolute/path/to/coding_agent make dev-agent-all
+```
+
+首次使用前仍需分别安装两个仓库的依赖；启动器发现缺失依赖时会给出对应命令，不会静默修改 lockfile。
+
+### 手动启动
+
 1. 在 AgentOps 仓库启动 PostgreSQL `:15432`，执行 Alembic upgrade，再以 `:8100` 启动 Control Plane。
 2. 在 AgentOps 仓库运行 workflow bootstrap，记录输出的 project ID。
 3. 启动 Quant PostgreSQL `:5432`。

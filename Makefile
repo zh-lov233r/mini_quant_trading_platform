@@ -5,11 +5,12 @@ BACKEND_DIR := $(ROOT_DIR)/backend
 FRONTEND_DIR := $(ROOT_DIR)/frontend
 PYTHON := $(ROOT_DIR)/.venv/bin/python
 
-.PHONY: help dev dev-agent-safe dev-backend dev-frontend backfill-daily docker-build docker-up docker-down docker-logs
+.PHONY: help dev dev-agent-all dev-agent-safe dev-backend dev-frontend backfill-daily docker-build docker-up docker-down docker-logs
 
 help:
 	@echo "Available targets:"
 	@echo "  make dev          Start backend and frontend together"
+	@echo "  make dev-agent-all Start AgentOps DB/API and Quant backend/frontend safely"
 	@echo "  make dev-agent-safe Start Quant for AgentOps with all paper order automation disabled"
 	@echo "  make dev-backend  Start FastAPI backend only"
 	@echo "  make dev-frontend Start Next.js frontend only"
@@ -24,6 +25,9 @@ dev:
 		cd "$(BACKEND_DIR)" && "$(PYTHON)" -m uvicorn src.main:app --reload --port 8000 & \
 		cd "$(FRONTEND_DIR)" && npm run dev & \
 		wait
+
+dev-agent-all:
+	@"$(PYTHON)" scripts/dev_agent_stack.py
 
 dev-agent-safe:
 	@test -n "$(QUANT_AGENT_SERVICE_TOKEN)" || { echo "QUANT_AGENT_SERVICE_TOKEN is required"; exit 1; }
