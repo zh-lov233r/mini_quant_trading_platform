@@ -54,6 +54,12 @@ export default function ResearchExperimentPage() {
     }
   }
 
+  const report = experiment?.report || {};
+  const termination = report.termination;
+  const tokenUsage = report.tokenUsage || {};
+  const counts = report.counts || experiment?.progress || {};
+  const bestTrial = report.bestOutOfSampleTrial;
+
   return (
     <AppShell
       title={experiment ? String(experiment.spec.name || "Research experiment") : (isZh ? "研究实验" : "Research experiment")}
@@ -72,6 +78,32 @@ export default function ResearchExperimentPage() {
             </div>
             {experiment.errorCode ? <p style={{ color: "#fda4af" }}>{experiment.errorCode}: {experiment.errorMessage}</p> : null}
             {experiment.status === "data_changed" ? <p style={{ color: "#fbbf24" }}>{isZh ? "数据指纹已变化，实验已停止，未混合不同数据版本。" : "The data fingerprint changed. Execution stopped without mixing data versions."}</p> : null}
+            {termination?.earlyStopped ? (
+              <p style={{ color: "#67e8f9" }}>
+                {isZh ? "实验已按自动条件提前停止：" : "Experiment stopped early by policy: "}
+                {terminationLabel(termination.reason, isZh)}
+              </p>
+            ) : null}
+          </section>
+
+          <section style={{ ...panelStyle, marginTop: 18 }}>
+            <h2 style={{ marginTop: 0 }}>{isZh ? "执行摘要" : "Execution summary"}</h2>
+            <div style={summaryGridStyle}>
+              <MetricCard label={isZh ? "完成 Trial" : "Completed trials"} value={`${Number(counts.completed || 0)} / ${Number(counts.total || trials.length)}`} />
+              <MetricCard label={isZh ? "失败" : "Failed"} value={String(Number(counts.failed || 0))} />
+              <MetricCard label={isZh ? "策略停止" : "Termination"} value={terminationLabel(termination?.reason || "running", isZh)} />
+              <MetricCard label={isZh ? "Agent tokens" : "Agent tokens"} value={formatInteger(tokenUsage.totalTokens)} />
+            </div>
+            {bestTrial ? (
+              <p style={{ marginBottom: 0 }}>
+                {isZh ? "最佳样本外 Trial：" : "Best out-of-sample trial: "}
+                {bestTrial.backtestRunId ? (
+                  <Link href={`/backtests/${bestTrial.backtestRunId}`} style={{ color: "#67e8f9" }}>
+                    {bestTrial.trialId.slice(0, 8)} · {formatMetric(bestTrial.metrics?.total_return)}
+                  </Link>
+                ) : bestTrial.trialId.slice(0, 8)}
+              </p>
+            ) : null}
           </section>
 
           <section style={{ ...panelStyle, marginTop: 18 }}>
@@ -93,7 +125,15 @@ export default function ResearchExperimentPage() {
 
           <section style={{ ...panelStyle, marginTop: 18 }}>
             <h2 style={{ marginTop: 0 }}>{isZh ? "稳健性报告" : "Robustness report"}</h2>
-            {Object.keys(experiment.report || {}).length ? <pre style={preStyle}>{JSON.stringify(experiment.report, null, 2)}</pre> : <p style={{ color: "#94a3b8" }}>{isZh ? "报告将在实验结束后生成。" : "The report is generated after execution finishes."}</p>}
+            {Object.keys(report).length ? (
+              <>
+                {report.disclaimer ? <p style={{ color: "#fbbf24" }}>{report.disclaimer}</p> : null}
+                <details>
+                  <summary style={{ cursor: "pointer", fontWeight: 800 }}>{isZh ? "查看完整确定性报告" : "View full deterministic report"}</summary>
+                  <pre style={preStyle}>{JSON.stringify(report, null, 2)}</pre>
+                </details>
+              </>
+            ) : <p style={{ color: "#94a3b8" }}>{isZh ? "报告将在实验结束或自动停止后生成。" : "The report is generated after completion or an automatic stop."}</p>}
           </section>
 
           <details style={{ ...panelStyle, marginTop: 18 }}>
@@ -110,8 +150,30 @@ function formatMetric(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(4) : "—";
 }
 
+function formatInteger(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString() : "—";
+}
+
+function terminationLabel(reason: string, isZh: boolean) {
+  const labels: Record<string, [string, string]> = {
+    running: ["运行中", "Running"],
+    all_trials_completed: ["全部 Trial 完成", "All trials completed"],
+    time_limit_reached: ["达到运行时间上限", "Time limit reached"],
+    token_budget_reached: ["达到 token 上限", "Token budget reached"],
+    target_reached: ["达到目标指标", "Target metric reached"],
+  };
+  const label = labels[reason];
+  return label ? label[isZh ? 0 : 1] : reason;
+}
+
+function MetricCard({ label, value }: { label: string; value: string }) {
+  return <div style={metricCardStyle}><span style={{ color: "#94a3b8" }}>{label}</span><strong style={{ marginTop: 8, fontSize: 20 }}>{value}</strong></div>;
+}
+
 const panelStyle: CSSProperties = { padding: 22, borderRadius: 20, border: "1px solid rgba(100,116,139,.35)", background: "rgba(8,15,24,.8)" };
 const linkButton: CSSProperties = { padding: "10px 16px", borderRadius: 10, background: "#0891b2", color: "white", textDecoration: "none", fontWeight: 800 };
 const dangerButton: CSSProperties = { padding: "10px 16px", border: "1px solid #be123c", borderRadius: 10, background: "rgba(159,18,57,.2)", color: "#fecdd3", fontWeight: 800, cursor: "pointer" };
 const tableStyle: CSSProperties = { width: "100%", borderCollapse: "collapse", textAlign: "left", lineHeight: 1.7 };
 const preStyle: CSSProperties = { overflow: "auto", padding: 14, borderRadius: 10, background: "#020617", color: "#bae6fd", fontSize: 12, lineHeight: 1.55 };
+const summaryGridStyle: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 };
+const metricCardStyle: CSSProperties = { display: "flex", flexDirection: "column", padding: 14, borderRadius: 12, border: "1px solid rgba(100,116,139,.3)", background: "rgba(15,23,42,.62)" };

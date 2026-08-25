@@ -14,6 +14,12 @@ export interface AgentWorkflowRun {
   currentNodeId: string | null;
   inputs: Record<string, unknown>;
   resultSummary: Record<string, unknown>;
+  tokenBudget: number | null;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
   lastError: string | null;
   workflowName: string | null;
   createdAt: string;

@@ -27,7 +27,7 @@ from src.models.tables import (
     StrategyRun,
     Transaction,
 )
-from src.schemas.research import ExperimentSpec
+from src.schemas.research import ExperimentSpec, ExperimentTokenUsageUpdate
 from src.services.backtest_engine import run_backtest
 from src.services.strategy_registry import extract_description, is_engine_ready, normalize_strategy_params
 from src.services.strategy_service import validate_strategy_params
@@ -290,6 +290,8 @@ def validate_experiment(db: Session, spec: ExperimentSpec) -> dict[str, Any]:
             "backtestRuns": len(definitions),
             "maxConcurrentTrials": max(1, int(os.getenv("RESEARCH_WORKER_CONCURRENCY", "2"))),
             "llmAnalysisCalls": 1,
+            "maxDurationSeconds": spec.stop_policy.max_duration_seconds if spec.stop_policy else None,
+            "tokenBudget": spec.stop_policy.token_budget if spec.stop_policy else None,
         },
     }
 
@@ -323,6 +325,7 @@ def create_experiment(
     )
     strategy = db.get(Strategy, spec.strategy_id)
     assert strategy is not None
+    policy_started_at = datetime.now(UTC)
     experiment = ResearchExperiment(
         workflow_run_id=workflow_run_id,
         idempotency_key=idempotency_key,
@@ -337,7 +340,15 @@ def create_experiment(
             "universe": universe,
             "dataFingerprint": fingerprint,
             "quantBuildVersion": os.getenv("APP_VERSION", "development"),
-            "createdAt": datetime.now(UTC).isoformat(),
+            "createdAt": policy_started_at.isoformat(),
+            "policyStartedAt": policy_started_at.isoformat(),
+            "tokenUsage": {
+                "inputTokens": 0,
+                "cachedInputTokens": 0,
+                "outputTokens": 0,
+                "reasoningOutputTokens": 0,
+                "totalTokens": 0,
+            },
         },
         progress={"total": len(definitions), "queued": len(definitions), "running": 0, "completed": 0, "failed": 0, "cancelled": 0},
     )
@@ -399,6 +410,31 @@ def cancel_experiment(db: Session, experiment_id: UUID | str) -> ResearchExperim
     )
     _refresh_progress(db, experiment)
     _finalize_if_ready(db, experiment)
+    db.commit()
+    db.refresh(experiment)
+    return experiment
+
+
+def update_experiment_token_usage(
+    db: Session,
+    experiment_id: UUID | str,
+    payload: ExperimentTokenUsageUpdate,
+) -> ResearchExperiment:
+    experiment = get_experiment(db, experiment_id)
+    if experiment.workflow_run_id != payload.workflow_run_id:
+        raise ExperimentConflictError("workflow run does not own this experiment")
+    manifest = dict(experiment.run_manifest or {})
+    previous = manifest.get("tokenUsage") if isinstance(manifest.get("tokenUsage"), dict) else {}
+    usage = payload.model_dump(mode="json", by_alias=True, exclude={"workflow_run_id"})
+    manifest["tokenUsage"] = {
+        key: max(int(previous.get(key) or 0), int(value or 0))
+        for key, value in usage.items()
+    }
+    manifest["tokenUsageUpdatedAt"] = datetime.now(UTC).isoformat()
+    experiment.run_manifest = manifest
+    enforce_experiment_stop_policy(db, experiment)
+    if experiment.status in TERMINAL_STATUSES:
+        experiment.report = build_experiment_report(db, experiment)
     db.commit()
     db.refresh(experiment)
     return experiment
@@ -603,9 +639,17 @@ def build_experiment_report(db: Session, experiment: ResearchExperiment) -> dict
             "rightParamsHash": right.params_hash,
             "returnDifference": abs(right_return - left_return) if left_return is not None and right_return is not None else None,
         })
+    manifest = experiment.run_manifest or {}
+    termination = manifest.get("termination") if isinstance(manifest.get("termination"), dict) else None
     return {
         "disclaimer": "Research evidence only; this is not a profitability or live-trading safety guarantee.",
         "status": experiment.status,
+        "termination": termination or {
+            "reason": "all_trials_completed",
+            "earlyStopped": False,
+            "triggeredConditions": [],
+        },
+        "tokenUsage": manifest.get("tokenUsage") or {},
         "counts": dict(experiment.progress or {}),
         "bestOutOfSampleTrial": (
             {
@@ -643,9 +687,9 @@ def build_experiment_report(db: Session, experiment: ResearchExperiment) -> dict
             "baseScenario": base_scenario,
         },
         "strategy": {
-            "id": (experiment.run_manifest or {}).get("strategyId"),
-            "version": (experiment.run_manifest or {}).get("strategyVersion"),
-            "type": (experiment.run_manifest or {}).get("strategyType"),
+            "id": manifest.get("strategyId"),
+            "version": manifest.get("strategyVersion"),
+            "type": manifest.get("strategyType"),
         },
         "parameterSets": [
             {
@@ -669,7 +713,7 @@ def build_experiment_report(db: Session, experiment: ResearchExperiment) -> dict
             }
             for trial in trials
         ],
-        "dataFingerprint": (experiment.run_manifest or {}).get("dataFingerprint"),
+        "dataFingerprint": manifest.get("dataFingerprint"),
         "generatedAt": datetime.now(UTC).isoformat(),
     }
 
@@ -691,7 +735,17 @@ def _finalize_if_ready(db: Session, experiment: ResearchExperiment) -> None:
             },
         }
         return
-    if experiment.status == "cancel_requested":
+    termination = (experiment.run_manifest or {}).get("termination")
+    if isinstance(termination, dict) and termination.get("earlyStopped"):
+        if progress["completed"] and progress["failed"]:
+            experiment.status = "partially_failed"
+        elif progress["failed"]:
+            experiment.status = "failed"
+        else:
+            experiment.status = "completed"
+        experiment.error_code = None
+        experiment.error_message = None
+    elif experiment.status == "cancel_requested":
         experiment.status = "cancelled"
     elif progress["completed"] and progress["failed"]:
         experiment.status = "partially_failed"
@@ -703,6 +757,141 @@ def _finalize_if_ready(db: Session, experiment: ResearchExperiment) -> None:
     experiment.report = build_experiment_report(db, experiment)
 
 
+def _target_condition_matches(
+    db: Session,
+    experiment: ResearchExperiment,
+    condition: dict[str, Any],
+) -> dict[str, Any] | None:
+    metric = str(condition.get("metric") or "")
+    operator = str(condition.get("operator") or "gte")
+    expected = condition.get("value")
+    if not isinstance(expected, (int, float)):
+        return None
+    trials = db.execute(
+        select(ExperimentTrial)
+        .where(
+            ExperimentTrial.experiment_id == experiment.id,
+            ExperimentTrial.status == "completed",
+            ExperimentTrial.sample_kind == str(condition.get("sampleKind") or "out_of_sample"),
+            ExperimentTrial.cost_scenario == str(condition.get("costScenario") or "base"),
+        )
+        .order_by(ExperimentTrial.ordinal)
+    ).scalars()
+    for trial in trials:
+        observed = (trial.metrics or {}).get(metric)
+        if not isinstance(observed, (int, float)) or not math.isfinite(float(observed)):
+            continue
+        matched = float(observed) >= float(expected) if operator == "gte" else float(observed) <= float(expected)
+        if matched:
+            return {
+                "metric": metric,
+                "operator": operator,
+                "target": float(expected),
+                "observed": float(observed),
+                "trialId": str(trial.id),
+                "backtestRunId": str(trial.backtest_run_id) if trial.backtest_run_id else None,
+            }
+    return None
+
+
+def enforce_experiment_stop_policy(
+    db: Session,
+    experiment: ResearchExperiment,
+    *,
+    now: datetime | None = None,
+) -> str | None:
+    manifest = dict(experiment.run_manifest or {})
+    if isinstance(manifest.get("termination"), dict):
+        return None
+    spec = experiment.spec or {}
+    policy = spec.get("stopPolicy") if isinstance(spec.get("stopPolicy"), dict) else None
+    if not policy or experiment.status in TERMINAL_STATUSES | {"cancel_requested"}:
+        return None
+
+    current_time = now or datetime.now(UTC)
+    triggered: list[dict[str, Any]] = []
+    target = policy.get("targetMetric") if isinstance(policy.get("targetMetric"), dict) else None
+    target_match = _target_condition_matches(db, experiment, target) if target else None
+    if target_match:
+        triggered.append({"reason": "target_reached", **target_match})
+
+    token_budget = policy.get("tokenBudget")
+    token_usage = manifest.get("tokenUsage") if isinstance(manifest.get("tokenUsage"), dict) else {}
+    total_tokens = int(token_usage.get("totalTokens") or 0)
+    if isinstance(token_budget, int) and total_tokens >= token_budget:
+        triggered.append(
+            {
+                "reason": "token_budget_reached",
+                "tokenBudget": token_budget,
+                "totalTokens": total_tokens,
+            }
+        )
+
+    max_duration = policy.get("maxDurationSeconds")
+    started_raw = manifest.get("policyStartedAt") or manifest.get("createdAt")
+    try:
+        policy_started_at = datetime.fromisoformat(str(started_raw))
+        if policy_started_at.tzinfo is None:
+            policy_started_at = policy_started_at.replace(tzinfo=UTC)
+    except (TypeError, ValueError):
+        policy_started_at = current_time
+    elapsed_seconds = max(0, int((current_time - policy_started_at).total_seconds()))
+    if isinstance(max_duration, int) and elapsed_seconds >= max_duration:
+        triggered.append(
+            {
+                "reason": "time_limit_reached",
+                "maxDurationSeconds": max_duration,
+                "elapsedSeconds": elapsed_seconds,
+            }
+        )
+
+    if not triggered:
+        return None
+    reason = str(triggered[0]["reason"])
+    manifest["termination"] = {
+        "reason": reason,
+        "earlyStopped": True,
+        "triggeredConditions": triggered,
+        "stoppedAt": current_time.isoformat(),
+    }
+    experiment.run_manifest = manifest
+    db.execute(
+        ExperimentTrial.__table__.update()
+        .where(
+            ExperimentTrial.experiment_id == experiment.id,
+            ExperimentTrial.status == "queued",
+        )
+        .values(
+            status="cancelled",
+            error_code="policy_stopped",
+            error_message=f"Experiment stopped after {reason}.",
+            finished_at=current_time,
+        )
+    )
+    db.flush()
+    _refresh_progress(db, experiment)
+    _finalize_if_ready(db, experiment)
+    log.info(
+        "Research stop policy triggered workflow_run_id=%s experiment_id=%s reason=%s",
+        experiment.workflow_run_id,
+        experiment.id,
+        reason,
+    )
+    return reason
+
+
+def enforce_active_experiment_stop_policies(db: Session) -> int:
+    experiments = list(
+        db.execute(
+            select(ResearchExperiment).where(ResearchExperiment.status.in_({"queued", "running"}))
+        ).scalars()
+    )
+    stopped = sum(bool(enforce_experiment_stop_policy(db, experiment)) for experiment in experiments)
+    if stopped:
+        db.commit()
+    return stopped
+
+
 def _commit_trial_and_finalize_experiment(db: Session, experiment: ResearchExperiment) -> None:
     """Make this worker's trial terminal before computing cross-worker progress."""
     experiment_id = experiment.id
@@ -710,8 +899,20 @@ def _commit_trial_and_finalize_experiment(db: Session, experiment: ResearchExper
     db.expire_all()
     current = db.get(ResearchExperiment, experiment_id)
     if current is not None:
+        enforce_experiment_stop_policy(db, current)
         _finalize_if_ready(db, current)
     db.commit()
+
+
+def _recovery_stop_code(experiment: ResearchExperiment | None) -> str | None:
+    if experiment is None:
+        return None
+    if experiment.status in {"cancel_requested", "data_changed"}:
+        return experiment.status
+    termination = (experiment.run_manifest or {}).get("termination")
+    if isinstance(termination, dict) and termination.get("earlyStopped"):
+        return "policy_stopped"
+    return None
 
 
 def recover_orphaned_trials() -> int:
@@ -732,10 +933,11 @@ def recover_orphaned_trials() -> int:
         for trial in trials:
             experiment = db.get(ResearchExperiment, trial.experiment_id)
             affected_experiment_ids.add(trial.experiment_id)
-            if experiment is not None and experiment.status in {"cancel_requested", "data_changed"}:
+            stop_code = _recovery_stop_code(experiment)
+            if stop_code is not None:
                 trial.status = "cancelled"
                 trial.finished_at = datetime.now(UTC)
-                trial.error_code = experiment.status
+                trial.error_code = stop_code
                 trial.error_message = "The trial was stopped while the research worker restarted."
             else:
                 trial.status = "queued"
@@ -764,6 +966,7 @@ def recover_orphaned_trials() -> int:
 
 
 def _claim_trial(db: Session) -> ExperimentTrial | None:
+    enforce_active_experiment_stop_policies(db)
     trial = db.execute(
         select(ExperimentTrial)
         .join(ResearchExperiment, ResearchExperiment.id == ExperimentTrial.experiment_id)

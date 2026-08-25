@@ -13,6 +13,7 @@ from src.schemas.research import (
     ExperimentCreate,
     ExperimentOut,
     ExperimentSpec,
+    ExperimentTokenUsageUpdate,
     ExperimentValidationOut,
     TrialOut,
 )
@@ -25,6 +26,7 @@ from src.services.research_experiment_service import (
     get_experiment,
     list_experiments,
     list_trials,
+    update_experiment_token_usage,
     validate_experiment,
 )
 
@@ -129,6 +131,23 @@ def cancel_research_experiment(experiment_id: UUID, db: Session = Depends(get_db
         return _experiment_out(cancel_experiment(db, experiment_id))
     except ExperimentNotFoundError as exc:
         raise HTTPException(status_code=404, detail="experiment not found") from exc
+
+
+@agent_router.post("/experiments/{experiment_id}/usage", response_model=ExperimentOut)
+def update_research_experiment_usage(
+    experiment_id: UUID,
+    payload: ExperimentTokenUsageUpdate,
+    db: Session = Depends(get_db),
+):
+    try:
+        return _experiment_out(update_experiment_token_usage(db, experiment_id, payload))
+    except ExperimentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="experiment not found") from exc
+    except ExperimentConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "workflow_conflict", "message": str(exc)},
+        ) from exc
 
 
 @router.get("/experiments", response_model=list[ExperimentOut])

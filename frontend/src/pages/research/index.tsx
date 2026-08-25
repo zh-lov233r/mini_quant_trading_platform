@@ -9,7 +9,7 @@ import { listStrategies } from "@/api/strategies";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import { useI18n } from "@/i18n/provider";
-import type { ResearchExperiment } from "@/types/research";
+import type { ExperimentStopPolicy, ResearchExperiment, ResearchTargetMetric } from "@/types/research";
 import type { StrategyOut } from "@/types/strategy";
 
 const WORKFLOWS = {
@@ -29,6 +29,14 @@ export default function ResearchHomePage() {
   const [items, setItems] = useState<ResearchExperiment[]>([]);
   const [strategies, setStrategies] = useState<StrategyOut[]>([]);
   const [strategyId, setStrategyId] = useState("");
+  const [durationEnabled, setDurationEnabled] = useState(true);
+  const [maxDurationMinutes, setMaxDurationMinutes] = useState(30);
+  const [tokenEnabled, setTokenEnabled] = useState(true);
+  const [tokenBudget, setTokenBudget] = useState(50_000);
+  const [targetEnabled, setTargetEnabled] = useState(false);
+  const [targetMetric, setTargetMetric] = useState<ResearchTargetMetric>("total_return");
+  const [targetOperator, setTargetOperator] = useState<"gte" | "lte">("gte");
+  const [targetValue, setTargetValue] = useState(0.05);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,10 +79,27 @@ export default function ResearchHomePage() {
     setSubmitting(true);
     setError(null);
     try {
+      const stopPolicy: ExperimentStopPolicy = {};
+      if (mode === "experiment") {
+        if (durationEnabled) stopPolicy.maxDurationSeconds = Math.round(maxDurationMinutes * 60);
+        if (tokenEnabled) stopPolicy.tokenBudget = Math.round(tokenBudget);
+        if (targetEnabled) {
+          stopPolicy.targetMetric = {
+            metric: targetMetric,
+            operator: targetOperator,
+            value: targetValue,
+            sampleKind: "out_of_sample",
+            costScenario: "base",
+          };
+        }
+        if (!Object.keys(stopPolicy).length) {
+          throw new Error(isZh ? "请至少启用一个自动停止条件。" : "Enable at least one automatic stop condition.");
+        }
+      }
       const run = await startAgentWorkflow(
         WORKFLOWS[mode],
         goal.trim(),
-        mode === "experiment" ? { strategyId } : {},
+        mode === "experiment" ? { strategyId, stopPolicy } : {},
       );
       await router.push(`/agent-runs/${run.id}`);
     } catch (err) {
@@ -124,6 +149,44 @@ export default function ResearchHomePage() {
                   {isZh ? "没有可研究的 engine-ready 策略。" : "No engine-ready strategy is available for research."}
                 </p>
               ) : null}
+              <div style={{ ...stopPolicyStyle, marginTop: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                  <strong>{isZh ? "自动停止条件" : "Automatic stop conditions"}</strong>
+                  <span style={{ color: "#94a3b8" }}>
+                    {isZh ? "任意一个已启用条件命中即停止领取新 Trial" : "Any enabled condition stops new trial claims"}
+                  </span>
+                </div>
+                <div style={stopGridStyle}>
+                  <label style={stopOptionStyle}>
+                    <span><input type="checkbox" checked={durationEnabled} onChange={(event) => setDurationEnabled(event.target.checked)} /> {isZh ? "最长运行时间" : "Maximum duration"}</span>
+                    <span style={fieldRowStyle}>
+                      <input type="number" min={1} max={10080} value={maxDurationMinutes} disabled={!durationEnabled} onChange={(event) => setMaxDurationMinutes(Number(event.target.value))} style={smallInputStyle} />
+                      <span>{isZh ? "分钟" : "minutes"}</span>
+                    </span>
+                  </label>
+                  <label style={stopOptionStyle}>
+                    <span><input type="checkbox" checked={tokenEnabled} onChange={(event) => setTokenEnabled(event.target.checked)} /> {isZh ? "Agent token 上限" : "Agent token budget"}</span>
+                    <input type="number" min={1000} max={10000000} step={1000} value={tokenBudget} disabled={!tokenEnabled} onChange={(event) => setTokenBudget(Number(event.target.value))} style={smallInputStyle} />
+                  </label>
+                  <label style={stopOptionStyle}>
+                    <span><input type="checkbox" checked={targetEnabled} onChange={(event) => setTargetEnabled(event.target.checked)} /> {isZh ? "样本外目标" : "Out-of-sample target"}</span>
+                    <span style={{ ...fieldRowStyle, flexWrap: "wrap" }}>
+                      <select value={targetMetric} disabled={!targetEnabled} onChange={(event) => setTargetMetric(event.target.value as ResearchTargetMetric)} style={smallInputStyle}>
+                        <option value="total_return">total return</option>
+                        <option value="sharpe">Sharpe</option>
+                        <option value="max_drawdown">max drawdown</option>
+                        <option value="excess_return">excess return</option>
+                      </select>
+                      <select value={targetOperator} disabled={!targetEnabled} onChange={(event) => setTargetOperator(event.target.value as "gte" | "lte")} style={smallInputStyle}>
+                        <option value="gte">≥</option>
+                        <option value="lte">≤</option>
+                      </select>
+                      <input type="number" step="any" value={targetValue} disabled={!targetEnabled} onChange={(event) => setTargetValue(Number(event.target.value))} style={smallInputStyle} />
+                    </span>
+                    <small style={{ color: "#94a3b8" }}>{isZh ? "固定使用 out_of_sample / base 场景；收益率使用小数，例如 0.05 = 5%。" : "Uses out_of_sample / base; returns are decimals, for example 0.05 = 5%."}</small>
+                  </label>
+                </div>
+              </div>
             </div>
           ) : null}
           <label style={labelStyle}>{isZh ? "研发目标" : "Research goal"}</label>
@@ -181,6 +244,11 @@ function modeLabel(mode: Mode, isZh: boolean) {
 const panelStyle: CSSProperties = { padding: 22, borderRadius: 22, border: "1px solid rgba(100,116,139,.35)", background: "rgba(8,15,24,.8)" };
 const labelStyle: CSSProperties = { display: "block", marginBottom: 9, fontWeight: 700 };
 const inputStyle: CSSProperties = { boxSizing: "border-box", width: "100%", padding: 14, color: "#e2e8f0", background: "#07111c", border: "1px solid #334155", borderRadius: 14, resize: "vertical", font: "inherit", lineHeight: 1.6 };
+const stopPolicyStyle: CSSProperties = { padding: 16, border: "1px solid rgba(14,116,144,.65)", borderRadius: 14, background: "rgba(8,145,178,.08)" };
+const stopGridStyle: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginTop: 14 };
+const stopOptionStyle: CSSProperties = { display: "flex", flexDirection: "column", gap: 10, padding: 12, border: "1px solid rgba(100,116,139,.3)", borderRadius: 12 };
+const fieldRowStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
+const smallInputStyle: CSSProperties = { minWidth: 0, maxWidth: "100%", padding: "8px 10px", color: "#e2e8f0", background: "#07111c", border: "1px solid #334155", borderRadius: 9, font: "inherit" };
 const primaryButton: CSSProperties = { padding: "11px 18px", border: 0, borderRadius: 12, background: "#0891b2", color: "white", fontWeight: 800, cursor: "pointer" };
 const rowStyle: CSSProperties = { display: "flex", justifyContent: "space-between", gap: 18, alignItems: "center", padding: 16, color: "#e2e8f0", textDecoration: "none", borderRadius: 14, border: "1px solid rgba(100,116,139,.28)", background: "rgba(15,23,42,.55)" };
 const modeStyle = (active: boolean): CSSProperties => ({ padding: 16, textAlign: "left", color: active ? "#ecfeff" : "#cbd5e1", borderRadius: 14, border: `1px solid ${active ? "#0e7490" : "#334155"}`, background: active ? "rgba(8,145,178,.18)" : "rgba(15,23,42,.58)", cursor: "pointer", font: "inherit" });

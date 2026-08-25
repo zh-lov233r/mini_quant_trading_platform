@@ -29,6 +29,38 @@ class CostScenario(BaseModel):
     slippage_bps: float = Field(default=0, ge=0, alias="slippageBps")
 
 
+class TargetMetricCondition(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    metric: Literal["total_return", "sharpe", "max_drawdown", "excess_return"]
+    operator: Literal["gte", "lte"] = "gte"
+    value: float
+    sample_kind: Literal["in_sample", "out_of_sample"] = Field(
+        default="out_of_sample",
+        alias="sampleKind",
+    )
+    cost_scenario: str = Field(default="base", min_length=1, max_length=64, alias="costScenario")
+
+
+class ExperimentStopPolicy(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    max_duration_seconds: int | None = Field(
+        default=None,
+        ge=60,
+        le=7 * 24 * 60 * 60,
+        alias="maxDurationSeconds",
+    )
+    token_budget: int | None = Field(default=None, ge=1000, le=10_000_000, alias="tokenBudget")
+    target_metric: TargetMetricCondition | None = Field(default=None, alias="targetMetric")
+
+    @model_validator(mode="after")
+    def validate_condition(self) -> "ExperimentStopPolicy":
+        if self.max_duration_seconds is None and self.token_budget is None and self.target_metric is None:
+            raise ValueError("stopPolicy must contain maxDurationSeconds, tokenBudget, or targetMetric")
+        return self
+
+
 class ExperimentSpec(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -43,6 +75,7 @@ class ExperimentSpec(BaseModel):
     cost_scenarios: list[CostScenario] = Field(alias="costScenarios", min_length=1, max_length=5)
     initial_cash: float = Field(default=100_000, gt=0, alias="initialCash")
     benchmark_symbol: str | None = Field(default="SPY", alias="benchmarkSymbol")
+    stop_policy: ExperimentStopPolicy | None = Field(default=None, alias="stopPolicy")
 
     @model_validator(mode="after")
     def validate_spec(self) -> "ExperimentSpec":
@@ -81,7 +114,18 @@ class ExperimentValidationOut(BaseModel):
     normalized_spec: dict[str, Any] = Field(alias="normalizedSpec")
     universe_symbols: list[str] = Field(alias="universeSymbols")
     warnings: list[str] = Field(default_factory=list)
-    estimated_cost: dict[str, int] = Field(default_factory=dict, alias="estimatedCost")
+    estimated_cost: dict[str, Any] = Field(default_factory=dict, alias="estimatedCost")
+
+
+class ExperimentTokenUsageUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_run_id: str = Field(min_length=1, max_length=64, alias="workflowRunId")
+    input_tokens: int = Field(default=0, ge=0, alias="inputTokens")
+    cached_input_tokens: int = Field(default=0, ge=0, alias="cachedInputTokens")
+    output_tokens: int = Field(default=0, ge=0, alias="outputTokens")
+    reasoning_output_tokens: int = Field(default=0, ge=0, alias="reasoningOutputTokens")
+    total_tokens: int = Field(default=0, ge=0, alias="totalTokens")
 
 
 class TrialOut(BaseModel):

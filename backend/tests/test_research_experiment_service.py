@@ -5,9 +5,10 @@ import os
 import sys
 import unittest
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -16,8 +17,14 @@ from fastapi import HTTPException
 from src.core.agent_auth import require_agent_service
 from src.api.research import agent_router as research_agent_router
 from src.api.strategies import agent_router as strategy_agent_router
-from src.schemas.research import ExperimentSpec
-from src.services.research_experiment_service import _commit_trial_and_finalize_experiment, expand_experiment
+from src.schemas.research import ExperimentSpec, ExperimentTokenUsageUpdate
+from src.services.research_experiment_service import (
+    _commit_trial_and_finalize_experiment,
+    _recovery_stop_code,
+    enforce_experiment_stop_policy,
+    expand_experiment,
+    update_experiment_token_usage,
+)
 from src.services.strategy_service import StrategyCreateConflictError, create_strategy_version
 from src.services.strategy_registry import MEAN_REVERSION_DEFAULTS, TREND_DEFAULTS
 
@@ -112,6 +119,136 @@ class ResearchExperimentServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "stress scenario"):
             ExperimentSpec.model_validate(payload)
 
+    def test_spec_validates_bounded_stop_policy(self):
+        payload = experiment_payload(values=[0.1])
+        payload["stopPolicy"] = {
+            "maxDurationSeconds": 1800,
+            "tokenBudget": 50000,
+            "targetMetric": {
+                "metric": "total_return",
+                "operator": "gte",
+                "value": 0.05,
+                "sampleKind": "out_of_sample",
+                "costScenario": "base",
+            },
+        }
+        spec = ExperimentSpec.model_validate(payload)
+        self.assertEqual(1800, spec.stop_policy.max_duration_seconds)
+        self.assertEqual(50000, spec.stop_policy.token_budget)
+        payload["stopPolicy"] = {"maxDurationSeconds": 30}
+        with self.assertRaisesRegex(ValueError, "greater than or equal to 60"):
+            ExperimentSpec.model_validate(payload)
+
+    @patch("src.services.research_experiment_service._finalize_if_ready")
+    @patch("src.services.research_experiment_service._refresh_progress")
+    def test_token_budget_stops_queued_trials_and_records_reason(self, refresh, finalize):
+        now = datetime(2026, 8, 25, tzinfo=UTC)
+        experiment = SimpleNamespace(
+            id=uuid.uuid4(),
+            workflow_run_id="workflow-1",
+            status="running",
+            spec={"stopPolicy": {"tokenBudget": 5000}},
+            run_manifest={
+                "policyStartedAt": now.isoformat(),
+                "tokenUsage": {"totalTokens": 5000},
+            },
+        )
+        db = MagicMock()
+        reason = enforce_experiment_stop_policy(db, experiment, now=now)
+        self.assertEqual("token_budget_reached", reason)
+        self.assertEqual("token_budget_reached", experiment.run_manifest["termination"]["reason"])
+        self.assertTrue(experiment.run_manifest["termination"]["earlyStopped"])
+        db.execute.assert_called_once()
+        refresh.assert_called_once_with(db, experiment)
+        finalize.assert_called_once_with(db, experiment)
+
+    @patch("src.services.research_experiment_service._finalize_if_ready")
+    @patch("src.services.research_experiment_service._refresh_progress")
+    def test_time_limit_stops_experiment_from_worker_sweep(self, refresh, finalize):
+        now = datetime(2026, 8, 25, tzinfo=UTC)
+        experiment = SimpleNamespace(
+            id=uuid.uuid4(),
+            workflow_run_id="workflow-1",
+            status="queued",
+            spec={"stopPolicy": {"maxDurationSeconds": 60}},
+            run_manifest={"policyStartedAt": (now - timedelta(seconds=61)).isoformat()},
+        )
+        db = MagicMock()
+
+        reason = enforce_experiment_stop_policy(db, experiment, now=now)
+
+        self.assertEqual("time_limit_reached", reason)
+        condition = experiment.run_manifest["termination"]["triggeredConditions"][0]
+        self.assertEqual(61, condition["elapsedSeconds"])
+        refresh.assert_called_once_with(db, experiment)
+        finalize.assert_called_once_with(db, experiment)
+
+    @patch("src.services.research_experiment_service._finalize_if_ready")
+    @patch("src.services.research_experiment_service._refresh_progress")
+    def test_out_of_sample_target_stops_on_completed_matching_trial(self, refresh, finalize):
+        now = datetime(2026, 8, 25, tzinfo=UTC)
+        trial = SimpleNamespace(
+            id=uuid.uuid4(),
+            backtest_run_id=uuid.uuid4(),
+            metrics={"total_return": 0.08},
+        )
+        rows = MagicMock()
+        rows.scalars.return_value = [trial]
+        db = MagicMock()
+        db.execute.side_effect = [rows, MagicMock()]
+        experiment = SimpleNamespace(
+            id=uuid.uuid4(),
+            workflow_run_id="workflow-1",
+            status="running",
+            spec={
+                "stopPolicy": {
+                    "targetMetric": {
+                        "metric": "total_return",
+                        "operator": "gte",
+                        "value": 0.05,
+                        "sampleKind": "out_of_sample",
+                        "costScenario": "base",
+                    }
+                }
+            },
+            run_manifest={"policyStartedAt": now.isoformat()},
+        )
+
+        reason = enforce_experiment_stop_policy(db, experiment, now=now)
+
+        self.assertEqual("target_reached", reason)
+        condition = experiment.run_manifest["termination"]["triggeredConditions"][0]
+        self.assertEqual(0.08, condition["observed"])
+        self.assertEqual(str(trial.id), condition["trialId"])
+
+    @patch("src.services.research_experiment_service.enforce_experiment_stop_policy")
+    @patch("src.services.research_experiment_service.get_experiment")
+    def test_usage_sync_is_absolute_monotonic_and_owned_by_workflow(self, get_experiment, enforce):
+        experiment = SimpleNamespace(
+            workflow_run_id="workflow-1",
+            status="running",
+            run_manifest={"tokenUsage": {"inputTokens": 100, "totalTokens": 120}},
+        )
+        get_experiment.return_value = experiment
+        db = MagicMock()
+
+        update_experiment_token_usage(
+            db,
+            uuid.uuid4(),
+            ExperimentTokenUsageUpdate(
+                workflowRunId="workflow-1",
+                inputTokens=90,
+                outputTokens=10,
+                totalTokens=100,
+            ),
+        )
+
+        self.assertEqual(100, experiment.run_manifest["tokenUsage"]["inputTokens"])
+        self.assertEqual(120, experiment.run_manifest["tokenUsage"]["totalTokens"])
+        enforce.assert_called_once_with(db, experiment)
+        db.commit.assert_called_once()
+        db.refresh.assert_called_once_with(experiment)
+
     def test_expansion_rejects_parameter_out_of_range(self):
         self.strategy.strategy_type = "mean_reversion"
         self.strategy.params = copy.deepcopy(MEAN_REVERSION_DEFAULTS)
@@ -119,8 +256,9 @@ class ResearchExperimentServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "risk.position_size_pct"):
             expand_experiment(self.db, spec)
 
+    @patch("src.services.research_experiment_service.enforce_experiment_stop_policy")
     @patch("src.services.research_experiment_service._finalize_if_ready")
-    def test_worker_commits_terminal_trial_before_cross_worker_finalize(self, finalize):
+    def test_worker_commits_terminal_trial_before_cross_worker_finalize(self, finalize, enforce):
         events = []
         experiment = SimpleNamespace(id=uuid.uuid4())
 
@@ -137,9 +275,26 @@ class ResearchExperimentServiceTests(unittest.TestCase):
 
         finalize.side_effect = lambda _db, _experiment: events.append("finalize")
 
+        enforce.side_effect = lambda _db, _experiment: events.append("enforce")
+
         _commit_trial_and_finalize_experiment(FinalizeSession(), experiment)
 
-        self.assertEqual(["commit", "expire", "reload", "finalize", "commit"], events)
+        self.assertEqual(["commit", "expire", "reload", "enforce", "finalize", "commit"], events)
+
+    def test_worker_restart_does_not_requeue_trial_after_policy_stop(self):
+        experiment = SimpleNamespace(
+            status="running",
+            run_manifest={
+                "termination": {
+                    "earlyStopped": True,
+                    "reason": "token_budget_reached",
+                }
+            },
+        )
+
+        self.assertEqual("policy_stopped", _recovery_stop_code(experiment))
+        experiment.run_manifest = {}
+        self.assertIsNone(_recovery_stop_code(experiment))
 
 
 class AgentAuthTests(unittest.TestCase):

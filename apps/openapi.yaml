@@ -261,6 +261,36 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/agent/research/experiments/{experiment_id}/usage:
+    post:
+      tags: [Agent Integration]
+      summary: Synchronize absolute AgentOps token usage and enforce the experiment stop policy
+      operationId: updateAgentExperimentTokenUsage
+      x-implementation-status: implemented
+      security:
+        - AgentServiceToken: []
+      parameters:
+        - $ref: "#/components/parameters/ExperimentIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExperimentTokenUsageUpdate"
+      responses:
+        "200":
+          description: Current experiment state after idempotent absolute usage synchronization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResearchExperiment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /api/research/experiments:
     get:
       tags: [Research]
@@ -1477,6 +1507,33 @@ components:
         commissionMin: {type: number, minimum: 0}
         slippageBps: {type: number, minimum: 0}
 
+    TargetMetricCondition:
+      type: object
+      required: [metric, operator, value, sampleKind, costScenario]
+      properties:
+        metric:
+          type: string
+          enum: [total_return, sharpe, max_drawdown, excess_return]
+        operator: {type: string, enum: [gte, lte]}
+        value: {type: number}
+        sampleKind: {type: string, enum: [in_sample, out_of_sample]}
+        costScenario: {type: string, minLength: 1, maxLength: 64}
+
+    ExperimentStopPolicy:
+      type: object
+      description: Any configured condition stops new trial claims; already-running trials finish safely.
+      properties:
+        maxDurationSeconds: {type: [integer, "null"], minimum: 60, maximum: 604800}
+        tokenBudget: {type: [integer, "null"], minimum: 1000, maximum: 10000000}
+        targetMetric:
+          oneOf:
+            - {$ref: "#/components/schemas/TargetMetricCondition"}
+            - {type: "null"}
+      anyOf:
+        - required: [maxDurationSeconds]
+        - required: [tokenBudget]
+        - required: [targetMetric]
+
     ExperimentSpec:
       type: object
       required: [name, hypothesis, strategyId, symbols, inSample, outOfSample, parameterGrid, costScenarios, initialCash]
@@ -1502,6 +1559,10 @@ components:
           items: {$ref: "#/components/schemas/CostScenario"}
         initialCash: {type: number, exclusiveMinimum: 0}
         benchmarkSymbol: {type: [string, "null"]}
+        stopPolicy:
+          oneOf:
+            - {$ref: "#/components/schemas/ExperimentStopPolicy"}
+            - {type: "null"}
 
     ExperimentCreate:
       type: object
@@ -1530,6 +1591,19 @@ components:
             backtestRuns: {type: integer}
             maxConcurrentTrials: {type: integer}
             llmAnalysisCalls: {type: integer}
+            maxDurationSeconds: {type: [integer, "null"]}
+            tokenBudget: {type: [integer, "null"]}
+
+    ExperimentTokenUsageUpdate:
+      type: object
+      required: [workflowRunId]
+      properties:
+        workflowRunId: {type: string, minLength: 1, maxLength: 64}
+        inputTokens: {type: integer, minimum: 0, default: 0}
+        cachedInputTokens: {type: integer, minimum: 0, default: 0}
+        outputTokens: {type: integer, minimum: 0, default: 0}
+        reasoningOutputTokens: {type: integer, minimum: 0, default: 0}
+        totalTokens: {type: integer, minimum: 0, default: 0}
 
     ResearchExperiment:
       type: object
