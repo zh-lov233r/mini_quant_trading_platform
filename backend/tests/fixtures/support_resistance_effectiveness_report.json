@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "studyId": "golden-fixture",
+  "studyKind": "support_resistance_effectiveness_v1",
+  "status": "completed",
+  "decision": "not_validated",
+  "disclaimer": "Research evidence only; no profitability guarantee or live-trading safety proof.",
+  "hypothesis": "The pre-registered default or frozen champion remains positive after costs out of sample.",
+  "protocol": {"bootstrapSeed": 20260828, "bootstrapReplicates": 10000, "maxBacktests": 200},
+  "protocolHash": "golden-protocol-hash",
+  "dataFingerprint": {"sha256": "golden-data-fingerprint"},
+  "backtestBudget": {"maximum": 200, "scheduled": 195},
+  "children": [
+    {"id": "discovery-bounce", "phase": "discovery:support_bounce", "status": "completed"},
+    {"id": "annual-2021", "phase": "annual_2021", "status": "completed"},
+    {"id": "final-holdout", "phase": "final_holdout", "status": "completed"}
+  ],
+  "finalCandidates": [
+    {
+      "candidateId": "default-candidate",
+      "paramsHash": "default1234567890",
+      "rationale": "pre-registered all-mode pivot-atr-v1 default",
+      "passed": false,
+      "base": {"excess_return": 0.0123, "max_drawdown": 0.14, "pnl_concentration": 0.18},
+      "stress": {"excess_return": -0.0045},
+      "eventStudy": {
+        "eventCount": 214,
+        "horizons": {
+          "1": {"mean": 0.001, "lower95": -0.002},
+          "5": {"mean": 0.004, "lower95": -0.001},
+          "10": {"mean": 0.006, "lower95": -0.001},
+          "20": {"mean": 0.009, "lower95": -0.0005},
+          "40": {"mean": 0.012, "lower95": -0.003}
+        }
+      },
+      "annualFolds": [
+        {"phase": "annual_2021", "base": {"excess_return": 0.02}},
+        {"phase": "annual_2022", "base": {"excess_return": -0.01}},
+        {"phase": "annual_2023", "base": {"excess_return": 0.01}}
+      ],
+      "acceptanceGates": {
+        "finalBaseExcessPositive": true,
+        "finalStressExcessPositive": false,
+        "drawdownWithinFivePoints": true,
+        "eventAlphaLowerBoundNonNegative": false,
+        "eventCountAtLeast200": true,
+        "annualEventCountsAtLeast50": true,
+        "pnlConcentrationAtMost20Pct": true,
+        "annualFoldExcessPositive": false,
+        "cacheAuditEquivalent": true
+      }
+    }
+  ],
+  "charts": {
+    "costDecay": [{"base": 0.0123, "stress": -0.0045}],
+    "pnlConcentration": [{"value": 0.18}]
+  },
+  "limitations": [
+    "Fixture data is synthetic and cannot be interpreted as strategy evidence.",
+    "No result authorizes portfolio activation, scheduling, or order submission."
+  ]
+}

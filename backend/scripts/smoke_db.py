@@ -37,6 +37,7 @@ CREATE_SQL_FILES = (
     "create_instrument.sql",
     "create_stock_daily.sql",
     "create_trans_strategy.sql",
+    "create_stock_enrichment.sql",
 )
 
 
@@ -79,6 +80,9 @@ def assert_tables_exist(conn: psycopg.Connection) -> None:
         "symbol_history",
         "symbol_reference",
         "eod_bars",
+        "stock_short_interest",
+        "security_ticker_events",
+        "instrument_vendor_sync_state",
         "strategies",
         "transactions",
     }
@@ -226,7 +230,7 @@ def main() -> None:
     schema_name = f"smoke_{uuid.uuid4().hex[:8]}"
     keep_schema = os.getenv("SMOKE_KEEP_SCHEMA", "").lower() in {"1", "true", "yes"}
 
-    print(f"Connecting to database: {database_url}")
+    print("Connecting to configured database (credentials redacted)")
     print(f"Using isolated schema: {schema_name}")
 
     with psycopg.connect(database_url) as conn:

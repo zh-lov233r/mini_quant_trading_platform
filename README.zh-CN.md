@@ -13,9 +13,11 @@
 
 - 策略管理
   - 创建、查看、更新、归档策略
+  - 从 `/strategies/new` 引导中心开始：可用五步向导手工配置已有引擎策略，也可转入 Agent 的已有大类研究或新算法研究
+  - 手工创建在落库前完成校验和标准化，并且始终保存为 `draft`；不会激活 portfolio、创建 allocation、启动调度或提交订单
   - 获取策略 catalog 和 normalized runtime payload
-  - 当前策略类型包含 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`、`custom`
-  - 当前 engine-ready 的执行型策略包含 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`
+  - 当前策略类型包含 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`、`support_resistance`、`custom`
+  - 当前 engine-ready 的执行型策略包含 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`、`support_resistance`
   - `momentum_breakout` 只使用现有优先前复权的日线收盘价、SMA20、20 日收益和成交量特征；T 日收盘信号继续在下一交易日开盘成交
 
 - 市场数据与特征工程
@@ -25,8 +27,10 @@
 
 - 回测
   - 基于策略参数和 `daily_features` 生成信号
-  - 持久化 `StrategyRun`、`Signal`、`Transaction`、`PortfolioSnapshot`
-  - 前端可查看回测列表和详情
+  - 在 PostgreSQL 中排队手动与研究回测，并由独立 worker 执行
+  - 支持 `summary`、`trades`、`full` 三种持久化级别；手动回测默认 `full`
+  - 通过增量接口加载摘要、下采样权益、signals 和 transactions
+  - v1 继续作为默认引擎，v2 的 instrument 身份与批量持久化在验收后受控切换
 
 - Paper trading
   - 支持多个 Alpaca paper account
@@ -40,6 +44,13 @@
   - scheduler 只会在 `daily_features` 对目标 trade date 完整落库后才执行
   - scheduler 只会跑 `auto_run_enabled=true` 的 active portfolio allocation
   - 可以配置为 dry run，也可以配置为直接提交 Alpaca paper orders
+
+- Agent 辅助策略研究
+  - 通过 AgentOps 工作流生成策略草案、执行有界研究实验，并为新策略代码准备 Draft PR
+  - 支持 engine-ready 的 `support_resistance` 大类研究，可独立搜索反弹、突破与回踩模式开关
+  - 持久化实验规格、确定性的 trial 展开、进度、token 用量、终止证据和稳健性报告
+  - 支持按运行时长、工作流 token 用量或目标指标自动停止
+  - Agent service API 不开放券商下单、组合激活或订单提交工具
 
 ## 技术栈
 
@@ -79,12 +90,12 @@
 │   ├── package.json
 │   └── Dockerfile
 ├── apps/openapi.yaml     # 项目 API 规格草案/对照文档
+├── docs/                 # 架构、研究与联调指南
 ├── data/                 # 本地数据文件
 ├── logs/                 # 回填和定时任务日志
 ├── docker-compose.yml
 ├── Makefile
 ├── README.md
-├── README.en.md
 └── README.zh-CN.md
 ```
 
@@ -93,7 +104,7 @@
 当前前端页面主要包括：
 
 - `/dashboard`
-- `/strategies`
+- `/strategies`：提供按策略大类导航、数量统计和类型色彩识别
 - `/strategies/new`
 - `/strategies/[strategyId]`
 - `/backtests`
@@ -101,6 +112,10 @@
 - `/stock-baskets`
 - `/strategy-allocations`
 - `/paper-trading`
+- `/paper-trading/portfolios/[portfolioId]`
+- `/research`
+- `/research/[experimentId]`
+- `/agent-runs/[runId]`
 
 ## 后端 API 模块
 
@@ -114,6 +129,12 @@
 - `/api/paper-accounts`
 - `/api/strategy-portfolios`
 - `/api/paper-trading`
+- `/api/research`
+- `/api/agent`
+
+`/api/agent/*` 路由要求 Bearer service token，只提供受控的策略草案和研究实验操作，不开放券商订单或组合激活能力。
+
+Web 进程不再执行 CPU 回测。显式应用附加 schema 后，使用 `make backtest-worker` 单独启动 worker；该命令会明确关闭 paper scheduler 和订单提交。详见[回测性能与 worker 运维](docs/backtest-performance.zh-CN.md)。
 
 应用健康检查：
 
@@ -183,6 +204,14 @@ ALPACA_BASE_URL=https://paper-api.alpaca.markets
 这个脚本会顺序执行 `backend/utils/` 下的 `create_*.sql` 文件，创建项目需要的表结构。
 
 ### 5. 启动开发环境
+
+启动 backend 也会启动 paper trading scheduler。除非明确需要修改券商侧 paper 状态，本地开发、smoke 检查和 Agent 联调都必须显式关闭调度和订单提交：
+
+```bash
+PAPER_TRADING_SCHEDULER_ENABLED=false \
+PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false \
+make dev
+```
 
 同时启动前后端：
 
@@ -279,9 +308,12 @@ make docker-down
 ```bash
 make help
 make dev
+make dev-agent-all
+make dev-agent-safe
 make dev-backend
 make dev-frontend
 make backfill-daily
+make check-data
 make docker-build
 make docker-up
 make docker-down
@@ -297,16 +329,35 @@ make docker-logs
 
 - `run_daily_market_backfill.py`
   - 每日市场数据 catch-up 总入口
-  - 顺序执行缺失 EOD 检查、公司行为同步、复权价格刷新、`daily_features` 刷新
+  - 顺序执行证券主数据 → SIC/代码事件 → EOD 缺口 → VWAP → 公司行动 → 复权价格 → short interest → `daily_features` → 只读完整性门禁
 
 - `backfill_missing_eod_from_massive.py`
   - 用 Massive 补缺失的日线行情
+
+- `backfill_vwap_from_massive.py`
+  - 使用 point-in-time 代码映射，仅填充为空的未复权 `eod_bars.vwap`，绝不覆盖 OHLCV
+
+- `backfill_sic_from_massive.py`
+  - 保存当前（或退市日最终）SIC 快照及命名空间隔离的 Massive ticker-overview 原始响应
+
+- `backfill_short_interest_from_massive.py`
+  - 保存 Massive/FINRA 双周结算事实，不向日频特征 forward-fill
+
+- `backfill_ticker_events_from_massive.py`
+  - 保存 experimental 代码变更事件，只应用完整验证且无冲突的代码区间
 
 - `backfill_adjusted_prices.py`
   - 刷新复权 OHLC
 
 - `backfill_daily_features.py`
   - 基于 `eod_bars` 计算并回写 `daily_features`
+
+- `check_market_data_quality.py`
+  - 只读检查价格/特征缺口、非法 VWAP/short interest、代码事件一致性、重复证券身份、代码历史重叠、数据陈旧和最新交易日是否完整
+
+首次运行增强数据同步前，应先应用 `backend/utils/create_stock_enrichment.sql`。该 SQL 为增量且可幂等执行，但仓库没有 Alembic 迁移流程；应用前需要备份并核对目标数据库。它会新增 SIC 快照字段、`stock_short_interest`、`security_ticker_events` 和按证券记录的供应商同步状态。
+
+Massive VWAP 以未复权口径保存（`adjusted=false`）。当前套餐历史边界从 2016-08-29 开始，更早的空 VWAP 属于预期 warning。SIC 是快照而非 point-in-time 行业历史。Short interest 以结算日为键；由于接口没有可靠发布日期，不能视为每个日线交易日当时已知。Ticker Events 仍是 experimental：原始事件始终可审计；不完整事件链、FIGI/交易所不一致、ticker 复用和区间冲突保持 `unresolved`，绝不猜测修复。
 
 通过 Makefile 触发每日回填：
 
@@ -319,6 +370,32 @@ make backfill-daily
 ```bash
 make backfill-daily BACKFILL_ARGS="--start-date 2026-04-01 --end-date 2026-04-10"
 ```
+
+在不写数据库的情况下预览日期范围和供应商覆盖情况：
+
+```bash
+make backfill-daily BACKFILL_ARGS="--dry-run"
+```
+
+全量刷新 SIC 和 ticker events，或按数据集跳过：
+
+```bash
+make backfill-daily BACKFILL_ARGS="--full-reference-refresh --dry-run"
+make backfill-daily BACKFILL_ARGS="--skip-sic --skip-ticker-events --skip-vwap --skip-short-interest"
+```
+
+dry-run 会读取所选增强数据集的供应商覆盖，但不会写事实表或修改身份区间；证券主数据同步会被跳过，因为其独立脚本尚无 dry-run 模式。所有写入均可幂等重跑。失败后的恢复方式是修复错误并重跑同一日期范围，不删除或重建历史；ticker-event 修复前后的区间快照保存在 `security_ticker_events` 中。
+
+单独运行完整性门禁。关键错误始终返回非零状态；warning 默认只记录，传入 `--strict` 后才会导致失败：
+
+```bash
+make check-data
+make check-data CHECK_DATA_ARGS="--strict --json"
+```
+
+特殊维护运行可用 `--skip-quality-check` 跳过最终门禁，或用 `--strict-quality-check` 让流水线中的 warning 也阻断任务。正常安装任务保持默认的“仅关键失败阻断”策略。
+
+已安装的 macOS LaunchAgent 每天按本地时间 20:15 运行，并将日志写入 `logs/daily-market-backfill.log` 和 `logs/daily-market-backfill.err.log`。可用 `launchctl print "gui/$(id -u)/com.quant.daily-market-backfill"` 检查状态；补数脚本不会修改其日程或安装路径。每个维护子进程都会显式收到 `PAPER_TRADING_SCHEDULER_ENABLED=false` 和 `PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false`。证券主数据或质量门禁失败时，后续步骤会停止，幂等的补数日期范围会留给下一次运行继续处理。
 
 ## Paper Trading 与 Scheduler
 
@@ -351,7 +428,7 @@ make backfill-daily BACKFILL_ARGS="--start-date 2026-04-01 --end-date 2026-04-10
 PAPER_TRADING_SCHEDULER_ENABLED=true
 PAPER_TRADING_SCHEDULER_RUN_TIME_NY=23:30
 PAPER_TRADING_SCHEDULER_POLL_SECONDS=60
-PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false
+PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=true
 PAPER_TRADING_SCHEDULER_CONTINUE_ON_ERROR=true
 ```
 
@@ -365,6 +442,7 @@ PAPER_TRADING_SCHEDULER_CONTINUE_ON_ERROR=true
 - 这里的自动下单面向 Alpaca paper account
 - 真实提交订单后，会在 Alpaca paper 账户里留下真实的 paper position / order state
 - 如果在联调期间做过测试下单，记得清理 paper 持仓和挂单，避免影响后续策略判断
+- 应用当前默认同时启用 scheduler 和 scheduler 订单提交；如果没有明确下单意图，必须将两项都覆盖为 `false`
 
 ## 数据模型概览
 
@@ -389,13 +467,20 @@ PaperTradingAccount
 - 一个 paper account 管多个 portfolio
 - 同时支持回测和 paper trading
 
-## README 之外值得先看的文件
+## Agent 研究工作台
 
-Agent 研发与研究实验的联合启动、安全开关、数据库升级和恢复语义见 [docs/agent-research-integration.md](docs/agent-research-integration.md)。两个仓库安装依赖后，可用 `make dev-agent-all` 一键启动完整的安全本地拓扑。本次本地全流程联调证据与交付状态记录在 [docs/agent-research-e2e-delivery-2026-08-19.md](docs/agent-research-e2e-delivery-2026-08-19.md)，有界自动验证与回测结果记录在 [docs/automated-strategy-validation-backtest-report-2026-08-25.md](docs/automated-strategy-validation-backtest-report-2026-08-25.md)。
+`/strategies/new` 会先区分手工创建和 Agent 辅助研究。手工路径读取 catalog 默认值，以人类可读百分比、核心/高级参数分层和只读校验接口完成五步创建，校验通过后只保存 Draft。Agent 路径跳转到 `/research?mode=category|algorithm&source=strategy-create`，预选对应研究模式并提供返回创建中心的入口。
 
-- [backend/src/main.py](backend/src/main.py)
-- [backend/src/services/paper_trading_service.py](backend/src/services/paper_trading_service.py)
-- [backend/src/services/paper_trading_scheduler.py](backend/src/services/paper_trading_scheduler.py)
-- [backend/src/services/strategy_engine.py](backend/src/services/strategy_engine.py)
-- [backend/src/services/strategy_registry.py](backend/src/services/strategy_registry.py)
-- [frontend/src/pages/paper-trading.tsx](frontend/src/pages/paper-trading.tsx)
+`/research` 只保留两个入口。“已有引擎大类研究”让用户选择 catalog handler，自动创建经过校验的 draft，并在实验审批后执行最多 5 轮 / 100 个实际回测的自适应 Pareto 研究；“新算法研究”只交付 Draft PR，不自动合并、部署或回测。旧有限网格实验继续只读，但创建流程已下线。详见[研究实验](docs/research-experiments.zh-CN.md)。
+
+## 文档
+
+请从[文档索引](docs/README.zh-CN.md)开始。当前维护的指南包括：
+
+- [系统架构](docs/architecture.zh-CN.md)
+- [研究实验](docs/research-experiments.zh-CN.md)
+- [支撑/压力区策略有效性研究](docs/support-resistance-effectiveness.zh-CN.md)
+- [支撑线与压力线策略](docs/support-resistance-strategy.zh-CN.md)
+- [Quant 与 AgentOps 本地联调](docs/agent-research-integration.zh-CN.md)
+
+`docs/` 下带日期的交付和验证报告属于历史证据，不纳入当前文档导航，也不能替代上述长期指南。

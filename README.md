@@ -13,9 +13,11 @@ The repository currently has two main parts:
 
 - Strategy management
   - Create, inspect, update, and archive strategies
+  - Start from a guided `/strategies/new` hub: hand-configure an existing engine strategy in five steps, or hand off to Agent research for an existing category or new algorithm
+  - Manual creation validates and normalizes the payload before persistence and always saves a `draft`; it does not activate a portfolio, create an allocation, start scheduling, or submit an order
   - Expose a strategy catalog and normalized runtime payloads
-  - Current strategy types include `trend`, `mean_reversion`, `momentum_breakout`, `island_reversal`, `double_bottom`, and `custom`
-  - Engine-ready execution currently supports `trend`, `mean_reversion`, `momentum_breakout`, `island_reversal`, and `double_bottom`
+  - Current strategy types include `trend`, `mean_reversion`, `momentum_breakout`, `island_reversal`, `double_bottom`, `support_resistance`, and `custom`
+  - Engine-ready execution currently supports `trend`, `mean_reversion`, `momentum_breakout`, `island_reversal`, `double_bottom`, and `support_resistance`
   - `momentum_breakout` uses existing forward-adjusted-when-available daily close, SMA20, 20-day return, and volume features; day-T close signals retain next-session open backtest fills
 
 - Market data and feature engineering
@@ -25,8 +27,10 @@ The repository currently has two main parts:
 
 - Backtesting
   - Generate signals from strategy parameters plus `daily_features`
-  - Persist `StrategyRun`, `Signal`, `Transaction`, and `PortfolioSnapshot`
-  - Inspect backtest runs and details from the frontend
+  - Queue manual and research runs in PostgreSQL and execute them with an independent worker
+  - Choose `summary`, `trades`, or `full` persistence; manual runs default to `full`
+  - Load summary, downsampled equity, signals, and transactions through incremental APIs
+  - Keep v1 as the default engine while v2 instrument-identity and batch-persistence rollout is validated
 
 - Paper trading
   - Support multiple Alpaca paper accounts
@@ -40,6 +44,14 @@ The repository currently has two main parts:
   - Runs only after `daily_features` are fully materialized for the target trade date
   - Runs only active allocations with `auto_run_enabled=true`
   - Can run in dry-run mode or submit real Alpaca paper orders
+
+- Agent-assisted strategy research
+  - Uses AgentOps workflows to propose draft strategies, run bounded research experiments, and prepare Draft PRs for new strategy code
+  - Includes engine-ready `support_resistance` research with independent bounce, breakout, and retest mode switches
+  - Adds a pre-registered `pivot-atr-v1` effectiveness study with a historical dynamic universe, sealed holdout, 200-backtest ceiling, and bilingual JSON/Markdown/PDF reports
+  - Persists experiment specifications, deterministic trial expansions, progress, token usage, termination evidence, and robustness reports
+  - Supports automatic stop policies based on elapsed time, workflow token usage, or a target metric
+  - Keeps broker, portfolio activation, and order-submission tools outside the Agent service API
 
 ## Tech Stack
 
@@ -79,6 +91,7 @@ The repository currently has two main parts:
 │   ├── package.json
 │   └── Dockerfile
 ├── apps/openapi.yaml     # API spec / reference document
+├── docs/                 # Architecture, research, and integration guides
 ├── data/                 # Local data files
 ├── logs/                 # Backfill and scheduled-task logs
 ├── docker-compose.yml
@@ -92,7 +105,7 @@ The repository currently has two main parts:
 The frontend currently includes:
 
 - `/dashboard`
-- `/strategies`
+- `/strategies`: category navigation, inventory counts, and type-specific visual accents
 - `/strategies/new`
 - `/strategies/[strategyId]`
 - `/backtests`
@@ -100,6 +113,10 @@ The frontend currently includes:
 - `/stock-baskets`
 - `/strategy-allocations`
 - `/paper-trading`
+- `/paper-trading/portfolios/[portfolioId]`
+- `/research`
+- `/research/[experimentId]`
+- `/agent-runs/[runId]`
 
 ## Backend API Modules
 
@@ -113,6 +130,12 @@ The main route groups currently include:
 - `/api/paper-accounts`
 - `/api/strategy-portfolios`
 - `/api/paper-trading`
+- `/api/research`
+- `/api/agent`
+
+The `/api/agent/*` routes require a Bearer service token and expose only controlled draft-strategy and research-experiment operations. They do not expose broker orders or portfolio activation.
+
+Backtests are not executed by the Web process. After applying the additive schema, start the dedicated worker separately with `make backtest-worker`. This command explicitly disables paper scheduling and order submission. See [Backtest performance and worker operations](docs/backtest-performance.md).
 
 Health endpoints:
 
@@ -182,6 +205,14 @@ Before the first startup, you can manually run:
 This script runs all `create_*.sql` files in `backend/utils/` and creates the required schema.
 
 ### 5. Start the development environment
+
+Starting the backend also starts the paper-trading scheduler. For local development, smoke checks, and Agent integration, explicitly disable both scheduling and order submission unless broker-side paper mutations are intended:
+
+```bash
+PAPER_TRADING_SCHEDULER_ENABLED=false \
+PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false \
+make dev
+```
 
 Start backend and frontend together:
 
@@ -278,9 +309,12 @@ make docker-down
 ```bash
 make help
 make dev
+make dev-agent-all
+make dev-agent-safe
 make dev-backend
 make dev-frontend
 make backfill-daily
+make check-data
 make docker-build
 make docker-up
 make docker-down
@@ -296,16 +330,35 @@ make docker-logs
 
 - `run_daily_market_backfill.py`
   - Main daily market-data catch-up entrypoint
-  - Runs missing EOD checks, corporate action sync, adjusted-price refresh, and `daily_features` refresh
+  - Runs security master → SIC/ticker events → EOD gaps → VWAP → corporate actions → adjusted prices → short interest → `daily_features` → read-only integrity gate
 
 - `backfill_missing_eod_from_massive.py`
   - Fill missing daily bars from Massive
+
+- `backfill_vwap_from_massive.py`
+  - Fill only null, unadjusted `eod_bars.vwap` values with point-in-time symbol mapping; OHLCV is never overwritten
+
+- `backfill_sic_from_massive.py`
+  - Store the current (or final delisted-date) SIC snapshot and namespaced Massive ticker-overview payload
+
+- `backfill_short_interest_from_massive.py`
+  - Store Massive/FINRA biweekly settlement facts without forward-filling them into daily features
+
+- `backfill_ticker_events_from_massive.py`
+  - Store experimental ticker-change events and apply only fully validated, conflict-free symbol intervals
 
 - `backfill_adjusted_prices.py`
   - Refresh adjusted OHLC fields
 
 - `backfill_daily_features.py`
   - Recompute and upsert `daily_features` from `eod_bars`
+
+- `check_market_data_quality.py`
+  - Read-only checks for price/feature gaps, invalid VWAP/short-interest values, ticker-event consistency, duplicate identities, symbol-history overlaps, stale instruments, and partial latest sessions
+
+Apply `backend/utils/create_stock_enrichment.sql` before the first enrichment run. It is additive and idempotent, but this repository has no Alembic migration workflow; back up and verify the target database before applying it. The schema adds SIC snapshot columns, `stock_short_interest`, `security_ticker_events`, and per-instrument vendor sync state.
+
+Massive VWAP is stored unadjusted (`adjusted=false`). The current plan boundary begins on 2016-08-29; older null VWAP remains an expected warning. SIC is a snapshot, not point-in-time industry history. Short interest is keyed by settlement date and is not treated as known on every daily bar because the endpoint does not provide a reliable publication timestamp. Ticker Events is experimental: raw events are always auditable, while incomplete chains, FIGI/exchange mismatches, ticker reuse, and interval conflicts remain `unresolved` and never trigger a guessed repair.
 
 Run the daily backfill flow through Make:
 
@@ -318,6 +371,32 @@ Pass extra arguments like this:
 ```bash
 make backfill-daily BACKFILL_ARGS="--start-date 2026-04-01 --end-date 2026-04-10"
 ```
+
+Preview the resolved range and vendor coverage without writing to the database:
+
+```bash
+make backfill-daily BACKFILL_ARGS="--dry-run"
+```
+
+Refresh all SIC and ticker-event references, or selectively skip datasets:
+
+```bash
+make backfill-daily BACKFILL_ARGS="--full-reference-refresh --dry-run"
+make backfill-daily BACKFILL_ARGS="--skip-sic --skip-ticker-events --skip-vwap --skip-short-interest"
+```
+
+The dry run fetches provider coverage for the selected enrichment datasets but does not write facts or identity intervals; security-master sync is skipped because its standalone script has no dry-run mode. All writes are idempotent. Recovery after a failure is to fix the reported cause and rerun the same range—do not delete or rebuild history. Ticker-event repairs retain before/after interval snapshots in `security_ticker_events`.
+
+Run the integrity gate directly. Critical failures always return a non-zero exit status; warnings are informational unless `--strict` is used:
+
+```bash
+make check-data
+make check-data CHECK_DATA_ARGS="--strict --json"
+```
+
+For an exceptional maintenance run, `--skip-quality-check` omits the final gate; `--strict-quality-check` makes pipeline warnings blocking. The normal installed task uses the default critical-failure-only policy.
+
+The installed macOS LaunchAgent runs daily at 20:15 local time and writes to `logs/daily-market-backfill.log` and `logs/daily-market-backfill.err.log`. Inspect its status with `launchctl print "gui/$(id -u)/com.quant.daily-market-backfill"`. Its schedule and installed paths are unchanged by the backfill scripts. Every child maintenance process explicitly receives `PAPER_TRADING_SCHEDULER_ENABLED=false` and `PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false`. A failed security-master or quality-gate step stops the remaining pipeline and leaves the idempotent catch-up range available for the next run.
 
 ## Paper Trading and Scheduler
 
@@ -373,6 +452,7 @@ Recommended workflow:
 - Automated order submission is aimed at Alpaca paper accounts
 - Real paper submissions leave actual paper positions and order state in Alpaca
 - If you use smoke tests during integration, clear paper positions and open orders afterward so they do not affect later runs
+- The application defaults both scheduler enablement and scheduler order submission to `true`; override both to `false` whenever order submission is not explicitly intended
 
 ## Data Model Overview
 
@@ -397,13 +477,20 @@ This separation makes it easier to:
 - manage multiple portfolios under one paper account
 - support both backtesting and paper trading in the same system
 
-## Good Files to Read Next
+## Agent Research Workspace
 
-For Agent-driven draft strategies, research experiments, safe joint startup, schema rollout, and recovery semantics, see [docs/agent-research-integration.md](docs/agent-research-integration.md). After both repositories have dependencies installed, start the complete safe local stack with `make dev-agent-all`. The executed local E2E evidence and delivery status are recorded in [docs/agent-research-e2e-delivery-2026-08-19.md](docs/agent-research-e2e-delivery-2026-08-19.md), and the bounded automated validation/backtest run is recorded in [docs/automated-strategy-validation-backtest-report-2026-08-25.md](docs/automated-strategy-validation-backtest-report-2026-08-25.md).
+`/strategies/new` first separates manual creation from Agent-assisted research. The manual path uses catalog defaults, human-readable percentage inputs, core/advanced parameter sections, and the read-only validation API before saving a Draft. The Agent path links to `/research?mode=category|algorithm&source=strategy-create`, where the requested mode is preselected and the user can return to the creation hub.
 
-- [backend/src/main.py](backend/src/main.py)
-- [backend/src/services/paper_trading_service.py](backend/src/services/paper_trading_service.py)
-- [backend/src/services/paper_trading_scheduler.py](backend/src/services/paper_trading_scheduler.py)
-- [backend/src/services/strategy_engine.py](backend/src/services/strategy_engine.py)
-- [backend/src/services/strategy_registry.py](backend/src/services/strategy_registry.py)
-- [frontend/src/pages/paper-trading.tsx](frontend/src/pages/paper-trading.tsx)
+`/research` has two entry points. Existing engine category research lets the user choose a catalog handler, then creates a validated draft and runs up to 5 adaptive Pareto rounds / 100 actual backtests after experiment approval. New algorithm research ends at a Draft PR; it does not merge, deploy, or backtest the new handler. Historical finite-grid experiments remain readable, but the old create flow is retired. See [Research experiments](docs/research-experiments.md).
+
+## Documentation
+
+Start with the [documentation index](docs/README.md). The maintained guides cover:
+
+- [System architecture](docs/architecture.md)
+- [Research experiments](docs/research-experiments.md)
+- [Support/resistance effectiveness study](docs/support-resistance-effectiveness.md)
+- [Support and resistance strategy](docs/support-resistance-strategy.md)
+- [Quant and AgentOps local integration](docs/agent-research-integration.md)
+
+The dated delivery and validation reports under `docs/` are historical evidence. They are intentionally not part of the maintained documentation navigation and must not be used as substitutes for the guides above.

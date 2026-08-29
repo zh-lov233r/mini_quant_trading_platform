@@ -99,6 +99,13 @@ export function getStrategyTemplateCopy(
           ? "保守版双底形态策略，确认长期下跌后的双底、放量突破颈线与缩量回踩。"
           : "Conservative double-bottom strategy focused on a confirmed neckline breakout and low-volume retest after a prolonged decline.",
       };
+    case "support_resistance":
+      return {
+        label: isZh ? "支撑 / 压力区域" : "Support / Resistance Zones",
+        description: isZh
+          ? "使用已确认 Pivot 与 ATR 聚类识别动态价格区，交易支撑反弹、压力突破和突破回踩。"
+          : "Dynamic confirmed-Pivot and ATR-clustered zones for support bounces, resistance breakouts, and breakout retests.",
+      };
     case "custom":
       return {
         label: isZh ? "自定义配置" : "Custom Config",
@@ -112,6 +119,46 @@ export function getStrategyTemplateCopy(
         description: fallbackDescription || (isZh ? "暂无模板说明" : "No template description yet"),
       };
   }
+}
+
+export interface StrategyCategoryPresentation {
+  label: string;
+  description: string;
+  accent: string;
+  accentRgb: string;
+}
+
+const STRATEGY_CATEGORY_VISUALS: Record<
+  string,
+  Pick<StrategyCategoryPresentation, "accent" | "accentRgb">
+> = {
+  trend: { accent: "#2dd4bf", accentRgb: "45, 212, 191" },
+  mean_reversion: { accent: "#a78bfa", accentRgb: "167, 139, 250" },
+  momentum_breakout: { accent: "#fbbf24", accentRgb: "251, 191, 36" },
+  island_reversal: { accent: "#fb7185", accentRgb: "251, 113, 133" },
+  double_bottom: { accent: "#38bdf8", accentRgb: "56, 189, 248" },
+  support_resistance: { accent: "#fb923c", accentRgb: "251, 146, 60" },
+  custom: { accent: "#94a3b8", accentRgb: "148, 163, 184" },
+};
+
+export function getStrategyCategoryPresentation(
+  strategyType: string,
+  locale: string = "zh-CN",
+  fallbackLabel?: string,
+  fallbackDescription?: string
+): StrategyCategoryPresentation {
+  const copy = getStrategyTemplateCopy(
+    strategyType,
+    locale,
+    fallbackLabel,
+    fallbackDescription
+  );
+  const visual = STRATEGY_CATEGORY_VISUALS[strategyType] || STRATEGY_CATEGORY_VISUALS.custom;
+
+  return {
+    ...copy,
+    ...visual,
+  };
 }
 
 export function formatDateTime(

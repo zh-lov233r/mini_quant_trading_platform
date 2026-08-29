@@ -17,6 +17,9 @@ __pycache__/
 htmlcov/
 dist/
 build/
+output/research/
+output/pdf/
+tmp/pdfs/
 *.egg-info/
 
 # Frontend dependencies and build output

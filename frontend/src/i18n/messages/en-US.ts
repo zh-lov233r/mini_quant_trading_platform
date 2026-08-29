@@ -1,4 +1,5 @@
 import type { MessageSchema } from "./zh-CN";
+import { strategyCreateEnUS } from "./strategy-create/en-US";
 
 export const enUSMessages: MessageSchema = {
   common: {
@@ -23,6 +24,7 @@ export const enUSMessages: MessageSchema = {
       description: "Confirms daily breakouts with forward-adjusted-when-available close, 20-day return, SMA20, and volume; signals form at the day-T close for next-session open execution.",
     },
   },
+  strategyCreate: strategyCreateEnUS,
   marketViewer: {
     trigger: "Market",
     title: "Stock Candles",

@@ -1,28 +1,53 @@
 from __future__ import annotations
 
+import base64
 from datetime import date, datetime
-from typing import Any, Optional
+import json
+import logging
+from time import perf_counter
+from typing import Any, Literal, Optional
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.orm import Session, selectinload
 
-from src.core.db import SessionLocal, get_db
-from src.models.tables import PortfolioSnapshot, Signal, StockBasket, Strategy, StrategyRun, Transaction
-from src.services.backtest_engine import BacktestResult, run_backtest
+from src.core.db import get_db
+from src.models.tables import (
+    PortfolioSnapshot,
+    Signal,
+    StockBasket,
+    Strategy,
+    StrategyRun,
+    SupportResistanceMaterialization,
+    SupportResistanceRunEvent,
+    SupportResistanceRunMaterialization,
+    SupportResistanceZoneVersion,
+    Transaction,
+)
+from src.services.backtest_engine import (
+    _available_details,
+    _downsample_snapshots,
+)
+from src.services.backtest_job_service import enqueue_backtest_job, request_backtest_cancel
 from src.services.data_service import get_historical_data
+from src.schemas.research import PointInTimeUniversePolicy
 from src.services.stock_basket_service import DEFAULT_COMMON_STOCK_BASKET_NAME
 
 NEW_YORK = ZoneInfo("America/New_York")
 DISPLAY_COMPARISON_SYMBOLS = ("SPY", "QQQ")
+log = logging.getLogger(__name__)
 
 
 class BacktestCreate(BaseModel):
     strategy_id: UUID = Field(..., description="策略 ID")
     basket_id: Optional[UUID] = Field(default=None, description="股票组合 ID，用于覆盖策略 universe")
+    universe_policy: Optional[PointInTimeUniversePolicy] = Field(
+        default=None,
+        description="历史动态入场股票池；与 basket_id 互斥",
+    )
     start_date: date = Field(..., description="回测开始日期")
     end_date: date = Field(..., description="回测结束日期")
     initial_cash: float = Field(default=100_000.0, gt=0, description="初始资金")
@@ -30,6 +55,7 @@ class BacktestCreate(BaseModel):
     commission_bps: Optional[float] = Field(default=None, ge=0)
     commission_min: Optional[float] = Field(default=None, ge=0)
     slippage_bps: Optional[float] = Field(default=None, ge=0)
+    persist_level: Literal["summary", "trades", "full"] = "full"
 
 
 class BacktestRunOut(BaseModel):
@@ -51,6 +77,9 @@ class BacktestRunOut(BaseModel):
     final_equity: Optional[float] = None
     benchmark_symbol: Optional[str] = None
     summary_metrics: dict[str, Any]
+    persist_level: Literal["summary", "trades", "full"] = "full"
+    available_details: list[str] = Field(default_factory=list)
+    progress: Optional[dict[str, Any]] = None
     error_message: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -63,6 +92,24 @@ class BacktestDetailOut(BacktestRunOut):
     comparison_curves: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     signals: list[dict[str, Any]] = Field(default_factory=list)
     transactions: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class BacktestSummaryOut(BacktestRunOut):
+    latest_snapshot: Optional[dict[str, Any]] = None
+    transaction_count: int = 0
+
+
+class BacktestPageOut(BaseModel):
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    total: int
+    next_cursor: Optional[str] = None
+
+
+class SupportResistanceBacktestOut(BaseModel):
+    run_id: UUID
+    materialization: Optional[dict[str, Any]] = None
+    zone_versions: list[dict[str, Any]] = Field(default_factory=list)
+    events: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def _serialize_snapshot(snapshot: PortfolioSnapshot) -> dict[str, Any]:
@@ -380,6 +427,9 @@ def _merge_benchmark_fields(
 def _serialize_transaction(txn: Transaction) -> dict[str, Any]:
     return {
         "id": str(txn.id),
+        "run_id": str(txn.run_id) if txn.run_id is not None else None,
+        "strategy_id": str(txn.strategy_id),
+        "instrument_id": int(txn.instrument_id) if txn.instrument_id is not None else None,
         "ts": txn.ts.isoformat() if txn.ts else None,
         "symbol": txn.symbol,
         "side": txn.side,
@@ -394,6 +444,9 @@ def _serialize_transaction(txn: Transaction) -> dict[str, Any]:
 def _serialize_signal(signal: Signal) -> dict[str, Any]:
     return {
         "id": str(signal.id),
+        "run_id": str(signal.run_id),
+        "strategy_id": str(signal.strategy_id),
+        "instrument_id": int(signal.instrument_id) if signal.instrument_id is not None else None,
         "ts": signal.ts.isoformat() if signal.ts else None,
         "symbol": signal.symbol,
         "signal": signal.signal,
@@ -403,50 +456,65 @@ def _serialize_signal(signal: Signal) -> dict[str, Any]:
     }
 
 
+def _compact_summary_metrics(metrics: dict[str, Any] | None) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in (metrics or {}).items()
+        if isinstance(value, (str, int, float, bool)) or value is None
+    }
+
+
+def _incremental_summary_metrics(metrics: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep exact metrics and telemetry while excluding large response arrays."""
+    return {
+        key: value
+        for key, value in (metrics or {}).items()
+        if key not in {"comparison_curves", "symbols_loaded"}
+    }
+
+
+def _encode_cursor(*values: Any) -> str:
+    payload = json.dumps([str(value) for value in values], separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_cursor(cursor: str, expected_items: int) -> list[str]:
+    try:
+        padding = "=" * (-len(cursor) % 4)
+        decoded = base64.urlsafe_b64decode(cursor + padding)
+        values = json.loads(decoded.decode("utf-8"))
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=422, detail="invalid pagination cursor") from exc
+    if not isinstance(values, list) or len(values) != expected_items or not all(
+        isinstance(value, str) for value in values
+    ):
+        raise HTTPException(status_code=422, detail="invalid pagination cursor")
+    return values
+
+
+def _run_persist_level(run: StrategyRun) -> Literal["summary", "trades", "full"]:
+    metrics_level = (run.summary_metrics or {}).get("persist_level")
+    run_options = (run.config_snapshot or {}).get("run_options") or {}
+    value = str(metrics_level or run_options.get("persist_level") or "full")
+    return value if value in {"summary", "trades", "full"} else "full"  # type: ignore[return-value]
+
+
 router = APIRouter(prefix="/api/backtests", tags=["backtests"])
 
 
-def _run_backtest_in_background(
-    run_id: UUID,
-    strategy_id: UUID,
-    start_date: date,
-    end_date: date,
-    initial_cash: float,
-    benchmark_symbol: str | None,
-    commission_bps: float | None,
-    commission_min: float | None,
-    slippage_bps: float | None,
-    basket_symbols: list[str] | None,
-    basket_metadata: dict[str, Any] | None,
-) -> None:
-    db = SessionLocal()
-    try:
-        run_backtest(
-            db=db,
-            strategy_id=strategy_id,
-            start_date=start_date,
-            end_date=end_date,
-            initial_cash=initial_cash,
-            benchmark_symbol=benchmark_symbol,
-            commission_bps=commission_bps,
-            commission_min=commission_min,
-            slippage_bps=slippage_bps,
-            universe_symbols=basket_symbols,
-            universe_metadata=basket_metadata,
-            existing_run_id=run_id,
-        )
-    except Exception:
-        # The backtest service marks the run as failed when execution raises.
-        db.rollback()
-    finally:
-        db.close()
-
-
-def _to_backtest_run_out(run: StrategyRun, strategy_name: str | None = None) -> BacktestRunOut:
+def _to_backtest_run_out(
+    run: StrategyRun,
+    strategy_name: str | None = None,
+    *,
+    compact_metrics: bool = False,
+) -> BacktestRunOut:
     universe = (run.config_snapshot or {}).get("universe") or {}
     basket = universe.get("basket") if isinstance(universe, dict) else {}
     selection_mode = universe.get("selection_mode") if isinstance(universe, dict) else None
     default_label = universe.get("default_label") if isinstance(universe, dict) else None
+    persist_level = _run_persist_level(run)
+    metrics = run.summary_metrics or {}
+    job = getattr(run, "backtest_job", None)
     return BacktestRunOut(
         id=run.id,
         strategy_id=run.strategy_id,
@@ -473,7 +541,10 @@ def _to_backtest_run_out(run: StrategyRun, strategy_name: str | None = None) -> 
         initial_cash=float(run.initial_cash) if run.initial_cash is not None else None,
         final_equity=float(run.final_equity) if run.final_equity is not None else None,
         benchmark_symbol=run.benchmark_symbol,
-        summary_metrics=run.summary_metrics or {},
+        summary_metrics=_compact_summary_metrics(metrics) if compact_metrics else metrics,
+        persist_level=persist_level,
+        available_details=list(metrics.get("available_details") or _available_details(persist_level)),
+        progress=dict(job.progress or {}) if job is not None else None,
         error_message=run.error_message,
         created_at=run.created_at,
         updated_at=run.updated_at,
@@ -548,7 +619,6 @@ def _to_backtest_detail_out(
 @router.post("", response_model=BacktestRunOut, status_code=status.HTTP_201_CREATED)
 def create_backtest(
     payload: BacktestCreate,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     strategy = db.get(Strategy, payload.strategy_id)
@@ -556,6 +626,8 @@ def create_backtest(
         raise HTTPException(status_code=404, detail="strategy not found")
     if payload.end_date < payload.start_date:
         raise HTTPException(status_code=422, detail="end_date must be on or after start_date")
+    if payload.basket_id is not None and payload.universe_policy is not None:
+        raise HTTPException(status_code=422, detail="basket_id and universe_policy are mutually exclusive")
     basket = None
     basket_symbols = None
     basket_metadata = None
@@ -587,30 +659,46 @@ def create_backtest(
             "submit_payload": {
                 "basket_id": str(payload.basket_id) if payload.basket_id else None,
                 "basket_name": basket.name if basket is not None else None,
+                "universe_policy": (
+                    payload.universe_policy.model_dump(mode="json", by_alias=True)
+                    if payload.universe_policy
+                    else None
+                ),
                 "commission_bps": payload.commission_bps,
                 "commission_min": payload.commission_min,
                 "slippage_bps": payload.slippage_bps,
-            }
+            },
+            "run_options": {"persist_level": payload.persist_level},
         },
     )
     db.add(run)
+    db.flush()
+    enqueue_backtest_job(
+        db,
+        run=run,
+        source="manual",
+        payload={
+            "strategy_id": str(strategy.id),
+            "start_date": payload.start_date.isoformat(),
+            "end_date": payload.end_date.isoformat(),
+            "initial_cash": payload.initial_cash,
+            "benchmark_symbol": payload.benchmark_symbol,
+            "commission_bps": payload.commission_bps,
+            "commission_min": payload.commission_min,
+            "slippage_bps": payload.slippage_bps,
+            "universe_symbols": basket_symbols,
+            "universe_metadata": basket_metadata,
+            "universe_policy": (
+                payload.universe_policy.model_dump(mode="json", by_alias=True)
+                if payload.universe_policy
+                else None
+            ),
+            "persist_level": payload.persist_level,
+            "engine_version": "v2" if payload.universe_policy else None,
+        },
+    )
     db.commit()
     db.refresh(run)
-
-    background_tasks.add_task(
-        _run_backtest_in_background,
-        run.id,
-        strategy.id,
-        payload.start_date,
-        payload.end_date,
-        payload.initial_cash,
-        payload.benchmark_symbol,
-        payload.commission_bps,
-        payload.commission_min,
-        payload.slippage_bps,
-        basket_symbols,
-        basket_metadata,
-    )
 
     return _to_backtest_run_out(run, strategy.name)
 
@@ -624,7 +712,11 @@ def list_backtests(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
-    stmt = select(StrategyRun, Strategy.name).join(Strategy, Strategy.id == StrategyRun.strategy_id)
+    stmt = (
+        select(StrategyRun, Strategy.name)
+        .join(Strategy, Strategy.id == StrategyRun.strategy_id)
+        .options(selectinload(StrategyRun.backtest_job))
+    )
 
     if strategy_id:
         stmt = stmt.where(StrategyRun.strategy_id == strategy_id)
@@ -635,11 +727,15 @@ def list_backtests(
 
     stmt = stmt.order_by(StrategyRun.requested_at.desc(), StrategyRun.created_at.desc())
     rows = db.execute(stmt.offset(offset).limit(limit)).all()
-    return [_to_backtest_run_out(run, strategy_name) for run, strategy_name in rows]
+    return [
+        _to_backtest_run_out(run, strategy_name, compact_metrics=True)
+        for run, strategy_name in rows
+    ]
 
 
 @router.get("/{run_id}", response_model=BacktestDetailOut)
 def get_backtest(run_id: UUID, db: Session = Depends(get_db)):
+    serialize_started = perf_counter()
     row = db.execute(
         select(StrategyRun, Strategy.name)
         .join(Strategy, Strategy.id == StrategyRun.strategy_id)
@@ -676,7 +772,7 @@ def get_backtest(run_id: UUID, db: Session = Depends(get_db)):
         .where(Transaction.run_id == run_id)
     ).scalar_one()
 
-    return _to_backtest_detail_out(
+    response = _to_backtest_detail_out(
         db=db,
         run=run,
         strategy_name=strategy_name,
@@ -685,4 +781,289 @@ def get_backtest(run_id: UUID, db: Session = Depends(get_db)):
         equity_curve=equity_curve,
         signals=signals,
         transactions=transactions,
+    )
+    log.info(
+        "Serialized legacy backtest detail run_id=%s elapsed_ms=%.3f snapshots=%s signals=%s transactions=%s",
+        run_id,
+        (perf_counter() - serialize_started) * 1000.0,
+        len(equity_curve),
+        len(signals),
+        len(transactions),
+    )
+    return response
+
+
+def _get_run_with_strategy(db: Session, run_id: UUID) -> tuple[StrategyRun, str | None]:
+    row = db.execute(
+        select(StrategyRun, Strategy.name)
+        .join(Strategy, Strategy.id == StrategyRun.strategy_id)
+        .where(StrategyRun.id == run_id)
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="backtest not found")
+    return row
+
+
+@router.get("/{run_id}/summary", response_model=BacktestSummaryOut)
+def get_backtest_summary(run_id: UUID, db: Session = Depends(get_db)):
+    run, strategy_name = _get_run_with_strategy(db, run_id)
+    latest_snapshot = db.execute(
+        select(PortfolioSnapshot)
+        .where(PortfolioSnapshot.run_id == run_id)
+        .order_by(PortfolioSnapshot.ts.desc())
+        .limit(1)
+    ).scalars().first()
+    transaction_count = db.execute(
+        select(func.count()).select_from(Transaction).where(Transaction.run_id == run_id)
+    ).scalar_one()
+    base = _to_backtest_run_out(run, strategy_name)
+    dump = base.model_dump() if hasattr(base, "model_dump") else base.dict()
+    return BacktestSummaryOut(
+        **{**dump, "summary_metrics": _incremental_summary_metrics(dump.get("summary_metrics"))},
+        latest_snapshot=_serialize_snapshot(latest_snapshot) if latest_snapshot else None,
+        transaction_count=int(transaction_count),
+    )
+
+
+@router.get("/{run_id}/equity", response_model=list[dict[str, Any]])
+def get_backtest_equity(
+    run_id: UUID,
+    max_points: int = Query(default=1500, ge=2, le=5000),
+    db: Session = Depends(get_db),
+):
+    if db.get(StrategyRun, run_id) is None:
+        raise HTTPException(status_code=404, detail="backtest not found")
+    snapshots = db.execute(
+        select(PortfolioSnapshot)
+        .where(PortfolioSnapshot.run_id == run_id)
+        .order_by(PortfolioSnapshot.ts.asc())
+    ).scalars().all()
+    rows = [_serialize_snapshot(snapshot) for snapshot in snapshots]
+    return _downsample_snapshots(rows, max_points=max_points)
+
+
+@router.get("/{run_id}/signals", response_model=BacktestPageOut)
+def list_backtest_signals(
+    run_id: UUID,
+    limit: int = Query(default=100, ge=1, le=500),
+    cursor: Optional[str] = Query(default=None),
+    symbol: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    run = db.get(StrategyRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="backtest not found")
+    stmt = select(Signal).where(Signal.run_id == run_id)
+    count_stmt = select(func.count()).select_from(Signal).where(Signal.run_id == run_id)
+    if symbol:
+        normalized_symbol = symbol.strip().upper()
+        stmt = stmt.where(Signal.symbol == normalized_symbol)
+        count_stmt = count_stmt.where(Signal.symbol == normalized_symbol)
+    if cursor:
+        ts_raw, symbol_raw, id_raw = _decode_cursor(cursor, 3)
+        try:
+            cursor_ts = datetime.fromisoformat(ts_raw)
+            cursor_id = UUID(id_raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid pagination cursor") from exc
+        stmt = stmt.where(
+            or_(
+                Signal.ts > cursor_ts,
+                and_(Signal.ts == cursor_ts, Signal.symbol > symbol_raw),
+                and_(Signal.ts == cursor_ts, Signal.symbol == symbol_raw, Signal.id > cursor_id),
+            )
+        )
+    items = db.execute(
+        stmt.order_by(Signal.ts.asc(), Signal.symbol.asc(), Signal.id.asc()).limit(limit + 1)
+    ).scalars().all()
+    page_items = items[:limit]
+    next_cursor = None
+    if len(items) > limit and page_items:
+        last = page_items[-1]
+        next_cursor = _encode_cursor(last.ts.isoformat(), last.symbol, last.id)
+    return BacktestPageOut(
+        items=[_serialize_signal(item) for item in page_items],
+        total=int(db.execute(count_stmt).scalar_one()),
+        next_cursor=next_cursor,
+    )
+
+
+@router.get("/{run_id}/transactions", response_model=BacktestPageOut)
+def list_backtest_transactions(
+    run_id: UUID,
+    limit: int = Query(default=100, ge=1, le=500),
+    cursor: Optional[str] = Query(default=None),
+    symbol: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    run = db.get(StrategyRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="backtest not found")
+    stmt = select(Transaction).where(Transaction.run_id == run_id)
+    count_stmt = select(func.count()).select_from(Transaction).where(Transaction.run_id == run_id)
+    if symbol:
+        normalized_symbol = symbol.strip().upper()
+        stmt = stmt.where(Transaction.symbol == normalized_symbol)
+        count_stmt = count_stmt.where(Transaction.symbol == normalized_symbol)
+    if cursor:
+        ts_raw, id_raw = _decode_cursor(cursor, 2)
+        try:
+            cursor_ts = datetime.fromisoformat(ts_raw)
+            cursor_id = UUID(id_raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid pagination cursor") from exc
+        stmt = stmt.where(
+            or_(
+                Transaction.ts < cursor_ts,
+                and_(Transaction.ts == cursor_ts, Transaction.id < cursor_id),
+            )
+        )
+    items = db.execute(
+        stmt.order_by(Transaction.ts.desc(), Transaction.id.desc()).limit(limit + 1)
+    ).scalars().all()
+    page_items = items[:limit]
+    next_cursor = None
+    if len(items) > limit and page_items:
+        last = page_items[-1]
+        next_cursor = _encode_cursor(last.ts.isoformat(), last.id)
+    return BacktestPageOut(
+        items=[_serialize_transaction(item) for item in page_items],
+        total=int(db.execute(count_stmt).scalar_one()),
+        next_cursor=next_cursor,
+    )
+
+
+@router.post("/{run_id}/cancel", response_model=BacktestRunOut, status_code=status.HTTP_202_ACCEPTED)
+def cancel_backtest(run_id: UUID, db: Session = Depends(get_db)):
+    run, strategy_name = _get_run_with_strategy(db, run_id)
+    try:
+        request_backtest_cancel(db, run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    db.refresh(run)
+    return _to_backtest_run_out(run, strategy_name)
+
+
+@router.get("/{run_id}/support-resistance", response_model=SupportResistanceBacktestOut)
+def get_backtest_support_resistance(
+    run_id: UUID,
+    db: Session = Depends(get_db),
+    symbol: Optional[str] = Query(default=None),
+    zone_key: Optional[str] = Query(default=None),
+    start_date: Optional[date] = Query(default=None),
+    end_date: Optional[date] = Query(default=None),
+):
+    if end_date is not None and start_date is not None and end_date < start_date:
+        raise HTTPException(status_code=422, detail="end_date must be on or after start_date")
+    run = db.get(StrategyRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="backtest not found")
+
+    linked = db.execute(
+        select(SupportResistanceRunMaterialization, SupportResistanceMaterialization)
+        .join(
+            SupportResistanceMaterialization,
+            SupportResistanceMaterialization.id
+            == SupportResistanceRunMaterialization.materialization_id,
+        )
+        .where(SupportResistanceRunMaterialization.run_id == run_id)
+    ).first()
+    if linked is None:
+        return SupportResistanceBacktestOut(run_id=run_id)
+
+    _, materialization = linked
+    normalized_symbol = str(symbol).strip().upper() if symbol else None
+    zone_stmt = select(SupportResistanceZoneVersion).where(
+        SupportResistanceZoneVersion.materialization_id == materialization.id
+    )
+    event_stmt = select(SupportResistanceRunEvent).where(
+        SupportResistanceRunEvent.run_id == run_id
+    )
+    if normalized_symbol:
+        zone_stmt = zone_stmt.where(SupportResistanceZoneVersion.symbol == normalized_symbol)
+        event_stmt = event_stmt.where(SupportResistanceRunEvent.symbol == normalized_symbol)
+    if zone_key:
+        zone_stmt = zone_stmt.where(SupportResistanceZoneVersion.zone_key == zone_key)
+        event_stmt = event_stmt.where(SupportResistanceRunEvent.zone_key == zone_key)
+    if start_date:
+        zone_stmt = zone_stmt.where(
+            (SupportResistanceZoneVersion.effective_to.is_(None))
+            | (SupportResistanceZoneVersion.effective_to >= start_date)
+        )
+        event_stmt = event_stmt.where(SupportResistanceRunEvent.event_date >= start_date)
+    if end_date:
+        zone_stmt = zone_stmt.where(SupportResistanceZoneVersion.effective_from <= end_date)
+        event_stmt = event_stmt.where(SupportResistanceRunEvent.event_date <= end_date)
+
+    versions = db.execute(
+        zone_stmt.order_by(
+            SupportResistanceZoneVersion.symbol,
+            SupportResistanceZoneVersion.zone_key,
+            SupportResistanceZoneVersion.effective_from,
+            SupportResistanceZoneVersion.version,
+        )
+    ).scalars().all()
+    events = db.execute(
+        event_stmt.order_by(
+            SupportResistanceRunEvent.event_date,
+            SupportResistanceRunEvent.symbol,
+            SupportResistanceRunEvent.created_at,
+        )
+    ).scalars().all()
+
+    return SupportResistanceBacktestOut(
+        run_id=run_id,
+        materialization={
+            "id": str(materialization.id),
+            "cache_key": materialization.cache_key,
+            "algorithm_version": materialization.algorithm_version,
+            "detector_params": materialization.detector_params,
+            "symbols": materialization.symbols,
+            "coverage_start": materialization.coverage_start.isoformat(),
+            "coverage_end": materialization.coverage_end.isoformat(),
+            "source_data_fingerprint": materialization.source_data_fingerprint,
+            "price_semantics": materialization.price_semantics,
+            "status": materialization.status,
+            "statistics": materialization.statistics,
+            "completed_at": (
+                materialization.completed_at.isoformat() if materialization.completed_at else None
+            ),
+        },
+        zone_versions=[
+            {
+                "id": str(version.id),
+                "symbol": version.symbol,
+                "zone_key": version.zone_key,
+                "version": version.version,
+                "effective_from": version.effective_from.isoformat(),
+                "effective_to": version.effective_to.isoformat() if version.effective_to else None,
+                "role": version.role,
+                "status": version.status,
+                "center_price": float(version.center_price),
+                "lower_price": float(version.lower_price),
+                "upper_price": float(version.upper_price),
+                "atr_width": float(version.atr_width),
+                "pivot_count": version.pivot_count,
+                "touch_count": version.touch_count,
+                "source_metadata": version.source_metadata,
+            }
+            for version in versions
+        ],
+        events=[
+            {
+                "id": str(event.id),
+                "symbol": event.symbol,
+                "event_date": event.event_date.isoformat(),
+                "event_type": event.event_type,
+                "zone_key": event.zone_key,
+                "setup": event.setup,
+                "selected": event.selected,
+                "score": float(event.score) if event.score is not None else None,
+                "posterior_sample_count": event.posterior_sample_count,
+                "lower_price": float(event.lower_price) if event.lower_price is not None else None,
+                "upper_price": float(event.upper_price) if event.upper_price is not None else None,
+                "payload": event.payload,
+            }
+            for event in events
+        ],
     )

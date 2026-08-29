@@ -4,6 +4,7 @@ export type StrategyType =
   | "momentum_breakout"
   | "island_reversal"
   | "double_bottom"
+  | "support_resistance"
   | "custom";
 export type StrategyStatus = "draft" | "active" | "archived";
 
@@ -185,12 +186,54 @@ export interface DoubleBottomStrategyParams {
   };
 }
 
+export interface SupportResistanceStrategyParams {
+  signal: {
+    support_bounce_enabled: boolean;
+    resistance_breakout_enabled: boolean;
+    breakout_retest_enabled: boolean;
+    pivot_left_bars: number;
+    pivot_right_bars: number;
+    detection_window: number;
+    cluster_radius_atr: number;
+    zone_half_width_atr: number;
+    min_touches: number;
+    decay_half_life: number;
+    max_zones_per_side: number;
+    bounce_confirmation_atr: number;
+    breakout_confirmation_atr: number;
+    breakout_volume_ratio_min: number;
+    retest_window: number;
+    retest_volume_ratio_max: number;
+    score_outcome_window: number;
+    score_target_atr: number;
+    score_stop_atr: number;
+  };
+  universe: { symbols: string[]; selection_mode: string };
+  risk: {
+    max_positions: number;
+    position_size_pct: number;
+    stop_loss_atr: number;
+    max_loss_pct: number;
+    take_profit_atr: number;
+    min_reward_risk: number;
+    max_holding_days: number;
+  };
+  execution: { timeframe: "1d"; rebalance: "daily"; run_at: "close" };
+  metadata: {
+    description: string;
+    schema_version: number;
+    algorithm_version: "pivot-atr-v1";
+    price_semantics: "forward_adjusted_preferred_unadjusted_fallback";
+  };
+}
+
 export type StrategyParams =
   | TrendStrategyParams
   | MeanReversionStrategyParams
   | MomentumBreakoutStrategyParams
   | IslandReversalStrategyParams
   | DoubleBottomStrategyParams
+  | SupportResistanceStrategyParams
   | Record<string, unknown>;
 
 export interface StrategyCreate {
@@ -199,6 +242,13 @@ export interface StrategyCreate {
   strategy_type: StrategyType;
   status?: StrategyStatus;
   params: Record<string, unknown>;
+}
+
+export interface StrategyValidation {
+  valid: boolean;
+  engine_ready: boolean;
+  strategy_type: StrategyType;
+  normalized_params: Record<string, unknown>;
 }
 
 export interface StrategyRename {
@@ -248,6 +298,9 @@ export interface StrategyDeleteOut {
   deleted_signals: number;
   deleted_transactions: number;
   deleted_allocations: number;
+  deleted_support_resistance_run_events: number;
+  deleted_support_resistance_run_links: number;
+  retained_support_resistance_materializations: number;
 }
 
 export interface StrategyCatalogItem {

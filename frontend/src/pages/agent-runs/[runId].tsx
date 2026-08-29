@@ -29,6 +29,7 @@ export default function AgentRunPage() {
   const [tools, setTools] = useState<AgentToolRun[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [acting, setActing] = useState(false);
+  const [selectedCandidateIds, setSelectedCandidateIds] = useState<string[]>([]);
 
   const refresh = useCallback(async () => {
     if (!runId) return;
@@ -58,7 +59,13 @@ export default function AgentRunPage() {
   async function resolveApproval(approval: AgentApproval, approve: boolean) {
     setActing(true);
     try {
-      if (approve) await approveAgentRequest(approval.id, "Approved from Quant Frontend");
+      if (approve) await approveAgentRequest(
+        approval.id,
+        "Approved from Quant Frontend",
+        approval.action === "promote_pareto_candidates"
+          ? { candidateIds: selectedCandidateIds }
+          : {},
+      );
       else await rejectAgentRequest(approval.id, "Rejected from Quant Frontend");
       await refresh();
     } catch (err) {
@@ -95,7 +102,10 @@ export default function AgentRunPage() {
   }
 
   const pending = approvals.find((item) => item.status === "pending");
-  const experimentId = tools.find((item) => item.toolId === "quant.create_experiment")?.externalRef;
+  const experimentId = tools.find((item) => item.toolId === "quant.create_category_study")?.externalRef;
+  const promotableCandidates = pending?.action === "promote_pareto_candidates"
+    ? findPromotableCandidates(pending.payload.review)
+    : [];
   const tokenBudget = Number(run?.tokenBudget || 0);
   const totalTokens = Number(run?.totalTokens || 0);
   const tokenPercent = tokenBudget > 0 ? Math.min(100, Math.round(totalTokens / tokenBudget * 100)) : 0;
@@ -145,6 +155,20 @@ export default function AgentRunPage() {
               <p>{pending.reason}</p>
               <p style={{ color: "#fbbf24" }}>{isZh ? "请核对下方结构化提案、试验数量与校验输出后再批准。" : "Review the proposal, trial count, and validation output below before approving."}</p>
               {pending.payload.review ? <pre style={preStyle}>{JSON.stringify(pending.payload.review, null, 2)}</pre> : null}
+              {pending.action === "promote_pareto_candidates" ? (
+                <div style={{ display: "grid", gap: 8, marginBottom: 14 }}>
+                  <strong>{isZh ? "选择最多 5 个 Pareto rank 1–2 候选；不选也可正常完成" : "Select up to 5 Pareto rank 1–2 candidates; an empty selection also completes"}</strong>
+                  {promotableCandidates.map((candidate) => (
+                    <label key={candidate.id} style={detailStyle}>
+                      <input
+                        type="checkbox"
+                        checked={selectedCandidateIds.includes(candidate.id)}
+                        onChange={(event) => setSelectedCandidateIds((current) => event.target.checked ? [...current, candidate.id].slice(0, 5) : current.filter((id) => id !== candidate.id))}
+                      />{" "}R{candidate.paretoRank} · {candidate.paramsHash.slice(0, 8)} · {JSON.stringify(candidate.overrides)}
+                    </label>
+                  ))}
+                </div>
+              ) : null}
               <div style={{ display: "flex", gap: 10 }}>
                 <button disabled={acting} onClick={() => void resolveApproval(pending, true)} style={primaryButton}>{isZh ? "批准" : "Approve"}</button>
                 <button disabled={acting} onClick={() => void resolveApproval(pending, false)} style={dangerButton}>{isZh ? "拒绝" : "Reject"}</button>
@@ -186,6 +210,22 @@ export default function AgentRunPage() {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+interface PromotableCandidate { id: string; paretoRank: number; paramsHash: string; overrides: Record<string, unknown>; }
+
+function findPromotableCandidates(value: unknown): PromotableCandidate[] {
+  const found = new Map<string, PromotableCandidate>();
+  function visit(item: unknown) {
+    if (Array.isArray(item)) { item.forEach(visit); return; }
+    if (!isRecord(item)) return;
+    if (typeof item.id === "string" && typeof item.paramsHash === "string" && (item.paretoRank === 1 || item.paretoRank === 2)) {
+      found.set(item.id, { id: item.id, paramsHash: item.paramsHash, paretoRank: item.paretoRank, overrides: isRecord(item.overrides) ? item.overrides : {} });
+    }
+    Object.values(item).forEach(visit);
+  }
+  visit(value);
+  return [...found.values()].sort((left, right) => left.paretoRank - right.paretoRank || left.paramsHash.localeCompare(right.paramsHash));
 }
 
 const panelStyle: CSSProperties = { padding: 22, borderRadius: 20, border: "1px solid rgba(100,116,139,.35)", background: "rgba(8,15,24,.8)" };

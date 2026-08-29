@@ -76,10 +76,14 @@ export async function listAgentToolRuns(id: string): Promise<AgentToolRun[]> {
   return result.items;
 }
 
-export function approveAgentRequest(id: string, note?: string): Promise<AgentApproval> {
+export function approveAgentRequest(
+  id: string,
+  note?: string,
+  resolutionPayload: Record<string, unknown> = {},
+): Promise<AgentApproval> {
   return request<AgentApproval>(`/v1/approval-requests/${encodeURIComponent(id)}/approve`, {
     method: "POST",
-    body: JSON.stringify({ note: note || null }),
+    body: JSON.stringify({ note: note || null, resolutionPayload }),
   });
 }
 

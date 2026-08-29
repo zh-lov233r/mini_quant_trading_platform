@@ -1,3 +1,5 @@
+import { strategyCreateZhCN } from "./strategy-create/zh-CN";
+
 export const zhCNMessages = {
   common: {
     appName: "量化策略工作台",
@@ -21,6 +23,7 @@ export const zhCNMessages = {
       description: "使用优先前复权的收盘价、20 日收益、20 日均线与成交量确认日线突破；T 日收盘生成信号，下一交易日开盘执行。",
     },
   },
+  strategyCreate: strategyCreateZhCN,
   marketViewer: {
     trigger: "行情窗",
     title: "股票蜡烛图",

@@ -5,7 +5,7 @@ BACKEND_DIR := $(ROOT_DIR)/backend
 FRONTEND_DIR := $(ROOT_DIR)/frontend
 PYTHON := $(ROOT_DIR)/.venv/bin/python
 
-.PHONY: help dev dev-agent-all dev-agent-safe dev-backend dev-frontend backfill-daily docker-build docker-up docker-down docker-logs
+.PHONY: help dev dev-agent-all dev-agent-safe dev-backend dev-frontend backtest-worker backfill-daily check-data docker-build docker-up docker-down docker-logs
 
 help:
 	@echo "Available targets:"
@@ -14,7 +14,9 @@ help:
 	@echo "  make dev-agent-safe Start Quant for AgentOps with all paper order automation disabled"
 	@echo "  make dev-backend  Start FastAPI backend only"
 	@echo "  make dev-frontend Start Next.js frontend only"
+	@echo "  make backtest-worker Run the independent durable backtest worker"
 	@echo "  make backfill-daily Run the daily market-data catch-up flow"
+	@echo "  make check-data     Run read-only market-data integrity checks"
 	@echo "  make docker-build Build all Docker images"
 	@echo "  make docker-up    Start the full Docker stack in background"
 	@echo "  make docker-down  Stop the Docker stack"
@@ -43,8 +45,14 @@ dev-backend:
 dev-frontend:
 	@cd "$(FRONTEND_DIR)" && npm run dev
 
+backtest-worker:
+	@cd "$(BACKEND_DIR)" && PAPER_TRADING_SCHEDULER_ENABLED=false PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false "$(PYTHON)" -m src.workers.backtest_worker $(BACKTEST_WORKER_ARGS)
+
 backfill-daily:
 	@cd "$(ROOT_DIR)" && "$(PYTHON)" backend/utils/run_daily_market_backfill.py $(BACKFILL_ARGS)
+
+check-data:
+	@cd "$(ROOT_DIR)" && "$(PYTHON)" backend/utils/check_market_data_quality.py $(CHECK_DATA_ARGS)
 
 docker-build:
 	@docker compose --env-file .env.docker build

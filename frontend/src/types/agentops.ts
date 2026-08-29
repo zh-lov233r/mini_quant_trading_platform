@@ -44,6 +44,7 @@ export interface AgentApproval {
   reason: string;
   payload: Record<string, unknown>;
   resolutionNote: string | null;
+  resolutionPayload: Record<string, unknown>;
   createdAt: string;
 }
 

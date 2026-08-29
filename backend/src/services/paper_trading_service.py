@@ -38,11 +38,21 @@ from src.services.strategy_allocation_service import (
 from src.services.strategy_engine import (
     STRATEGY_HANDLERS,
     SignalEvent,
+    generate_support_resistance_replay_signals,
     load_feature_market_data,
     required_recent_bar_count_for_runtime,
     required_recent_bar_lookback_days,
 )
 from src.services.strategy_registry import build_runtime_payload
+from src.services.support_resistance_persistence_service import (
+    SupportResistanceMaterializationBuildError,
+    find_reusable_materialization,
+    hydrate_state_from_materialization,
+    persist_support_resistance_run,
+    record_failed_materialization_after_rollback,
+    source_data_fingerprint,
+)
+from src.services.support_resistance_service import SupportResistanceState
 
 
 log = logging.getLogger("paper_trading")
@@ -262,6 +272,11 @@ def run_paper_trading(
 
         recent_bar_count = required_recent_bar_count_for_runtime(runtime)
         recent_bar_lookback_days = required_recent_bar_lookback_days(recent_bar_count)
+        support_resistance_source_fingerprint = (
+            source_data_fingerprint(db)
+            if runtime["strategy_type"] == "support_resistance"
+            else None
+        )
         snapshots = load_feature_market_data(
             db,
             trade_date,
@@ -279,8 +294,53 @@ def run_paper_trading(
             allocation_cfg,
             price_lookup_before,
         )
-        _inject_virtual_positions(snapshots, sleeve_before.positions_by_symbol, trade_date)
-        signals = handler(runtime, snapshots)
+        _inject_virtual_positions(
+            snapshots,
+            sleeve_before.positions_by_symbol,
+            trade_date,
+            use_trading_days=runtime["strategy_type"] == "support_resistance",
+        )
+        support_resistance_materialization = None
+        if runtime["strategy_type"] == "support_resistance":
+            replay_dates = [
+                replay_date
+                for symbol in symbols
+                for bar in (snapshots.get(symbol) or {}).get("recent_bars") or []
+                if (replay_date := _support_resistance_bar_date(bar)) is not None
+            ]
+            coverage_start = min(replay_dates) if replay_dates else trade_date
+            reusable = find_reusable_materialization(
+                db,
+                runtime=runtime,
+                symbols=symbols,
+                coverage_start=coverage_start,
+                coverage_end=trade_date,
+                expected_data_fingerprint=support_resistance_source_fingerprint,
+            )
+            replay_state = (
+                hydrate_state_from_materialization(db, reusable)
+                if reusable is not None
+                else SupportResistanceState()
+            )
+            signals = generate_support_resistance_replay_signals(
+                runtime,
+                snapshots,
+                replay_state,
+            )
+            # Materialization and run-event audit must succeed before the first
+            # possible broker order is submitted.
+            support_resistance_materialization = persist_support_resistance_run(
+                db,
+                run=run,
+                runtime=runtime,
+                state=replay_state,
+                symbols=symbols,
+                coverage_start=coverage_start,
+                coverage_end=trade_date,
+                expected_data_fingerprint=support_resistance_source_fingerprint,
+            )
+        else:
+            signals = handler(runtime, snapshots)
         _persist_signals(db, strategy, run, signals)
 
         order_outcomes, sleeve_after, broker_cash_after = _execute_paper_orders(
@@ -364,6 +424,16 @@ def run_paper_trading(
             "symbols_loaded": sorted(snapshots.keys()),
             "symbols_signaled": sorted({event.symbol for event in signals}),
             "strategy_type": runtime["strategy_type"],
+            "support_resistance_materialization_id": (
+                str(support_resistance_materialization.id)
+                if support_resistance_materialization is not None
+                else None
+            ),
+            "support_resistance_cache_key": (
+                support_resistance_materialization.cache_key
+                if support_resistance_materialization is not None
+                else None
+            ),
             "account_id": account_after.get("id"),
             "account_status": account_after.get("status"),
             "broker_cash": _account_cash(account_after),
@@ -429,6 +499,11 @@ def run_paper_trading(
         )
     except Exception as exc:
         db.rollback()
+        if isinstance(exc, SupportResistanceMaterializationBuildError):
+            try:
+                record_failed_materialization_after_rollback(db, exc)
+            except Exception:
+                db.rollback()
         failed_run = db.get(StrategyRun, run.id)
         if failed_run is not None:
             failed_run.status = "failed"
@@ -446,6 +521,20 @@ def run_paper_trading(
             submit_orders,
         )
         raise
+
+
+def _support_resistance_bar_date(bar: dict[str, Any]) -> date | None:
+    value = bar.get("dt_ny")
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            return None
+    return None
 
 
 def run_multi_strategy_paper_trading(
@@ -1417,6 +1506,8 @@ def _inject_virtual_positions(
     snapshots: dict[str, dict[str, Any]],
     positions_by_symbol: dict[str, VirtualPosition],
     trade_date: date,
+    *,
+    use_trading_days: bool = False,
 ) -> None:
     for symbol, snapshot in snapshots.items():
         position = positions_by_symbol.get(symbol)
@@ -1424,11 +1515,21 @@ def _inject_virtual_positions(
         snapshot["avg_entry_price"] = position.avg_entry_price if position is not None else None
         snapshot["entry_trade_date"] = position.entry_trade_date if position is not None else None
         snapshot["entry_signal_features"] = position.entry_signal_features if position is not None else None
-        snapshot["position_holding_days"] = (
-            max((trade_date - position.entry_trade_date).days, 0)
-            if position is not None and position.entry_trade_date is not None
-            else None
-        )
+        if position is None or position.entry_trade_date is None:
+            snapshot["position_holding_days"] = None
+        elif use_trading_days:
+            observed_dates = {
+                observed_date
+                for bar in snapshot.get("recent_bars") or []
+                if (observed_date := _support_resistance_bar_date(bar)) is not None
+                and position.entry_trade_date < observed_date <= trade_date
+            }
+            snapshot["position_holding_days"] = len(observed_dates)
+        else:
+            snapshot["position_holding_days"] = max(
+                (trade_date - position.entry_trade_date).days,
+                0,
+            )
 
 
 def _build_price_lookup(

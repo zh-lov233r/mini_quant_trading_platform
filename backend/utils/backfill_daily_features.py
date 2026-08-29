@@ -249,6 +249,7 @@ class RollingStats:
         self.values: deque[float] = deque()
         self.sum = 0.0
         self.sum_sq = 0.0
+        self.evictions = 0
 
     def push(self, value: float | None) -> None:
         if value is None or math.isnan(value):
@@ -258,13 +259,41 @@ class RollingStats:
         self.sum_sq += value * value
         while len(self.values) > self.window:
             old = self.values.popleft()
+            sum_before_eviction = self.sum
             self.sum -= old
             self.sum_sq -= old * old
+            self.evictions += 1
+
+            # Sliding sums can lose the entire low-order remainder when a very
+            # large split-era observation leaves a window of much smaller
+            # values. Rebase around severe cancellation and periodically during
+            # long histories. This keeps the O(1) common path while preventing
+            # impossible negative price/volume/true-range means.
+            cancellation_scale = abs(sum_before_eviction) + abs(old)
+            severe_cancellation = (
+                cancellation_scale > 0
+                and abs(self.sum) <= cancellation_scale * 1e-12
+            )
+            if severe_cancellation or self.evictions % 1024 == 0:
+                self.sum = math.fsum(self.values)
+                self.sum_sq = math.fsum(value * value for value in self.values)
 
     def mean(self) -> float | None:
         if len(self.values) < self.window:
             return None
-        return self.sum / self.window
+        mean = self.sum / self.window
+        # A long sequence of additions/removals after an extreme split can
+        # leave a residual that is large relative to today's observations even
+        # when no single eviction met the cancellation threshold. A finite
+        # arithmetic mean must remain inside the active window's bounds, so use
+        # that invariant as a cheap self-healing check.
+        lower = min(self.values)
+        upper = max(self.values)
+        if not math.isfinite(mean) or mean < lower or mean > upper:
+            self.sum = math.fsum(self.values)
+            self.sum_sq = math.fsum(value * value for value in self.values)
+            mean = self.sum / self.window
+        return mean
 
     def std(self) -> float | None:
         if len(self.values) < self.window:

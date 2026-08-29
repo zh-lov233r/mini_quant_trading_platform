@@ -1,6 +1,7 @@
 export interface BacktestCreate {
   strategy_id: string;
   basket_id?: string | null;
+  universe_policy?: import("@/types/research").PointInTimeUniversePolicy | null;
   start_date: string;
   end_date: string;
   initial_cash?: number;
@@ -8,7 +9,10 @@ export interface BacktestCreate {
   commission_bps?: number | null;
   commission_min?: number | null;
   slippage_bps?: number | null;
+  persist_level?: BacktestPersistLevel;
 }
+
+export type BacktestPersistLevel = "summary" | "trades" | "full";
 
 export interface BacktestRunOut {
   id: string;
@@ -29,9 +33,23 @@ export interface BacktestRunOut {
   final_equity?: number | null;
   benchmark_symbol?: string | null;
   summary_metrics: Record<string, unknown>;
+  persist_level: BacktestPersistLevel;
+  available_details: string[];
+  progress?: Record<string, unknown> | null;
   error_message?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+}
+
+export interface BacktestSummaryOut extends BacktestRunOut {
+  latest_snapshot?: BacktestSnapshotPoint | null;
+  transaction_count: number;
+}
+
+export interface BacktestPageOut<T> {
+  items: T[];
+  total: number;
+  next_cursor?: string | null;
 }
 
 export interface BacktestSnapshotPoint {
@@ -52,6 +70,9 @@ export interface BacktestSnapshotPoint {
 
 export interface BacktestTransactionOut {
   id: string;
+  run_id?: string | null;
+  strategy_id?: string;
+  instrument_id?: number | null;
   ts?: string | null;
   symbol: string;
   side: string;
@@ -64,6 +85,9 @@ export interface BacktestTransactionOut {
 
 export interface BacktestSignalOut {
   id: string;
+  run_id?: string;
+  strategy_id?: string;
+  instrument_id?: number | null;
   ts?: string | null;
   symbol: string;
   signal: string;
@@ -87,4 +111,59 @@ export interface BacktestDetailOut extends BacktestRunOut {
   comparison_curves?: Record<string, BacktestComparisonCurvePoint[]>;
   signals: BacktestSignalOut[];
   transactions: BacktestTransactionOut[];
+}
+
+export interface SupportResistanceMaterializationOut {
+  id: string;
+  cache_key: string;
+  algorithm_version: string;
+  detector_params: Record<string, unknown>;
+  symbols: string[];
+  coverage_start: string;
+  coverage_end: string;
+  source_data_fingerprint: string;
+  price_semantics: string;
+  status: string;
+  statistics: Record<string, unknown>;
+  completed_at?: string | null;
+}
+
+export interface SupportResistanceZoneVersionOut {
+  id: string;
+  symbol: string;
+  zone_key: string;
+  version: number;
+  effective_from: string;
+  effective_to?: string | null;
+  role: "support" | "resistance";
+  status: string;
+  center_price: number;
+  lower_price: number;
+  upper_price: number;
+  atr_width: number;
+  pivot_count: number;
+  touch_count: number;
+  source_metadata: Record<string, unknown>;
+}
+
+export interface SupportResistanceRunEventOut {
+  id: string;
+  symbol: string;
+  event_date: string;
+  event_type: string;
+  zone_key?: string | null;
+  setup?: string | null;
+  selected: boolean;
+  score?: number | null;
+  posterior_sample_count?: number | null;
+  lower_price?: number | null;
+  upper_price?: number | null;
+  payload: Record<string, unknown>;
+}
+
+export interface SupportResistanceBacktestOut {
+  run_id: string;
+  materialization?: SupportResistanceMaterializationOut | null;
+  zone_versions: SupportResistanceZoneVersionOut[];
+  events: SupportResistanceRunEventOut[];
 }

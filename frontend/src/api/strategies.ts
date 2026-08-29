@@ -8,6 +8,7 @@ import type {
   StrategyRename,
   StrategyOut,
   StrategyRuntimeOut,
+  StrategyValidation,
 } from "@/types/strategy";
 
 export const STRATEGY_DELETE_CLOSE_REQUIRED_PREFIX =
@@ -32,6 +33,13 @@ export async function createStrategy(
     throw await readApiError(res, "/api/strategies");
   }
   return res.json() as Promise<StrategyOut>;
+}
+
+export function validateStrategy(payload: StrategyCreate): Promise<StrategyValidation> {
+  return http<StrategyValidation>("/api/strategies/validate", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function listStrategies(): Promise<StrategyOut[]> {

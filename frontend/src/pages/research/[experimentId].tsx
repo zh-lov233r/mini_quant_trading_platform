@@ -4,11 +4,23 @@ import { useRouter } from "next/router";
 import { useCallback, useEffect, useState } from "react";
 
 import { cancelAgentWorkflow } from "@/api/agentops";
-import { getResearchExperiment, listExperimentTrials } from "@/api/research";
+import {
+  getResearchExperiment,
+  listExperimentChildren,
+  listExperimentCandidates,
+  listExperimentRounds,
+  listExperimentTrials,
+  researchArtifactUrl,
+} from "@/api/research";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import { useI18n } from "@/i18n/provider";
-import type { ExperimentTrial, ResearchExperiment } from "@/types/research";
+import type {
+  ExperimentCandidate,
+  ExperimentRound,
+  ExperimentTrial,
+  ResearchExperiment,
+} from "@/types/research";
 
 const TERMINAL = new Set(["completed", "partially_failed", "failed", "cancelled", "data_changed"]);
 
@@ -19,17 +31,26 @@ export default function ResearchExperimentPage() {
   const id = typeof router.query.experimentId === "string" ? router.query.experimentId : "";
   const [experiment, setExperiment] = useState<ResearchExperiment | null>(null);
   const [trials, setTrials] = useState<ExperimentTrial[]>([]);
+  const [rounds, setRounds] = useState<ExperimentRound[]>([]);
+  const [candidates, setCandidates] = useState<ExperimentCandidate[]>([]);
+  const [children, setChildren] = useState<ResearchExperiment[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!id) return;
     try {
-      const [nextExperiment, nextTrials] = await Promise.all([
+      const [nextExperiment, nextTrials, nextRounds, nextCandidates, nextChildren] = await Promise.all([
         getResearchExperiment(id),
         listExperimentTrials(id),
+        listExperimentRounds(id),
+        listExperimentCandidates(id),
+        listExperimentChildren(id),
       ]);
       setExperiment(nextExperiment);
       setTrials(nextTrials);
+      setRounds(nextRounds);
+      setCandidates(nextCandidates);
+      setChildren(nextChildren);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -59,6 +80,12 @@ export default function ResearchExperimentPage() {
   const tokenUsage = report.tokenUsage || {};
   const counts = report.counts || experiment?.progress || {};
   const bestTrial = report.bestOutOfSampleTrial;
+  const isEffectivenessStudy = experiment?.studyKind === "support_resistance_effectiveness_v1";
+  const finalCandidates = Array.isArray(report.finalCandidates)
+    ? report.finalCandidates.map(asRecord)
+    : [];
+  const reportArtifacts = asRecord(asRecord(experiment?.runManifest).reportArtifacts);
+  const artifactFiles = asRecord(reportArtifacts.files);
 
   return (
     <AppShell
@@ -86,6 +113,54 @@ export default function ResearchExperimentPage() {
             ) : null}
           </section>
 
+          {isEffectivenessStudy ? (
+            <section style={{ ...panelStyle, marginTop: 18 }}>
+              <h2 style={{ marginTop: 0 }}>{isZh ? "预注册有效性判定" : "Pre-registered effectiveness decision"}</h2>
+              <div style={summaryGridStyle}>
+                <MetricCard label={isZh ? "最终判定" : "Final decision"} value={String(report.decision || (isZh ? "待完成" : "Pending"))} />
+                <MetricCard label={isZh ? "当前阶段" : "Current phase"} value={String(experiment.progress.phase || "—")} />
+                <MetricCard label={isZh ? "回测预算" : "Backtest budget"} value={`${Number(experiment.progress.scheduled || 0)} / 200`} />
+                <MetricCard label={isZh ? "报告状态" : "Report status"} value={String(reportArtifacts.status || "pending")} />
+              </div>
+              {finalCandidates.map((candidate) => {
+                const gates = asRecord(candidate.acceptanceGates);
+                return (
+                  <div key={String(candidate.paramsHash || candidate.candidateId)} style={{ marginTop: 16 }}>
+                    <strong>{String(candidate.rationale || candidate.paramsHash || "Candidate")}</strong>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                      {Object.entries(gates).map(([name, passed]) => (
+                        <Badge key={name}>{passed ? "✓" : "✗"} {name}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+              {children.length ? (
+                <div style={{ overflowX: "auto", marginTop: 18 }}>
+                  <table style={tableStyle}>
+                    <thead><tr><th>{isZh ? "阶段" : "Phase"}</th><th>Status</th><th>{isZh ? "进度" : "Progress"}</th><th>ID</th></tr></thead>
+                    <tbody>{children.map((child) => <tr key={child.id}>
+                      <td>{String(child.spec.validationPhase || child.studyKind)}</td>
+                      <td>{child.status}</td>
+                      <td>{Number(child.progress.completed || 0)} / {Number(child.progress.total || 0)}</td>
+                      <td><Link href={`/research/${child.id}`} style={{ color: "#67e8f9" }}>{child.id.slice(0, 8)}</Link></td>
+                    </tr>)}</tbody>
+                  </table>
+                </div>
+              ) : null}
+              {Object.keys(artifactFiles).length ? (
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 18 }}>
+                  {([
+                    ["json", "JSON"], ["markdownZh", "Markdown 中文"], ["markdownEn", "Markdown EN"],
+                    ["pdfZh", "PDF 中文"], ["pdfEn", "PDF EN"],
+                  ] as const).map(([kind, label]) => artifactFiles[kind] ? (
+                    <a key={kind} href={researchArtifactUrl(experiment.id, kind)} style={linkButton}>{label}</a>
+                  ) : null)}
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
           <section style={{ ...panelStyle, marginTop: 18 }}>
             <h2 style={{ marginTop: 0 }}>{isZh ? "执行摘要" : "Execution summary"}</h2>
             <div style={summaryGridStyle}>
@@ -103,6 +178,31 @@ export default function ResearchExperimentPage() {
                   </Link>
                 ) : bestTrial.trialId.slice(0, 8)}
               </p>
+            ) : null}
+          </section>
+
+          <section style={{ ...panelStyle, marginTop: 18 }}>
+            <h2 style={{ marginTop: 0 }}>{isZh ? "自适应轮次与 Pareto 候选" : "Adaptive rounds and Pareto candidates"}</h2>
+            {rounds.length ? (
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
+                {rounds.map((round) => <Badge key={round.id}>R{round.ordinal} · {round.status}</Badge>)}
+              </div>
+            ) : <p style={{ color: "#94a3b8" }}>{isZh ? "这是旧版有限网格实验；历史结果仍保持只读。" : "This is a legacy finite-grid experiment; its history remains read-only."}</p>}
+            {candidates.length ? (
+              <div style={{ overflowX: "auto" }}>
+                <table style={tableStyle}>
+                  <thead><tr><th>Rank</th><th>Hash</th><th>Overrides</th><th>OOS return</th><th>Sharpe</th><th>Drawdown</th><th>{isZh ? "已保存 draft" : "Saved draft"}</th></tr></thead>
+                  <tbody>{candidates.map((candidate) => <tr key={candidate.id}>
+                    <td>{candidate.paretoRank ?? "—"}</td>
+                    <td>{candidate.paramsHash.slice(0, 8)}</td>
+                    <td><code>{JSON.stringify(candidate.overrides)}</code></td>
+                    <td>{formatMetric(candidate.aggregateMetrics.oos_total_return)}</td>
+                    <td>{formatMetric(candidate.aggregateMetrics.oos_sharpe)}</td>
+                    <td>{formatMetric(candidate.aggregateMetrics.oos_max_drawdown)}</td>
+                    <td>{candidate.promotedStrategyId ? <Link href={`/strategies/${candidate.promotedStrategyId}`} style={{ color: "#67e8f9" }}>{candidate.promotedStrategyId.slice(0, 8)}</Link> : "—"}</td>
+                  </tr>)}</tbody>
+                </table>
+              </div>
             ) : null}
           </section>
 
@@ -150,6 +250,12 @@ function formatMetric(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(4) : "—";
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
 function formatInteger(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString() : "—";
 }
@@ -161,6 +267,11 @@ function terminationLabel(reason: string, isZh: boolean) {
     time_limit_reached: ["达到运行时间上限", "Time limit reached"],
     token_budget_reached: ["达到 token 上限", "Token budget reached"],
     target_reached: ["达到目标指标", "Target metric reached"],
+    max_rounds_reached: ["达到轮数上限", "Round limit reached"],
+    max_trials_reached: ["达到 Backtest 上限", "Backtest limit reached"],
+    no_valid_candidates: ["没有有效候选", "No valid candidates"],
+    no_novel_candidates: ["没有新候选", "No novel candidates"],
+    controller_failed: ["研究控制器失败", "Research controller failed"],
   };
   const label = labels[reason];
   return label ? label[isZh ? 0 : 1] : reason;

@@ -15,29 +15,99 @@ UNKNOWN_VALID_FROM = "1900-01-01"
 SUPPORTED_ASSET_TYPES = {"CS"}
 BENCHMARK_PROXY_ASSET_TYPES = {"ETF"}
 BENCHMARK_PROXY_SYMBOLS = {"SPY", "QQQ"}
+ACTIVE_SYNC_ORDER = ("false", "true")
 
 UPSERT_INSTR = """
 INSERT INTO instruments (
   share_class_figi, composite_figi, cik,
   ticker_canonical, exchange, asset_type, share_class, name, currency,
-  listed_at, is_active, vendor_source
+  listed_at, delisted_at, is_active, vendor_source
 ) VALUES (
   %(share_class_figi)s, %(composite_figi)s, %(cik)s,
   %(ticker)s, %(exchange)s, %(type)s, %(share_class)s, %(name)s, %(currency)s,
-  %(list_date)s, %(active)s, 'massive'
+  %(list_date)s, %(delisted_at)s, %(active)s, 'massive'
 )
 ON CONFLICT (share_class_figi) DO UPDATE SET
   composite_figi   = COALESCE(EXCLUDED.composite_figi, instruments.composite_figi),
   cik              = COALESCE(EXCLUDED.cik, instruments.cik),
-  ticker_canonical = EXCLUDED.ticker_canonical,
-  exchange         = EXCLUDED.exchange,
-  asset_type       = EXCLUDED.asset_type,
-  share_class      = COALESCE(EXCLUDED.share_class, instruments.share_class),
-  name             = COALESCE(EXCLUDED.name, instruments.name),
-  currency         = COALESCE(EXCLUDED.currency, instruments.currency),
-  listed_at        = COALESCE(EXCLUDED.listed_at, instruments.listed_at),
-  is_active        = EXCLUDED.is_active
-RETURNING id;
+  ticker_canonical = CASE
+    WHEN EXCLUDED.is_active THEN EXCLUDED.ticker_canonical
+    ELSE instruments.ticker_canonical
+  END,
+  exchange         = CASE
+    WHEN instruments.is_active AND NOT EXCLUDED.is_active
+      AND (
+        EXCLUDED.ticker_canonical IS DISTINCT FROM instruments.ticker_canonical
+        OR EXCLUDED.delisted_at < instruments.listed_at
+      )
+      THEN instruments.exchange
+    ELSE EXCLUDED.exchange
+  END,
+  asset_type       = CASE
+    WHEN instruments.is_active AND NOT EXCLUDED.is_active
+      AND (
+        EXCLUDED.ticker_canonical IS DISTINCT FROM instruments.ticker_canonical
+        OR EXCLUDED.delisted_at < instruments.listed_at
+      )
+      THEN instruments.asset_type
+    ELSE EXCLUDED.asset_type
+  END,
+  share_class      = CASE
+    WHEN instruments.is_active AND NOT EXCLUDED.is_active
+      AND (
+        EXCLUDED.ticker_canonical IS DISTINCT FROM instruments.ticker_canonical
+        OR EXCLUDED.delisted_at < instruments.listed_at
+      )
+      THEN instruments.share_class
+    ELSE COALESCE(EXCLUDED.share_class, instruments.share_class)
+  END,
+  name             = CASE
+    WHEN instruments.is_active AND NOT EXCLUDED.is_active
+      AND (
+        EXCLUDED.ticker_canonical IS DISTINCT FROM instruments.ticker_canonical
+        OR EXCLUDED.delisted_at < instruments.listed_at
+      )
+      THEN instruments.name
+    ELSE COALESCE(EXCLUDED.name, instruments.name)
+  END,
+  currency         = CASE
+    WHEN instruments.is_active AND NOT EXCLUDED.is_active
+      AND (
+        EXCLUDED.ticker_canonical IS DISTINCT FROM instruments.ticker_canonical
+        OR EXCLUDED.delisted_at < instruments.listed_at
+      )
+      THEN instruments.currency
+    ELSE COALESCE(EXCLUDED.currency, instruments.currency)
+  END,
+  listed_at        = CASE
+    WHEN instruments.is_active AND NOT EXCLUDED.is_active
+      AND (
+        EXCLUDED.ticker_canonical IS DISTINCT FROM instruments.ticker_canonical
+        OR EXCLUDED.delisted_at < instruments.listed_at
+      )
+      THEN instruments.listed_at
+    ELSE COALESCE(EXCLUDED.listed_at, instruments.listed_at)
+  END,
+  delisted_at      = CASE
+    WHEN EXCLUDED.is_active THEN NULL
+    WHEN instruments.is_active
+      AND (
+        EXCLUDED.ticker_canonical IS DISTINCT FROM instruments.ticker_canonical
+        OR EXCLUDED.delisted_at < instruments.listed_at
+      )
+      THEN instruments.delisted_at
+    ELSE COALESCE(EXCLUDED.delisted_at, instruments.delisted_at)
+  END,
+  is_active        = CASE
+    WHEN instruments.is_active AND NOT EXCLUDED.is_active
+      AND (
+        EXCLUDED.ticker_canonical IS DISTINCT FROM instruments.ticker_canonical
+        OR EXCLUDED.delisted_at < instruments.listed_at
+      )
+      THEN TRUE
+    ELSE EXCLUDED.is_active
+  END
+RETURNING id, is_active;
 """
 
 UPSERT_SYMBOL_REFERENCE = """
@@ -78,8 +148,204 @@ SET valid_to = CASE
     ELSE valid_from
 END
 WHERE instrument_id <> %(iid)s
+  AND symbol = %(symbol)s
+  AND id IN (
+    SELECT DISTINCT ON (instrument_id) id
+    FROM symbol_history
+    WHERE instrument_id <> %(iid)s
+      AND symbol = %(symbol)s
+    ORDER BY instrument_id, valid_from DESC, id DESC
+  )
+  AND (
+    valid_to IS NULL
+    OR (
+      valid_to < %(start_date)s::date - 1
+      AND EXISTS (
+        SELECT 1
+        FROM eod_bars
+        WHERE instrument_id = symbol_history.instrument_id
+          AND dt_ny > symbol_history.valid_to
+          AND dt_ny < %(start_date)s::date
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM symbol_history other
+        WHERE other.id <> symbol_history.id
+          AND other.exchange = symbol_history.exchange
+          AND other.symbol = symbol_history.symbol
+          AND other.valid_from < %(start_date)s::date
+          AND COALESCE(other.valid_to, DATE 'infinity') >= symbol_history.valid_from
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM symbol_history later_primary
+        WHERE later_primary.instrument_id = symbol_history.instrument_id
+          AND later_primary.is_primary
+          AND later_primary.valid_from > symbol_history.valid_from
+      )
+    )
+  );
+"""
+
+
+SQL_EFFECTIVE_HANDOFF_START = """
+SELECT GREATEST(
+  %(start_date)s::date,
+  COALESCE(
+    (
+      SELECT MAX(sh.valid_to) + 1
+      FROM symbol_history sh
+      WHERE sh.instrument_id = %(iid)s
+        AND sh.is_primary
+        AND sh.valid_to IS NOT NULL
+    ),
+    %(start_date)s::date
+  ),
+  COALESCE(
+    (
+      SELECT MAX(e.dt_ny) + 1
+      FROM eod_bars e
+      WHERE e.instrument_id = %(iid)s
+        AND EXISTS (
+          SELECT 1
+          FROM symbol_history sh
+          WHERE sh.instrument_id = %(iid)s
+            AND sh.valid_to IS NULL
+            AND sh.is_primary
+            AND (sh.exchange <> %(exchange)s OR sh.symbol <> %(symbol)s)
+        )
+    ),
+    %(start_date)s::date
+  ),
+  COALESCE(
+    (
+      SELECT MAX(e.dt_ny) + 1
+      FROM instruments old
+      JOIN eod_bars e ON e.instrument_id = old.id
+      WHERE old.id <> %(iid)s
+        AND old.ticker_canonical = %(symbol)s
+    ),
+    %(start_date)s::date
+  )
+);
+"""
+
+
+# The vendor can remove FIGIs after a security is delisted. Those rows cannot be
+# inserted through the FIGI-keyed upsert, but they still need to retire the
+# existing instrument that was created while the FIGI was available.
+SQL_DEACTIVATE_MISSING_FIGI = """
+UPDATE instruments
+SET is_active = FALSE,
+    delisted_at = COALESCE(%(delisted_at)s::date, delisted_at),
+    updated_at = now()
+WHERE ticker_canonical = %(ticker)s
+  AND exchange = %(exchange)s
+  AND (%(cik)s::text IS NULL OR cik = %(cik)s::text)
+RETURNING id;
+"""
+
+
+SQL_CLOSE_INACTIVE_SYMBOL = """
+UPDATE symbol_history
+SET valid_to = GREATEST(
+      valid_from,
+      COALESCE(
+        %(delisted_at)s::date - 1,
+        (SELECT MAX(dt_ny) FROM eod_bars WHERE instrument_id = %(iid)s),
+        valid_from
+      )
+    )
+WHERE instrument_id = %(iid)s
   AND valid_to IS NULL
+  AND exchange = %(exchange)s
   AND symbol = %(symbol)s;
+"""
+
+
+SQL_CLOSE_ALL_INACTIVE_OPEN_SYMBOLS = """
+UPDATE symbol_history sh
+SET valid_to = GREATEST(
+      sh.valid_from,
+      COALESCE(
+        i.delisted_at - 1,
+        (SELECT MAX(dt_ny) FROM eod_bars WHERE instrument_id = i.id),
+        sh.valid_from
+      )
+    )
+FROM instruments i
+WHERE i.id = sh.instrument_id
+  AND NOT i.is_active
+  AND sh.valid_to IS NULL;
+"""
+
+
+# A ticker can be reused by a genuinely new security. Once the current active
+# identity is known, the old owner must no longer remain active or canonical.
+SQL_RETIRE_CONFLICTING_CANONICAL_OWNERS = """
+UPDATE instruments
+SET ticker_canonical = NULL,
+    is_active = FALSE,
+    delisted_at = COALESCE(
+      delisted_at,
+      CASE
+        WHEN %(start_date)s::date > DATE '1900-01-01'
+          THEN %(start_date)s::date - 1
+        ELSE NULL
+      END
+    ),
+    updated_at = now()
+WHERE id <> %(iid)s
+  AND ticker_canonical = %(symbol)s;
+"""
+
+
+# Historical vendor aliases can already exist as open non-primary intervals.
+# Once the old primary interval is closed, promote the current alias and move
+# its inferred start after the last closed primary interval. Exact vendor dates
+# are never rewritten automatically; a conflicting exact date should remain a
+# visible quality failure for manual review.
+SQL_PROMOTE_OPEN_SYMBOL = """
+WITH target AS (
+  SELECT id
+  FROM symbol_history
+  WHERE instrument_id = %(iid)s
+    AND exchange = %(exchange)s
+    AND symbol = %(symbol)s
+    AND valid_to IS NULL
+  ORDER BY id DESC
+  LIMIT 1
+), inferred_bound AS (
+  SELECT COALESCE(MAX(valid_to) + 1, %(start_date)s::date) AS valid_from
+  FROM symbol_history
+  WHERE instrument_id = %(iid)s
+    AND is_primary
+    AND valid_to IS NOT NULL
+)
+UPDATE symbol_history sh
+SET valid_from = GREATEST(
+      sh.valid_from,
+      %(start_date)s::date,
+      inferred_bound.valid_from
+    ),
+    valid_from_precision = CASE
+      WHEN GREATEST(sh.valid_from, %(start_date)s::date, inferred_bound.valid_from)
+           > sh.valid_from
+        THEN 'inferred'
+      ELSE sh.valid_from_precision
+    END,
+    is_primary = TRUE
+FROM target, inferred_bound
+WHERE sh.id = target.id
+  AND NOT sh.is_primary
+  AND sh.valid_from_precision <> 'exact'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM symbol_history existing_primary
+    WHERE existing_primary.instrument_id = %(iid)s
+      AND existing_primary.valid_to IS NULL
+      AND existing_primary.is_primary
+  );
 """
 
 
@@ -115,9 +381,11 @@ SELECT
 FROM (
   SELECT MAX(valid_to) AS latest_valid_to
   FROM symbol_history
-  WHERE exchange = %(exchange)s
-    AND symbol = %(symbol)s
-    AND valid_to IS NOT NULL
+  WHERE (
+    (exchange = %(exchange)s AND symbol = %(symbol)s)
+    OR instrument_id = %(iid)s
+  )
+  AND valid_to IS NOT NULL
 ) latest_same_symbol
 WHERE NOT EXISTS (
   SELECT 1 FROM symbol_history
@@ -125,6 +393,15 @@ WHERE NOT EXISTS (
     AND valid_to IS NULL
     AND exchange = %(exchange)s
     AND symbol   = %(symbol)s
+)
+AND (
+  %(allow_reopen)s
+  OR NOT EXISTS (
+    SELECT 1 FROM symbol_history
+    WHERE instrument_id = %(iid)s
+      AND exchange = %(exchange)s
+      AND symbol = %(symbol)s
+  )
 )
 AND NOT EXISTS (
   SELECT 1 FROM symbol_history sh_conflict
@@ -145,6 +422,10 @@ def norm_item(it: dict) -> dict:
     market = (it.get("market") or "stocks").lower()
     locale = (it.get("locale") or "us").lower()
 
+    delisted_at = it.get("delisted_utc")
+    if delisted_at:
+        delisted_at = str(delisted_at).split("T", 1)[0]
+
     return {
         "share_class_figi": it.get("share_class_figi"),
         "composite_figi":   it.get("composite_figi"),
@@ -156,19 +437,23 @@ def norm_item(it: dict) -> dict:
         "name":             it.get("name"),
         "currency":         cur,
         "list_date":        it.get("list_date"),     # ISO 日期或 None
+        "delisted_at":      delisted_at,
         "active":           it.get("active"),
         "market":           market,
         "locale":           locale,
     }
 
 
-def is_supported_common_stock(row: dict) -> bool:
+def is_common_stock_reference(row: dict) -> bool:
     return (
-        bool(row["share_class_figi"])
-        and row["type"] in SUPPORTED_ASSET_TYPES
+        row["type"] in SUPPORTED_ASSET_TYPES
         and row["market"] == "stocks"
         and row["locale"] == "us"
     )
+
+
+def is_supported_common_stock(row: dict) -> bool:
+    return bool(row["share_class_figi"]) and is_common_stock_reference(row)
 
 
 def is_supported_benchmark_proxy(row: dict) -> bool:
@@ -189,11 +474,19 @@ def build_symbol_history_params(row: dict, *, instrument_id: int) -> dict[str, o
         "symbol": row["ticker"],
         "start_date": start_date,
         "valid_from_precision": "exact" if row["list_date"] else "unknown",
+        "allow_reopen": bool(row.get("active")),
     }
 
 
 def should_close_conflicting_symbol_owners(row: dict) -> bool:
     return bool(row.get("active"))
+
+
+def should_update_symbol_history(row: dict, *, effective_is_active: bool) -> bool:
+    # If an old inactive vendor snapshot collided with an already-active
+    # identity, the upsert deliberately kept the current record active. Do not
+    # let that historical row close or reopen its current symbol interval.
+    return bool(row.get("active")) or not effective_is_active
 
 async def backfill():
     if not API or not URL:
@@ -205,10 +498,10 @@ async def backfill():
             total = 0
             kept = 0
             with tqdm(desc="Upserting instruments + symbol_history", unit="rows") as pbar:
-                # Pragmatic rebuild path:
-                # seed current active symbols first, then pull inactive symbols to improve
-                # historical flat-file coverage. Unknown starts remain marked explicitly.
-                for active_flag in ["true", "false"]:
+                # Historical identities must be loaded first. Current active rows
+                # come last so an old ticker record sharing the same FIGI cannot
+                # overwrite the current canonical identity (for example NVRI).
+                for active_flag in ACTIVE_SYNC_ORDER:
                     next_url = BASE
                     params = {
                         "market": "stocks",
@@ -235,34 +528,76 @@ async def backfill():
                         with conn.cursor() as cur:
                             for raw in results:
                                 row = norm_item(raw)
+                                reference_is_common_stock = is_common_stock_reference(row)
+                                # This flag represents the project's supported
+                                # FIGI-backed common-stock universe, not every
+                                # vendor row whose broad type happens to be CS.
                                 row["is_common_stock"] = is_supported_common_stock(row)
                                 cur.execute(UPSERT_SYMBOL_REFERENCE, row)
+
+                                if (
+                                    reference_is_common_stock
+                                    and not row["share_class_figi"]
+                                    and not row["active"]
+                                ):
+                                    cur.execute(SQL_DEACTIVATE_MISSING_FIGI, row)
+                                    for (iid,) in cur.fetchall():
+                                        params = build_symbol_history_params(
+                                            row, instrument_id=iid
+                                        )
+                                        params["delisted_at"] = row["delisted_at"]
+                                        cur.execute(SQL_CLOSE_INACTIVE_SYMBOL, params)
+                                    continue
+
                                 if not (
-                                    row["is_common_stock"]
+                                    is_supported_common_stock(row)
                                     or is_supported_benchmark_proxy(row)
                                 ):
                                     continue
 
                                 # 1. instruments UPSERT
                                 cur.execute(UPSERT_INSTR, row)
-                                iid = cur.fetchone()[0]
+                                iid, effective_is_active = cur.fetchone()
                                 kept += 1
+
+                                if not should_update_symbol_history(
+                                    row,
+                                    effective_is_active=effective_is_active,
+                                ):
+                                    continue
 
                                 # 2. symbol_history 维护“当前区间”
                                 params = build_symbol_history_params(row, instrument_id=iid)
                                 if should_close_conflicting_symbol_owners(row):
+                                    cur.execute(SQL_EFFECTIVE_HANDOFF_START, params)
+                                    params["start_date"] = cur.fetchone()[0]
+                                    cur.execute(
+                                        SQL_RETIRE_CONFLICTING_CANONICAL_OWNERS,
+                                        params,
+                                    )
                                     cur.execute(SQL_CLOSE_CONFLICTING_SYMBOL_OWNERS, params)
                                 cur.execute(SQL_CLOSE_OLD, params)
                                 cur.execute(SQL_OPEN_NEW, params)
+                                if row["active"]:
+                                    cur.execute(SQL_PROMOTE_OPEN_SYMBOL, params)
+                                if not row["active"]:
+                                    params["delisted_at"] = row["delisted_at"]
+                                    cur.execute(SQL_CLOSE_INACTIVE_SYMBOL, params)
 
                         conn.commit()
                         n = len(results); total += n; pbar.update(n)
                         next_url = js.get("next_url")   # 翻页用 next_url（无需再带 params）
 
+                with conn.cursor() as cur:
+                    cur.execute(SQL_CLOSE_ALL_INACTIVE_OPEN_SYMBOLS)
+                    closed_inactive = cur.rowcount
+                conn.commit()
+
             print(
                 "Done. "
                 f"Processed ~{total} tickers, kept {kept} supported securities "
-                f"(common stocks + benchmark proxies {sorted(BENCHMARK_PROXY_SYMBOLS)})."
+                f"(common stocks + benchmark proxies {sorted(BENCHMARK_PROXY_SYMBOLS)}); "
+                f"closed {closed_inactive} inactive symbol intervals."
             )
 
 if __name__ == "__main__":

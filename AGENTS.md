@@ -147,6 +147,24 @@ database/model -> service -> FastAPI schema/route -> apps/openapi.yaml
 - Keep nullable and optional fields distinct.
 - Maintain backward compatibility unless the task explicitly authorizes a breaking change.
 
+## Documentation impact checklist
+
+Every new feature must update at least one applicable maintained document in the same change. A dated delivery report, test-run record, or historical design note does not satisfy this requirement.
+
+Assess documentation impact before implementation and again before handoff:
+
+- User-visible behavior, pages, workflows, or operator steps: update the root README or the relevant feature guide.
+- API routes, payloads, responses, errors, or schemas: update `apps/openapi.yaml`, examples, frontend types, and the relevant maintained guide.
+- Environment variables, commands, dependencies, ports, or startup behavior: update setup or operations documentation.
+- Database or persistence changes: document schema rollout, compatibility, target database, backup, recovery, and the absence of an Alembic workflow where relevant.
+- Scheduler, market-data, feature, backtest, metric, or trading semantics: document timing, adjusted/unadjusted data choices, safety boundaries, and external side effects.
+
+Maintained documentation is bilingual. English uses `<topic>.md`; Chinese uses `<topic>.zh-CN.md`, with `README.md` and `README.zh-CN.md` at the root. Update both languages in the same change and keep their structure, examples, commands, and cross-links equivalent.
+
+When adding or retiring a maintained guide, update both `docs/README.md` and `docs/README.zh-CN.md`. Do not add dated reports or superseded designs to the maintained indexes.
+
+A pure internal refactor may have no documentation diff only when behavior, contracts, configuration, operations, and user workflows are unchanged. The final handoff must explicitly state that determination and why. Before finishing documentation work, verify relative links, reciprocal language links, commands, routes, configuration names, and structured examples against repository sources of truth.
+
 ## Scope and change discipline
 
 - Inspect related code and tests before editing.
@@ -165,4 +183,5 @@ A task is complete only when:
 3. Focused tests were added or updated for changed behavior.
 4. Relevant validation commands pass.
 5. API specifications, frontend types, translations, and documentation are synchronized where applicable.
-6. The final handoff states what changed, what was verified, and any remaining risk or unverified dependency.
+6. Documentation impact was assessed; maintained English and Chinese guides and indexes are synchronized, and relative links were checked.
+7. The final handoff states what changed, what was verified, any remaining risk or unverified dependency, and the documentation impact (including a reason when no documentation changed).

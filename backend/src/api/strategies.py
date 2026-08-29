@@ -12,7 +12,16 @@ from sqlalchemy.orm import Session
 
 from src.core.db import get_db
 from src.core.agent_auth import require_agent_service
-from src.models.tables import PortfolioSnapshot, Signal, Strategy, StrategyAllocation, StrategyRun, Transaction
+from src.models.tables import (
+    PortfolioSnapshot,
+    Signal,
+    Strategy,
+    StrategyAllocation,
+    StrategyRun,
+    SupportResistanceRunEvent,
+    SupportResistanceRunMaterialization,
+    Transaction,
+)
 from src.services.alpaca_services import AlpacaClientError
 from src.services.strategy_delete_service import (
     StrategyDeleteCloseError,
@@ -36,6 +45,10 @@ from src.services.strategy_service import (
     load_feature_support,
     validate_strategy_params,
 )
+from src.services.adaptive_research_service import (
+    archive_unused_research_draft,
+)
+from src.services.research_experiment_service import ExperimentConflictError, ExperimentNotFoundError
 
 
 class StrategyCreate(BaseModel):
@@ -47,6 +60,7 @@ class StrategyCreate(BaseModel):
         "momentum_breakout",
         "island_reversal",
         "double_bottom",
+        "support_resistance",
         "custom",
     ] = Field(..., description="策略类型")
     params: Dict[str, Any] = Field(..., description="策略参数 (JSON 对象)")
@@ -131,6 +145,7 @@ class StrategyProposal(BaseModel):
         "momentum_breakout",
         "island_reversal",
         "double_bottom",
+        "support_resistance",
     ]
     overrides: list[StrategyParameterOverride] = Field(default_factory=list, max_length=30)
     symbols: list[str] = Field(min_length=1, max_length=500)
@@ -139,6 +154,10 @@ class StrategyProposal(BaseModel):
 class StrategyProposalValidationOut(BaseModel):
     valid: bool = True
     strategy: StrategyCreate
+
+
+class ResearchDraftArchiveRequest(BaseModel):
+    workflow_run_id: str = Field(min_length=1, max_length=64, alias="workflowRunId")
 
 
 class StrategyDeleteOut(BaseModel):
@@ -151,6 +170,9 @@ class StrategyDeleteOut(BaseModel):
     deleted_signals: int
     deleted_transactions: int
     deleted_allocations: int
+    deleted_support_resistance_run_events: int
+    deleted_support_resistance_run_links: int
+    retained_support_resistance_materializations: int
 
 
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
@@ -244,6 +266,30 @@ def _build_delete_summary(db: Session, strategy_id: UUID) -> dict[str, int]:
             .where(StrategyAllocation.strategy_id == strategy_id)
         ).scalar_one()
     )
+    deleted_support_resistance_run_events = int(
+        db.execute(
+            select(func.count())
+            .select_from(SupportResistanceRunEvent)
+            .join(StrategyRun, StrategyRun.id == SupportResistanceRunEvent.run_id)
+            .where(StrategyRun.strategy_id == strategy_id)
+        ).scalar_one()
+    )
+    deleted_support_resistance_run_links = int(
+        db.execute(
+            select(func.count())
+            .select_from(SupportResistanceRunMaterialization)
+            .join(StrategyRun, StrategyRun.id == SupportResistanceRunMaterialization.run_id)
+            .where(StrategyRun.strategy_id == strategy_id)
+        ).scalar_one()
+    )
+    retained_support_resistance_materializations = int(
+        db.execute(
+            select(func.count(func.distinct(SupportResistanceRunMaterialization.materialization_id)))
+            .select_from(SupportResistanceRunMaterialization)
+            .join(StrategyRun, StrategyRun.id == SupportResistanceRunMaterialization.run_id)
+            .where(StrategyRun.strategy_id == strategy_id)
+        ).scalar_one()
+    )
 
     return {
         "deleted_backtest_runs": int(run_counts.get("backtest", 0)),
@@ -253,6 +299,9 @@ def _build_delete_summary(db: Session, strategy_id: UUID) -> dict[str, int]:
         "deleted_signals": deleted_signals,
         "deleted_transactions": deleted_transactions,
         "deleted_allocations": deleted_allocations,
+        "deleted_support_resistance_run_events": deleted_support_resistance_run_events,
+        "deleted_support_resistance_run_links": deleted_support_resistance_run_links,
+        "retained_support_resistance_materializations": retained_support_resistance_materializations,
     }
 
 
@@ -442,6 +491,33 @@ def create_agent_strategy(
         raise HTTPException(status_code=422, detail={"code": "invalid_strategy", "message": str(exc)}) from exc
     except StrategyCreateConflictError as exc:
         raise HTTPException(status_code=409, detail={"code": "strategy_conflict", "message": str(exc)}) from exc
+    return _to_strategy_out(strategy)
+
+
+@agent_router.post(
+    "/strategies/{strategy_id}/archive-unused-research-draft",
+    response_model=StrategyOut,
+    dependencies=[Depends(require_agent_service)],
+)
+def archive_agent_research_draft(
+    strategy_id: UUID,
+    payload: ResearchDraftArchiveRequest,
+    db: Session = Depends(get_db),
+    _idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=1, max_length=128),
+):
+    try:
+        strategy = archive_unused_research_draft(
+            db,
+            strategy_id,
+            workflow_run_id=payload.workflow_run_id,
+        )
+    except ExperimentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="strategy not found") from exc
+    except ExperimentConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "archive_conflict", "message": str(exc)},
+        ) from exc
     return _to_strategy_out(strategy)
 
 

@@ -5,102 +5,80 @@ import { useRouter } from "next/router";
 
 import { startAgentWorkflow } from "@/api/agentops";
 import { listResearchExperiments } from "@/api/research";
-import { listStrategies } from "@/api/strategies";
+import { getStrategyCatalog, getStrategyFeatureSupport } from "@/api/strategies";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import { useI18n } from "@/i18n/provider";
-import type { ExperimentStopPolicy, ResearchExperiment, ResearchTargetMetric } from "@/types/research";
-import type { StrategyOut } from "@/types/strategy";
+import type { ResearchExperiment } from "@/types/research";
+import type { StrategyCatalogItem, StrategyFeatureSupport } from "@/types/strategy";
 
 const WORKFLOWS = {
-  parameter: "Quant Parameter Strategy",
-  code: "Quant Strategy Code Development",
-  experiment: "Quant Research Experiment",
+  category: "Quant Engine Category Research",
+  algorithm: "Quant New Algorithm Research",
 } as const;
-
 type Mode = keyof typeof WORKFLOWS;
 
 export default function ResearchHomePage() {
   const router = useRouter();
   const { locale } = useI18n();
   const isZh = locale === "zh-CN";
-  const [mode, setMode] = useState<Mode>("experiment");
+  const [mode, setMode] = useState<Mode>("category");
   const [goal, setGoal] = useState("");
   const [items, setItems] = useState<ResearchExperiment[]>([]);
-  const [strategies, setStrategies] = useState<StrategyOut[]>([]);
-  const [strategyId, setStrategyId] = useState("");
-  const [durationEnabled, setDurationEnabled] = useState(true);
-  const [maxDurationMinutes, setMaxDurationMinutes] = useState(30);
-  const [tokenEnabled, setTokenEnabled] = useState(true);
-  const [tokenBudget, setTokenBudget] = useState(50_000);
-  const [targetEnabled, setTargetEnabled] = useState(false);
-  const [targetMetric, setTargetMetric] = useState<ResearchTargetMetric>("total_return");
-  const [targetOperator, setTargetOperator] = useState<"gte" | "lte">("gte");
-  const [targetValue, setTargetValue] = useState(0.05);
+  const [catalog, setCatalog] = useState<StrategyCatalogItem[]>([]);
+  const [featureSupport, setFeatureSupport] = useState<StrategyFeatureSupport | null>(null);
+  const [strategyType, setStrategyType] = useState("");
+  const [maxRounds, setMaxRounds] = useState(3);
+  const [maxTrials, setMaxTrials] = useState(48);
+  const [maxDurationMinutes, setMaxDurationMinutes] = useState(60);
+  const [tokenBudget, setTokenBudget] = useState(80_000);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!router.isReady) return;
+    const requestedMode = Array.isArray(router.query.mode) ? router.query.mode[0] : router.query.mode;
+    if (requestedMode === "category" || requestedMode === "algorithm") setMode(requestedMode);
+  }, [router.isReady, router.query.mode]);
+
+  useEffect(() => {
     let cancelled = false;
-    Promise.all([listResearchExperiments(), listStrategies()])
-      .then(([experiments, strategyItems]) => {
+    Promise.all([listResearchExperiments(), getStrategyCatalog(), getStrategyFeatureSupport()])
+      .then(([experiments, categories, support]) => {
         if (cancelled) return;
-        const engineReady = strategyItems.filter((item) => item.engine_ready);
+        const executable = categories.filter((item) => item.engine_ready);
         setItems(experiments);
-        setStrategies(engineReady);
-        setStrategyId((current) => current || engineReady[0]?.id || "");
+        setCatalog(executable);
+        setFeatureSupport(support);
+        setStrategyType((current) => current || executable[0]?.strategy_type || "");
       })
       .catch((err: Error) => !cancelled && setError(err.message))
       .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
-  const copy = useMemo(
-    () => ({
-      parameter: isZh
-        ? "描述你希望创建的参数策略、股票范围和风险约束。Agent 只会创建 draft。"
-        : "Describe the parameter strategy, universe, and risk limits. The agent can only create a draft.",
-      code: isZh
-        ? "描述新算法与验收标准。Coder 只交付 Draft PR，部署前不能用于实验。"
-        : "Describe the algorithm and acceptance criteria. The coder only delivers a Draft PR.",
-      experiment: isZh
-        ? "描述研究假设、基础策略、样本内外日期、参数范围、标的和成本压力。"
-        : "Describe the hypothesis, base strategy, date windows, parameter grid, universe, and cost stress.",
-    }),
-    [isZh],
+  const selectedCategory = useMemo(
+    () => catalog.find((item) => item.strategy_type === strategyType),
+    [catalog, strategyType],
   );
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!goal.trim()) return;
+    if (!goal.trim() || (mode === "category" && !strategyType)) return;
     setSubmitting(true);
     setError(null);
     try {
-      const stopPolicy: ExperimentStopPolicy = {};
-      if (mode === "experiment") {
-        if (durationEnabled) stopPolicy.maxDurationSeconds = Math.round(maxDurationMinutes * 60);
-        if (tokenEnabled) stopPolicy.tokenBudget = Math.round(tokenBudget);
-        if (targetEnabled) {
-          stopPolicy.targetMetric = {
-            metric: targetMetric,
-            operator: targetOperator,
-            value: targetValue,
-            sampleKind: "out_of_sample",
-            costScenario: "base",
-          };
-        }
-        if (!Object.keys(stopPolicy).length) {
-          throw new Error(isZh ? "请至少启用一个自动停止条件。" : "Enable at least one automatic stop condition.");
-        }
-      }
-      const run = await startAgentWorkflow(
-        WORKFLOWS[mode],
-        goal.trim(),
-        mode === "experiment" ? { strategyId, stopPolicy } : {},
-      );
+      const inputs = mode === "category" ? {
+        strategyType,
+        strategyDefaults: selectedCategory?.defaults ?? {},
+        featureSupport: strategyType === "trend" ? featureSupport?.trend ?? null : null,
+        maxRounds,
+        maxTrials,
+        maxDurationSeconds: Math.round(maxDurationMinutes * 60),
+        tokenBudget: Math.round(tokenBudget),
+      } : {};
+      const run = await startAgentWorkflow(WORKFLOWS[mode], goal.trim(), inputs);
       await router.push(`/agent-runs/${run.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -111,144 +89,66 @@ export default function ResearchHomePage() {
   return (
     <AppShell
       title={isZh ? "Agent 研究工作台" : "Agent Research Workspace"}
-      subtitle={
-        isZh
-          ? "从自然语言开始，经结构化校验和人工审批，创建草稿策略或可恢复的稳健性实验。"
-          : "Start from natural language, then validate and approve a draft strategy or resumable robustness experiment."
-      }
+      subtitle={isZh
+        ? "选择已有引擎大类进行多轮 Pareto 研究，或为没有 handler 的算法交付 Draft PR。"
+        : "Run multi-round Pareto research on an existing engine category, or deliver a Draft PR for an algorithm without a handler."}
+      actions={router.query.source === "strategy-create" ? (
+        <Link href="/strategies/new" style={returnLinkStyle}>
+          {isZh ? "返回策略创建" : "Back To Strategy Creation"}
+        </Link>
+      ) : undefined}
     >
       <section style={panelStyle}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12 }}>
-          {(Object.keys(WORKFLOWS) as Mode[]).map((item) => (
-            <button key={item} type="button" onClick={() => setMode(item)} style={modeStyle(mode === item)}>
-              <strong>{modeLabel(item, isZh)}</strong>
-              <span style={{ display: "block", marginTop: 8, opacity: 0.72, lineHeight: 1.5 }}>{copy[item]}</span>
-            </button>
-          ))}
+        <div style={modeGridStyle}>
+          <ModeCard active={mode === "category"} title={isZh ? "已有引擎大类研究" : "Existing engine category research"} description={isZh ? "只选择策略大类。Agent 自动创建可执行 draft，再由你审批实验。" : "Choose only an engine category. The agent creates an executable draft before experiment approval."} onClick={() => setMode("category")} />
+          <ModeCard active={mode === "algorithm"} title={isZh ? "新算法研究" : "New algorithm research"} description={isZh ? "Planner → Codex → Quant Verifier → Draft PR；不会自动合并、部署或回测。" : "Planner → Codex → Quant Verifier → Draft PR; no automatic merge, deploy, or backtest."} onClick={() => setMode("algorithm")} />
         </div>
         <form onSubmit={submit} style={{ marginTop: 20 }}>
-          {mode === "experiment" ? (
-            <div style={{ marginBottom: 14 }}>
-              <label htmlFor="research-strategy" style={labelStyle}>
-                {isZh ? "基础策略（已部署且 engine-ready）" : "Base strategy (deployed and engine-ready)"}
-              </label>
-              <select
-                id="research-strategy"
-                value={strategyId}
-                onChange={(event) => setStrategyId(event.target.value)}
-                style={inputStyle}
-              >
-                {strategies.map((strategy) => (
-                  <option key={strategy.id} value={strategy.id}>
-                    {strategy.name} · v{strategy.version} · {strategy.strategy_type}
-                  </option>
-                ))}
+          {mode === "category" ? (
+            <>
+              <label htmlFor="strategy-category" style={labelStyle}>{isZh ? "策略大类" : "Engine category"}</label>
+              <select id="strategy-category" value={strategyType} onChange={(event) => setStrategyType(event.target.value)} style={inputStyle}>
+                {catalog.map((item) => <option key={item.strategy_type} value={item.strategy_type}>{item.label} · {item.strategy_type}</option>)}
               </select>
-              {!loading && strategies.length === 0 ? (
-                <p style={{ marginBottom: 0, color: "#fda4af" }}>
-                  {isZh ? "没有可研究的 engine-ready 策略。" : "No engine-ready strategy is available for research."}
-                </p>
-              ) : null}
-              <div style={{ ...stopPolicyStyle, marginTop: 16 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                  <strong>{isZh ? "自动停止条件" : "Automatic stop conditions"}</strong>
-                  <span style={{ color: "#94a3b8" }}>
-                    {isZh ? "任意一个已启用条件命中即停止领取新 Trial" : "Any enabled condition stops new trial claims"}
-                  </span>
-                </div>
-                <div style={stopGridStyle}>
-                  <label style={stopOptionStyle}>
-                    <span><input type="checkbox" checked={durationEnabled} onChange={(event) => setDurationEnabled(event.target.checked)} /> {isZh ? "最长运行时间" : "Maximum duration"}</span>
-                    <span style={fieldRowStyle}>
-                      <input type="number" min={1} max={10080} value={maxDurationMinutes} disabled={!durationEnabled} onChange={(event) => setMaxDurationMinutes(Number(event.target.value))} style={smallInputStyle} />
-                      <span>{isZh ? "分钟" : "minutes"}</span>
-                    </span>
-                  </label>
-                  <label style={stopOptionStyle}>
-                    <span><input type="checkbox" checked={tokenEnabled} onChange={(event) => setTokenEnabled(event.target.checked)} /> {isZh ? "Agent token 上限" : "Agent token budget"}</span>
-                    <input type="number" min={1000} max={10000000} step={1000} value={tokenBudget} disabled={!tokenEnabled} onChange={(event) => setTokenBudget(Number(event.target.value))} style={smallInputStyle} />
-                  </label>
-                  <label style={stopOptionStyle}>
-                    <span><input type="checkbox" checked={targetEnabled} onChange={(event) => setTargetEnabled(event.target.checked)} /> {isZh ? "样本外目标" : "Out-of-sample target"}</span>
-                    <span style={{ ...fieldRowStyle, flexWrap: "wrap" }}>
-                      <select value={targetMetric} disabled={!targetEnabled} onChange={(event) => setTargetMetric(event.target.value as ResearchTargetMetric)} style={smallInputStyle}>
-                        <option value="total_return">total return</option>
-                        <option value="sharpe">Sharpe</option>
-                        <option value="max_drawdown">max drawdown</option>
-                        <option value="excess_return">excess return</option>
-                      </select>
-                      <select value={targetOperator} disabled={!targetEnabled} onChange={(event) => setTargetOperator(event.target.value as "gte" | "lte")} style={smallInputStyle}>
-                        <option value="gte">≥</option>
-                        <option value="lte">≤</option>
-                      </select>
-                      <input type="number" step="any" value={targetValue} disabled={!targetEnabled} onChange={(event) => setTargetValue(Number(event.target.value))} style={smallInputStyle} />
-                    </span>
-                    <small style={{ color: "#94a3b8" }}>{isZh ? "固定使用 out_of_sample / base 场景；收益率使用小数，例如 0.05 = 5%。" : "Uses out_of_sample / base; returns are decimals, for example 0.05 = 5%."}</small>
-                  </label>
-                </div>
+              {selectedCategory ? <div style={categorySummaryStyle}><strong>{selectedCategory.description}</strong><pre style={compactPreStyle}>{JSON.stringify({ signal: selectedCategory.defaults.signal, risk: selectedCategory.defaults.risk }, null, 2)}</pre></div> : null}
+              <div style={resourceGridStyle}>
+                <NumberField label={isZh ? "最大轮数（1–5）" : "Max rounds (1–5)"} value={maxRounds} min={1} max={5} onChange={setMaxRounds} />
+                <NumberField label={isZh ? "实际 Backtest 上限（4–100）" : "Actual backtest limit (4–100)"} value={maxTrials} min={4} max={100} onChange={setMaxTrials} />
+                <NumberField label={isZh ? "最长时间（分钟）" : "Time limit (minutes)"} value={maxDurationMinutes} min={1} max={10080} onChange={setMaxDurationMinutes} />
+                <NumberField label={isZh ? "Agent token 上限" : "Agent token budget"} value={tokenBudget} min={1000} max={10000000} step={1000} onChange={setTokenBudget} />
               </div>
-            </div>
-          ) : null}
-          <label style={labelStyle}>{isZh ? "研发目标" : "Research goal"}</label>
-          <textarea
-            value={goal}
-            onChange={(event) => setGoal(event.target.value)}
-            rows={7}
-            placeholder={copy[mode]}
-            style={inputStyle}
-          />
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginTop: 14, flexWrap: "wrap" }}>
-            <span style={{ color: "#94a3b8", lineHeight: 1.6 }}>
-              {isZh ? "创建资源前会停在审批节点；Agent 没有订单或组合激活权限。" : "The run pauses for approval before creation and has no order or activation permission."}
-            </span>
-            <button
-              disabled={submitting || !goal.trim() || (mode === "experiment" && !strategyId)}
-              style={primaryButton}
-            >
-              {submitting ? (isZh ? "正在启动…" : "Starting…") : (isZh ? "生成提案" : "Generate proposal")}
-            </button>
-          </div>
+              <p style={noticeStyle}>{isZh ? "默认 3 轮 / 48 个实际回测；目标、自动创建的 draft 和首轮候选会在实验审批前展示。" : "Defaults: 3 rounds / 48 actual backtests. Objectives, the auto-created draft, and first-round candidates appear before approval."}</p>
+            </>
+          ) : <p style={noticeStyle}>{isZh ? "Draft PR 合并部署并注册为 engine-ready 后，才能从“大类研究”发起参数实验。" : "After the Draft PR is merged, deployed, and registered as engine-ready, use category research for parameter experiments."}</p>}
+          <label htmlFor="research-goal" style={labelStyle}>{isZh ? "研究目标与约束" : "Research goal and constraints"}</label>
+          <textarea id="research-goal" value={goal} onChange={(event) => setGoal(event.target.value)} rows={7} placeholder={mode === "category" ? (isZh ? "例如：在 AAPL、MSFT 上研究低回撤趋势策略，明确样本内外窗口与成本压力。" : "For example: research a low-drawdown trend strategy on AAPL and MSFT with explicit windows and cost stress.") : (isZh ? "描述没有现成 handler 的算法、验收标准和回归测试。" : "Describe the algorithm without an existing handler, acceptance criteria, and regression tests.")} style={inputStyle} />
+          <div style={actionRowStyle}><span style={{ color: "#94a3b8" }}>{isZh ? "Agent 无权激活策略、创建 allocation 或触发订单。" : "The agent cannot activate strategies, allocate capital, or submit orders."}</span><button disabled={submitting || !goal.trim() || (mode === "category" && !strategyType)} style={primaryButton}>{submitting ? (isZh ? "正在启动…" : "Starting…") : (isZh ? "生成研究提案" : "Generate research proposal")}</button></div>
         </form>
         {error ? <p style={{ color: "#fda4af" }}>{error}</p> : null}
       </section>
-
       <section style={{ ...panelStyle, marginTop: 20 }}>
-        <h2 style={{ marginTop: 0 }}>{isZh ? "研究实验" : "Research experiments"}</h2>
+        <h2 style={{ marginTop: 0 }}>{isZh ? "历史与当前实验" : "Historical and current experiments"}</h2>
         {loading ? <p>{isZh ? "加载中…" : "Loading…"}</p> : null}
         {!loading && items.length === 0 ? <p style={{ color: "#94a3b8" }}>{isZh ? "尚无实验。" : "No experiments yet."}</p> : null}
-        <div style={{ display: "grid", gap: 12 }}>
-          {items.map((item) => (
-            <Link key={item.id} href={`/research/${item.id}`} style={rowStyle}>
-              <div>
-                <strong>{String(item.spec.name || item.id)}</strong>
-                <div style={{ marginTop: 7, color: "#94a3b8" }}>{String(item.spec.hypothesis || "")}</div>
-              </div>
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <Badge>{item.status}</Badge>
-                <span>{Number(item.progress.completed || 0)}/{Number(item.progress.total || 0)}</span>
-              </div>
-            </Link>
-          ))}
-        </div>
+        <div style={{ display: "grid", gap: 12 }}>{items.map((item) => <Link key={item.id} href={`/research/${item.id}`} style={rowStyle}><div><strong>{String(item.spec.name || item.id)}</strong><div style={{ marginTop: 7, color: "#94a3b8" }}>{String(item.spec.hypothesis || "")}</div></div><div style={{ display: "flex", gap: 10, alignItems: "center" }}><Badge>{item.status}</Badge><span>{Number(item.progress.completed || 0)}/{Number(item.progress.total || 0)}</span></div></Link>)}</div>
       </section>
     </AppShell>
   );
 }
 
-function modeLabel(mode: Mode, isZh: boolean) {
-  if (mode === "parameter") return isZh ? "参数策略" : "Parameter strategy";
-  if (mode === "code") return isZh ? "新代码策略" : "New code strategy";
-  return isZh ? "研究实验" : "Research experiment";
-}
+function ModeCard({ active, title, description, onClick }: { active: boolean; title: string; description: string; onClick: () => void }) { return <button type="button" onClick={onClick} style={modeStyle(active)}><strong>{title}</strong><span style={{ display: "block", marginTop: 8, opacity: 0.74, lineHeight: 1.5 }}>{description}</span></button>; }
+function NumberField({ label, value, min, max, step, onChange }: { label: string; value: number; min: number; max: number; step?: number; onChange: (value: number) => void }) { return <label style={labelStyle}>{label}<input type="number" value={value} min={min} max={max} step={step} onChange={(event) => onChange(Number(event.target.value))} style={{ ...inputStyle, marginTop: 8 }} /></label>; }
 
 const panelStyle: CSSProperties = { padding: 22, borderRadius: 22, border: "1px solid rgba(100,116,139,.35)", background: "rgba(8,15,24,.8)" };
-const labelStyle: CSSProperties = { display: "block", marginBottom: 9, fontWeight: 700 };
-const inputStyle: CSSProperties = { boxSizing: "border-box", width: "100%", padding: 14, color: "#e2e8f0", background: "#07111c", border: "1px solid #334155", borderRadius: 14, resize: "vertical", font: "inherit", lineHeight: 1.6 };
-const stopPolicyStyle: CSSProperties = { padding: 16, border: "1px solid rgba(14,116,144,.65)", borderRadius: 14, background: "rgba(8,145,178,.08)" };
-const stopGridStyle: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginTop: 14 };
-const stopOptionStyle: CSSProperties = { display: "flex", flexDirection: "column", gap: 10, padding: 12, border: "1px solid rgba(100,116,139,.3)", borderRadius: 12 };
-const fieldRowStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
-const smallInputStyle: CSSProperties = { minWidth: 0, maxWidth: "100%", padding: "8px 10px", color: "#e2e8f0", background: "#07111c", border: "1px solid #334155", borderRadius: 9, font: "inherit" };
+const modeGridStyle: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 };
+const labelStyle: CSSProperties = { display: "block", marginBottom: 12, fontWeight: 700 };
+const inputStyle: CSSProperties = { boxSizing: "border-box", width: "100%", padding: 12, color: "#e2e8f0", background: "#07111c", border: "1px solid #334155", borderRadius: 12, resize: "vertical", font: "inherit", lineHeight: 1.5 };
+const categorySummaryStyle: CSSProperties = { marginTop: 12, padding: 14, border: "1px solid rgba(14,116,144,.55)", borderRadius: 12, background: "rgba(8,145,178,.08)" };
+const compactPreStyle: CSSProperties = { maxHeight: 220, overflow: "auto", marginBottom: 0, padding: 10, borderRadius: 8, background: "#020617", color: "#bae6fd", fontSize: 11 };
+const resourceGridStyle: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginTop: 18 };
+const noticeStyle: CSSProperties = { padding: 12, borderRadius: 10, color: "#bae6fd", background: "rgba(14,116,144,.12)", lineHeight: 1.6 };
+const actionRowStyle: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginTop: 14, flexWrap: "wrap" };
 const primaryButton: CSSProperties = { padding: "11px 18px", border: 0, borderRadius: 12, background: "#0891b2", color: "white", fontWeight: 800, cursor: "pointer" };
 const rowStyle: CSSProperties = { display: "flex", justifyContent: "space-between", gap: 18, alignItems: "center", padding: 16, color: "#e2e8f0", textDecoration: "none", borderRadius: 14, border: "1px solid rgba(100,116,139,.28)", background: "rgba(15,23,42,.55)" };
-const modeStyle = (active: boolean): CSSProperties => ({ padding: 16, textAlign: "left", color: active ? "#ecfeff" : "#cbd5e1", borderRadius: 14, border: `1px solid ${active ? "#0e7490" : "#334155"}`, background: active ? "rgba(8,145,178,.18)" : "rgba(15,23,42,.58)", cursor: "pointer", font: "inherit" });
+const modeStyle = (active: boolean): CSSProperties => ({ padding: 18, textAlign: "left", color: active ? "#ecfeff" : "#cbd5e1", borderRadius: 14, border: `1px solid ${active ? "#0e7490" : "#334155"}`, background: active ? "rgba(8,145,178,.18)" : "rgba(15,23,42,.58)", cursor: "pointer", font: "inherit" });
+const returnLinkStyle: CSSProperties = { padding: "11px 16px", borderRadius: 14, border: "1px solid rgba(148,163,184,.2)", background: "rgba(15,23,42,.72)", color: "#dbeafe", textDecoration: "none", fontWeight: 750 };

@@ -4,6 +4,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     JSON,
     CheckConstraint,
@@ -11,12 +12,15 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Identity,
     Integer,
+    Index,
     Numeric,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import declarative_base, relationship
@@ -24,6 +28,62 @@ from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 JSON_VARIANT = JSONB().with_variant(JSON(), "sqlite")
+
+
+class Instrument(Base):
+    """ORM mapping for the SQL-managed security-master identity table."""
+
+    __tablename__ = "instruments"
+    __table_args__ = (
+        CheckConstraint(
+            "ticker_canonical IS NULL OR ticker_canonical = UPPER(ticker_canonical)",
+            name="ck_instruments_ticker_canonical_upper",
+        ),
+        CheckConstraint(
+            "currency = UPPER(currency)",
+            name="ck_instruments_currency_upper",
+        ),
+        CheckConstraint(
+            "delisted_at IS NULL OR listed_at IS NULL OR delisted_at >= listed_at",
+            name="ck_instruments_listing_window",
+        ),
+        Index("idx_instr_exchange", "exchange"),
+        Index("idx_instr_ticker", "ticker_canonical"),
+        Index("idx_instr_active", "is_active"),
+        Index("idx_instr_figi_composite", "composite_figi"),
+        Index("idx_instr_cik", "cik"),
+        Index(
+            "idx_instruments_sic_code",
+            "sic_code",
+            postgresql_where=text("sic_code IS NOT NULL"),
+        ),
+    )
+
+    id = Column(BigInteger, Identity(always=True), primary_key=True)
+    share_class_figi = Column(Text, nullable=False, unique=True)
+    composite_figi = Column(Text)
+    cik = Column(Text)
+    ticker_canonical = Column(Text)
+    exchange = Column(Text, nullable=False)
+    mic = Column(Text)
+    asset_type = Column(Text, nullable=False, default="CS")
+    share_class = Column(Text)
+    name = Column(Text)
+    currency = Column(Text, nullable=False, default="USD")
+    country = Column(Text)
+    locale = Column(Text, default="us")
+    market = Column(Text, nullable=False, default="stocks")
+    sic_code = Column(Text)
+    sic_description = Column(Text)
+    sic_source = Column(Text)
+    sic_asof = Column(DateTime(timezone=True))
+    listed_at = Column(Date)
+    delisted_at = Column(Date)
+    is_active = Column(Boolean, nullable=False, default=True)
+    vendor_source = Column(Text, nullable=False, default="massive")
+    vendor_payload = Column(JSON_VARIANT, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class StockBasket(Base):
@@ -257,6 +317,264 @@ class StrategyRun(Base):
         passive_deletes=True,
         order_by="PortfolioSnapshot.ts",
     )
+    support_resistance_materializations = relationship(
+        "SupportResistanceRunMaterialization",
+        back_populates="run",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    support_resistance_events = relationship(
+        "SupportResistanceRunEvent",
+        back_populates="run",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    backtest_job = relationship(
+        "BacktestJob",
+        back_populates="run",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )
+
+
+class BacktestJob(Base):
+    """Durable PostgreSQL-backed execution lease for one StrategyRun."""
+
+    __tablename__ = "backtest_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "source IN ('manual', 'research', 'verification')",
+            name="ck_backtest_jobs_source",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'completed', 'failed', 'cancelled')",
+            name="ck_backtest_jobs_status",
+        ),
+        CheckConstraint("attempt >= 0", name="ck_backtest_jobs_attempt"),
+        CheckConstraint("max_attempts >= 1", name="ck_backtest_jobs_max_attempts"),
+        Index(
+            "idx_backtest_jobs_claim",
+            "status",
+            "available_at",
+            "priority",
+            "created_at",
+        ),
+        Index("idx_backtest_jobs_lease", "status", "lease_expires_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("strategy_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    experiment_trial_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("experiment_trials.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source = Column(String(16), nullable=False, default="manual")
+    status = Column(String(16), nullable=False, default="queued")
+    priority = Column(Integer, nullable=False, default=0)
+    attempt = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=2)
+    available_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    claimed_by = Column(Text)
+    claimed_at = Column(DateTime(timezone=True))
+    heartbeat_at = Column(DateTime(timezone=True))
+    lease_expires_at = Column(DateTime(timezone=True))
+    cancel_requested_at = Column(DateTime(timezone=True))
+    payload = Column(JSON_VARIANT, nullable=False, default=dict)
+    progress = Column(JSON_VARIANT, nullable=False, default=dict)
+    error_message = Column(Text)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    run = relationship("StrategyRun", back_populates="backtest_job")
+    experiment_trial = relationship("ExperimentTrial")
+
+
+class SupportResistanceMaterialization(Base):
+    __tablename__ = "support_resistance_materializations"
+    __table_args__ = (
+        UniqueConstraint("cache_key", name="uq_support_resistance_materializations_cache_key"),
+        CheckConstraint(
+            "status IN ('building', 'completed', 'failed')",
+            name="ck_support_resistance_materializations_status",
+        ),
+        CheckConstraint(
+            "coverage_end >= coverage_start",
+            name="ck_support_resistance_materializations_window",
+        ),
+        Index(
+            "idx_support_resistance_materializations_lookup",
+            "algorithm_version",
+            "universe_hash",
+            "source_data_fingerprint",
+            "coverage_start",
+            "coverage_end",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cache_key = Column(String(64), nullable=False)
+    algorithm_version = Column(String(64), nullable=False)
+    detector_params = Column(JSON_VARIANT, nullable=False)
+    universe_hash = Column(String(64), nullable=False)
+    symbols = Column(JSON_VARIANT, nullable=False, default=list)
+    coverage_start = Column(Date, nullable=False)
+    coverage_end = Column(Date, nullable=False)
+    source_data_fingerprint = Column(String(64), nullable=False)
+    price_semantics = Column(String(96), nullable=False)
+    status = Column(String(16), nullable=False, default="building")
+    statistics = Column(JSON_VARIANT, nullable=False, default=dict)
+    error_message = Column(Text)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    completed_at = Column(DateTime(timezone=True))
+
+    zone_versions = relationship(
+        "SupportResistanceZoneVersion",
+        back_populates="materialization",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    run_links = relationship(
+        "SupportResistanceRunMaterialization",
+        back_populates="materialization",
+        passive_deletes=True,
+    )
+
+
+class SupportResistanceZoneVersion(Base):
+    __tablename__ = "support_resistance_zone_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "materialization_id",
+            "instrument_id",
+            "zone_key",
+            "version",
+            name="uq_support_resistance_zone_versions_identity",
+        ),
+        UniqueConstraint(
+            "materialization_id",
+            "instrument_id",
+            "zone_key",
+            "effective_from",
+            name="uq_support_resistance_zone_versions_effective_from",
+        ),
+        CheckConstraint("role IN ('support', 'resistance')", name="ck_support_resistance_zone_role"),
+        CheckConstraint(
+            "status IN ('active', 'expired', 'broken', 'transformed')",
+            name="ck_support_resistance_zone_status",
+        ),
+        CheckConstraint(
+            "effective_to IS NULL OR effective_to >= effective_from",
+            name="ck_support_resistance_zone_window",
+        ),
+        Index(
+            "idx_support_resistance_zone_versions_timeline",
+            "materialization_id",
+            "symbol",
+            "zone_key",
+            "effective_from",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    materialization_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("support_resistance_materializations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    instrument_id = Column(
+        BigInteger,
+        ForeignKey("instruments.id", ondelete="SET NULL"),
+    )
+    symbol = Column(Text, nullable=False)
+    zone_key = Column(String(64), nullable=False)
+    version = Column(Integer, nullable=False)
+    effective_from = Column(Date, nullable=False)
+    effective_to = Column(Date)
+    role = Column(String(16), nullable=False)
+    status = Column(String(16), nullable=False)
+    center_price = Column(Numeric(24, 10), nullable=False)
+    lower_price = Column(Numeric(24, 10), nullable=False)
+    upper_price = Column(Numeric(24, 10), nullable=False)
+    atr_width = Column(Numeric(24, 10), nullable=False)
+    pivot_count = Column(Integer, nullable=False)
+    touch_count = Column(Integer, nullable=False)
+    source_metadata = Column(JSON_VARIANT, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    materialization = relationship("SupportResistanceMaterialization", back_populates="zone_versions")
+
+
+class SupportResistanceRunMaterialization(Base):
+    __tablename__ = "support_resistance_run_materializations"
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_support_resistance_run_materializations_run"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("strategy_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    materialization_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("support_resistance_materializations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    run = relationship("StrategyRun", back_populates="support_resistance_materializations")
+    materialization = relationship("SupportResistanceMaterialization", back_populates="run_links")
+
+
+class SupportResistanceRunEvent(Base):
+    __tablename__ = "support_resistance_run_events"
+    __table_args__ = (
+        Index(
+            "idx_support_resistance_run_events_filter",
+            "run_id",
+            "symbol",
+            "zone_key",
+            "event_date",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("strategy_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    materialization_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("support_resistance_materializations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    instrument_id = Column(
+        BigInteger,
+        ForeignKey("instruments.id", ondelete="SET NULL"),
+    )
+    symbol = Column(Text, nullable=False)
+    event_date = Column(Date, nullable=False)
+    event_type = Column(String(32), nullable=False)
+    zone_key = Column(String(64))
+    setup = Column(String(32))
+    selected = Column(Boolean, nullable=False, default=False)
+    score = Column(Numeric(20, 10))
+    posterior_sample_count = Column(Integer)
+    lower_price = Column(Numeric(24, 10))
+    upper_price = Column(Numeric(24, 10))
+    payload = Column(JSON_VARIANT, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    run = relationship("StrategyRun", back_populates="support_resistance_events")
 
 
 class ResearchExperiment(Base):
@@ -264,13 +582,20 @@ class ResearchExperiment(Base):
     __table_args__ = (
         UniqueConstraint("idempotency_key", name="uq_research_experiments_idempotency_key"),
         CheckConstraint(
-            "status IN ('queued', 'running', 'completed', 'partially_failed', "
+            "status IN ('queued', 'running', 'waiting_agent', 'completed', 'partially_failed', "
             "'failed', 'cancel_requested', 'cancelled', 'data_changed')",
             name="ck_research_experiments_status",
         ),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    parent_experiment_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("research_experiments.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    study_kind = Column(String(64), nullable=False, default="adaptive_category", index=True)
     workflow_run_id = Column(String(64), nullable=False, index=True)
     idempotency_key = Column(String(128), nullable=False)
     status = Column(String(24), nullable=False, default="queued", index=True)
@@ -292,6 +617,111 @@ class ResearchExperiment(Base):
         passive_deletes=True,
         order_by="ExperimentTrial.ordinal",
     )
+    rounds = relationship(
+        "ExperimentRound",
+        back_populates="experiment",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ExperimentRound.ordinal",
+    )
+    candidates = relationship(
+        "ExperimentCandidate",
+        back_populates="experiment",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ExperimentCandidate.params_hash",
+    )
+    parent_experiment = relationship(
+        "ResearchExperiment",
+        remote_side=[id],
+        back_populates="child_experiments",
+    )
+    child_experiments = relationship(
+        "ResearchExperiment",
+        back_populates="parent_experiment",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ResearchExperiment.created_at",
+    )
+
+
+class ExperimentRound(Base):
+    __tablename__ = "experiment_rounds"
+    __table_args__ = (
+        UniqueConstraint("experiment_id", "ordinal", name="uq_experiment_rounds_ordinal"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'completed', 'failed', 'cancelled')",
+            name="ck_experiment_rounds_status",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    experiment_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("research_experiments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    ordinal = Column(Integer, nullable=False)
+    status = Column(String(16), nullable=False, default="queued")
+    proposal = Column(JSON_VARIANT, nullable=False, default=dict)
+    validation_issues = Column(JSON_VARIANT, nullable=False, default=list)
+    result_summary = Column(JSON_VARIANT, nullable=False, default=dict)
+    started_at = Column(DateTime(timezone=True))
+    finished_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    experiment = relationship("ResearchExperiment", back_populates="rounds")
+    candidates = relationship(
+        "ExperimentCandidate",
+        back_populates="round",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ExperimentCandidate.ordinal",
+    )
+
+
+class ExperimentCandidate(Base):
+    __tablename__ = "experiment_candidates"
+    __table_args__ = (
+        UniqueConstraint("experiment_id", "params_hash", name="uq_experiment_candidates_params_hash"),
+        UniqueConstraint("round_id", "ordinal", name="uq_experiment_candidates_round_ordinal"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    experiment_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("research_experiments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    round_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("experiment_rounds.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    ordinal = Column(Integer, nullable=False)
+    parameter_overrides = Column(JSON_VARIANT, nullable=False, default=dict)
+    params = Column(JSON_VARIANT, nullable=False, default=dict)
+    params_hash = Column(String(64), nullable=False)
+    rationale = Column(Text)
+    aggregate_metrics = Column(JSON_VARIANT, nullable=False, default=dict)
+    pareto_rank = Column(Integer)
+    promoted_strategy_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("strategies.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    experiment = relationship("ResearchExperiment", back_populates="candidates")
+    round = relationship("ExperimentRound", back_populates="candidates")
+    trials = relationship("ExperimentTrial", back_populates="candidate")
+    promoted_strategy = relationship("Strategy", foreign_keys=[promoted_strategy_id])
 
 
 class ExperimentTrial(Base):
@@ -322,6 +752,12 @@ class ExperimentTrial(Base):
         nullable=True,
         index=True,
     )
+    candidate_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("experiment_candidates.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     trial_key = Column(String(64), nullable=False)
     ordinal = Column(Integer, nullable=False)
     status = Column(String(16), nullable=False, default="queued", index=True)
@@ -343,6 +779,7 @@ class ExperimentTrial(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     experiment = relationship("ResearchExperiment", back_populates="trials")
+    candidate = relationship("ExperimentCandidate", back_populates="trials")
     backtest_run = relationship("StrategyRun")
 
 
@@ -362,6 +799,11 @@ class Signal(Base):
         UUID(as_uuid=True),
         ForeignKey("strategies.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    instrument_id = Column(
+        BigInteger,
+        ForeignKey("instruments.id", ondelete="SET NULL"),
+        nullable=True,
     )
     ts = Column(DateTime(timezone=True), nullable=False)
     symbol = Column(Text, nullable=False)
@@ -392,6 +834,11 @@ class Transaction(Base):
     run_id = Column(
         UUID(as_uuid=True),
         ForeignKey("strategy_runs.id", ondelete="SET NULL"),
+    )
+    instrument_id = Column(
+        BigInteger,
+        ForeignKey("instruments.id", ondelete="SET NULL"),
+        nullable=True,
     )
     ts = Column(DateTime(timezone=True), nullable=False)
     symbol = Column(Text, nullable=False)

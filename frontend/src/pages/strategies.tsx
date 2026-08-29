@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   deleteStrategy,
@@ -17,9 +17,9 @@ import type { StrategyCatalogItem, StrategyOut } from "@/types/strategy";
 import {
   formatDateTime,
   getStrategyDescription,
+  getStrategyCategoryPresentation,
   getStrategyFieldNumber,
   getStrategyFieldText,
-  getTypeLabel,
   getUniverseSummary,
   summarizeStrategies,
 } from "@/utils/strategy";
@@ -38,6 +38,41 @@ export default function StrategiesPage() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [engineFilter, setEngineFilter] = useState("all");
+
+  const categoryEntries = useMemo(() => {
+    const counts = new Map<string, number>();
+    items.forEach((item) => {
+      counts.set(item.strategy_type, (counts.get(item.strategy_type) || 0) + 1);
+    });
+
+    const catalogByType = new Map<string, StrategyCatalogItem>(
+      catalog.map((item) => [item.strategy_type, item])
+    );
+    const orderedTypes = [
+      ...catalog.map((item) => item.strategy_type),
+      ...items
+        .map((item) => item.strategy_type)
+        .filter((strategyType, index, values) => (
+          !catalogByType.has(strategyType) && values.indexOf(strategyType) === index
+        )),
+    ];
+
+    return orderedTypes.map((strategyType) => {
+      const catalogItem = catalogByType.get(strategyType);
+      return {
+        strategyType,
+        count: counts.get(strategyType) || 0,
+        presentation: getStrategyCategoryPresentation(
+          strategyType,
+          locale,
+          catalogItem?.label,
+          catalogItem?.description
+        ),
+      };
+    });
+  }, [catalog, items, locale]);
+
+  const visibleCategoryEntries = categoryEntries.filter((entry) => entry.count > 0);
 
   useEffect(() => {
     let cancelled = false;
@@ -199,6 +234,140 @@ export default function StrategiesPage() {
           </section>
 
           <section
+            aria-labelledby="strategy-category-heading"
+            style={{
+              marginBottom: 18,
+              padding: 18,
+              borderRadius: 24,
+              border: "1px solid rgba(71, 85, 105, 0.3)",
+              background: "linear-gradient(135deg, rgba(8,15,24,0.92), rgba(15,23,42,0.82))",
+              color: "#e2e8f0",
+              boxShadow: "0 18px 44px rgba(2, 6, 23, 0.2)",
+            }}
+          >
+            <div style={{ marginBottom: 14 }}>
+              <h2 id="strategy-category-heading" style={{ margin: "0 0 5px", fontSize: 19 }}>
+                {isZh ? "策略大类" : "Strategy Categories"}
+              </h2>
+              <p
+                style={{
+                  margin: 0,
+                  color: "rgba(148, 163, 184, 0.9)",
+                  fontSize: 14,
+                  lineHeight: 1.6,
+                  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+                }}
+              >
+                {isZh
+                  ? "用大类快速切换策略视角；数量始终表示策略库中的完整库存。"
+                  : "Switch strategy views by category; counts always reflect the full library inventory."}
+              </p>
+            </div>
+
+            <div
+              role="group"
+              aria-label={isZh ? "按策略大类筛选" : "Filter by strategy category"}
+              style={{ display: "flex", flexWrap: "wrap", gap: 10 }}
+            >
+              <button
+                type="button"
+                className="strategy-category-filter"
+                aria-pressed={typeFilter === "all"}
+                onClick={() => setTypeFilter("all")}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 9,
+                  padding: "10px 13px",
+                  borderRadius: 14,
+                  border: typeFilter === "all"
+                    ? "1px solid rgba(226, 232, 240, 0.84)"
+                    : "1px solid rgba(71, 85, 105, 0.42)",
+                  background: typeFilter === "all"
+                    ? "rgba(226, 232, 240, 0.14)"
+                    : "rgba(8, 15, 24, 0.68)",
+                  color: "#f8fafc",
+                  cursor: "pointer",
+                  fontWeight: 750,
+                  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+                }}
+              >
+                <span>{isZh ? "全部策略" : "All Strategies"}</span>
+                <span
+                  style={{
+                    minWidth: 24,
+                    padding: "3px 7px",
+                    borderRadius: 999,
+                    background: "rgba(148, 163, 184, 0.22)",
+                    color: "#e2e8f0",
+                    fontSize: 12,
+                    textAlign: "center",
+                  }}
+                >
+                  {items.length}
+                </span>
+              </button>
+
+              {visibleCategoryEntries.map((entry) => {
+                const selected = typeFilter === entry.strategyType;
+                const { accent, accentRgb, label } = entry.presentation;
+                return (
+                  <button
+                    key={entry.strategyType}
+                    type="button"
+                    className="strategy-category-filter"
+                    aria-pressed={selected}
+                    onClick={() => setTypeFilter(entry.strategyType)}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 9,
+                      padding: "10px 13px",
+                      borderRadius: 14,
+                      border: selected
+                        ? `1px solid rgba(${accentRgb}, 0.92)`
+                        : `1px solid rgba(${accentRgb}, 0.38)`,
+                      background: selected
+                        ? `rgba(${accentRgb}, 0.2)`
+                        : `rgba(${accentRgb}, 0.08)`,
+                      color: selected ? "#f8fafc" : "#e2e8f0",
+                      cursor: "pointer",
+                      fontWeight: 750,
+                      fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+                    }}
+                  >
+                    <span
+                      aria-hidden="true"
+                      style={{ width: 8, height: 8, borderRadius: 999, background: accent }}
+                    />
+                    <span>{label}</span>
+                    <span
+                      style={{
+                        minWidth: 24,
+                        padding: "3px 7px",
+                        borderRadius: 999,
+                        background: `rgba(${accentRgb}, 0.18)`,
+                        color: accent,
+                        fontSize: 12,
+                        textAlign: "center",
+                      }}
+                    >
+                      {entry.count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <style jsx>{`
+              .strategy-category-filter:focus-visible {
+                outline: 3px solid rgba(248, 250, 252, 0.92);
+                outline-offset: 3px;
+              }
+            `}</style>
+          </section>
+
+          <section
             style={{
               marginBottom: 18,
               padding: 18,
@@ -212,7 +381,7 @@ export default function StrategiesPage() {
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "minmax(220px, 2fr) repeat(3, minmax(150px, 1fr))",
+                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
                 gap: 12,
               }}
             >
@@ -271,9 +440,9 @@ export default function StrategiesPage() {
                 onChange={(e) => setTypeFilter(e.target.value)}
               >
                 <option value="all">{isZh ? "全部类型" : "All Types"}</option>
-                {catalog.map((item) => (
-                  <option key={item.strategy_type} value={item.strategy_type}>
-                    {item.label}
+                {categoryEntries.map((entry) => (
+                  <option key={entry.strategyType} value={entry.strategyType}>
+                    {entry.presentation.label}
                   </option>
                 ))}
               </select>
@@ -401,6 +570,15 @@ export default function StrategiesPage() {
                         "rebalance"
                       );
                       const runAt = getStrategyFieldText(item, "execution", "run_at");
+                      const catalogItem = catalog.find(
+                        (entry) => entry.strategy_type === item.strategy_type
+                      );
+                      const categoryPresentation = getStrategyCategoryPresentation(
+                        item.strategy_type,
+                        locale,
+                        catalogItem?.label,
+                        catalogItem?.description
+                      );
 
                       return (
                         <article
@@ -411,12 +589,14 @@ export default function StrategiesPage() {
                             height: "100%",
                             padding: 22,
                             borderRadius: 22,
-                            border: "1px solid rgba(71, 85, 105, 0.28)",
+                            border: `1px solid rgba(${categoryPresentation.accentRgb}, 0.36)`,
                             background:
-                              "radial-gradient(circle at top right, rgba(45,212,191,0.08), transparent 26%), linear-gradient(140deg, rgba(8,15,24,0.94), rgba(15,23,42,0.9))",
+                              `radial-gradient(circle at top right, rgba(${categoryPresentation.accentRgb}, 0.16), transparent 34%), linear-gradient(140deg, rgba(8,15,24,0.96), rgba(15,23,42,0.9))`,
                             color: "#e2e8f0",
                             boxShadow: "0 14px 36px rgba(2, 6, 23, 0.24)",
                             cursor: "pointer",
+                            position: "relative",
+                            overflow: "hidden",
                           }}
                           role="link"
                           tabIndex={0}
@@ -428,6 +608,15 @@ export default function StrategiesPage() {
                             }
                           }}
                         >
+                          <div
+                            aria-hidden="true"
+                            style={{
+                              position: "absolute",
+                              inset: "0 0 auto",
+                              height: 4,
+                              background: categoryPresentation.accent,
+                            }}
+                          />
                           <div
                             style={{
                               display: "flex",
@@ -448,6 +637,51 @@ export default function StrategiesPage() {
                               }}
                             >
                               <div style={{ minWidth: 0, flex: "1 1 220px" }}>
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 9,
+                                    marginBottom: 10,
+                                    flexWrap: "wrap",
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: 7,
+                                      color: categoryPresentation.accent,
+                                      fontSize: 16,
+                                      fontWeight: 800,
+                                      letterSpacing: "0.01em",
+                                      fontFamily:
+                                        "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+                                    }}
+                                  >
+                                    <span
+                                      aria-hidden="true"
+                                      style={{
+                                        width: 9,
+                                        height: 9,
+                                        borderRadius: 999,
+                                        background: categoryPresentation.accent,
+                                        boxShadow: `0 0 0 4px rgba(${categoryPresentation.accentRgb}, 0.13)`,
+                                      }}
+                                    />
+                                    {categoryPresentation.label}
+                                  </span>
+                                  <span
+                                    style={{
+                                      color: "rgba(148, 163, 184, 0.92)",
+                                      fontSize: 12,
+                                      fontFamily:
+                                        "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                                    }}
+                                  >
+                                    {item.strategy_type} · v{item.version}
+                                  </span>
+                                </div>
                                 <h2
                                   style={{
                                     margin: "0 0 6px",
@@ -459,17 +693,6 @@ export default function StrategiesPage() {
                                 >
                                   {item.name}
                                 </h2>
-                                <div
-                                  style={{
-                                    color: "rgba(148, 163, 184, 0.88)",
-                                    fontSize: 14,
-                                    minHeight: 20,
-                                    fontFamily:
-                                      "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-                                  }}
-                                >
-                                  {getTypeLabel(item.strategy_type, catalog)} · v{item.version}
-                                </div>
                               </div>
                               <div
                                 style={{
@@ -490,7 +713,7 @@ export default function StrategiesPage() {
                                 gap: 8,
                                 flexWrap: "wrap",
                                 marginBottom: 12,
-                                minHeight: 62,
+                                minHeight: 38,
                                 alignContent: "flex-start",
                               }}
                             >
@@ -498,7 +721,6 @@ export default function StrategiesPage() {
                                 {item.engine_ready ? "engine-ready" : "stored-only"}
                               </Badge>
                               <Badge>{item.status}</Badge>
-                              <Badge tone="info">{item.strategy_type}</Badge>
                             </div>
 
                             <p

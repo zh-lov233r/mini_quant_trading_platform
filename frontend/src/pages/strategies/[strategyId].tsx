@@ -162,8 +162,10 @@ function sectionCard(title: string, subtitle: string, children: React.ReactNode)
 
 export default function StrategyDetailPage() {
   const router = useRouter();
-  const { locale } = useI18n();
+  const { locale, messages } = useI18n();
   const isZh = locale === "zh-CN";
+  const createdFromWizard = router.query.created === "1";
+  const createCopy = messages.strategyCreate.success;
   const strategyId = Array.isArray(router.query.strategyId)
     ? router.query.strategyId[0]
     : router.query.strategyId;
@@ -413,6 +415,27 @@ export default function StrategyDetailPage() {
       {loading ? <p>{isZh ? "加载中..." : "Loading..."}</p> : null}
       {error ? <p style={{ color: "#fda4af" }}>{error}</p> : null}
       {deleteError ? <p style={{ color: "#fda4af" }}>{deleteError}</p> : null}
+
+      {createdFromWizard && strategy ? (
+        <section
+          style={{
+            marginBottom: 18,
+            padding: 18,
+            borderRadius: 18,
+            border: "1px solid rgba(34,197,94,.42)",
+            background: "rgba(22,101,52,.14)",
+            color: "#dcfce7",
+          }}
+        >
+          <h2 style={{ margin: "0 0 8px", fontSize: 20 }}>{createCopy.title}</h2>
+          <p style={{ margin: "0 0 14px", color: "#bbf7d0", lineHeight: 1.6 }}>{createCopy.description}</p>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {actionLink(`/backtests?strategyId=${encodeURIComponent(strategy.id)}`, createCopy.backtest, true)}
+            {actionLink(`/strategies/${encodeURIComponent(strategy.id)}/edit`, createCopy.edit)}
+            {actionLink("/strategies", createCopy.library)}
+          </div>
+        </section>
+      ) : null}
 
       {!loading && !error && strategy ? (
         <>

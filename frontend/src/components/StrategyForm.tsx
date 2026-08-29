@@ -34,6 +34,10 @@ function toStringValue(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value : fallback;
 }
 
+function toBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
 function toSymbolText(value: unknown): string {
   if (!Array.isArray(value)) {
     return "";
@@ -51,6 +55,7 @@ function isStrategyType(value: unknown): value is StrategyType {
     || value === "momentum_breakout"
     || value === "island_reversal"
     || value === "double_bottom"
+    || value === "support_resistance"
     || value === "custom"
   );
 }
@@ -260,6 +265,36 @@ export default function StrategyForm({
   const [doubleBottomTakeProfitAtr, setDoubleBottomTakeProfitAtr] = useState(
     toFiniteNumber(initialRisk.take_profit_atr, 3.0)
   );
+  const [supportBounceEnabled, setSupportBounceEnabled] = useState(
+    toBoolean(initialSignal.support_bounce_enabled, true)
+  );
+  const [resistanceBreakoutEnabled, setResistanceBreakoutEnabled] = useState(
+    toBoolean(initialSignal.resistance_breakout_enabled, true)
+  );
+  const [breakoutRetestEnabled, setBreakoutRetestEnabled] = useState(
+    toBoolean(initialSignal.breakout_retest_enabled, true)
+  );
+  const [srPivotLeftBars, setSrPivotLeftBars] = useState(toFiniteNumber(initialSignal.pivot_left_bars, 3));
+  const [srPivotRightBars, setSrPivotRightBars] = useState(toFiniteNumber(initialSignal.pivot_right_bars, 3));
+  const [srDetectionWindow, setSrDetectionWindow] = useState(toFiniteNumber(initialSignal.detection_window, 120));
+  const [srClusterRadiusAtr, setSrClusterRadiusAtr] = useState(toFiniteNumber(initialSignal.cluster_radius_atr, 0.75));
+  const [srZoneHalfWidthAtr, setSrZoneHalfWidthAtr] = useState(toFiniteNumber(initialSignal.zone_half_width_atr, 0.5));
+  const [srMinTouches, setSrMinTouches] = useState(toFiniteNumber(initialSignal.min_touches, 2));
+  const [srDecayHalfLife, setSrDecayHalfLife] = useState(toFiniteNumber(initialSignal.decay_half_life, 60));
+  const [srMaxZonesPerSide, setSrMaxZonesPerSide] = useState(toFiniteNumber(initialSignal.max_zones_per_side, 5));
+  const [srBounceConfirmationAtr, setSrBounceConfirmationAtr] = useState(toFiniteNumber(initialSignal.bounce_confirmation_atr, 0.25));
+  const [srBreakoutConfirmationAtr, setSrBreakoutConfirmationAtr] = useState(toFiniteNumber(initialSignal.breakout_confirmation_atr, 0.5));
+  const [srBreakoutVolumeRatioMin, setSrBreakoutVolumeRatioMin] = useState(toFiniteNumber(initialSignal.breakout_volume_ratio_min, 1.5));
+  const [srRetestWindow, setSrRetestWindow] = useState(toFiniteNumber(initialSignal.retest_window, 10));
+  const [srRetestVolumeRatioMax, setSrRetestVolumeRatioMax] = useState(toFiniteNumber(initialSignal.retest_volume_ratio_max, 0.8));
+  const [srScoreOutcomeWindow, setSrScoreOutcomeWindow] = useState(toFiniteNumber(initialSignal.score_outcome_window, 20));
+  const [srScoreTargetAtr, setSrScoreTargetAtr] = useState(toFiniteNumber(initialSignal.score_target_atr, 3));
+  const [srScoreStopAtr, setSrScoreStopAtr] = useState(toFiniteNumber(initialSignal.score_stop_atr, 1.5));
+  const [srStopLossAtr, setSrStopLossAtr] = useState(toFiniteNumber(initialRisk.stop_loss_atr, 1.5));
+  const [srMaxLossPct, setSrMaxLossPct] = useState(toFiniteNumber(initialRisk.max_loss_pct, 0.08));
+  const [srTakeProfitAtr, setSrTakeProfitAtr] = useState(toFiniteNumber(initialRisk.take_profit_atr, 3));
+  const [srMinRewardRisk, setSrMinRewardRisk] = useState(toFiniteNumber(initialRisk.min_reward_risk, 1.5));
+  const [srMaxHoldingDays, setSrMaxHoldingDays] = useState(toFiniteNumber(initialRisk.max_holding_days, 40));
   const [rawJson, setRawJson] = useState(
     initialStrategy
       ? JSON.stringify(initialStrategy.params, null, 2)
@@ -354,6 +389,34 @@ export default function StrategyForm({
       return;
     }
 
+    if (template.strategy_type === "support_resistance") {
+      setSupportBounceEnabled(toBoolean(signal.support_bounce_enabled, true));
+      setResistanceBreakoutEnabled(toBoolean(signal.resistance_breakout_enabled, true));
+      setBreakoutRetestEnabled(toBoolean(signal.breakout_retest_enabled, true));
+      setSrPivotLeftBars(toFiniteNumber(signal.pivot_left_bars, 3));
+      setSrPivotRightBars(toFiniteNumber(signal.pivot_right_bars, 3));
+      setSrDetectionWindow(toFiniteNumber(signal.detection_window, 120));
+      setSrClusterRadiusAtr(toFiniteNumber(signal.cluster_radius_atr, 0.75));
+      setSrZoneHalfWidthAtr(toFiniteNumber(signal.zone_half_width_atr, 0.5));
+      setSrMinTouches(toFiniteNumber(signal.min_touches, 2));
+      setSrDecayHalfLife(toFiniteNumber(signal.decay_half_life, 60));
+      setSrMaxZonesPerSide(toFiniteNumber(signal.max_zones_per_side, 5));
+      setSrBounceConfirmationAtr(toFiniteNumber(signal.bounce_confirmation_atr, 0.25));
+      setSrBreakoutConfirmationAtr(toFiniteNumber(signal.breakout_confirmation_atr, 0.5));
+      setSrBreakoutVolumeRatioMin(toFiniteNumber(signal.breakout_volume_ratio_min, 1.5));
+      setSrRetestWindow(toFiniteNumber(signal.retest_window, 10));
+      setSrRetestVolumeRatioMax(toFiniteNumber(signal.retest_volume_ratio_max, 0.8));
+      setSrScoreOutcomeWindow(toFiniteNumber(signal.score_outcome_window, 20));
+      setSrScoreTargetAtr(toFiniteNumber(signal.score_target_atr, 3));
+      setSrScoreStopAtr(toFiniteNumber(signal.score_stop_atr, 1.5));
+      setSrStopLossAtr(toFiniteNumber(risk.stop_loss_atr, 1.5));
+      setSrMaxLossPct(toFiniteNumber(risk.max_loss_pct, 0.08));
+      setSrTakeProfitAtr(toFiniteNumber(risk.take_profit_atr, 3));
+      setSrMinRewardRisk(toFiniteNumber(risk.min_reward_risk, 1.5));
+      setSrMaxHoldingDays(toFiniteNumber(risk.max_holding_days, 40));
+      return;
+    }
+
     setRawJson(JSON.stringify(template.defaults, null, 2));
   };
 
@@ -408,6 +471,7 @@ export default function StrategyForm({
       strategyType === "trend"
       || strategyType === "island_reversal"
       || strategyType === "double_bottom"
+      || strategyType === "support_resistance"
       || catalog.length === 0
     ) {
       return;
@@ -818,6 +882,64 @@ export default function StrategyForm({
     ]
   );
 
+  const supportResistanceParams = useMemo(() => {
+    const parsedSymbols = symbols
+      .split(",")
+      .map((item) => item.trim().toUpperCase())
+      .filter(Boolean);
+    return {
+      signal: {
+        support_bounce_enabled: supportBounceEnabled,
+        resistance_breakout_enabled: resistanceBreakoutEnabled,
+        breakout_retest_enabled: breakoutRetestEnabled,
+        pivot_left_bars: Number(srPivotLeftBars),
+        pivot_right_bars: Number(srPivotRightBars),
+        detection_window: Number(srDetectionWindow),
+        cluster_radius_atr: Number(srClusterRadiusAtr),
+        zone_half_width_atr: Number(srZoneHalfWidthAtr),
+        min_touches: Number(srMinTouches),
+        decay_half_life: Number(srDecayHalfLife),
+        max_zones_per_side: Number(srMaxZonesPerSide),
+        bounce_confirmation_atr: Number(srBounceConfirmationAtr),
+        breakout_confirmation_atr: Number(srBreakoutConfirmationAtr),
+        breakout_volume_ratio_min: Number(srBreakoutVolumeRatioMin),
+        retest_window: Number(srRetestWindow),
+        retest_volume_ratio_max: Number(srRetestVolumeRatioMax),
+        score_outcome_window: Number(srScoreOutcomeWindow),
+        score_target_atr: Number(srScoreTargetAtr),
+        score_stop_atr: Number(srScoreStopAtr),
+      },
+      universe: {
+        symbols: parsedSymbols,
+        selection_mode: parsedSymbols.length ? "manual" : "all_common_stock",
+      },
+      risk: {
+        max_positions: Number(maxPositions),
+        position_size_pct: Number(positionSizePct),
+        stop_loss_atr: Number(srStopLossAtr),
+        max_loss_pct: Number(srMaxLossPct),
+        take_profit_atr: Number(srTakeProfitAtr),
+        min_reward_risk: Number(srMinRewardRisk),
+        max_holding_days: Number(srMaxHoldingDays),
+      },
+      execution: { timeframe: "1d", rebalance, run_at: runAt },
+      metadata: {
+        description,
+        schema_version: 1,
+        algorithm_version: "pivot-atr-v1",
+        price_semantics: "forward_adjusted_preferred_unadjusted_fallback",
+      },
+    };
+  }, [
+    breakoutRetestEnabled, description, maxPositions, positionSizePct, rebalance,
+    resistanceBreakoutEnabled, runAt, srBounceConfirmationAtr, srBreakoutConfirmationAtr,
+    srBreakoutVolumeRatioMin, srClusterRadiusAtr, srDecayHalfLife, srDetectionWindow,
+    srMaxHoldingDays, srMaxLossPct, srMaxZonesPerSide, srMinRewardRisk, srMinTouches,
+    srPivotLeftBars, srPivotRightBars, srRetestVolumeRatioMax, srRetestWindow,
+    srScoreOutcomeWindow, srScoreStopAtr, srScoreTargetAtr, srStopLossAtr,
+    srTakeProfitAtr, srZoneHalfWidthAtr, supportBounceEnabled, symbols,
+  ]);
+
   const previewPayload = useMemo<StrategyCreate>(() => {
     if (strategyType === "trend") {
       return {
@@ -855,6 +977,15 @@ export default function StrategyForm({
         params: doubleBottomParams,
       };
     }
+    if (strategyType === "support_resistance") {
+      return {
+        name,
+        description,
+        strategy_type: strategyType,
+        status,
+        params: supportResistanceParams,
+      };
+    }
 
     try {
       return {
@@ -873,7 +1004,7 @@ export default function StrategyForm({
         params: {},
       };
     }
-  }, [description, doubleBottomParams, islandReversalParams, meanReversionParams, name, rawJson, status, strategyType, trendParams]);
+  }, [description, doubleBottomParams, islandReversalParams, meanReversionParams, name, rawJson, status, strategyType, supportResistanceParams, trendParams]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1102,6 +1233,34 @@ export default function StrategyForm({
           status,
           params: doubleBottomParams,
         };
+      } else if (strategyType === "support_resistance") {
+        if (!supportBounceEnabled && !resistanceBreakoutEnabled && !breakoutRetestEnabled) {
+          throw new Error(isZh ? "至少启用一种入场模式" : "Enable at least one entry mode");
+        }
+        const positiveValues = [
+          srPivotLeftBars, srPivotRightBars, srDetectionWindow, srClusterRadiusAtr,
+          srZoneHalfWidthAtr, srMinTouches, srDecayHalfLife, srMaxZonesPerSide,
+          srBounceConfirmationAtr, srBreakoutConfirmationAtr, srBreakoutVolumeRatioMin,
+          srRetestWindow, srRetestVolumeRatioMax, srScoreOutcomeWindow, srScoreTargetAtr,
+          srScoreStopAtr, srStopLossAtr, srTakeProfitAtr, srMinRewardRisk,
+          srMaxHoldingDays, maxPositions, positionSizePct,
+        ];
+        if (positiveValues.some((value) => !(Number(value) > 0))) {
+          throw new Error(isZh ? "支撑压力参数必须全部大于 0" : "Support/resistance numeric parameters must be positive");
+        }
+        if (Number(srDetectionWindow) < Number(srPivotLeftBars) + Number(srPivotRightBars) + 1) {
+          throw new Error(isZh ? "检测窗口必须覆盖 Pivot 左右确认区间" : "Detection window must cover the full Pivot confirmation interval");
+        }
+        if (!(Number(srMaxLossPct) > 0 && Number(srMaxLossPct) <= 1) || Number(positionSizePct) > 1) {
+          throw new Error(isZh ? "比例参数必须在 (0, 1] 之间" : "Percentage parameters must be within (0, 1]");
+        }
+        payload = {
+          name: name.trim(),
+          description: description.trim(),
+          strategy_type: strategyType,
+          status,
+          params: supportResistanceParams,
+        };
       } else {
         payload = {
           name: name.trim(),
@@ -1194,6 +1353,35 @@ export default function StrategyForm({
     gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
     gap: 12,
   };
+  const srDetectionFields: Array<{ labelZh: string; labelEn: string; value: number; setValue: (value: number) => void }> = [
+    { labelZh: "Pivot 左侧 K 线", labelEn: "Pivot Left Bars", value: srPivotLeftBars, setValue: setSrPivotLeftBars },
+    { labelZh: "Pivot 右侧确认 K 线", labelEn: "Pivot Right Bars", value: srPivotRightBars, setValue: setSrPivotRightBars },
+    { labelZh: "检测窗口", labelEn: "Detection Window", value: srDetectionWindow, setValue: setSrDetectionWindow },
+    { labelZh: "聚类半径（ATR）", labelEn: "Cluster Radius (ATR)", value: srClusterRadiusAtr, setValue: setSrClusterRadiusAtr },
+    { labelZh: "区域半宽（ATR）", labelEn: "Zone Half Width (ATR)", value: srZoneHalfWidthAtr, setValue: setSrZoneHalfWidthAtr },
+    { labelZh: "最少独立触碰", labelEn: "Minimum Independent Touches", value: srMinTouches, setValue: setSrMinTouches },
+    { labelZh: "衰减半衰期", labelEn: "Decay Half-Life", value: srDecayHalfLife, setValue: setSrDecayHalfLife },
+    { labelZh: "每侧最大区域数", labelEn: "Max Zones Per Side", value: srMaxZonesPerSide, setValue: setSrMaxZonesPerSide },
+  ];
+  const srSignalFields: Array<{ labelZh: string; labelEn: string; value: number; setValue: (value: number) => void }> = [
+    { labelZh: "支撑反弹确认（ATR）", labelEn: "Bounce Confirmation (ATR)", value: srBounceConfirmationAtr, setValue: setSrBounceConfirmationAtr },
+    { labelZh: "压力突破确认（ATR）", labelEn: "Breakout Confirmation (ATR)", value: srBreakoutConfirmationAtr, setValue: setSrBreakoutConfirmationAtr },
+    { labelZh: "突破成交量 / ADV20", labelEn: "Breakout Volume / ADV20", value: srBreakoutVolumeRatioMin, setValue: setSrBreakoutVolumeRatioMin },
+    { labelZh: "回踩窗口", labelEn: "Retest Window", value: srRetestWindow, setValue: setSrRetestWindow },
+    { labelZh: "回踩量 / 突破量上限", labelEn: "Retest / Breakout Volume Max", value: srRetestVolumeRatioMax, setValue: setSrRetestVolumeRatioMax },
+    { labelZh: "评分结果窗口", labelEn: "Scoring Outcome Window", value: srScoreOutcomeWindow, setValue: setSrScoreOutcomeWindow },
+    { labelZh: "评分目标（ATR）", labelEn: "Scoring Target (ATR)", value: srScoreTargetAtr, setValue: setSrScoreTargetAtr },
+    { labelZh: "评分止损（ATR）", labelEn: "Scoring Stop (ATR)", value: srScoreStopAtr, setValue: setSrScoreStopAtr },
+  ];
+  const srRiskFields: Array<{ labelZh: string; labelEn: string; value: number; setValue: (value: number) => void }> = [
+    { labelZh: "最大持仓数", labelEn: "Max Positions", value: maxPositions, setValue: setMaxPositions },
+    { labelZh: "单票仓位比例", labelEn: "Position Size Pct", value: positionSizePct, setValue: setPositionSizePct },
+    { labelZh: "ATR 止损", labelEn: "ATR Stop", value: srStopLossAtr, setValue: setSrStopLossAtr },
+    { labelZh: "最大亏损比例", labelEn: "Max Loss Pct", value: srMaxLossPct, setValue: setSrMaxLossPct },
+    { labelZh: "无压力区目标（ATR）", labelEn: "Fallback Target (ATR)", value: srTakeProfitAtr, setValue: setSrTakeProfitAtr },
+    { labelZh: "最低盈亏比", labelEn: "Minimum Reward / Risk", value: srMinRewardRisk, setValue: setSrMinRewardRisk },
+    { labelZh: "最长持有交易日", labelEn: "Maximum Holding Days", value: srMaxHoldingDays, setValue: setSrMaxHoldingDays },
+  ];
 
   return (
     <form
@@ -1354,7 +1542,12 @@ export default function StrategyForm({
                 <select
                   style={inputStyle}
                   value={strategyType}
-                  onChange={(e) => setStrategyType(e.target.value as StrategyType)}
+                  onChange={(e) => {
+                    const nextType = e.target.value as StrategyType;
+                    setStrategyType(nextType);
+                    const nextTemplate = catalog.find((item) => item.strategy_type === nextType);
+                    if (nextTemplate) applyTemplateDefaults(nextTemplate);
+                  }}
                   disabled={isEditMode}
                 >
                   {catalog.length === 0 && <option value="trend">trend</option>}
@@ -2318,6 +2511,83 @@ export default function StrategyForm({
                       }
                     />
                   </div>
+                </div>
+              </div>
+            </section>
+          ) : strategyType === "support_resistance" ? (
+            <section style={cardStyle}>
+              <h3 style={{ marginTop: 0 }}>{isZh ? "支撑 / 压力区域参数" : "Support / Resistance Zone Parameters"}</h3>
+              <p style={{ marginTop: 0, color: "rgba(148, 163, 184, 0.88)", lineHeight: 1.6 }}>
+                {isZh
+                  ? "区域由已确认 Pivot 与 ATR 聚类生成；T 日仅使用 T-1 收盘后冻结的区域。日线信号在收盘产生，并在下一有效交易日开盘成交。"
+                  : "Zones use confirmed Pivots and ATR clustering. Session T only sees zones frozen after T-1; close signals fill at the next valid session open."}
+              </p>
+              <div style={{ display: "grid", gap: 14 }}>
+                <div style={groupedPanelStyle}>
+                  <div style={groupedPanelTitleStyle}>{isZh ? "入场模式" : "Entry Modes"}</div>
+                  <p style={groupedPanelHintStyle}>{isZh ? "至少开启一种；同日多模式命中时只生成一个最高评分 BUY。" : "Enable at least one. Multiple same-day matches persist as events but emit one highest-scored BUY."}</p>
+                  <div style={groupedCompactGridStyle}>
+                    {[
+                      { label: isZh ? "支撑反弹" : "Support Bounce", value: supportBounceEnabled, setValue: setSupportBounceEnabled },
+                      { label: isZh ? "压力突破" : "Resistance Breakout", value: resistanceBreakoutEnabled, setValue: setResistanceBreakoutEnabled },
+                      { label: isZh ? "突破回踩" : "Breakout Retest", value: breakoutRetestEnabled, setValue: setBreakoutRetestEnabled },
+                    ].map((item) => (
+                      <label key={item.label} style={{ ...groupedBoxStyle, flexDirection: "row", alignItems: "center" }}>
+                        <input type="checkbox" checked={item.value} onChange={(event) => item.setValue(event.target.checked)} />
+                        {item.label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={groupedPanelStyle}>
+                  <div style={groupedPanelTitleStyle}>{isZh ? "区域检测" : "Zone Detection"}</div>
+                  <div style={groupedGridStyle}>
+                    {srDetectionFields.map((field) => (
+                      <div key={field.labelEn} style={groupedBoxStyle}>
+                        <label>{isZh ? field.labelZh : field.labelEn}</label>
+                        <input type="number" min={0.01} step="any" style={inputStyle} value={field.value} onChange={(event) => field.setValue(Number(event.target.value))} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={groupedPanelStyle}>
+                  <div style={groupedPanelTitleStyle}>{isZh ? "确认与向前评分" : "Confirmation And Forward Scoring"}</div>
+                  <p style={groupedPanelHintStyle}>{isZh ? "Beta 后验只使用当前日期以前已结束的同类事件；未决样本不进入分母。" : "The Beta posterior only uses same-mode outcomes resolved before the current date; censored outcomes stay out of the denominator."}</p>
+                  <div style={groupedGridStyle}>
+                    {srSignalFields.map((field) => (
+                      <div key={field.labelEn} style={groupedBoxStyle}>
+                        <label>{isZh ? field.labelZh : field.labelEn}</label>
+                        <input type="number" min={0.01} step="any" style={inputStyle} value={field.value} onChange={(event) => field.setValue(Number(event.target.value))} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={groupedPanelStyle}>
+                  <div style={groupedPanelTitleStyle}>{isZh ? "风险与执行" : "Risk And Execution"}</div>
+                  <div style={groupedGridStyle}>
+                    {srRiskFields.map((field) => (
+                      <div key={field.labelEn} style={groupedBoxStyle}>
+                        <label>{isZh ? field.labelZh : field.labelEn}</label>
+                        <input type="number" min={0.01} step="any" style={inputStyle} value={field.value} onChange={(event) => field.setValue(Number(event.target.value))} />
+                      </div>
+                    ))}
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "调仓频率" : "Rebalance"}</label>
+                      <select style={inputStyle} value={rebalance} onChange={(event) => setRebalance(event.target.value)}><option value="daily">daily</option></select>
+                    </div>
+                    <div style={groupedBoxStyle}>
+                      <label>{isZh ? "运行时机" : "Run Timing"}</label>
+                      <select style={inputStyle} value={runAt} onChange={(event) => setRunAt(event.target.value)}><option value="close">close</option></select>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={groupedPanelStyle}>
+                  <div style={groupedPanelTitleStyle}>{isZh ? "股票池" : "Universe"}</div>
+                  <input style={inputStyle} value={symbols} onChange={(event) => setSymbols(event.target.value)} placeholder={isZh ? "留空使用全部 common stock，或输入 AAPL,MSFT" : "Leave empty for all common stocks, or enter AAPL,MSFT"} />
                 </div>
               </div>
             </section>

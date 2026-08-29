@@ -63,7 +63,9 @@ JOIN instruments instr
 WHERE sh.valid_from <= %(trade_date)s::date
   AND (sh.valid_to IS NULL OR sh.valid_to >= %(trade_date)s::date)
   AND sh.is_primary
-  AND instr.is_active = TRUE
+  -- Historical flat files must use the point-in-time symbol interval. Filtering
+  -- on today's `is_active` snapshot drops bars that traded historically but
+  -- were delisted later, introducing look-ahead and survivorship bias.
   AND (
     instr.asset_type = 'CS'
     OR (
@@ -190,7 +192,7 @@ WITH ranked_stage AS (
         low_u = EXCLUDED.low_u,
         close_u = EXCLUDED.close_u,
         volume = EXCLUDED.volume,
-        vwap = EXCLUDED.vwap,
+        vwap = COALESCE(EXCLUDED.vwap, eod_bars.vwap),
         trades = EXCLUDED.trades,
         vendor = EXCLUDED.vendor,
         asof = now()

@@ -102,6 +102,30 @@ paths:
                   $ref: "#/components/schemas/StrategyOut"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
+    post:
+      tags: [Strategies]
+      summary: Create a strategy definition
+      operationId: createStrategy
+      x-implementation-status: implemented
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StrategyCreate"
+      responses:
+        "201":
+          description: Strategy created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrategyOut"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
 
   /api/strategies/validate:
     post:
@@ -181,11 +205,35 @@ paths:
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
-  /api/agent/research/experiments/validate:
+  /api/agent/strategies/{strategy_id}/archive-unused-research-draft:
     post:
       tags: [Agent Integration]
-      summary: Validate and expand a research experiment specification
-      operationId: validateAgentExperiment
+      summary: Archive an unreferenced auto-created research draft owned by the workflow
+      operationId: archiveUnusedAgentResearchDraft
+      security: [{AgentServiceToken: []}]
+      parameters:
+        - name: strategy_id
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - $ref: "#/components/parameters/RequiredIdempotencyKeyHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workflowRunId]
+              properties: {workflowRunId: {type: string}}
+      responses:
+        "200": {description: Archived or already archived draft, content: {application/json: {schema: {$ref: "#/components/schemas/StrategyOut"}}}}
+        "409": {$ref: "#/components/responses/Conflict"}
+
+  /api/agent/research/category-studies/validate:
+    post:
+      tags: [Agent Integration]
+      summary: Validate a generated engine-category draft and first adaptive round
+      operationId: validateAgentCategoryStudy
       x-implementation-status: implemented
       security:
         - AgentServiceToken: []
@@ -194,24 +242,24 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ExperimentSpec"
+              $ref: "#/components/schemas/CategoryStudyValidationRequest"
       responses:
         "200":
           description: Normalized specification and bounded trial count
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ExperimentValidation"
+                $ref: "#/components/schemas/CategoryStudyValidation"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
-  /api/agent/research/experiments:
+  /api/agent/research/category-studies:
     post:
       tags: [Agent Integration]
-      summary: Create a persistent research experiment
-      operationId: createAgentExperiment
+      summary: Create a persistent adaptive category study after experiment approval
+      operationId: createAgentCategoryStudy
       x-implementation-status: implemented
       security:
         - AgentServiceToken: []
@@ -222,7 +270,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ExperimentCreate"
+              $ref: "#/components/schemas/CategoryStudyCreate"
       responses:
         "201":
           description: Experiment created or replayed
@@ -238,6 +286,58 @@ paths:
           $ref: "#/components/responses/UnprocessableEntity"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+
+  /api/agent/research/experiments/{experiment_id}/rounds:
+    post:
+      tags: [Agent Integration]
+      summary: Submit the next bounded adaptive candidate round
+      operationId: submitAgentExperimentRound
+      security: [{AgentServiceToken: []}]
+      parameters:
+        - $ref: "#/components/parameters/ExperimentIdPath"
+        - $ref: "#/components/parameters/RequiredIdempotencyKeyHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ExperimentRoundSubmit"}
+      responses:
+        "200": {description: Updated experiment, content: {application/json: {schema: {$ref: "#/components/schemas/ResearchExperiment"}}}}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/UnprocessableEntity"}
+
+  /api/agent/research/experiments/{experiment_id}/controller-failure:
+    post:
+      tags: [Agent Integration]
+      summary: Terminate an adaptive experiment when its Agent controller cannot continue
+      operationId: failAgentExperimentController
+      security: [{AgentServiceToken: []}]
+      parameters:
+        - $ref: "#/components/parameters/ExperimentIdPath"
+        - $ref: "#/components/parameters/RequiredIdempotencyKeyHeader"
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/ControllerFailure"}}}
+      responses:
+        "200": {description: Terminal experiment, content: {application/json: {schema: {$ref: "#/components/schemas/ResearchExperiment"}}}}
+        "409": {$ref: "#/components/responses/Conflict"}
+
+  /api/agent/research/experiments/{experiment_id}/candidates/promote:
+    post:
+      tags: [Agent Integration]
+      summary: Save up to five Pareto rank 1-2 candidates as visible drafts
+      operationId: promoteAgentExperimentCandidates
+      security: [{AgentServiceToken: []}]
+      parameters:
+        - $ref: "#/components/parameters/ExperimentIdPath"
+        - $ref: "#/components/parameters/RequiredIdempotencyKeyHeader"
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/CandidatePromotion"}}}
+      responses:
+        "200": {description: Promoted draft strategy IDs}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/UnprocessableEntity"}
 
   /api/agent/research/experiments/{experiment_id}/cancel:
     post:
@@ -290,6 +390,19 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+
+  /api/agent/research/experiments/{experiment_id}/report/retry:
+    post:
+      tags: [Agent Integration]
+      summary: Idempotently retry effectiveness-study report generation
+      operationId: retryAgentEffectivenessReport
+      security: [{AgentServiceToken: []}]
+      parameters:
+        - $ref: "#/components/parameters/ExperimentIdPath"
+      responses:
+        "200": {description: Updated parent experiment, content: {application/json: {schema: {$ref: "#/components/schemas/ResearchExperiment"}}}}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/UnprocessableEntity"}
 
   /api/research/experiments:
     get:
@@ -360,30 +473,32 @@ paths:
                 $ref: "#/components/schemas/FreeFormObject"
         "409":
           $ref: "#/components/responses/Conflict"
-    post:
-      tags: [Strategies]
-      summary: Create a strategy definition
-      operationId: createStrategy
-      x-implementation-status: implemented
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKeyHeader"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/StrategyCreate"
+
+  /api/research/experiments/{experiment_id}/children:
+    get:
+      tags: [Research]
+      summary: List child experiments of a parent effectiveness study
+      operationId: listResearchExperimentChildren
+      parameters: [{$ref: "#/components/parameters/ExperimentIdPath"}]
       responses:
-        "201":
-          description: Strategy created
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/StrategyOut"
-        "409":
-          $ref: "#/components/responses/Conflict"
-        "422":
-          $ref: "#/components/responses/UnprocessableEntity"
+        "200": {description: Ordered child experiments, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/ResearchExperiment"}}}}}
+        "404": {$ref: "#/components/responses/NotFound"}
+
+  /api/research/experiments/{experiment_id}/report-artifacts/{artifact_kind}:
+    get:
+      tags: [Research]
+      summary: Download a generated JSON, Markdown, or PDF report artifact
+      operationId: downloadResearchReportArtifact
+      parameters:
+        - $ref: "#/components/parameters/ExperimentIdPath"
+        - in: path
+          name: artifact_kind
+          required: true
+          schema: {type: string, enum: [json, markdownZh, markdownEn, pdfZh, pdfEn]}
+      responses:
+        "200": {description: Generated report artifact}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
 
   /api/strategies/{strategy_id}:
     get:
@@ -402,6 +517,51 @@ paths:
                 $ref: "#/components/schemas/StrategyOut"
         "404":
           $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Strategies]
+      summary: Delete a strategy and its run-scoped records while retaining shared support/resistance caches
+      operationId: deleteStrategy
+      x-implementation-status: implemented
+      parameters:
+        - $ref: "#/components/parameters/StrategyIdPath"
+        - in: query
+          name: close_positions
+          required: false
+          description: Explicitly authorize closing matching Alpaca positions before deletion.
+          schema: {type: boolean, default: false}
+      responses:
+        "200":
+          description: Deletion counts, including retained shared support/resistance materializations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrategyDeleteOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "502":
+          description: Broker position inspection or explicit close failed
+
+  /api/research/experiments/{experiment_id}/rounds:
+    get:
+      tags: [Research]
+      summary: List adaptive rounds; legacy experiments return an empty list
+      operationId: listResearchExperimentRounds
+      parameters: [{$ref: "#/components/parameters/ExperimentIdPath"}]
+      responses:
+        "200": {description: Adaptive rounds, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/ExperimentRound"}}}}}
+        "404": {$ref: "#/components/responses/NotFound"}
+
+  /api/research/experiments/{experiment_id}/candidates:
+    get:
+      tags: [Research]
+      summary: List adaptive candidates and Pareto ranks; legacy experiments return an empty list
+      operationId: listResearchExperimentCandidates
+      parameters: [{$ref: "#/components/parameters/ExperimentIdPath"}]
+      responses:
+        "200": {description: Adaptive candidates, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/ExperimentCandidate"}}}}}
+        "404": {$ref: "#/components/responses/NotFound"}
 
   /api/strategies/{strategy_id}/runtime:
     get:
@@ -451,12 +611,12 @@ paths:
   /api/backtests:
     post:
       tags: [Backtests]
-      summary: Run a backtest for an existing strategy
+      summary: Queue a backtest for an existing strategy
       description: >
-        Aligned with the current synchronous run_backtest service. The backend persists a StrategyRun,
-        signals, transactions, and portfolio snapshots, then returns a compact backtest summary.
+        Creates a StrategyRun and durable database job. Manual requests default to full persistence;
+        execution is performed by the independent backtest worker.
       operationId: createBacktest
-      x-implementation-status: planned
+      x-implementation-status: implemented
       requestBody:
         required: true
         content:
@@ -464,12 +624,12 @@ paths:
             schema:
               $ref: "#/components/schemas/BacktestCreate"
       responses:
-        "200":
-          description: Backtest completed and persisted
+        "201":
+          description: Backtest queued
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/BacktestResult"
+                $ref: "#/components/schemas/BacktestRun"
         "404":
           $ref: "#/components/responses/NotFound"
         "422":
@@ -479,8 +639,10 @@ paths:
     get:
       tags: [Backtests]
       summary: Get one backtest run
+      deprecated: true
+      description: Legacy compatibility endpoint that loads all persisted details.
       operationId: getBacktestRun
-      x-implementation-status: planned
+      x-implementation-status: implemented
       parameters:
         - $ref: "#/components/parameters/RunIdPath"
       responses:
@@ -493,23 +655,46 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/backtests/{run_id}/support-resistance:
+    get:
+      tags: [Backtests]
+      summary: Get the entry-related support/resistance audit timeline for a backtest
+      operationId: getBacktestSupportResistance
+      x-implementation-status: implemented
+      parameters:
+        - $ref: "#/components/parameters/RunIdPath"
+        - {in: query, name: symbol, required: false, schema: {type: string}}
+        - {in: query, name: zone_key, required: false, schema: {type: string}}
+        - {in: query, name: start_date, required: false, schema: {type: string, format: date}}
+        - {in: query, name: end_date, required: false, schema: {type: string, format: date}}
+      responses:
+        "200":
+          description: Materialization identity, sparse zone versions, and run-scoped scoring/events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportResistanceBacktest"
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/UnprocessableEntity"}
+
   /api/backtests/{run_id}/signals:
     get:
       tags: [Backtests]
       summary: List signals generated by a backtest run
       operationId: listBacktestSignals
-      x-implementation-status: planned
+      x-implementation-status: implemented
       parameters:
         - $ref: "#/components/parameters/RunIdPath"
+        - {in: query, name: limit, required: false, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
+        - {in: query, name: cursor, required: false, schema: {type: string}}
+        - {in: query, name: symbol, required: false, schema: {type: string}}
       responses:
         "200":
           description: Signals for the requested backtest run
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/SignalRecord"
+                $ref: "#/components/schemas/SignalPage"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -518,18 +703,19 @@ paths:
       tags: [Backtests]
       summary: List simulated fills generated by a backtest run
       operationId: listBacktestTransactions
-      x-implementation-status: planned
+      x-implementation-status: implemented
       parameters:
         - $ref: "#/components/parameters/RunIdPath"
+        - {in: query, name: limit, required: false, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
+        - {in: query, name: cursor, required: false, schema: {type: string}}
+        - {in: query, name: symbol, required: false, schema: {type: string}}
       responses:
         "200":
           description: Transactions for the requested backtest run
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/TransactionRecord"
+                $ref: "#/components/schemas/TransactionPage"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -1050,7 +1236,7 @@ components:
 
     StrategyType:
       type: string
-      enum: [trend, mean_reversion, momentum_breakout, island_reversal, double_bottom, custom]
+      enum: [trend, mean_reversion, momentum_breakout, island_reversal, double_bottom, support_resistance, custom]
 
     StrategyStatus:
       type: string
@@ -1302,6 +1488,74 @@ components:
         metadata:
           $ref: "#/components/schemas/MetadataConfig"
 
+    SupportResistanceStrategyParams:
+      type: object
+      description: >-
+        Causal confirmed-Pivot plus ATR-clustered zones. Session T evaluates only zones
+        frozen after T-1; signals use adjusted OHLC and fill at the next session open.
+      required: [signal, universe, risk, execution, metadata]
+      properties:
+        signal:
+          type: object
+          required:
+            [support_bounce_enabled, resistance_breakout_enabled, breakout_retest_enabled,
+             pivot_left_bars, pivot_right_bars, detection_window, cluster_radius_atr,
+             zone_half_width_atr, min_touches, decay_half_life, max_zones_per_side,
+             bounce_confirmation_atr, breakout_confirmation_atr, breakout_volume_ratio_min,
+             retest_window, retest_volume_ratio_max, score_outcome_window,
+             score_target_atr, score_stop_atr]
+          properties:
+            support_bounce_enabled: {type: boolean, default: true}
+            resistance_breakout_enabled: {type: boolean, default: true}
+            breakout_retest_enabled: {type: boolean, default: true}
+            pivot_left_bars: {type: integer, minimum: 1, default: 3}
+            pivot_right_bars: {type: integer, minimum: 1, default: 3}
+            detection_window: {type: integer, minimum: 7, default: 120}
+            cluster_radius_atr: {type: number, exclusiveMinimum: 0, default: 0.75}
+            zone_half_width_atr: {type: number, exclusiveMinimum: 0, default: 0.5}
+            min_touches: {type: integer, minimum: 1, default: 2}
+            decay_half_life: {type: integer, minimum: 1, default: 60}
+            max_zones_per_side: {type: integer, minimum: 1, default: 5}
+            bounce_confirmation_atr: {type: number, exclusiveMinimum: 0, default: 0.25}
+            breakout_confirmation_atr: {type: number, exclusiveMinimum: 0, default: 0.5}
+            breakout_volume_ratio_min: {type: number, exclusiveMinimum: 0, default: 1.5}
+            retest_window: {type: integer, minimum: 1, default: 10}
+            retest_volume_ratio_max: {type: number, exclusiveMinimum: 0, default: 0.8}
+            score_outcome_window: {type: integer, minimum: 1, default: 20}
+            score_target_atr: {type: number, exclusiveMinimum: 0, default: 3}
+            score_stop_atr: {type: number, exclusiveMinimum: 0, default: 1.5}
+          anyOf:
+            - properties: {support_bounce_enabled: {const: true}}
+            - properties: {resistance_breakout_enabled: {const: true}}
+            - properties: {breakout_retest_enabled: {const: true}}
+        universe: {$ref: "#/components/schemas/UniverseConfig"}
+        risk:
+          type: object
+          required: [max_positions, position_size_pct, stop_loss_atr, max_loss_pct, take_profit_atr, min_reward_risk, max_holding_days]
+          properties:
+            max_positions: {type: integer, minimum: 1}
+            position_size_pct: {type: number, exclusiveMinimum: 0, maximum: 1}
+            stop_loss_atr: {type: number, exclusiveMinimum: 0}
+            max_loss_pct: {type: number, exclusiveMinimum: 0, maximum: 1}
+            take_profit_atr: {type: number, exclusiveMinimum: 0}
+            min_reward_risk: {type: number, exclusiveMinimum: 0}
+            max_holding_days: {type: integer, minimum: 1}
+        execution:
+          type: object
+          required: [timeframe, rebalance, run_at]
+          properties:
+            timeframe: {type: string, const: 1d}
+            rebalance: {type: string, const: daily}
+            run_at: {type: string, const: close}
+        metadata:
+          type: object
+          required: [description, schema_version, algorithm_version, price_semantics]
+          properties:
+            description: {type: string}
+            schema_version: {type: integer, minimum: 1}
+            algorithm_version: {type: string, const: pivot-atr-v1}
+            price_semantics: {type: string, const: forward_adjusted_preferred_unadjusted_fallback}
+
     UniverseConfig:
       type: object
       required: [symbols, selection_mode]
@@ -1393,6 +1647,7 @@ components:
             - $ref: "#/components/schemas/MeanReversionStrategyParams"
             - $ref: "#/components/schemas/MomentumBreakoutStrategyParams"
             - $ref: "#/components/schemas/IslandReversalStrategyParams"
+            - $ref: "#/components/schemas/SupportResistanceStrategyParams"
             - $ref: "#/components/schemas/FreeFormObject"
 
     StrategyCreate:
@@ -1415,6 +1670,7 @@ components:
             - $ref: "#/components/schemas/MeanReversionStrategyParams"
             - $ref: "#/components/schemas/MomentumBreakoutStrategyParams"
             - $ref: "#/components/schemas/IslandReversalStrategyParams"
+            - $ref: "#/components/schemas/SupportResistanceStrategyParams"
             - $ref: "#/components/schemas/FreeFormObject"
         status:
           $ref: "#/components/schemas/StrategyStatus"
@@ -1456,6 +1712,35 @@ components:
           format: date-time
           nullable: true
 
+    StrategyDeleteOut:
+      type: object
+      required:
+        - strategy_id
+        - strategy_name
+        - deleted_backtest_runs
+        - deleted_paper_runs
+        - deleted_live_runs
+        - deleted_backtest_snapshots
+        - deleted_signals
+        - deleted_transactions
+        - deleted_allocations
+        - deleted_support_resistance_run_events
+        - deleted_support_resistance_run_links
+        - retained_support_resistance_materializations
+      properties:
+        strategy_id: {type: string, format: uuid}
+        strategy_name: {type: string}
+        deleted_backtest_runs: {type: integer, minimum: 0}
+        deleted_paper_runs: {type: integer, minimum: 0}
+        deleted_live_runs: {type: integer, minimum: 0}
+        deleted_backtest_snapshots: {type: integer, minimum: 0}
+        deleted_signals: {type: integer, minimum: 0}
+        deleted_transactions: {type: integer, minimum: 0}
+        deleted_allocations: {type: integer, minimum: 0}
+        deleted_support_resistance_run_events: {type: integer, minimum: 0}
+        deleted_support_resistance_run_links: {type: integer, minimum: 0}
+        retained_support_resistance_materializations: {type: integer, minimum: 0}
+
     StrategyValidation:
       type: object
       required: [valid, engine_ready, normalized_params]
@@ -1475,7 +1760,7 @@ components:
         description: {type: [string, "null"], maxLength: 500}
         strategy_type:
           type: string
-          enum: [trend, mean_reversion, momentum_breakout, island_reversal, double_bottom]
+          enum: [trend, mean_reversion, momentum_breakout, island_reversal, double_bottom, support_resistance]
         overrides:
           type: array
           maxItems: 30
@@ -1534,65 +1819,125 @@ components:
         - required: [tokenBudget]
         - required: [targetMetric]
 
-    ExperimentSpec:
+    PointInTimeUniversePolicy:
       type: object
-      required: [name, hypothesis, strategyId, symbols, inSample, outOfSample, parameterGrid, costScenarios, initialCash]
+      required: [type, assetTypes, exchanges, minUnadjustedClose, minDollarVolume20, minHistorySessions, membershipAsOf, existingPositionPolicy, delistingValuePolicy]
       properties:
-        name: {type: string, maxLength: 160}
-        hypothesis: {type: string, maxLength: 2000}
-        strategyId: {type: string, format: uuid}
+        type: {type: string, enum: [point_in_time_liquid]}
+        assetTypes: {type: array, minItems: 1, items: {type: string}, default: [CS]}
+        exchanges: {type: array, minItems: 1, items: {type: string}, default: [XNAS, XNYS, XASE]}
+        minUnadjustedClose: {type: number, exclusiveMinimum: 0, default: 5}
+        minDollarVolume20: {type: number, exclusiveMinimum: 0, default: 10000000}
+        minHistorySessions: {type: integer, minimum: 20, maximum: 252, default: 200}
+        membershipAsOf: {type: string, enum: [signal_close], default: signal_close}
+        existingPositionPolicy: {type: string, enum: [exit_only], default: exit_only}
+        delistingValuePolicy: {type: string, enum: [zero_with_last_close_sensitivity], default: zero_with_last_close_sensitivity}
+
+    SupportResistanceValidationProtocol:
+      type: object
+      required: [kind, maxBacktests, bootstrapSeed, bootstrapReplicates, eventHorizons, dedupeSessions, reportFormats]
+      properties:
+        kind: {type: string, enum: [support_resistance_effectiveness_v1]}
+        maxBacktests: {type: integer, enum: [200]}
+        bootstrapSeed: {type: integer, enum: [20260828]}
+        bootstrapReplicates: {type: integer, enum: [10000]}
+        eventHorizons: {type: array, prefixItems: [{const: 1}, {const: 5}, {const: 10}, {const: 20}, {const: 40}], minItems: 5, maxItems: 5}
+        dedupeSessions: {type: integer, enum: [40]}
+        reportFormats: {type: array, items: {type: string, enum: [json, markdown_zh, markdown_en, pdf_zh, pdf_en]}}
+
+    CategoryStudyValidationRequest:
+      type: object
+      required: [workflowRunId, goal, strategyType, strategy, name, hypothesis]
+      properties:
+        workflowRunId: {type: string}
+        goal: {type: string}
+        strategyType: {type: string, enum: [trend, mean_reversion, momentum_breakout, island_reversal, double_bottom, support_resistance]}
+        strategy: {$ref: "#/components/schemas/FreeFormObject"}
+        name: {type: string}
+        hypothesis: {type: string}
         basketId: {type: [string, "null"], format: uuid}
-        symbols:
-          type: array
-          items: {type: string}
+        symbols: {type: array, items: {type: string}}
+        universePolicy: {oneOf: [{$ref: "#/components/schemas/PointInTimeUniversePolicy"}, {type: "null"}]}
+        validationProtocol: {oneOf: [{$ref: "#/components/schemas/SupportResistanceValidationProtocol"}, {type: "null"}]}
         inSample: {$ref: "#/components/schemas/DateWindow"}
         outOfSample: {$ref: "#/components/schemas/DateWindow"}
-        parameterGrid:
-          type: object
-          additionalProperties:
-            type: array
-            minItems: 1
-        costScenarios:
-          type: array
-          minItems: 2
-          maxItems: 5
-          items: {$ref: "#/components/schemas/CostScenario"}
+        costScenarios: {type: array, minItems: 2, maxItems: 5, items: {$ref: "#/components/schemas/CostScenario"}}
         initialCash: {type: number, exclusiveMinimum: 0}
         benchmarkSymbol: {type: [string, "null"]}
-        stopPolicy:
-          oneOf:
-            - {$ref: "#/components/schemas/ExperimentStopPolicy"}
-            - {type: "null"}
+        stopPolicy: {oneOf: [{$ref: "#/components/schemas/ExperimentStopPolicy"}, {type: "null"}]}
+        searchPolicy: {$ref: "#/components/schemas/FreeFormObject"}
+        initialCandidates: {type: array, minItems: 1, maxItems: 5, items: {$ref: "#/components/schemas/FreeFormObject"}}
 
-    ExperimentCreate:
+    CategoryStudyValidation:
+      type: object
+      required: [valid, normalizedStrategy, normalizedSpec, firstRoundTrialCount, maximumTrialCount, universeSymbols, universeSummary, proposalHash]
+      properties:
+        valid: {type: boolean}
+        normalizedStrategy: {$ref: "#/components/schemas/StrategyCreate"}
+        normalizedSpec: {$ref: "#/components/schemas/FreeFormObject"}
+        firstRoundTrialCount: {type: integer, maximum: 200}
+        maximumTrialCount: {type: integer, maximum: 200}
+        universeSymbols: {type: array, items: {type: string}}
+        universeSummary: {$ref: "#/components/schemas/FreeFormObject"}
+        proposalHash: {type: string}
+        warnings: {type: array, items: {type: string}}
+
+    CategoryStudyCreate:
       type: object
       required: [workflowRunId, spec]
       properties:
         workflowRunId: {type: string}
-        spec: {$ref: "#/components/schemas/ExperimentSpec"}
+        spec: {$ref: "#/components/schemas/FreeFormObject"}
 
-    ExperimentValidation:
+    ExperimentRoundSubmit:
       type: object
-      required: [valid, trialCount, normalizedSpec, universeSymbols, warnings, estimatedCost]
+      required: [workflowRunId, roundOrdinal, candidates]
       properties:
-        valid: {type: boolean}
-        trialCount: {type: integer, maximum: 50}
-        normalizedSpec: {$ref: "#/components/schemas/ExperimentSpec"}
-        universeSymbols:
-          type: array
-          items: {type: string}
-        warnings:
-          type: array
-          items: {type: string}
-        estimatedCost:
-          type: object
-          required: [backtestRuns, maxConcurrentTrials, llmAnalysisCalls]
-          properties:
-            backtestRuns: {type: integer}
-            maxConcurrentTrials: {type: integer}
-            llmAnalysisCalls: {type: integer}
-            maxDurationSeconds: {type: [integer, "null"]}
-            tokenBudget: {type: [integer, "null"]}
+        workflowRunId: {type: string}
+        roundOrdinal: {type: integer, minimum: 2, maximum: 5}
+        candidates: {type: array, minItems: 1, maxItems: 5, items: {$ref: "#/components/schemas/FreeFormObject"}}
+
+    ControllerFailure:
+      type: object
+      required: [workflowRunId, code, message]
+      properties:
+        workflowRunId: {type: string}
+        code: {type: string, enum: [model_output_invalid, provider_unavailable, controller_callback_failed]}
+        message: {type: string}
+
+    CandidatePromotion:
+      type: object
+      required: [workflowRunId, candidateIds]
+      properties:
+        workflowRunId: {type: string}
+        candidateIds: {type: array, maxItems: 5, items: {type: string, format: uuid}}
+
+    ExperimentRound:
+      type: object
+      required: [id, experimentId, ordinal, status, proposal, validationIssues, resultSummary]
+      properties:
+        id: {type: string, format: uuid}
+        experimentId: {type: string, format: uuid}
+        ordinal: {type: integer}
+        status: {type: string}
+        proposal: {$ref: "#/components/schemas/FreeFormObject"}
+        validationIssues: {type: array, items: {$ref: "#/components/schemas/FreeFormObject"}}
+        resultSummary: {$ref: "#/components/schemas/FreeFormObject"}
+
+    ExperimentCandidate:
+      type: object
+      required: [id, experimentId, roundId, ordinal, overrides, params, paramsHash, aggregateMetrics]
+      properties:
+        id: {type: string, format: uuid}
+        experimentId: {type: string, format: uuid}
+        roundId: {type: string, format: uuid}
+        ordinal: {type: integer}
+        overrides: {$ref: "#/components/schemas/FreeFormObject"}
+        params: {$ref: "#/components/schemas/FreeFormObject"}
+        paramsHash: {type: string}
+        aggregateMetrics: {$ref: "#/components/schemas/FreeFormObject"}
+        paretoRank: {type: [integer, "null"]}
+        promotedStrategyId: {type: [string, "null"], format: uuid}
 
     ExperimentTokenUsageUpdate:
       type: object
@@ -1607,14 +1952,16 @@ components:
 
     ResearchExperiment:
       type: object
-      required: [id, workflowRunId, status, spec, runManifest, progress, report]
+      required: [id, parentExperimentId, studyKind, workflowRunId, status, spec, runManifest, progress, report]
       properties:
         id: {type: string, format: uuid}
+        parentExperimentId: {type: [string, "null"], format: uuid}
+        studyKind: {type: string}
         workflowRunId: {type: string}
         status:
           type: string
-          enum: [queued, running, completed, partially_failed, failed, cancel_requested, cancelled, data_changed]
-        spec: {$ref: "#/components/schemas/ExperimentSpec"}
+          enum: [queued, running, waiting_agent, completed, partially_failed, failed, cancel_requested, cancelled, data_changed]
+        spec: {$ref: "#/components/schemas/FreeFormObject"}
         runManifest: {$ref: "#/components/schemas/FreeFormObject"}
         progress: {$ref: "#/components/schemas/FreeFormObject"}
         report: {$ref: "#/components/schemas/FreeFormObject"}
@@ -1642,6 +1989,7 @@ components:
         costConfig: {$ref: "#/components/schemas/FreeFormObject"}
         dataFingerprint: {type: [string, "null"]}
         backtestRunId: {type: [string, "null"], format: uuid}
+        candidateId: {type: [string, "null"], format: uuid}
         metrics: {$ref: "#/components/schemas/FreeFormObject"}
         attempt: {type: integer}
         errorCode: {type: [string, "null"]}
@@ -1676,6 +2024,13 @@ components:
         strategy_id:
           type: string
           format: uuid
+        basket_id:
+          type: [string, "null"]
+          format: uuid
+        universe_policy:
+          oneOf:
+            - $ref: "#/components/schemas/PointInTimeUniversePolicy"
+            - {type: "null"}
         start_date:
           type: string
           format: date
@@ -1702,6 +2057,61 @@ components:
           type: number
           minimum: 0
           nullable: true
+        persist_level:
+          type: string
+          enum: [summary, trades, full]
+          default: full
+
+    BacktestRun:
+      allOf:
+        - $ref: "#/components/schemas/StrategyRunSummary"
+        - type: object
+          required: [persist_level, available_details]
+          properties:
+            strategy_name: {type: string, nullable: true}
+            basket_id: {type: string, nullable: true}
+            basket_name: {type: string, nullable: true}
+            runtime_ms: {type: integer, nullable: true}
+            persist_level: {type: string, enum: [summary, trades, full]}
+            available_details:
+              type: array
+              items: {type: string}
+            progress:
+              allOf:
+                - $ref: "#/components/schemas/FreeFormObject"
+              nullable: true
+
+    BacktestSummary:
+      allOf:
+        - $ref: "#/components/schemas/BacktestRun"
+        - type: object
+          required: [transaction_count]
+          properties:
+            latest_snapshot:
+              allOf:
+                - $ref: "#/components/schemas/PortfolioSnapshotRecord"
+              nullable: true
+            transaction_count: {type: integer, minimum: 0}
+
+    SignalPage:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/SignalRecord"}
+        total: {type: integer, minimum: 0}
+        next_cursor: {type: string, nullable: true}
+
+    TransactionPage:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/TransactionRecord"}
+        total: {type: integer, minimum: 0}
+        next_cursor: {type: string, nullable: true}
 
     BacktestResult:
       type: object
@@ -1800,6 +2210,69 @@ components:
             config_snapshot:
               $ref: "#/components/schemas/FreeFormObject"
 
+    SupportResistanceBacktest:
+      type: object
+      required: [run_id, zone_versions, events]
+      properties:
+        run_id: {type: string, format: uuid}
+        materialization:
+          oneOf:
+            - type: object
+              required: [id, cache_key, algorithm_version, detector_params, symbols, coverage_start, coverage_end, source_data_fingerprint, price_semantics, status, statistics]
+              properties:
+                id: {type: string, format: uuid}
+                cache_key: {type: string}
+                algorithm_version: {type: string}
+                detector_params: {$ref: "#/components/schemas/FreeFormObject"}
+                symbols: {type: array, items: {type: string}}
+                coverage_start: {type: string, format: date}
+                coverage_end: {type: string, format: date}
+                source_data_fingerprint: {type: string}
+                price_semantics: {type: string}
+                status: {type: string, enum: [building, completed, failed]}
+                statistics: {$ref: "#/components/schemas/FreeFormObject"}
+                completed_at: {type: [string, "null"], format: date-time}
+            - type: "null"
+        zone_versions:
+          type: array
+          items:
+            type: object
+            required: [id, symbol, zone_key, version, effective_from, role, status, center_price, lower_price, upper_price, atr_width, pivot_count, touch_count, source_metadata]
+            properties:
+              id: {type: string, format: uuid}
+              symbol: {type: string}
+              zone_key: {type: string}
+              version: {type: integer, minimum: 1}
+              effective_from: {type: string, format: date}
+              effective_to: {type: [string, "null"], format: date}
+              role: {type: string, enum: [support, resistance]}
+              status: {type: string}
+              center_price: {type: number}
+              lower_price: {type: number}
+              upper_price: {type: number}
+              atr_width: {type: number}
+              pivot_count: {type: integer}
+              touch_count: {type: integer}
+              source_metadata: {$ref: "#/components/schemas/FreeFormObject"}
+        events:
+          type: array
+          items:
+            type: object
+            required: [id, symbol, event_date, event_type, selected, payload]
+            properties:
+              id: {type: string, format: uuid}
+              symbol: {type: string}
+              event_date: {type: string, format: date}
+              event_type: {type: string}
+              zone_key: {type: [string, "null"]}
+              setup: {type: [string, "null"]}
+              selected: {type: boolean}
+              score: {type: [number, "null"]}
+              posterior_sample_count: {type: [integer, "null"]}
+              lower_price: {type: [number, "null"]}
+              upper_price: {type: [number, "null"]}
+              payload: {$ref: "#/components/schemas/FreeFormObject"}
+
     SignalRecord:
       type: object
       required: [id, run_id, strategy_id, ts, symbol, signal, features]
@@ -1813,6 +2286,10 @@ components:
         strategy_id:
           type: string
           format: uuid
+        instrument_id:
+          type: integer
+          format: int64
+          nullable: true
         ts:
           type: string
           format: date-time
@@ -1846,6 +2323,10 @@ components:
         run_id:
           type: string
           format: uuid
+          nullable: true
+        instrument_id:
+          type: integer
+          format: int64
           nullable: true
         ts:
           type: string
@@ -2129,3 +2610,57 @@ components:
             oneOf:
               - $ref: "#/components/schemas/OrderResponse"
               - $ref: "#/components/schemas/FreeFormObject"
+  /api/backtests/{run_id}/summary:
+    get:
+      tags: [Backtests]
+      summary: Get compact backtest summary
+      operationId: getBacktestSummary
+      x-implementation-status: implemented
+      parameters:
+        - $ref: "#/components/parameters/RunIdPath"
+      responses:
+        "200":
+          description: Exact metrics, persistence availability, progress, and latest snapshot
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BacktestSummary"}
+        "404": {$ref: "#/components/responses/NotFound"}
+
+  /api/backtests/{run_id}/equity:
+    get:
+      tags: [Backtests]
+      summary: Get a deterministic downsampled equity curve
+      operationId: getBacktestEquity
+      x-implementation-status: implemented
+      parameters:
+        - $ref: "#/components/parameters/RunIdPath"
+        - in: query
+          name: max_points
+          required: false
+          schema: {type: integer, minimum: 2, maximum: 5000, default: 1500}
+      responses:
+        "200":
+          description: First/last preserving min/max bucket curve
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/PortfolioSnapshotRecord"}
+        "404": {$ref: "#/components/responses/NotFound"}
+
+  /api/backtests/{run_id}/cancel:
+    post:
+      tags: [Backtests]
+      summary: Request cancellation of a queued or running backtest
+      operationId: cancelBacktest
+      x-implementation-status: implemented
+      parameters:
+        - $ref: "#/components/parameters/RunIdPath"
+      responses:
+        "202":
+          description: Cancellation accepted
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BacktestRun"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}

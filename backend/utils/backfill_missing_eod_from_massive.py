@@ -455,12 +455,12 @@ def _run_feature_refresh(
         start_date.isoformat(),
         "--end-date",
         end_date.isoformat(),
-        "--database-url",
-        database_url,
     ]
     printable = " ".join(command)
+    env = os.environ.copy()
+    env["DATABASE_URL"] = database_url
     print(f"\n[refresh-daily-features] {printable}", flush=True)
-    subprocess.run(command, cwd=REPO_ROOT, check=True)
+    subprocess.run(command, cwd=REPO_ROOT, env=env, check=True)
 
 
 def _run_corporate_action_sync(
@@ -478,12 +478,12 @@ def _run_corporate_action_sync(
         start_date.isoformat(),
         "--end-date",
         end_date.isoformat(),
-        "--database-url",
-        database_url,
     ]
     printable = " ".join(command)
+    env = os.environ.copy()
+    env["DATABASE_URL"] = database_url
     print(f"\n[sync-corporate-actions] {printable}", flush=True)
-    subprocess.run(command, cwd=REPO_ROOT, check=True)
+    subprocess.run(command, cwd=REPO_ROOT, env=env, check=True)
 
 
 def _run_adjusted_price_refresh(
@@ -501,12 +501,12 @@ def _run_adjusted_price_refresh(
         start_date.isoformat(),
         "--end-date",
         end_date.isoformat(),
-        "--database-url",
-        database_url,
     ]
     printable = " ".join(command)
+    env = os.environ.copy()
+    env["DATABASE_URL"] = database_url
     print(f"\n[refresh-adjusted-prices] {printable}", flush=True)
-    subprocess.run(command, cwd=REPO_ROOT, check=True)
+    subprocess.run(command, cwd=REPO_ROOT, env=env, check=True)
 
 
 def main() -> None:

@@ -1,72 +1,68 @@
-# Quant + AgentOps 本地联调
+# Quant and AgentOps Local Integration
 
-Quant Frontend 是策略研发与研究实验的主入口。普通 Quant 功能仍可只启动本仓库；只有 `/research`、`/agent-runs/*` 和新算法 Draft PR 流程需要 AgentOps。
+[中文](agent-research-integration.zh-CN.md) | [Documentation index](README.md)
 
-## 安全边界
+The Quant frontend is the primary entry point for strategy development and research experiments. Ordinary Quant features can run from this repository alone. `/research`, `/agent-runs/*`, and the new-strategy Draft PR flow also require the adjacent AgentOps Control Plane repository.
 
-联合开发时必须关闭 paper scheduler 和订单提交：
+## Safety Boundary
+
+Joint development must disable the paper scheduler and order submission:
 
 ```env
 PAPER_TRADING_SCHEDULER_ENABLED=false
 PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false
 ```
 
-`/api/agent/*` 仅接受 Bearer service token，只暴露 draft strategy 与 research experiment 的校验、创建和取消，不注册 broker、portfolio activation 或 order 工具。不要把 token 写入 workflow input、Artifact 或日志。
+`/api/agent/*` requires a Bearer service token and exposes only draft-strategy and research-experiment validation, creation, cancellation, and experiment usage updates. Broker, portfolio activation, and order tools are not registered. Never put the token in workflow inputs, artifacts, URLs, or logs.
 
-## 首次数据库升级
+GitHub delivery defaults to mock mode. Real delivery is Draft-PR-only, requires an explicit delivery mode and approval, and does not merge or deploy code.
 
-Quant 没有 Alembic。对明确的本地 Quant 数据库应用下面这个 additive SQL 文件，并在执行前确认数据库目标：
+## First Database Upgrade
+
+Quant does not use Alembic. Resolve the exact local Quant database before applying the additive SQL file:
 
 ```bash
+.venv/bin/python backend/utils/preflight_adaptive_research_rollout.py
 psql "$DATABASE_URL" -f backend/utils/create_zzzzz_research_experiments.sql
 ```
 
-该文件以 additive 方式为 `strategies` 增加可空幂等键列和唯一索引，并创建
-`research_experiments`、`experiment_trials` 及其索引；它不删除已有数据。生产式环境仍需单独安排向后兼容的 rollout 与备份。
+The SQL adds the research experiment, round, candidate, and trial structures, including the nullable historical `candidate_id` link. It does not delete existing data. Before rollout, run a read-only preflight and block deployment if any legacy experiment is `queued`, `running`, or `cancel_requested`; production-like rollout still requires an exact target, backup, recovery, and compatibility plan.
 
-## 启动顺序
+AgentOps uses Alembic. Revision `0007` persists external tool runs, `0008` adds workflow token accounting, and `0009` adds structured approval resolution payloads for final Pareto candidate selection. `make dev-agent-all` applies AgentOps migrations but does not silently target or mutate an unknown Quant database.
 
-### 一键启动（推荐）
+## Recommended One-Command Startup
 
-两个仓库已经安装依赖后，在 Quant 仓库执行：
+After both repositories have their dependencies installed, run this from the Quant repository:
 
 ```bash
 make dev-agent-all
 ```
 
-macOS 也可以在 Finder 中双击仓库根目录的 `start-agent-platform.command`。启动器会自动：
+On macOS, `start-agent-platform.command` starts the same topology. The launcher:
 
-1. 查找相邻的 Coding Agent 仓库（也可用 `CODING_AGENT_REPO=/absolute/path` 指定）。
-2. 启动 AgentOps PostgreSQL 并执行 Alembic migration。
-3. 启动 `:8100` Control Plane，创建或更新 Quant Project，并发布三套工作流。
-4. 启动 Quant Backend `:8000`、研究 worker 和 Frontend `:3000`。
-5. 临时生成共享 service token；不写入磁盘或日志。
-6. 强制将 paper scheduler 和订单提交设为 `false`。
+1. Finds a sibling Coding Agent repository, or uses `CODING_AGENT_REPO=/absolute/path`.
+2. Starts AgentOps PostgreSQL and applies Alembic migrations.
+3. Starts the Control Plane on `:8100`, creates or updates the Quant Project, and publishes the engine-category research and new-algorithm Draft PR workflows.
+4. Starts the Quant backend on `:8000`, the research worker, and the frontend on `:3000`.
+5. Generates an ephemeral shared service token without writing it to disk or logs.
+6. Forces both paper scheduler switches to `false`.
 
-默认 `GITHUB_DELIVERY_MODE=mock`，不会创建真实 PR。如需真实 Draft PR，必须显式设置 `GITHUB_DELIVERY_MODE=gh`，并提前确认 `gh auth status`；工作流仍会停在交付审批节点。按 `Ctrl+C` 会停止本次启动的三个应用进程，但保留 AgentOps PostgreSQL 和已有数据。
+Pressing `Ctrl+C` stops the application processes started by the launcher. AgentOps PostgreSQL and existing data remain. Missing dependencies are reported with installation commands; the launcher does not modify lockfiles.
 
-若 Coding Agent 不在自动查找的位置：
+## Manual Startup
 
-```bash
-CODING_AGENT_REPO=/absolute/path/to/coding_agent make dev-agent-all
-```
-
-首次使用前仍需分别安装两个仓库的依赖；启动器发现缺失依赖时会给出对应命令，不会静默修改 lockfile。
-
-### 手动启动
-
-1. 在 AgentOps 仓库启动 PostgreSQL `:15432`，执行 Alembic upgrade，再以 `:8100` 启动 Control Plane。
-2. 在 AgentOps 仓库运行 workflow bootstrap，记录输出的 project ID。
-3. 启动 Quant PostgreSQL `:5432`。
-4. 用同一个非空 service token 启动 Quant backend/frontend：
+1. In AgentOps, start PostgreSQL on `:15432`, apply Alembic migrations, and start the Control Plane on `:8100`.
+2. Bootstrap the Quant workflow templates and record the printed project ID.
+3. Start Quant PostgreSQL on `:5432`.
+4. Start the Quant backend, research worker, and frontend with the same non-empty service token:
 
 ```bash
 QUANT_AGENT_SERVICE_TOKEN='local-only-token' \
-AGENTOPS_PROJECT_ID='<bootstrap 输出>' \
+AGENTOPS_PROJECT_ID='<bootstrap-project-id>' \
 make dev-agent-safe
 ```
 
-AgentOps 对应环境：
+AgentOps requires:
 
 ```env
 QUANT_AGENT_INTEGRATION_ENABLED=true
@@ -74,21 +70,31 @@ QUANT_API_BASE_URL=http://localhost:8000
 QUANT_AGENT_SERVICE_TOKEN=local-only-token
 ```
 
-Quant Frontend 由 `dev-agent-safe` 注入：
+The Quant frontend receives:
 
 ```env
 NEXT_PUBLIC_AGENTOPS_API_BASE_URL=http://localhost:8100
 NEXT_PUBLIC_AGENTOPS_PROJECT_ID=<project-id>
 ```
 
-AgentOps Web Console 是可选高级入口；Quant 主流程不要求启动它。
+The AgentOps Web Console on `:3100` is an optional advanced surface. The Quant research flow does not require it.
 
-## 恢复与限制
+## Stop Policies and Token Synchronization
 
-- AgentOps 将外部工具任务持久化为 `ExternalToolRun`，重启后继续轮询实验。
-- Quant worker 使用 PostgreSQL `FOR UPDATE SKIP LOCKED`，默认并发 2，最多展开 50 个 trial。
-- worker 重启会重排遗留 trial，并清理后复用其 `StrategyRun`，不创建重复回测。
-- 实验创建时固化 universe，以及特征、复权/未复权价格和公司行动的 SHA-256 数据指纹；每个 trial 前复核，漂移后状态为 `data_changed`。
-- 取消会停止领取新 trial；已运行的同步回测安全结束后，实验进入 `cancelled`。
-- 新代码策略只交付 Draft PR。合并并部署、出现在 engine-ready catalog 之前，不能进入研究实验。
-- 稳健性报告是研究证据，不是盈利或实盘安全保证。
+The published Quant research workflow requires `stopPolicy` with at least one time, token, or target-metric condition. AgentOps validates the policy before starting the run, stores `tokenBudget` and cumulative `totalTokens` on `WorkflowRun`, and copies the requested policy exactly into the Quant experiment specification.
+
+The engine-category workflow accepts `support_resistance` without changing the selected type. The planner may vary existing scalar mode switches and numeric `signal.*` / `risk.*` leaves, while Quant rejects any candidate that disables all three entry modes. This does not add portfolio, scheduler, or order permissions.
+
+While the workflow is `waiting_external`, AgentOps periodically sends cumulative usage to the authenticated experiment usage endpoint. Quant records that usage and re-evaluates all stop conditions. A triggered stop records termination evidence, cancels queued trials, and lets already-running synchronous work finish safely. See [Research experiments](research-experiments.md) for exact fields and semantics.
+
+## Recovery and Limits
+
+- AgentOps persists external tool work as `ExternalToolRun`; Control Plane restart resumes `waiting_external` polling.
+- Experiment polling tolerates a bounded number of connection or HTTP 503 failures, configured in AgentOps by `QUANT_TOOL_POLL_MAX_ERRORS`.
+- The Quant worker uses PostgreSQL `FOR UPDATE SKIP LOCKED`, defaults to concurrency 2, and permits at most 5 rounds and 100 actual backtests (defaults: 3/48).
+- Worker restart requeues orphaned trials and reuses their cleaned `StrategyRun` evidence instead of creating duplicate backtests.
+- Creation freezes the universe and a SHA-256 fingerprint of features, adjusted and unadjusted prices, and corporate actions. Drift produces `data_changed`.
+- Cancellation stops new trial claims; already-running synchronous backtests reach a safe boundary before `cancelled`.
+- Policy-stopped and cancelled experiments do not resume queued work after restart.
+- A new code strategy remains in a Draft PR until it is reviewed, merged, deployed, and present in the engine-ready catalog.
+- Robustness reports are research evidence, not proof of profitability or live-trading safety.

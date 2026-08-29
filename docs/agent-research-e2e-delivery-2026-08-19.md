@@ -224,3 +224,46 @@
 参数策略、研究实验、故障恢复、数据漂移、代码策略 mock 和真实 Draft PR 均已完成验收；所有本地测试、compileall、lint、production build、migration 和 workflow schema 校验通过。Broker/order 调用为 0，paper scheduler 与订单提交在整个联合运行期间保持关闭。
 
 真实 [Draft PR #4](https://github.com/zh-lov233r/mini_quant_trading_platform/pull/4) 保持 open、draft、未合并、未部署。该 head 当前没有 GitHub checks；上线前仍需人工 review，建议在合并前补跑或配置远端 CI，并再次确认生产数据库 rollout、服务 token 管理和 paper/live 权限隔离。本报告中的回测和稳健性结果不构成盈利或实盘安全保证。
+
+## 11. 2026-08-25 双入口重构补充验证
+
+本节记录“已有引擎大类研究 / 新算法研究”重构的真实执行过程；不改写前述旧流程验收历史。
+
+### 11.1 环境与 rollout
+
+- Quant 与 Coding Agent 均位于 `codex/quant-agent-research-integration`。
+- rollout preflight 在变更前读到 10 个历史实验、0 个非终态旧实验，因此未阻止 additive schema rollout。
+- Quant schema 已先备份到本机临时文件，再新增 `experiment_rounds`、`experiment_candidates` 和 nullable `experiment_trials.candidate_id`。
+- AgentOps Alembic 已升级到 `0009`，Approval resolution payload 已持久化。
+- 联合启动全程显示 paper scheduler 与 paper order submission 均为 disabled；AgentOps 注册工具不含 broker/order 操作。
+
+### 11.2 失败过程与修复
+
+| UTC 顺序 | WorkflowRun | 实际结果 | 修复 |
+| --- | --- | --- | --- |
+| 1 | `6a57555d-c62d-4c49-84ee-581a6bf22787` | `category_plan` 因 `invalid_json_schema` 失败 | 将任意键参数对象改为 strict `overrideItems` 数组，并在受控工具边界转换为 Quant 参数映射 |
+| 2 | `b4bece8c-25ab-492e-b17c-4b91cba14aea` | Quant 拒绝不存在的 `signal.fast_window` | 增加初始提案最多两次有界修复，并把 catalog 默认参数传给 Planner |
+| 3 | `0683784a-1bb4-44a9-9575-dc9836307dcd` | 前端字段名错误导致 `strategyDefaults={}` | 改为 catalog 的真实 `defaults` 字段 |
+| 4 | `c4e4c6fb-cb66-4b65-abbc-42a97b2c2fe1` | 两次修复后仍包含数据库不支持的 EMA30 | 同步 `/api/strategies/feature-support` 到 Planner，并明确实际 trial 展开预算公式 |
+| 5 | `1a4469aa-fecb-4cfc-9df6-3d9f2f59d9e5` | 完整闭环完成 | 无需进一步修复 |
+
+### 11.3 成功闭环证据
+
+| 资源 | ID | 结果 |
+| --- | --- | --- |
+| WorkflowRun | `1a4469aa-fecb-4cfc-9df6-3d9f2f59d9e5` | `completed`；两次审批均从 Quant Frontend 完成 |
+| 自动基础 draft | `d90ef5cd-a708-4174-b9cf-deaa07906876` | `draft`、`engine_ready=true`；无 allocation/order |
+| ResearchExperiment | `8aec87c3-9f5c-41da-8f9b-094c31974c87` | `completed`；2 candidates × 2 samples × 2 costs = 8/8 trials |
+| 数据指纹 | `da0f952c20ed1b128199650d87b644510f20758657d706002cb073e881831813` | AAPL/MSFT 固化数据快照 |
+| 最终推广 | 同一 WorkflowRun 的 `quant.promote_candidates` ToolRun | 空 `candidateIds` 正常完成，未重复创建 draft |
+
+该最小场景的所有 trial 都没有产生交易，因此 `oos_sharpe` 为缺失值。候选按设计保留指标和 Backtest 证据，但不进入 Pareto frontier，并以 `no_valid_candidates` 停止；分析节点仍完成，未伪造 Sharpe 或盈利结论。
+
+### 11.4 自动化验证与结论
+
+- Quant：60 个 backend tests、compileall、frontend lint、frontend production build 全部通过。
+- Coding Agent：91 个 control-plane tests、compileall、Web Console typecheck/build、Alembic `0009` 和 workflow JSON 校验全部通过。
+- OpenAPI 已删除旧有限网格 mutation 契约；旧实验、trial、report 与 Backtest 仍可只读。
+- 浏览器已验证 `/research` 只有两个入口、动态大类 catalog、实验审批、进度、最终空选择和历史深链。
+
+本次补充验证结论：`PARTIAL`。实现和单轮完整闭环已通过；尚未完成一个真实的三轮浏览器 E2E，也未在本次补充运行中重新执行 provider 故障、重启、取消和数据漂移演练（这些故障语义已有前述历史 E2E 与自动化测试证据）。回测结果不构成盈利或实盘安全证明。

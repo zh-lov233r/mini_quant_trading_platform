@@ -15,6 +15,19 @@ from sqlalchemy import bindparam, delete, select, text
 from sqlalchemy.orm import Session
 
 from src.models.tables import Signal, Strategy, StrategyRun
+from src.services.support_resistance_service import (
+    SupportResistanceState,
+    SupportResistanceSymbolState,
+    advance_symbol as advance_support_resistance_symbol,
+)
+from src.services.support_resistance_persistence_service import (
+    SupportResistanceMaterializationBuildError,
+    find_reusable_materialization,
+    hydrate_state_from_materialization,
+    persist_support_resistance_run,
+    record_failed_materialization_after_rollback,
+    source_data_fingerprint,
+)
 from src.services.strategy_registry import build_runtime_payload
 
 
@@ -123,6 +136,7 @@ class SignalEvent:
     reason: str
     score: float | None = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    instrument_id: int | None = None
 
 
 @dataclass(slots=True)
@@ -298,6 +312,11 @@ def generate_and_persist_signals_for_trade_date(
     active_strategies = list_active_strategies(db)
     active_runtimes = _list_engine_ready_runtimes_from_strategies(active_strategies)
     recent_bar_count, recent_bar_lookback_days = _recent_history_window_for_runtimes(active_runtimes)
+    support_resistance_source_fingerprint = (
+        source_data_fingerprint(db)
+        if any(runtime["strategy_type"] == "support_resistance" for runtime in active_runtimes)
+        else None
+    )
     snapshots = load_feature_market_data(
         db,
         trade_date,
@@ -317,7 +336,39 @@ def generate_and_persist_signals_for_trade_date(
         if handler is None:
             continue
 
-        strategy_signals = handler(runtime, snapshots)
+        replay_state: SupportResistanceState | None = None
+        replay_symbols: list[str] = []
+        replay_dates: list[date] = []
+        if runtime["strategy_type"] == "support_resistance":
+            replay_symbols = _resolve_strategy_universe(runtime["params"]["universe"], snapshots)
+            for symbol in replay_symbols:
+                for bar in (snapshots.get(symbol) or {}).get("recent_bars") or []:
+                    value = bar.get("dt_ny")
+                    if isinstance(value, datetime):
+                        replay_dates.append(value.date())
+                    elif isinstance(value, date):
+                        replay_dates.append(value)
+            coverage_start = min(replay_dates) if replay_dates else trade_date
+            reusable = find_reusable_materialization(
+                db,
+                runtime=runtime,
+                symbols=replay_symbols,
+                coverage_start=coverage_start,
+                coverage_end=trade_date,
+                expected_data_fingerprint=support_resistance_source_fingerprint,
+            )
+            replay_state = (
+                hydrate_state_from_materialization(db, reusable)
+                if reusable is not None
+                else SupportResistanceState()
+            )
+            strategy_signals = _support_resistance_replay_handler_with_state(
+                runtime,
+                snapshots,
+                replay_state,
+            )
+        else:
+            strategy_signals = handler(runtime, snapshots)
         run = _get_or_create_signal_run(
             db=db,
             strategy=strategy,
@@ -328,6 +379,38 @@ def generate_and_persist_signals_for_trade_date(
         )
         _replace_signals_for_run(db, run, strategy, strategy_signals)
 
+        support_resistance_materialization = None
+        if runtime["strategy_type"] == "support_resistance":
+            assert replay_state is not None
+            try:
+                support_resistance_materialization = persist_support_resistance_run(
+                    db,
+                    run=run,
+                    runtime=runtime,
+                    state=replay_state,
+                    symbols=replay_symbols,
+                    coverage_start=min(replay_dates) if replay_dates else trade_date,
+                    coverage_end=trade_date,
+                    expected_data_fingerprint=support_resistance_source_fingerprint,
+                )
+            except SupportResistanceMaterializationBuildError as exc:
+                db.rollback()
+                record_failed_materialization_after_rollback(db, exc)
+                failed_run = _get_or_create_signal_run(
+                    db=db,
+                    strategy=strategy,
+                    mode=mode,
+                    trade_date=trade_date,
+                    config_snapshot=runtime["params"],
+                    started_at=started_at,
+                )
+                _replace_signals_for_run(db, failed_run, strategy, [])
+                failed_run.status = "failed"
+                failed_run.finished_at = datetime.now(timezone.utc)
+                failed_run.error_message = str(exc)
+                db.commit()
+                raise
+
         run.status = "completed"
         run.started_at = run.started_at or started_at
         run.finished_at = datetime.now(timezone.utc)
@@ -335,6 +418,11 @@ def generate_and_persist_signals_for_trade_date(
             "signal_count": len(strategy_signals),
             "symbols_requested": runtime["params"]["universe"].get("symbols", []),
             "symbols_signaled": sorted({event.symbol for event in strategy_signals}),
+            "support_resistance_materialization_id": (
+                str(support_resistance_materialization.id)
+                if support_resistance_materialization is not None
+                else None
+            ),
         }
         db.flush()
 
@@ -451,6 +539,7 @@ def required_recent_bar_count_for_runtime(runtime_strategy: RuntimeStrategy) -> 
     recent_bar_count = RECENT_BAR_COUNT
     strategy_type = runtime_strategy.get("strategy_type")
     signal_cfg = runtime_strategy.get("params", {}).get("signal", {}) or {}
+    risk_cfg = runtime_strategy.get("params", {}).get("risk", {}) or {}
 
     if strategy_type == "island_reversal":
         downtrend_lookback = _safe_positive_int(signal_cfg.get("downtrend_lookback"), 0)
@@ -472,10 +561,27 @@ def required_recent_bar_count_for_runtime(runtime_strategy: RuntimeStrategy) -> 
             downtrend_lookback + max_bottom_spacing + left_bottom_before_bars + max_breakout_wait + retest_window + 10,
         )
 
+    if strategy_type == "support_resistance":
+        detection_window = _safe_positive_int(signal_cfg.get("detection_window"), 120)
+        pivot_right = _safe_positive_int(signal_cfg.get("pivot_right_bars"), 3)
+        score_window = _safe_positive_int(signal_cfg.get("score_outcome_window"), 20)
+        retest_window = _safe_positive_int(signal_cfg.get("retest_window"), 10)
+        max_holding_days = _safe_positive_int(risk_cfg.get("max_holding_days"), 40)
+        return max(
+            recent_bar_count,
+            detection_window + pivot_right + score_window + retest_window + 10,
+            max_holding_days + 5,
+        )
+
+    if strategy_type in {"trend", "mean_reversion", "momentum_breakout"}:
+        return 0
+
     return recent_bar_count
 
 
 def required_recent_bar_lookback_days(recent_bar_count: int) -> int:
+    if recent_bar_count <= 0:
+        return 0
     estimated_calendar_days = int(recent_bar_count * 1.8) + 30
     return max(RECENT_BAR_LOOKBACK_DAYS, estimated_calendar_days)
 
@@ -1548,26 +1654,155 @@ def _resolve_island_reversal_action(
 
 def build_stateful_backtest_signal_state(
     runtime_strategy: RuntimeStrategy,
-) -> DoubleBottomBacktestState | None:
+) -> DoubleBottomBacktestState | SupportResistanceState | None:
     if runtime_strategy.get("strategy_type") == "double_bottom":
         return DoubleBottomBacktestState()
+    if runtime_strategy.get("strategy_type") == "support_resistance":
+        return SupportResistanceState()
     return None
 
 
 def generate_stateful_backtest_signals(
     runtime_strategy: RuntimeStrategy,
     market_data_by_symbol: MarketDataBySymbol,
-    state: DoubleBottomBacktestState,
+    state: DoubleBottomBacktestState | SupportResistanceState,
     *,
     emit_signals: bool = True,
 ) -> list[SignalEvent]:
-    if runtime_strategy.get("strategy_type") != "double_bottom":
-        return []
-    return _double_bottom_backtest_handler(
+    strategy_type = runtime_strategy.get("strategy_type")
+    if strategy_type == "double_bottom" and isinstance(state, DoubleBottomBacktestState):
+        return _double_bottom_backtest_handler(
+            runtime_strategy,
+            market_data_by_symbol,
+            state,
+            emit_signals=emit_signals,
+        )
+    if strategy_type == "support_resistance" and isinstance(state, SupportResistanceState):
+        return _support_resistance_backtest_handler(
+            runtime_strategy,
+            market_data_by_symbol,
+            state,
+            emit_signals=emit_signals,
+        )
+    return []
+
+
+def _support_resistance_backtest_handler(
+    runtime_strategy: RuntimeStrategy,
+    market_data_by_symbol: MarketDataBySymbol,
+    state: SupportResistanceState,
+    *,
+    emit_signals: bool = True,
+) -> list[SignalEvent]:
+    params = runtime_strategy["params"]
+    universe = _resolve_strategy_universe(params["universe"], market_data_by_symbol)
+    signals: list[SignalEvent] = []
+    for symbol in universe:
+        snapshot = market_data_by_symbol.get(symbol)
+        if not snapshot:
+            continue
+        symbol_state = state.symbols.setdefault(symbol, SupportResistanceSymbolState())
+        decision = advance_support_resistance_symbol(
+            symbol_state,
+            snapshot,
+            params["signal"],
+            params["risk"],
+            emit_signals=emit_signals,
+        )
+        if decision is not None:
+            signals.append(_support_resistance_signal_event(runtime_strategy, symbol, snapshot, decision))
+    return signals
+
+
+def _support_resistance_handler(
+    runtime_strategy: RuntimeStrategy,
+    market_data_by_symbol: MarketDataBySymbol,
+) -> list[SignalEvent]:
+    return _support_resistance_replay_handler_with_state(
+        runtime_strategy,
+        market_data_by_symbol,
+        SupportResistanceState(),
+    )
+
+
+def generate_support_resistance_replay_signals(
+    runtime_strategy: RuntimeStrategy,
+    market_data_by_symbol: MarketDataBySymbol,
+    state: SupportResistanceState,
+) -> list[SignalEvent]:
+    """Public paper-signal entrypoint that shares the causal replay state machine."""
+    return _support_resistance_replay_handler_with_state(
         runtime_strategy,
         market_data_by_symbol,
         state,
-        emit_signals=emit_signals,
+    )
+
+
+def _support_resistance_replay_handler_with_state(
+    runtime_strategy: RuntimeStrategy,
+    market_data_by_symbol: MarketDataBySymbol,
+    state: SupportResistanceState,
+) -> list[SignalEvent]:
+    params = runtime_strategy["params"]
+    universe = _resolve_strategy_universe(params["universe"], market_data_by_symbol)
+    signals: list[SignalEvent] = []
+    for symbol in universe:
+        snapshot = market_data_by_symbol.get(symbol)
+        if not snapshot:
+            continue
+        symbol_state = state.symbols.setdefault(symbol, SupportResistanceSymbolState())
+        history = list(snapshot.get("recent_bars") or [])
+        snapshot_date = snapshot.get("dt_ny")
+        if not history or history[-1].get("dt_ny") != snapshot_date:
+            history.append(snapshot)
+        decision = None
+        for index, raw_bar in enumerate(history):
+            replay_snapshot = dict(raw_bar)
+            is_last = index == len(history) - 1
+            if is_last:
+                replay_snapshot.update(
+                    {
+                        "position": snapshot.get("position"),
+                        "avg_entry_price": snapshot.get("avg_entry_price"),
+                        "position_holding_days": snapshot.get("position_holding_days"),
+                        "entry_signal_features": snapshot.get("entry_signal_features"),
+                    }
+                )
+            decision = advance_support_resistance_symbol(
+                symbol_state,
+                replay_snapshot,
+                params["signal"],
+                params["risk"],
+                emit_signals=is_last,
+            )
+        if decision is not None:
+            signals.append(_support_resistance_signal_event(runtime_strategy, symbol, snapshot, decision))
+    return signals
+
+
+def _support_resistance_signal_event(
+    runtime_strategy: RuntimeStrategy,
+    symbol: str,
+    snapshot: MarketSnapshot,
+    decision: dict[str, Any],
+) -> SignalEvent:
+    return SignalEvent(
+        strategy_id=runtime_strategy["strategy_id"],
+        ts=snapshot.get("ts") or datetime.now(timezone.utc),
+        symbol=symbol,
+        action=decision["action"],
+        reason=decision["reason"],
+        score=decision.get("score"),
+        metadata={
+            "close": snapshot.get("close"),
+            "open": snapshot.get("open"),
+            "high": snapshot.get("high"),
+            "low": snapshot.get("low"),
+            "atr_14": snapshot.get("atr_14"),
+            "position": float(snapshot.get("position", 0) or 0.0),
+            "avg_entry_price": _safe_float_or_none(snapshot.get("avg_entry_price")),
+            "support_resistance": decision["support_resistance"],
+        },
     )
 
 
@@ -2643,4 +2878,5 @@ STRATEGY_HANDLERS: dict[str, StrategyHandler] = {
     "momentum_breakout": _momentum_breakout_handler,
     "island_reversal": _island_reversal_handler,
     "double_bottom": _double_bottom_handler,
+    "support_resistance": _support_resistance_handler,
 }

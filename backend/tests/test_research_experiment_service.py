@@ -17,7 +17,12 @@ from fastapi import HTTPException
 from src.core.agent_auth import require_agent_service
 from src.api.research import agent_router as research_agent_router
 from src.api.strategies import agent_router as strategy_agent_router
-from src.schemas.research import ExperimentSpec, ExperimentTokenUsageUpdate
+from src.schemas.research import (
+    CategoryStudyValidationRequest,
+    ExperimentSpec,
+    ExperimentTokenUsageUpdate,
+)
+from src.services.adaptive_research_service import nondominated_sort
 from src.services.research_experiment_service import (
     _commit_trial_and_finalize_experiment,
     _recovery_stop_code,
@@ -317,6 +322,58 @@ class AgentAuthTests(unittest.TestCase):
         }
         self.assertTrue(paths)
         self.assertFalse(any("order" in path or "paper-trading" in path for path in paths))
+
+    def test_old_grid_mutation_routes_are_removed(self):
+        methods_by_path = {
+            route.path: set(route.methods or set())
+            for route in research_agent_router.routes
+        }
+        self.assertNotIn("/api/agent/research/experiments/validate", methods_by_path)
+        self.assertNotIn("/api/agent/research/experiments", methods_by_path)
+        self.assertIn("/api/agent/research/category-studies/validate", methods_by_path)
+        self.assertIn("/api/agent/research/category-studies", methods_by_path)
+
+
+class AdaptiveResearchContractTests(unittest.TestCase):
+    def test_selected_strategy_type_cannot_be_changed(self):
+        payload = {
+            "workflowRunId": "workflow-1",
+            "goal": "Research trend",
+            "strategyType": "trend",
+            "strategy": {"name": "Draft", "description": "Draft", "strategyType": "mean_reversion", "overrides": {}},
+            "name": "Study",
+            "hypothesis": "Test",
+            "symbols": ["AAPL"],
+            "inSample": {"startDate": "2020-01-01", "endDate": "2021-01-01"},
+            "outOfSample": {"startDate": "2022-01-01", "endDate": "2023-01-01"},
+            "costScenarios": [{"name": "base"}, {"name": "stress"}],
+            "searchPolicy": {"maxRounds": 3, "maxTrials": 48, "objectives": [
+                {"metric": "oos_total_return", "direction": "maximize"},
+                {"metric": "oos_max_drawdown", "direction": "minimize"},
+            ]},
+            "initialCandidates": [{"overrides": {"risk.position_size_pct": 0.1}, "rationale": "base"}],
+        }
+        with self.assertRaisesRegex(ValueError, "cannot change"):
+            CategoryStudyValidationRequest.model_validate(payload)
+
+    def test_pareto_sort_handles_directions_ties_and_missing_metrics(self):
+        objectives = [
+            {"metric": "oos_total_return", "direction": "maximize"},
+            {"metric": "oos_max_drawdown", "direction": "minimize"},
+        ]
+        ranks = nondominated_sort(
+            [
+                ("a", {"oos_total_return": 0.10, "oos_max_drawdown": 0.20}),
+                ("b", {"oos_total_return": 0.12, "oos_max_drawdown": 0.25}),
+                ("c", {"oos_total_return": 0.08, "oos_max_drawdown": 0.30}),
+                ("d", {"oos_total_return": None, "oos_max_drawdown": 0.10}),
+            ],
+            objectives,
+        )
+        self.assertEqual(1, ranks["a"])
+        self.assertEqual(1, ranks["b"])
+        self.assertEqual(2, ranks["c"])
+        self.assertIsNone(ranks["d"])
 
 
 class StrategyIdempotencyTests(unittest.TestCase):

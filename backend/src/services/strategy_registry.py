@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 import json
 import re
 from typing import Any, Dict, Iterable
@@ -12,9 +13,62 @@ ENGINE_SUPPORTED_TYPES = {
     "momentum_breakout",
     "island_reversal",
     "double_bottom",
+    "support_resistance",
 }
 _INDICATOR_PATTERN = re.compile(r"^(EMA|SMA)(\d+)$", re.IGNORECASE)
 MEAN_REVERSION_SUPPORTED_LOOKBACK_WINDOWS = (5, 10, 20)
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyDataRequirements:
+    current_fields: tuple[str, ...]
+    previous_fields: tuple[str, ...] = ()
+    history_fields: tuple[str, ...] = ()
+    history_length: int = 0
+    signal_metadata_fields: tuple[str, ...] = ()
+
+
+_OHLCV = ("open", "high", "low", "close", "volume")
+STRATEGY_DATA_REQUIREMENTS: dict[str, StrategyDataRequirements] = {
+    "trend": StrategyDataRequirements(
+        current_fields=("open", "close", "volume", "volume_sma_20", "atr_14", "ema_15", "sma_200"),
+        previous_fields=("ema_15", "sma_200"),
+        signal_metadata_fields=("close", "volume", "volume_sma_20", "atr_14", "ema_15", "sma_200"),
+    ),
+    "mean_reversion": StrategyDataRequirements(
+        current_fields=("open", "close", "atr_14", "zscore_5", "zscore_10", "zscore_20"),
+        signal_metadata_fields=("close", "atr_14", "zscore_5", "zscore_10", "zscore_20"),
+    ),
+    "momentum_breakout": StrategyDataRequirements(
+        current_fields=("open", "close", "volume", "volume_sma_20", "ret_20d", "atr_14"),
+        signal_metadata_fields=("close", "volume", "volume_sma_20", "ret_20d", "atr_14"),
+    ),
+    "island_reversal": StrategyDataRequirements(
+        current_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
+        history_fields=(*_OHLCV, "atr_14", "volume_sma_20", "ret_60d"),
+        history_length=90,
+        signal_metadata_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
+    ),
+    "double_bottom": StrategyDataRequirements(
+        current_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
+        history_fields=(*_OHLCV, "atr_14", "volume_sma_20", "ret_60d"),
+        history_length=150,
+        signal_metadata_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
+    ),
+    "support_resistance": StrategyDataRequirements(
+        current_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
+        history_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
+        history_length=160,
+        signal_metadata_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
+    ),
+}
+
+
+def strategy_data_requirements(strategy_type: str) -> StrategyDataRequirements:
+    try:
+        return STRATEGY_DATA_REQUIREMENTS[str(strategy_type).strip().lower()]
+    except KeyError as exc:
+        raise ValueError(f"unsupported strategy type: {strategy_type}") from exc
 
 TREND_DEFAULTS: Dict[str, Any] = {
     "signal": {
@@ -184,6 +238,54 @@ DOUBLE_BOTTOM_DEFAULTS: Dict[str, Any] = {
     },
 }
 
+SUPPORT_RESISTANCE_DEFAULTS: Dict[str, Any] = {
+    "signal": {
+        "support_bounce_enabled": True,
+        "resistance_breakout_enabled": True,
+        "breakout_retest_enabled": True,
+        "pivot_left_bars": 3,
+        "pivot_right_bars": 3,
+        "detection_window": 120,
+        "cluster_radius_atr": 0.75,
+        "zone_half_width_atr": 0.5,
+        "min_touches": 2,
+        "decay_half_life": 60,
+        "max_zones_per_side": 5,
+        "bounce_confirmation_atr": 0.25,
+        "breakout_confirmation_atr": 0.5,
+        "breakout_volume_ratio_min": 1.5,
+        "retest_window": 10,
+        "retest_volume_ratio_max": 0.8,
+        "score_outcome_window": 20,
+        "score_target_atr": 3.0,
+        "score_stop_atr": 1.5,
+    },
+    "universe": {
+        "symbols": [],
+        "selection_mode": "all_common_stock",
+    },
+    "risk": {
+        "max_positions": 6,
+        "position_size_pct": 0.15,
+        "stop_loss_atr": 1.5,
+        "max_loss_pct": 0.08,
+        "take_profit_atr": 3.0,
+        "min_reward_risk": 1.5,
+        "max_holding_days": 40,
+    },
+    "execution": {
+        "timeframe": "1d",
+        "rebalance": "daily",
+        "run_at": "close",
+    },
+    "metadata": {
+        "description": "",
+        "schema_version": 1,
+        "algorithm_version": "pivot-atr-v1",
+        "price_semantics": "forward_adjusted_preferred_unadjusted_fallback",
+    },
+}
+
 CUSTOM_DEFAULTS: Dict[str, Any] = {
     "rules": [],
     "universe": {
@@ -249,6 +351,13 @@ def build_strategy_catalog() -> list[Dict[str, Any]]:
             "defaults": copy.deepcopy(DOUBLE_BOTTOM_DEFAULTS),
         },
         {
+            "strategy_type": "support_resistance",
+            "label": "Support / Resistance Zones",
+            "description": "使用已确认 Pivot 与 ATR 聚类识别动态支撑/压力区，并交易反弹、突破和突破回踩。",
+            "engine_ready": True,
+            "defaults": copy.deepcopy(SUPPORT_RESISTANCE_DEFAULTS),
+        },
+        {
             "strategy_type": "custom",
             "label": "Custom Config",
             "description": "自定义 JSON/DSL 策略定义。建议存储规则，不要直接存储可执行代码。",
@@ -282,6 +391,8 @@ def normalize_strategy_params(
         normalized = _normalize_island_reversal_params(raw)
     elif strategy_type == "double_bottom":
         normalized = _normalize_double_bottom_params(raw)
+    elif strategy_type == "support_resistance":
+        normalized = _normalize_support_resistance_params(raw)
     elif strategy_type == "custom":
         normalized = _normalize_custom_params(raw)
     else:
@@ -342,6 +453,17 @@ def is_engine_ready(strategy_type: str, params: Dict[str, Any]) -> bool:
             and signal.get("bottom_tolerance_pct")
             and signal.get("breakout_volume_ratio_min")
             and signal.get("retest_window")
+        )
+    if strategy_type == "support_resistance":
+        return bool(
+            signal.get("detection_window")
+            and signal.get("pivot_left_bars")
+            and signal.get("pivot_right_bars")
+            and (
+                signal.get("support_bounce_enabled")
+                or signal.get("resistance_breakout_enabled")
+                or signal.get("breakout_retest_enabled")
+            )
         )
     return False
 
@@ -425,6 +547,16 @@ def required_feature_keys(strategy_type: str, params: Dict[str, Any]) -> list[st
             "volume_sma_20",
             "atr_14",
             "sma_20",
+        ]
+    if strategy_type == "support_resistance":
+        return [
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "volume_sma_20",
+            "atr_14",
         ]
     return []
 
@@ -1039,6 +1171,136 @@ def _normalize_double_bottom_params(raw: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
+def _normalize_support_resistance_params(raw: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = copy.deepcopy(SUPPORT_RESISTANCE_DEFAULTS)
+    normalized["signal"] = _merge_nested_section(normalized["signal"], raw.get("signal"))
+    normalized["universe"] = _merge_nested_section(
+        normalized["universe"],
+        raw.get("universe"),
+        symbols=raw.get("symbols") or raw.get("universe_symbols"),
+    )
+    normalized["risk"] = _merge_nested_section(normalized["risk"], raw.get("risk"))
+    normalized["execution"] = _merge_nested_section(normalized["execution"], raw.get("execution"))
+    normalized["metadata"] = _merge_nested_section(normalized["metadata"], raw.get("metadata"))
+
+    for field in SUPPORT_RESISTANCE_DEFAULTS["signal"]:
+        if field in raw:
+            normalized["signal"][field] = raw[field]
+    for field in SUPPORT_RESISTANCE_DEFAULTS["risk"]:
+        if field in raw:
+            normalized["risk"][field] = raw[field]
+    for field in ("timeframe", "rebalance", "run_at"):
+        if field in raw:
+            normalized["execution"][field] = raw[field]
+    if "description" in raw:
+        normalized["metadata"]["description"] = raw["description"]
+
+    signal = normalized["signal"]
+    for field in (
+        "support_bounce_enabled",
+        "resistance_breakout_enabled",
+        "breakout_retest_enabled",
+    ):
+        signal[field] = _boolean(signal.get(field), f"signal.{field}")
+    if not any(
+        signal[field]
+        for field in (
+            "support_bounce_enabled",
+            "resistance_breakout_enabled",
+            "breakout_retest_enabled",
+        )
+    ):
+        raise ValueError("at least one support/resistance entry mode must be enabled")
+
+    for field in (
+        "pivot_left_bars",
+        "pivot_right_bars",
+        "detection_window",
+        "min_touches",
+        "decay_half_life",
+        "max_zones_per_side",
+        "retest_window",
+        "score_outcome_window",
+    ):
+        signal[field] = _positive_int(signal.get(field), f"signal.{field}")
+    minimum_window = signal["pivot_left_bars"] + signal["pivot_right_bars"] + 1
+    if signal["detection_window"] < minimum_window:
+        raise ValueError(
+            "signal.detection_window must cover pivot_left_bars + pivot_right_bars + 1"
+        )
+    for field in (
+        "cluster_radius_atr",
+        "zone_half_width_atr",
+        "bounce_confirmation_atr",
+        "breakout_confirmation_atr",
+        "breakout_volume_ratio_min",
+        "retest_volume_ratio_max",
+        "score_target_atr",
+        "score_stop_atr",
+    ):
+        signal[field] = _positive_float(signal.get(field), f"signal.{field}")
+
+    normalized["universe"]["symbols"] = _normalize_symbols(
+        normalized["universe"].get("symbols", [])
+    )
+    normalized["universe"]["selection_mode"] = _normalize_selection_mode(
+        normalized["universe"].get("selection_mode"),
+        normalized["universe"]["symbols"],
+    )
+
+    risk = normalized["risk"]
+    risk["max_positions"] = _positive_int(risk.get("max_positions"), "risk.max_positions")
+    risk["position_size_pct"] = _fraction(
+        risk.get("position_size_pct"), "risk.position_size_pct"
+    )
+    risk["stop_loss_atr"] = _positive_float(
+        risk.get("stop_loss_atr"), "risk.stop_loss_atr"
+    )
+    risk["max_loss_pct"] = _fraction(risk.get("max_loss_pct"), "risk.max_loss_pct")
+    risk["take_profit_atr"] = _positive_float(
+        risk.get("take_profit_atr"), "risk.take_profit_atr"
+    )
+    risk["min_reward_risk"] = _positive_float(
+        risk.get("min_reward_risk"), "risk.min_reward_risk"
+    )
+    risk["max_holding_days"] = _positive_int(
+        risk.get("max_holding_days"), "risk.max_holding_days"
+    )
+
+    normalized["execution"]["timeframe"] = str(normalized["execution"].get("timeframe"))
+    normalized["execution"]["rebalance"] = str(normalized["execution"].get("rebalance"))
+    normalized["execution"]["run_at"] = str(normalized["execution"].get("run_at"))
+    if normalized["execution"]["timeframe"] != "1d":
+        raise ValueError("execution.timeframe must be 1d for support_resistance")
+    if normalized["execution"]["rebalance"] != "daily":
+        raise ValueError("execution.rebalance must be daily for support_resistance")
+    if normalized["execution"]["run_at"] != "close":
+        raise ValueError("execution.run_at must be close for support_resistance")
+    normalized["metadata"]["description"] = str(
+        normalized["metadata"].get("description", "")
+    ).strip()
+    normalized["metadata"]["schema_version"] = _positive_int(
+        normalized["metadata"].get("schema_version", 1),
+        "metadata.schema_version",
+    )
+    algorithm_version = str(
+        normalized["metadata"].get("algorithm_version") or "pivot-atr-v1"
+    )
+    if algorithm_version != "pivot-atr-v1":
+        raise ValueError("metadata.algorithm_version must be pivot-atr-v1")
+    normalized["metadata"]["algorithm_version"] = algorithm_version
+    price_semantics = str(
+        normalized["metadata"].get("price_semantics")
+        or "forward_adjusted_preferred_unadjusted_fallback"
+    )
+    if price_semantics != "forward_adjusted_preferred_unadjusted_fallback":
+        raise ValueError(
+            "metadata.price_semantics must be forward_adjusted_preferred_unadjusted_fallback"
+        )
+    normalized["metadata"]["price_semantics"] = price_semantics
+    return normalized
+
+
 def _normalize_custom_params(raw: Dict[str, Any]) -> Dict[str, Any]:
     normalized = copy.deepcopy(CUSTOM_DEFAULTS)
     if not isinstance(raw, dict):
@@ -1148,6 +1410,12 @@ def _positive_int(value: Any, label: str) -> int:
     if ivalue <= 0:
         raise ValueError(f"{label} must be a positive integer")
     return ivalue
+
+
+def _boolean(value: Any, label: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f"{label} must be a boolean")
 
 
 def _non_negative_int(value: Any, label: str) -> int:

@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from typing import AsyncIterator
+from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 import psycopg
@@ -18,6 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 SPLITS_URL = "https://api.massive.com/stocks/v1/splits"
 DIVIDENDS_URL = "https://api.massive.com/v3/reference/dividends"
+MAX_FETCH_ATTEMPTS = 5
+RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
 
 LOOKUP_INSTRUMENT_SQL = """
 SELECT instrument_id
@@ -163,22 +167,62 @@ def _load_common_stock_symbols(conn: psycopg.Connection) -> set[str]:
         return {row[0] for row in cur.fetchall()}
 
 
-async def _fetch_all(session: aiohttp.ClientSession, url: str, params: dict) -> list[dict]:
+def _safe_url(url: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
+
+async def _fetch_page(
+    session: aiohttp.ClientSession,
+    url: str,
+    params: dict | None,
+) -> dict:
+    for attempt in range(1, MAX_FETCH_ATTEMPTS + 1):
+        try:
+            async with session.get(url, params=params, timeout=180) as response:
+                if response.status == 200:
+                    return await response.json()
+                body = await response.text()
+                if response.status not in RETRYABLE_HTTP_STATUSES:
+                    raise RuntimeError(
+                        f"{response.status} {response.reason} | {_safe_url(url)} | {body[:500]}"
+                    )
+                error = RuntimeError(f"{response.status} {response.reason}")
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            error = exc
+
+        if attempt == MAX_FETCH_ATTEMPTS:
+            raise RuntimeError(
+                f"Massive request failed after {MAX_FETCH_ATTEMPTS} attempts: "
+                f"{_safe_url(url)} ({type(error).__name__})"
+            ) from error
+        delay = min(2 ** (attempt - 1), 16)
+        print(
+            f"Retrying {_safe_url(url)} after {type(error).__name__} "
+            f"attempt={attempt}/{MAX_FETCH_ATTEMPTS} delay_seconds={delay}",
+            flush=True,
+        )
+        await asyncio.sleep(delay)
+
+    raise AssertionError("unreachable")
+
+
+async def _fetch_all(
+    session: aiohttp.ClientSession,
+    url: str,
+    params: dict,
+) -> AsyncIterator[list[dict]]:
     next_url: str | None = url
     next_params: dict | None = params
     page = 0
 
     while next_url:
         page += 1
-        async with session.get(next_url, params=next_params, timeout=180) as response:
-            if response.status != 200:
-                body = await response.text()
-                raise RuntimeError(f"{response.status} {response.reason} | {next_url} | {body}")
-            payload = await response.json()
+        payload = await _fetch_page(session, next_url, next_params)
 
         results = payload.get("results") or []
         print(
-            f"Fetched page {page} from {url} results={len(results)}",
+            f"Fetched page {page} from {_safe_url(url)} results={len(results)}",
             flush=True,
         )
         yield results
