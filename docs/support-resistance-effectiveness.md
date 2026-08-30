@@ -2,7 +2,7 @@
 
 [中文](support-resistance-effectiveness.zh-CN.md) | [Documentation index](README.md)
 
-This workflow validates the pre-registered `pivot-atr-v1` strategy without changing allocations, activating a portfolio, starting the scheduler, or submitting orders. It is separate from ordinary adaptive research and is persisted as a parent `support_resistance_effectiveness_v1` experiment with discovery, annual-fold, and sealed-final-holdout children.
+This workflow independently validates the pre-registered `pivot-slope-atr-v2` strategy without changing allocations, activating a portfolio, starting the scheduler, or submitting orders. It is separate from ordinary adaptive research and is persisted as a parent `support_resistance_effectiveness_v2` experiment with discovery, annual-fold, and sealed-final-holdout children. Results from the retired horizontal `pivot-atr-v1` detector are not evidence for v2 and must not be carried forward.
 
 ## Protocol and universe
 
@@ -27,7 +27,7 @@ The JSON output contains yearly eligible membership and exclusion observations. 
 
 ## Fixed candidate and time budget
 
-Discovery runs `support_bounce`, `resistance_breakout`, and `breakout_retest` independently. Each mode has four frozen detector profiles and three frozen trigger profiles: 12 candidates and 48 trials per mode, 144 trials total. A discovery champion requires positive 2020 base and stress excess returns before deterministic ordering by excess return, Sharpe, drawdown, concentration, and parameter hash.
+Discovery runs `support_bounce`, `resistance_breakout`, and `breakout_retest` independently. Each mode has four frozen v2 detector profiles covering minimum line Pivot count/span, inlier tolerance, slope cap, zone half-width, and recency half-life, plus three frozen trigger profiles: 12 candidates and 48 trials per mode, 144 trials total. A discovery champion requires positive 2020 base and stress excess returns before deterministic ordering by excess return, Sharpe, drawdown, concentration, and parameter hash.
 
 The default plus three mode champions enter the 2021, 2022, and 2023 folds. A calibrated champion must have positive base excess return in all three folds and is frozen by median annual excess return, worst drawdown, stress decay, then hash. The final child runs only out-of-sample trials. It adds `base_cache_replay`, which has the same costs as `base`, so events, signals, transactions, positions, and NAV can be compared exactly. Total scheduled trials are at most 198; unused capacity is never reassigned.
 

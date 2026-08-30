@@ -1491,16 +1491,19 @@ components:
     SupportResistanceStrategyParams:
       type: object
       description: >-
-        Causal confirmed-Pivot plus ATR-clustered zones. Session T evaluates only zones
-        frozen after T-1; signals use adjusted OHLC and fill at the next session open.
+        Causal confirmed-Pivot plus ATR sloped zones. High and low Pivots are fitted
+        independently with a deterministic two-stage weighted Theil-Sen estimator.
+        Session T evaluates only zones frozen after T-1; signals use adjusted OHLC and
+        fill at the next session open.
       required: [signal, universe, risk, execution, metadata]
       properties:
         signal:
           type: object
           required:
             [support_bounce_enabled, resistance_breakout_enabled, breakout_retest_enabled,
-             pivot_left_bars, pivot_right_bars, detection_window, cluster_radius_atr,
-             zone_half_width_atr, min_touches, decay_half_life, max_zones_per_side,
+             pivot_left_bars, pivot_right_bars, detection_window, min_line_pivots,
+             min_line_span_sessions, line_inlier_tolerance_atr,
+             max_abs_slope_atr_per_session, zone_half_width_atr, decay_half_life,
              bounce_confirmation_atr, breakout_confirmation_atr, breakout_volume_ratio_min,
              retest_window, retest_volume_ratio_max, score_outcome_window,
              score_target_atr, score_stop_atr]
@@ -1511,11 +1514,12 @@ components:
             pivot_left_bars: {type: integer, minimum: 1, default: 3}
             pivot_right_bars: {type: integer, minimum: 1, default: 3}
             detection_window: {type: integer, minimum: 7, default: 120}
-            cluster_radius_atr: {type: number, exclusiveMinimum: 0, default: 0.75}
+            min_line_pivots: {type: integer, minimum: 3, default: 3}
+            min_line_span_sessions: {type: integer, minimum: 1, default: 10}
+            line_inlier_tolerance_atr: {type: number, exclusiveMinimum: 0, default: 0.75}
+            max_abs_slope_atr_per_session: {type: number, exclusiveMinimum: 0, default: 0.25}
             zone_half_width_atr: {type: number, exclusiveMinimum: 0, default: 0.5}
-            min_touches: {type: integer, minimum: 1, default: 2}
             decay_half_life: {type: integer, minimum: 1, default: 60}
-            max_zones_per_side: {type: integer, minimum: 1, default: 5}
             bounce_confirmation_atr: {type: number, exclusiveMinimum: 0, default: 0.25}
             breakout_confirmation_atr: {type: number, exclusiveMinimum: 0, default: 0.5}
             breakout_volume_ratio_min: {type: number, exclusiveMinimum: 0, default: 1.5}
@@ -1553,7 +1557,7 @@ components:
           properties:
             description: {type: string}
             schema_version: {type: integer, minimum: 1}
-            algorithm_version: {type: string, const: pivot-atr-v1}
+            algorithm_version: {type: string, const: pivot-slope-atr-v2}
             price_semantics: {type: string, const: forward_adjusted_preferred_unadjusted_fallback}
 
     UniverseConfig:
@@ -1837,7 +1841,7 @@ components:
       type: object
       required: [kind, maxBacktests, bootstrapSeed, bootstrapReplicates, eventHorizons, dedupeSessions, reportFormats]
       properties:
-        kind: {type: string, enum: [support_resistance_effectiveness_v1]}
+        kind: {type: string, enum: [support_resistance_effectiveness_v2]}
         maxBacktests: {type: integer, enum: [200]}
         bootstrapSeed: {type: integer, enum: [20260828]}
         bootstrapReplicates: {type: integer, enum: [10000]}
@@ -2237,7 +2241,7 @@ components:
           type: array
           items:
             type: object
-            required: [id, symbol, zone_key, version, effective_from, role, status, center_price, lower_price, upper_price, atr_width, pivot_count, touch_count, source_metadata]
+            required: [id, symbol, zone_key, version, effective_from, role, status, center_price, lower_price, upper_price, atr_width, anchor_session_index, slope_per_session, fit_residual_atr, projection_end, end_center_price, end_lower_price, end_upper_price, pivot_count, touch_count, source_metadata, geometry]
             properties:
               id: {type: string, format: uuid}
               symbol: {type: string}
@@ -2251,9 +2255,31 @@ components:
               lower_price: {type: number}
               upper_price: {type: number}
               atr_width: {type: number}
+              anchor_session_index: {type: integer}
+              slope_per_session: {type: number}
+              fit_residual_atr: {type: number}
+              projection_end: {type: string, format: date}
+              end_center_price: {type: number}
+              end_lower_price: {type: number}
+              end_upper_price: {type: number}
               pivot_count: {type: integer}
               touch_count: {type: integer}
               source_metadata: {$ref: "#/components/schemas/FreeFormObject"}
+              geometry:
+                oneOf:
+                  - type: object
+                    required: [start_date, end_date, start_center_price, start_lower_price, start_upper_price, end_center_price, end_lower_price, end_upper_price, slope_per_session]
+                    properties:
+                      start_date: {type: string, format: date}
+                      end_date: {type: string, format: date}
+                      start_center_price: {type: number}
+                      start_lower_price: {type: number}
+                      start_upper_price: {type: number}
+                      end_center_price: {type: number}
+                      end_lower_price: {type: number}
+                      end_upper_price: {type: number}
+                      slope_per_session: {type: number}
+                  - type: "null"
         events:
           type: array
           items:
@@ -2360,6 +2386,19 @@ components:
         latest_signal:
           type: string
           nullable: true
+
+    BacktestEquityPoint:
+      type: object
+      required: [ts, equity]
+      properties:
+        ts: {type: string, format: date-time}
+        equity: {type: number}
+        drawdown: {type: number, nullable: true}
+        benchmark_symbol: {type: string, nullable: true}
+        benchmark_close: {type: number, nullable: true}
+        benchmark_equity: {type: number, nullable: true}
+        benchmark_return: {type: number, nullable: true}
+        benchmark_excess_return: {type: number, nullable: true}
 
     PortfolioSnapshotRecord:
       type: object
@@ -2638,6 +2677,11 @@ components:
           name: max_points
           required: false
           schema: {type: integer, minimum: 2, maximum: 5000, default: 1500}
+        - in: query
+          name: shape
+          required: false
+          description: Compact chart points omit positions and full metrics; snapshot preserves the legacy payload.
+          schema: {type: string, enum: [chart, snapshot], default: snapshot}
       responses:
         "200":
           description: First/last preserving min/max bucket curve
@@ -2645,7 +2689,10 @@ components:
             application/json:
               schema:
                 type: array
-                items: {$ref: "#/components/schemas/PortfolioSnapshotRecord"}
+                items:
+                  oneOf:
+                    - {$ref: "#/components/schemas/BacktestEquityPoint"}
+                    - {$ref: "#/components/schemas/PortfolioSnapshotRecord"}
         "404": {$ref: "#/components/responses/NotFound"}
 
   /api/backtests/{run_id}/cancel:

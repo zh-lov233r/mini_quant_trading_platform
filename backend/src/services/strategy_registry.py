@@ -246,11 +246,12 @@ SUPPORT_RESISTANCE_DEFAULTS: Dict[str, Any] = {
         "pivot_left_bars": 3,
         "pivot_right_bars": 3,
         "detection_window": 120,
-        "cluster_radius_atr": 0.75,
+        "min_line_pivots": 3,
+        "min_line_span_sessions": 10,
+        "line_inlier_tolerance_atr": 0.75,
+        "max_abs_slope_atr_per_session": 0.25,
         "zone_half_width_atr": 0.5,
-        "min_touches": 2,
         "decay_half_life": 60,
-        "max_zones_per_side": 5,
         "bounce_confirmation_atr": 0.25,
         "breakout_confirmation_atr": 0.5,
         "breakout_volume_ratio_min": 1.5,
@@ -281,7 +282,7 @@ SUPPORT_RESISTANCE_DEFAULTS: Dict[str, Any] = {
     "metadata": {
         "description": "",
         "schema_version": 1,
-        "algorithm_version": "pivot-atr-v1",
+        "algorithm_version": "pivot-slope-atr-v2",
         "price_semantics": "forward_adjusted_preferred_unadjusted_fallback",
     },
 }
@@ -1216,9 +1217,9 @@ def _normalize_support_resistance_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         "pivot_left_bars",
         "pivot_right_bars",
         "detection_window",
-        "min_touches",
+        "min_line_pivots",
+        "min_line_span_sessions",
         "decay_half_life",
-        "max_zones_per_side",
         "retest_window",
         "score_outcome_window",
     ):
@@ -1229,7 +1230,8 @@ def _normalize_support_resistance_params(raw: Dict[str, Any]) -> Dict[str, Any]:
             "signal.detection_window must cover pivot_left_bars + pivot_right_bars + 1"
         )
     for field in (
-        "cluster_radius_atr",
+        "line_inlier_tolerance_atr",
+        "max_abs_slope_atr_per_session",
         "zone_half_width_atr",
         "bounce_confirmation_atr",
         "breakout_confirmation_atr",
@@ -1284,10 +1286,10 @@ def _normalize_support_resistance_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         "metadata.schema_version",
     )
     algorithm_version = str(
-        normalized["metadata"].get("algorithm_version") or "pivot-atr-v1"
+        normalized["metadata"].get("algorithm_version") or "pivot-slope-atr-v2"
     )
-    if algorithm_version != "pivot-atr-v1":
-        raise ValueError("metadata.algorithm_version must be pivot-atr-v1")
+    if algorithm_version != "pivot-slope-atr-v2":
+        raise ValueError("metadata.algorithm_version must be pivot-slope-atr-v2")
     normalized["metadata"]["algorithm_version"] = algorithm_version
     price_semantics = str(
         normalized["metadata"].get("price_semantics")

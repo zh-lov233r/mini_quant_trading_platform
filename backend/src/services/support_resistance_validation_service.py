@@ -34,7 +34,7 @@ from src.services.strategy_registry import (
 from src.services.strategy_service import validate_strategy_params
 
 
-STUDY_KIND = "support_resistance_effectiveness_v1"
+STUDY_KIND = "support_resistance_effectiveness_v2"
 DISCOVERY_IN = (date(2017, 3, 20), date(2019, 12, 31))
 DISCOVERY_OUT = (date(2020, 1, 2), date(2020, 12, 31))
 ANNUAL_FOLDS = (
@@ -70,9 +70,11 @@ DETECTOR_PROFILES: tuple[tuple[str, dict[str, Any]], ...] = (
             "signal.pivot_left_bars": 3,
             "signal.pivot_right_bars": 3,
             "signal.detection_window": 120,
-            "signal.cluster_radius_atr": 0.75,
+            "signal.min_line_pivots": 3,
+            "signal.min_line_span_sessions": 10,
+            "signal.line_inlier_tolerance_atr": 0.75,
+            "signal.max_abs_slope_atr_per_session": 0.25,
             "signal.zone_half_width_atr": 0.5,
-            "signal.min_touches": 2,
             "signal.decay_half_life": 60,
         },
     ),
@@ -82,9 +84,11 @@ DETECTOR_PROFILES: tuple[tuple[str, dict[str, Any]], ...] = (
             "signal.pivot_left_bars": 2,
             "signal.pivot_right_bars": 2,
             "signal.detection_window": 60,
-            "signal.cluster_radius_atr": 0.5,
+            "signal.min_line_pivots": 3,
+            "signal.min_line_span_sessions": 8,
+            "signal.line_inlier_tolerance_atr": 0.5,
+            "signal.max_abs_slope_atr_per_session": 0.25,
             "signal.zone_half_width_atr": 0.25,
-            "signal.min_touches": 2,
             "signal.decay_half_life": 30,
         },
     ),
@@ -94,9 +98,11 @@ DETECTOR_PROFILES: tuple[tuple[str, dict[str, Any]], ...] = (
             "signal.pivot_left_bars": 5,
             "signal.pivot_right_bars": 5,
             "signal.detection_window": 200,
-            "signal.cluster_radius_atr": 1.0,
+            "signal.min_line_pivots": 4,
+            "signal.min_line_span_sessions": 15,
+            "signal.line_inlier_tolerance_atr": 1.0,
+            "signal.max_abs_slope_atr_per_session": 0.2,
             "signal.zone_half_width_atr": 0.75,
-            "signal.min_touches": 3,
             "signal.decay_half_life": 120,
         },
     ),
@@ -106,9 +112,11 @@ DETECTOR_PROFILES: tuple[tuple[str, dict[str, Any]], ...] = (
             "signal.pivot_left_bars": 3,
             "signal.pivot_right_bars": 3,
             "signal.detection_window": 120,
-            "signal.cluster_radius_atr": 0.5,
+            "signal.min_line_pivots": 4,
+            "signal.min_line_span_sessions": 15,
+            "signal.line_inlier_tolerance_atr": 0.5,
+            "signal.max_abs_slope_atr_per_session": 0.15,
             "signal.zone_half_width_atr": 0.25,
-            "signal.min_touches": 3,
             "signal.decay_half_life": 60,
         },
     ),
@@ -466,7 +474,7 @@ def _default_proposal() -> AdaptiveCandidateProposal:
             "signal.resistance_breakout_enabled": True,
             "signal.breakout_retest_enabled": True,
         },
-        rationale="pre-registered all-mode pivot-atr-v1 default",
+        rationale="pre-registered all-mode pivot-slope-atr-v2 default; validity must be re-established",
     )
 
 

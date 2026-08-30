@@ -42,6 +42,7 @@ from src.services.support_resistance_service import (  # noqa: E402
     SupportResistanceSymbolState,
     Zone,
     SupportResistanceState,
+    _fit_pivot_line,
     _match_zone,
     _rebuild_zones,
     advance_symbol,
@@ -84,9 +85,9 @@ def _zone(key: str, role: str, center: float) -> Zone:
         lower=center - 1.0,
         upper=center + 1.0,
         atr=2.0,
-        pivot_keys=(f"{key}:1", f"{key}:2"),
-        pivot_count=2,
-        touch_count=2,
+        pivot_keys=(f"{key}:1", f"{key}:2", f"{key}:3"),
+        pivot_count=3,
+        touch_count=3,
         first_pivot_date=date(2024, 12, 1),
         last_pivot_date=date(2024, 12, 20),
         valid_from=date(2024, 12, 23),
@@ -138,7 +139,7 @@ class SupportResistanceStrategyTests(unittest.TestCase):
             {
                 "pivot_left_bars": 1,
                 "pivot_right_bars": 2,
-                "min_touches": 2,
+                "min_line_pivots": 3,
                 "detection_window": 20,
             }
         )
@@ -270,8 +271,15 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         self.assertTrue(
             any(event["event_type"] == "breakout" for event in state.events)
         )
+        transition = next(
+            event for event in state.events if event["event_type"] == "role_transition"
+        )
+        self.assertEqual(
+            (transition["from_role"], transition["to_role"], transition["reason"]),
+            ("resistance", "support", "confirmed_breakout"),
+        )
 
-        state.zones["resistance"] = _zone("resistance", "resistance", 101)
+        state.zones["resistance"] = _zone("resistance", "support", 101)
         retest_decision = advance_symbol(
             state,
             _bar(2, high=103, low=101.5, close=102.2, volume=150),
@@ -285,6 +293,47 @@ class SupportResistanceStrategyTests(unittest.TestCase):
             "breakout_retest",
         )
         self.assertTrue(any(event["event_type"] == "retest" for event in state.events))
+        self.assertNotIn("resistance", state.breakouts)
+
+    def test_breakout_signal_freezes_resistance_before_end_of_day_role_change(self) -> None:
+        state = SupportResistanceSymbolState()
+        state.history.append(_bar(0, high=102, low=100, close=101))
+        state.zones["resistance"] = _zone("resistance", "resistance", 101)
+
+        decision = advance_symbol(
+            state,
+            _bar(1, high=104, low=102, close=103, volume=200),
+            self.signal,
+            self.risk,
+        )
+
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["support_resistance"]["zone"]["role"], "resistance")
+        transition = next(
+            event for event in state.events if event["event_type"] == "role_transition"
+        )
+        self.assertEqual((transition["lower"], transition["upper"]), (100.0, 102.0))
+        self.assertEqual(transition["to_role"], "support")
+
+    def test_close_above_resistance_changes_role_without_emitting_breakout_signal(self) -> None:
+        state = SupportResistanceSymbolState()
+        state.history.append(_bar(0, high=102, low=100, close=101))
+        state.zones["resistance"] = _zone("resistance", "resistance", 101)
+
+        decision = advance_symbol(
+            state,
+            _bar(1, high=104, low=102, close=103, volume=100),
+            self.signal,
+            self.risk,
+        )
+
+        self.assertIsNone(decision)
+        self.assertFalse(any(event["event_type"] == "breakout" for event in state.events))
+        transition = next(
+            event for event in state.events if event["event_type"] == "role_transition"
+        )
+        self.assertEqual(transition["reason"], "close_above_resistance")
+        self.assertEqual(transition["to_role"], "support")
 
     def test_entry_zone_is_frozen_for_exit(self) -> None:
         snapshot = _bar(1, high=101, low=96, close=97)
@@ -454,36 +503,107 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         )
         self.assertNotIn("support", state.zones)
 
-    def test_exact_membership_is_reserved_from_neighboring_cluster_match(self) -> None:
-        exact = _zone("exact", "support", 100.0)
-        exact.pivot_keys = ("low:exact-1", "low:exact-2")
-        rebuilt = {}
-        memberships = {
-            exact.pivot_keys,
-            ("low:neighbor-1", "low:neighbor-2"),
-        }
+    def test_weighted_theil_sen_requires_three_pivots_and_filters_extreme_slope(self) -> None:
+        def pivot(index: int, price: float) -> Pivot:
+            return Pivot(
+                pivot_key=f"low:{index}",
+                kind="low",
+                session_index=index,
+                trade_date=date(2025, 1, 1) + timedelta(days=index),
+                confirmed_on=date(2025, 1, 4) + timedelta(days=index),
+                price=price,
+                atr=1.0,
+            )
 
-        neighbor_match = _match_zone(
-            [exact],
-            "low",
-            100.5,
-            1.0,
-            rebuilt,
-            pivot_keys=("low:neighbor-1", "low:neighbor-2"),
-            reserved_memberships=memberships,
+        self.assertIsNone(_fit_pivot_line([pivot(0, 100), pivot(10, 101)], 20, self.signal))
+        fit = _fit_pivot_line(
+            [pivot(0, 100), pivot(10, 101), pivot(20, 102), pivot(15, 110)],
+            20,
+            self.signal,
         )
-        exact_match = _match_zone(
-            [exact],
-            "low",
-            100.0,
-            1.0,
-            rebuilt,
-            pivot_keys=exact.pivot_keys,
-            reserved_memberships=memberships,
+        self.assertIsNotNone(fit)
+        inliers, center, slope, _, _ = fit
+        self.assertEqual([item.session_index for item in inliers], [0, 10, 20])
+        self.assertAlmostEqual(center, 102.0)
+        self.assertAlmostEqual(slope, 0.1)
+        self.assertIsNone(
+            _fit_pivot_line(
+                [pivot(0, 100), pivot(10, 104), pivot(20, 108)],
+                20,
+                self.signal,
+            )
         )
 
-        self.assertIsNone(neighbor_match)
-        self.assertIs(exact_match, exact)
+    def test_independent_low_and_high_lines_keep_at_most_one_zone_per_role(self) -> None:
+        state = SupportResistanceSymbolState(
+            history=[_bar(index, high=106, low=96, close=101) for index in range(21)]
+        )
+        for kind, prices in (("low", (98.0, 99.0, 100.0)), ("high", (106.0, 105.0, 104.0))):
+            for index, price in zip((0, 10, 20), prices):
+                state.pivots.append(
+                    Pivot(
+                        pivot_key=f"{kind}:{index}",
+                        kind=kind,
+                        session_index=index,
+                        trade_date=date(2025, 1, 1) + timedelta(days=index),
+                        confirmed_on=date(2025, 1, 4) + timedelta(days=index),
+                        price=price,
+                        atr=1.0,
+                    )
+                )
+        _rebuild_zones(state, state.history[-1], self.signal)
+        self.assertEqual(len(state.zones), 2)
+        by_role = {zone.role: zone for zone in state.zones.values()}
+        self.assertAlmostEqual(by_role["support"].slope_per_session, 0.1)
+        self.assertAlmostEqual(by_role["resistance"].slope_per_session, -0.1)
+
+    def test_touch_and_role_transition_use_event_day_projected_bounds(self) -> None:
+        state = SupportResistanceSymbolState(history=[_bar(0, high=106, low=104, close=105)])
+        zone = _zone("sloped", "support", 100)
+        zone.anchor_session_index = 0
+        zone.anchor_center = 100
+        zone.anchor_lower = 99
+        zone.anchor_upper = 101
+        zone.slope_per_session = 1
+        state.zones[zone.zone_key] = zone
+
+        advance_symbol(
+            state,
+            _bar(1, high=102.5, low=99.5, close=99.5),
+            self.signal,
+            self.risk,
+            emit_signals=False,
+        )
+
+        touch = next(event for event in state.events if event["event_type"] == "touch")
+        transition = next(
+            event for event in state.events if event["event_type"] == "role_transition"
+        )
+        self.assertEqual((touch["lower"], touch["upper"]), (100.0, 102.0))
+        self.assertEqual((transition["lower"], transition["upper"]), (100.0, 102.0))
+
+    def test_new_high_pivot_line_below_close_is_initialized_as_support(self) -> None:
+        state = SupportResistanceSymbolState(
+            pivots=[
+                Pivot(
+                    pivot_key=f"high:{index}",
+                    kind="high",
+                    session_index=index,
+                    trade_date=date(2025, 1, 1) + timedelta(days=index),
+                    confirmed_on=date(2025, 1, 4) + timedelta(days=index),
+                    price=100.0,
+                    atr=1.0,
+                )
+                for index in (0, 10, 20)
+            ],
+            history=[_bar(index, high=106, low=99, close=105) for index in range(21)],
+        )
+
+        _rebuild_zones(state, state.history[-1], self.signal)
+
+        zone = next(iter(state.zones.values()))
+        self.assertEqual(zone.source_kind, "high")
+        self.assertEqual(zone.role, "support")
 
     def test_zone_prices_match_persisted_numeric_precision(self) -> None:
         state = SupportResistanceSymbolState(
@@ -500,17 +620,26 @@ class SupportResistanceStrategyTests(unittest.TestCase):
                 Pivot(
                     pivot_key="low:2",
                     kind="low",
-                    session_index=1,
-                    trade_date=date(2025, 1, 2),
+                    session_index=10,
+                    trade_date=date(2025, 1, 11),
                     confirmed_on=date(2025, 1, 5),
                     price=100.12345678916,
                     atr=1.23456789016,
                 ),
+                Pivot(
+                    pivot_key="low:3",
+                    kind="low",
+                    session_index=20,
+                    trade_date=date(2025, 1, 21),
+                    confirmed_on=date(2025, 1, 24),
+                    price=100.12345678916,
+                    atr=1.23456789016,
+                ),
             ],
-            history=[_bar(0, high=102, low=99, close=100)],
+            history=[_bar(index, high=102, low=99, close=100) for index in range(21)],
         )
         signal = dict(self.signal)
-        signal.update({"cluster_radius_atr": 1.0, "zone_half_width_atr": 0.5})
+        signal.update({"zone_half_width_atr": 0.5})
         bar = {**state.history[-1], "atr_14": 1.23456789016}
 
         _rebuild_zones(state, bar, signal)
@@ -518,7 +647,7 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         zone = next(iter(state.zones.values()))
         self.assertEqual(zone.center, 100.1234567892)
         self.assertEqual(zone.atr, 1.2345678902)
-        self.assertEqual(normalized_detector_params({"signal": self.signal})["implementation_revision"], 2)
+        self.assertEqual(normalized_detector_params({"signal": self.signal})["implementation_revision"], 6)
 
     def test_paper_holding_period_counts_trading_sessions(self) -> None:
         snapshots = {
@@ -680,6 +809,16 @@ class SupportResistancePersistenceTests(unittest.TestCase):
                 coverage_end=date(2025, 3, 1),
             )
             db.commit()
+            self.assertIsNone(
+                find_reusable_materialization(
+                    db,
+                    runtime=self.runtime,
+                    symbols=["TEST"],
+                    coverage_start=date(2025, 1, 15),
+                    coverage_end=date(2025, 2, 15),
+                    expected_data_fingerprint="fingerprint-a",
+                )
+            )
             second_run = self._new_run(db)
             second = persist_support_resistance_run(
                 db,
@@ -687,8 +826,8 @@ class SupportResistancePersistenceTests(unittest.TestCase):
                 runtime=self.runtime,
                 state=self._state(),
                 symbols=["TEST"],
-                coverage_start=date(2025, 1, 15),
-                coverage_end=date(2025, 2, 15),
+                coverage_start=date(2025, 1, 1),
+                coverage_end=date(2025, 3, 1),
             )
             db.commit()
 

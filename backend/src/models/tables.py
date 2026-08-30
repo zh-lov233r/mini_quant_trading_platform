@@ -473,6 +473,14 @@ class SupportResistanceZoneVersion(Base):
             "effective_to IS NULL OR effective_to >= effective_from",
             name="ck_support_resistance_zone_window",
         ),
+        CheckConstraint(
+            "projection_end >= effective_from",
+            name="ck_support_resistance_zone_projection_window",
+        ),
+        CheckConstraint(
+            "end_lower_price <= end_center_price AND end_center_price <= end_upper_price",
+            name="ck_support_resistance_zone_end_prices",
+        ),
         Index(
             "idx_support_resistance_zone_versions_timeline",
             "materialization_id",
@@ -503,6 +511,13 @@ class SupportResistanceZoneVersion(Base):
     lower_price = Column(Numeric(24, 10), nullable=False)
     upper_price = Column(Numeric(24, 10), nullable=False)
     atr_width = Column(Numeric(24, 10), nullable=False)
+    anchor_session_index = Column(Integer, nullable=False)
+    slope_per_session = Column(Numeric(24, 10), nullable=False)
+    fit_residual_atr = Column(Numeric(20, 10), nullable=False)
+    projection_end = Column(Date, nullable=False)
+    end_center_price = Column(Numeric(24, 10), nullable=False)
+    end_lower_price = Column(Numeric(24, 10), nullable=False)
+    end_upper_price = Column(Numeric(24, 10), nullable=False)
     pivot_count = Column(Integer, nullable=False)
     touch_count = Column(Integer, nullable=False)
     source_metadata = Column(JSON_VARIANT, nullable=False, default=dict)

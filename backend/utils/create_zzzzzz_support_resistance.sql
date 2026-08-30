@@ -44,6 +44,13 @@ CREATE TABLE IF NOT EXISTS support_resistance_zone_versions (
   lower_price NUMERIC(24, 10) NOT NULL,
   upper_price NUMERIC(24, 10) NOT NULL,
   atr_width NUMERIC(24, 10) NOT NULL,
+  anchor_session_index INTEGER NOT NULL,
+  slope_per_session NUMERIC(24, 10) NOT NULL,
+  fit_residual_atr NUMERIC(20, 10) NOT NULL,
+  projection_end DATE NOT NULL,
+  end_center_price NUMERIC(24, 10) NOT NULL,
+  end_lower_price NUMERIC(24, 10) NOT NULL,
+  end_upper_price NUMERIC(24, 10) NOT NULL,
   pivot_count INTEGER NOT NULL,
   touch_count INTEGER NOT NULL,
   source_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -57,7 +64,11 @@ CREATE TABLE IF NOT EXISTS support_resistance_zone_versions (
   CONSTRAINT ck_support_resistance_zone_status
     CHECK (status IN ('active', 'expired', 'broken', 'transformed')),
   CONSTRAINT ck_support_resistance_zone_window
-    CHECK (effective_to IS NULL OR effective_to >= effective_from)
+    CHECK (effective_to IS NULL OR effective_to >= effective_from),
+  CONSTRAINT ck_support_resistance_zone_projection_window
+    CHECK (projection_end >= effective_from),
+  CONSTRAINT ck_support_resistance_zone_end_prices
+    CHECK (end_lower_price <= end_center_price AND end_center_price <= end_upper_price)
 );
 
 CREATE INDEX IF NOT EXISTS idx_support_resistance_zone_versions_timeline

@@ -277,11 +277,12 @@ export default function StrategyForm({
   const [srPivotLeftBars, setSrPivotLeftBars] = useState(toFiniteNumber(initialSignal.pivot_left_bars, 3));
   const [srPivotRightBars, setSrPivotRightBars] = useState(toFiniteNumber(initialSignal.pivot_right_bars, 3));
   const [srDetectionWindow, setSrDetectionWindow] = useState(toFiniteNumber(initialSignal.detection_window, 120));
-  const [srClusterRadiusAtr, setSrClusterRadiusAtr] = useState(toFiniteNumber(initialSignal.cluster_radius_atr, 0.75));
+  const [srMinLinePivots, setSrMinLinePivots] = useState(toFiniteNumber(initialSignal.min_line_pivots, 3));
+  const [srMinLineSpanSessions, setSrMinLineSpanSessions] = useState(toFiniteNumber(initialSignal.min_line_span_sessions, 10));
+  const [srLineInlierToleranceAtr, setSrLineInlierToleranceAtr] = useState(toFiniteNumber(initialSignal.line_inlier_tolerance_atr, 0.75));
+  const [srMaxAbsSlopeAtrPerSession, setSrMaxAbsSlopeAtrPerSession] = useState(toFiniteNumber(initialSignal.max_abs_slope_atr_per_session, 0.25));
   const [srZoneHalfWidthAtr, setSrZoneHalfWidthAtr] = useState(toFiniteNumber(initialSignal.zone_half_width_atr, 0.5));
-  const [srMinTouches, setSrMinTouches] = useState(toFiniteNumber(initialSignal.min_touches, 2));
   const [srDecayHalfLife, setSrDecayHalfLife] = useState(toFiniteNumber(initialSignal.decay_half_life, 60));
-  const [srMaxZonesPerSide, setSrMaxZonesPerSide] = useState(toFiniteNumber(initialSignal.max_zones_per_side, 5));
   const [srBounceConfirmationAtr, setSrBounceConfirmationAtr] = useState(toFiniteNumber(initialSignal.bounce_confirmation_atr, 0.25));
   const [srBreakoutConfirmationAtr, setSrBreakoutConfirmationAtr] = useState(toFiniteNumber(initialSignal.breakout_confirmation_atr, 0.5));
   const [srBreakoutVolumeRatioMin, setSrBreakoutVolumeRatioMin] = useState(toFiniteNumber(initialSignal.breakout_volume_ratio_min, 1.5));
@@ -396,11 +397,12 @@ export default function StrategyForm({
       setSrPivotLeftBars(toFiniteNumber(signal.pivot_left_bars, 3));
       setSrPivotRightBars(toFiniteNumber(signal.pivot_right_bars, 3));
       setSrDetectionWindow(toFiniteNumber(signal.detection_window, 120));
-      setSrClusterRadiusAtr(toFiniteNumber(signal.cluster_radius_atr, 0.75));
+      setSrMinLinePivots(toFiniteNumber(signal.min_line_pivots, 3));
+      setSrMinLineSpanSessions(toFiniteNumber(signal.min_line_span_sessions, 10));
+      setSrLineInlierToleranceAtr(toFiniteNumber(signal.line_inlier_tolerance_atr, 0.75));
+      setSrMaxAbsSlopeAtrPerSession(toFiniteNumber(signal.max_abs_slope_atr_per_session, 0.25));
       setSrZoneHalfWidthAtr(toFiniteNumber(signal.zone_half_width_atr, 0.5));
-      setSrMinTouches(toFiniteNumber(signal.min_touches, 2));
       setSrDecayHalfLife(toFiniteNumber(signal.decay_half_life, 60));
-      setSrMaxZonesPerSide(toFiniteNumber(signal.max_zones_per_side, 5));
       setSrBounceConfirmationAtr(toFiniteNumber(signal.bounce_confirmation_atr, 0.25));
       setSrBreakoutConfirmationAtr(toFiniteNumber(signal.breakout_confirmation_atr, 0.5));
       setSrBreakoutVolumeRatioMin(toFiniteNumber(signal.breakout_volume_ratio_min, 1.5));
@@ -895,11 +897,12 @@ export default function StrategyForm({
         pivot_left_bars: Number(srPivotLeftBars),
         pivot_right_bars: Number(srPivotRightBars),
         detection_window: Number(srDetectionWindow),
-        cluster_radius_atr: Number(srClusterRadiusAtr),
+        min_line_pivots: Number(srMinLinePivots),
+        min_line_span_sessions: Number(srMinLineSpanSessions),
+        line_inlier_tolerance_atr: Number(srLineInlierToleranceAtr),
+        max_abs_slope_atr_per_session: Number(srMaxAbsSlopeAtrPerSession),
         zone_half_width_atr: Number(srZoneHalfWidthAtr),
-        min_touches: Number(srMinTouches),
         decay_half_life: Number(srDecayHalfLife),
-        max_zones_per_side: Number(srMaxZonesPerSide),
         bounce_confirmation_atr: Number(srBounceConfirmationAtr),
         breakout_confirmation_atr: Number(srBreakoutConfirmationAtr),
         breakout_volume_ratio_min: Number(srBreakoutVolumeRatioMin),
@@ -926,15 +929,16 @@ export default function StrategyForm({
       metadata: {
         description,
         schema_version: 1,
-        algorithm_version: "pivot-atr-v1",
+        algorithm_version: "pivot-slope-atr-v2",
         price_semantics: "forward_adjusted_preferred_unadjusted_fallback",
       },
     };
   }, [
     breakoutRetestEnabled, description, maxPositions, positionSizePct, rebalance,
     resistanceBreakoutEnabled, runAt, srBounceConfirmationAtr, srBreakoutConfirmationAtr,
-    srBreakoutVolumeRatioMin, srClusterRadiusAtr, srDecayHalfLife, srDetectionWindow,
-    srMaxHoldingDays, srMaxLossPct, srMaxZonesPerSide, srMinRewardRisk, srMinTouches,
+    srBreakoutVolumeRatioMin, srDecayHalfLife, srDetectionWindow,
+    srLineInlierToleranceAtr, srMaxAbsSlopeAtrPerSession, srMaxHoldingDays, srMaxLossPct,
+    srMinLinePivots, srMinLineSpanSessions, srMinRewardRisk,
     srPivotLeftBars, srPivotRightBars, srRetestVolumeRatioMax, srRetestWindow,
     srScoreOutcomeWindow, srScoreStopAtr, srScoreTargetAtr, srStopLossAtr,
     srTakeProfitAtr, srZoneHalfWidthAtr, supportBounceEnabled, symbols,
@@ -1238,8 +1242,9 @@ export default function StrategyForm({
           throw new Error(isZh ? "至少启用一种入场模式" : "Enable at least one entry mode");
         }
         const positiveValues = [
-          srPivotLeftBars, srPivotRightBars, srDetectionWindow, srClusterRadiusAtr,
-          srZoneHalfWidthAtr, srMinTouches, srDecayHalfLife, srMaxZonesPerSide,
+          srPivotLeftBars, srPivotRightBars, srDetectionWindow, srMinLinePivots,
+          srMinLineSpanSessions, srLineInlierToleranceAtr, srMaxAbsSlopeAtrPerSession,
+          srZoneHalfWidthAtr, srDecayHalfLife,
           srBounceConfirmationAtr, srBreakoutConfirmationAtr, srBreakoutVolumeRatioMin,
           srRetestWindow, srRetestVolumeRatioMax, srScoreOutcomeWindow, srScoreTargetAtr,
           srScoreStopAtr, srStopLossAtr, srTakeProfitAtr, srMinRewardRisk,
@@ -1357,11 +1362,12 @@ export default function StrategyForm({
     { labelZh: "Pivot 左侧 K 线", labelEn: "Pivot Left Bars", value: srPivotLeftBars, setValue: setSrPivotLeftBars },
     { labelZh: "Pivot 右侧确认 K 线", labelEn: "Pivot Right Bars", value: srPivotRightBars, setValue: setSrPivotRightBars },
     { labelZh: "检测窗口", labelEn: "Detection Window", value: srDetectionWindow, setValue: setSrDetectionWindow },
-    { labelZh: "聚类半径（ATR）", labelEn: "Cluster Radius (ATR)", value: srClusterRadiusAtr, setValue: setSrClusterRadiusAtr },
+    { labelZh: "最少拟合 Pivot", labelEn: "Minimum Line Pivots", value: srMinLinePivots, setValue: setSrMinLinePivots },
+    { labelZh: "最小跨度（交易日）", labelEn: "Minimum Span (Sessions)", value: srMinLineSpanSessions, setValue: setSrMinLineSpanSessions },
+    { labelZh: "内点容差（ATR）", labelEn: "Inlier Tolerance (ATR)", value: srLineInlierToleranceAtr, setValue: setSrLineInlierToleranceAtr },
+    { labelZh: "最大斜率（ATR/日）", labelEn: "Maximum Slope (ATR/Session)", value: srMaxAbsSlopeAtrPerSession, setValue: setSrMaxAbsSlopeAtrPerSession },
     { labelZh: "区域半宽（ATR）", labelEn: "Zone Half Width (ATR)", value: srZoneHalfWidthAtr, setValue: setSrZoneHalfWidthAtr },
-    { labelZh: "最少独立触碰", labelEn: "Minimum Independent Touches", value: srMinTouches, setValue: setSrMinTouches },
     { labelZh: "衰减半衰期", labelEn: "Decay Half-Life", value: srDecayHalfLife, setValue: setSrDecayHalfLife },
-    { labelZh: "每侧最大区域数", labelEn: "Max Zones Per Side", value: srMaxZonesPerSide, setValue: setSrMaxZonesPerSide },
   ];
   const srSignalFields: Array<{ labelZh: string; labelEn: string; value: number; setValue: (value: number) => void }> = [
     { labelZh: "支撑反弹确认（ATR）", labelEn: "Bounce Confirmation (ATR)", value: srBounceConfirmationAtr, setValue: setSrBounceConfirmationAtr },

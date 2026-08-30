@@ -80,7 +80,7 @@ export default function ResearchExperimentPage() {
   const tokenUsage = report.tokenUsage || {};
   const counts = report.counts || experiment?.progress || {};
   const bestTrial = report.bestOutOfSampleTrial;
-  const isEffectivenessStudy = experiment?.studyKind === "support_resistance_effectiveness_v1";
+  const isEffectivenessStudy = experiment?.studyKind === "support_resistance_effectiveness_v2";
   const finalCandidates = Array.isArray(report.finalCandidates)
     ? report.finalCandidates.map(asRecord)
     : [];

@@ -8,6 +8,10 @@ from unittest.mock import MagicMock
 import numpy as np
 
 from src.services.backtest_engine import _available_details, _downsample_snapshots
+from src.services.backtest_equity_service import (
+    build_downsampled_chart_query,
+    build_downsampled_snapshot_ids_query,
+)
 from src.services.backtest_repository import BacktestRepository
 from src.services.prepared_dataset_service import PreparedDatasetCache
 from src.services.strategy_registry import strategy_data_requirements
@@ -26,6 +30,40 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
         self.assertEqual(first[0], rows[0])
         self.assertEqual(first[-1], rows[-1])
         self.assertLessEqual(len(first), 6)
+
+    def test_downsample_handles_small_odd_even_limits_and_ties(self) -> None:
+        rows = [
+            {"ts": f"2025-01-{index + 1:02d}", "equity": float(value)}
+            for index, value in enumerate([100, 90, 90, 110, 110, 95, 120])
+        ]
+        for max_points in (2, 3, 4, 5, 6):
+            with self.subTest(max_points=max_points):
+                sampled = _downsample_snapshots(rows, max_points=max_points)
+                self.assertLessEqual(len(sampled), max_points)
+                self.assertEqual(sampled[0], rows[0])
+                self.assertEqual(sampled[-1], rows[-1])
+                self.assertEqual(
+                    [item["ts"] for item in sampled],
+                    sorted(item["ts"] for item in sampled),
+                )
+
+    def test_downsample_returns_short_inputs_unchanged(self) -> None:
+        self.assertEqual(_downsample_snapshots([], max_points=3), [])
+        one = [{"ts": "2025-01-01", "equity": 100.0}]
+        self.assertEqual(_downsample_snapshots(one, max_points=3), one)
+        two = [*one, {"ts": "2025-01-02", "equity": 101.0}]
+        self.assertEqual(_downsample_snapshots(two, max_points=3), two)
+
+    def test_database_downsample_queries_share_the_deterministic_selector(self) -> None:
+        ids_sql = str(build_downsampled_snapshot_ids_query()).upper()
+        chart_sql = str(build_downsampled_chart_query()).upper()
+        for sql in (ids_sql, chart_sql):
+            self.assertIn("ROW_NUMBER() OVER", sql)
+            self.assertIn("COUNT(*) OVER", sql)
+            self.assertIn("ORDER BY EQUITY ASC, TS ASC", sql)
+            self.assertIn("ORDER BY EQUITY DESC, TS DESC", sql)
+            self.assertIn("LIMIT GREATEST(:MAX_POINTS - 2, 0)", sql)
+        self.assertNotIn("POSITIONS", chart_sql)
 
     def test_available_details_distinguish_unpersisted_from_empty(self) -> None:
         self.assertEqual(_available_details("summary"), ["summary", "equity"])

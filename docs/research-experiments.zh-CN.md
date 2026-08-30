@@ -120,4 +120,4 @@ worker 重启后会恢复遗留 trial，不重复创建回测证据。已经因�
 
 报告包含进度、成功与失败 trial 证据、稳健性对比、终止详情，以及可用时的 token 用量。它只描述研究执行，不能被表述为实盘安全或预期盈利能力。
 
-预注册的 `support_resistance_effectiveness_v1` 是父子实验特化流程，使用历史动态流动性股票池、封存最终留出、最多 200 次回测、同成本缓存重放，以及中英文 JSON/Markdown/PDF 产物。子实验和产物接口对 UI 保持只读。完整协议与数据库上线边界见[支撑/压力区策略有效性研究](support-resistance-effectiveness.zh-CN.md)。
+预注册的 `support_resistance_effectiveness_v2` 用于独立验证 `pivot-slope-atr-v2`，是父子实验特化流程，使用历史动态流动性股票池、封存最终留出、最多 200 次回测、同成本缓存重放，以及中英文 JSON/Markdown/PDF 产物。子实验和产物接口对 UI 保持只读。完整协议与数据库上线边界见[支撑/压力区策略有效性研究](support-resistance-effectiveness.zh-CN.md)。

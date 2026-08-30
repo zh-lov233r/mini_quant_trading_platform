@@ -2,7 +2,7 @@
 
 [English](support-resistance-effectiveness.md) | [文档索引](README.zh-CN.md)
 
-该流程用于按预注册协议验证 `pivot-atr-v1`，不会改变 allocation、激活 portfolio、启动 scheduler 或提交订单。它与普通自适应研究分离，持久化为父级 `support_resistance_effectiveness_v1` 实验，并包含发现、年度折和封存最终留出子实验。
+该流程用于独立验证预注册的 `pivot-slope-atr-v2`，不会改变 allocation、激活 portfolio、启动 scheduler 或提交订单。它与普通自适应研究分离，持久化为父级 `support_resistance_effectiveness_v2` 实验，并包含发现、年度折和封存最终留出子实验。已退役水平检测器 `pivot-atr-v1` 的结果不构成 v2 证据，不得继承。
 
 ## 协议与动态股票池
 
@@ -27,7 +27,7 @@ JSON 输出包含逐年合格成员和排除观测数。随后运行 `make check
 
 ## 固定候选与时间预算
 
-发现阶段分别运行 `support_bounce`、`resistance_breakout` 和 `breakout_retest`，每种模式关闭另外两种。每种模式固定 4 组检测器和 3 档触发器，共 12 个候选、48 个 trial；三种模式合计 144 个 trial。模式冠军首先要求 2020 年 base/stress 超额收益均为正，再按超额收益、Sharpe、回撤、集中度和参数哈希确定性排序。
+发现阶段分别运行 `support_bounce`、`resistance_breakout` 和 `breakout_retest`，每种模式关闭另外两种。每种模式固定 4 组 v2 检测器参数（最少拟合 Pivot/跨度、内点容差、斜率上限、区域半宽和时间衰减）与 3 档触发器，共 12 个候选、48 个 trial；三种模式合计 144 个 trial。模式冠军首先要求 2020 年 base/stress 超额收益均为正，再按超额收益、Sharpe、回撤、集中度和参数哈希确定性排序。
 
 默认策略和三个模式冠军进入 2021、2022、2023 年度折。校准冠军必须在三个年度折中 base 超额收益全部为正，再依次按年度超额收益中位数、最差回撤、stress 衰减和哈希冻结。最终子实验只生成样本外 trial，并增加与 base 成本完全相同的 `base_cache_replay`，用于逐项比较事件、信号、交易、持仓和 NAV。实际排队最多 198 个 trial，空余预算不会重新分配。
 

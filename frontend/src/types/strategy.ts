@@ -194,11 +194,12 @@ export interface SupportResistanceStrategyParams {
     pivot_left_bars: number;
     pivot_right_bars: number;
     detection_window: number;
-    cluster_radius_atr: number;
+    min_line_pivots: number;
+    min_line_span_sessions: number;
+    line_inlier_tolerance_atr: number;
+    max_abs_slope_atr_per_session: number;
     zone_half_width_atr: number;
-    min_touches: number;
     decay_half_life: number;
-    max_zones_per_side: number;
     bounce_confirmation_atr: number;
     breakout_confirmation_atr: number;
     breakout_volume_ratio_min: number;
@@ -222,7 +223,7 @@ export interface SupportResistanceStrategyParams {
   metadata: {
     description: string;
     schema_version: number;
-    algorithm_version: "pivot-atr-v1";
+    algorithm_version: "pivot-slope-atr-v2";
     price_semantics: "forward_adjusted_preferred_unadjusted_fallback";
   };
 }

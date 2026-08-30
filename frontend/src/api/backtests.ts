@@ -2,10 +2,10 @@ import http from "@/api/client";
 import type {
   BacktestCreate,
   BacktestDetailOut,
+  BacktestEquityPoint,
   BacktestPageOut,
   BacktestRunOut,
   BacktestSignalOut,
-  BacktestSnapshotPoint,
   BacktestSummaryOut,
   BacktestTransactionOut,
   SupportResistanceBacktestOut,
@@ -62,9 +62,9 @@ export function getBacktestSummary(runId: string): Promise<BacktestSummaryOut> {
 export function getBacktestEquity(
   runId: string,
   maxPoints = 1500,
-): Promise<BacktestSnapshotPoint[]> {
-  const query = new URLSearchParams({ max_points: String(maxPoints) });
-  return http<BacktestSnapshotPoint[]>(
+): Promise<BacktestEquityPoint[]> {
+  const query = new URLSearchParams({ max_points: String(maxPoints), shape: "chart" });
+  return http<BacktestEquityPoint[]>(
     `/api/backtests/${encodeURIComponent(runId)}/equity?${query.toString()}`,
     { method: "GET" },
   );

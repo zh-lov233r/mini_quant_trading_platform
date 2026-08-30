@@ -1,9 +1,15 @@
+import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
 import { getCandleSeries } from "@/api/quotes";
 import type { CandleBarOut, CandleSeriesOut } from "@/types/quote";
 import { useI18n } from "@/i18n/provider";
+
+const CandlestickLightweightChart = dynamic(
+  () => import("@/components/charts/CandlestickLightweightChart"),
+  { ssr: false },
+);
 
 interface CandleQueryForm {
   symbol: string;
@@ -630,7 +636,13 @@ export default function StockCandleWidget() {
                       </span>
                     </div>
 
-                    <CandleChart bars={bars} />
+                    <CandlestickLightweightChart
+                      bars={bars}
+                      locale={locale}
+                      showVolume={false}
+                      height={300}
+                      ariaLabel={messages.marketViewer.dailyHint}
+                    />
 
                     {latestBar ? (
                       <div

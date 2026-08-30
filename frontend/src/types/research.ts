@@ -23,7 +23,7 @@ export interface PointInTimeUniversePolicy {
 }
 
 export interface SupportResistanceValidationProtocol {
-  kind: "support_resistance_effectiveness_v1";
+  kind: "support_resistance_effectiveness_v2";
   maxBacktests: 200;
   bootstrapSeed: 20260828;
   bootstrapReplicates: 10000;

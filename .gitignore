@@ -19,6 +19,7 @@ dist/
 build/
 output/research/
 output/pdf/
+output/backups/
 tmp/pdfs/
 *.egg-info/
 

@@ -32,12 +32,22 @@ The API atomically creates a `strategy_runs` row and `backtest_jobs` row, then r
 ## Incremental API
 
 - `GET /api/backtests/{id}/summary`
-- `GET /api/backtests/{id}/equity?max_points=1500`
+- `GET /api/backtests/{id}/equity?max_points=1500&shape=chart`
 - `GET /api/backtests/{id}/signals?limit=100&cursor=...&symbol=...`
 - `GET /api/backtests/{id}/transactions?limit=100&cursor=...&symbol=...`
 - `POST /api/backtests/{id}/cancel`
 
+`shape` defaults to `snapshot` for backward compatibility and retains the original full-row/Python downsampling path as a rollback option. `shape=chart` returns only `ts`, `equity`, `drawdown`, and nullable benchmark values; it never transfers positions or the complete metrics document. For this compact shape, PostgreSQL applies the existing deterministic first/last plus bucket min/max selection before returning rows, including odd, even, and very small `max_points` values. Snapshot persistence and the default `max_points=1500` are unchanged.
+
 The legacy detail endpoint remains for one migration cycle. The list endpoint returns scalar metrics only. Signal ordering is `(ts, symbol, id)` ascending; transaction ordering is `(ts, id)` descending. Cursors are opaque.
+
+## Chart loading and rendering
+
+The backtest detail page renders summary data first. Equity, signals, and transactions then load independently and expose separate loading and error states, so one slow detail request does not block the whole page. Signal and transaction responses update chart markers and lifecycle rows as they arrive.
+
+Equity, lifecycle, and global stock charts use the pinned `lightweight-charts@5.2.1` client-only module. It is dynamically loaded only when a chart is visible and does not enter the shared first-load chunk. Native canvas interaction handles panning, wheel and touch zoom, crosshairs, and resize. Canvas primitives preserve island gaps, Double Bottom annotations, Support/Resistance regions, connectors, and collision-aware labels. Chart instances and attached primitives are destroyed when their panel closes or changes. The built-in TradingView attribution logo remains enabled.
+
+Rendering changes do not alter backtest calculations, T+1 execution, costs, corporate actions, positions, metrics, snapshot persistence, paper trading, or worker/scheduler behavior.
 
 ## Database rollout and recovery
 
@@ -50,3 +60,5 @@ If rollout fails, stop new job producers and the backtest worker, then route new
 `summary_metrics.performance` records SQL loading, Python dataset construction, history maintenance, signals, execution, detail/summary persistence, total time, row counts, output counts, and peak RSS. Logs contain the same structured mapping. Run the 100/500/3,640-symbol and 1-year/5-year/full-history matrix before enabling v2 for manual traffic. Index or LAG query changes require real `EXPLAIN ANALYZE` evidence and at least 20% improvement; neither is assumed from synthetic tests.
 
 The NumPy prepared-dataset/memmap layer is dependency-pinned but remains rollout-gated until cold/hot cache, fingerprint invalidation, concurrent open, corruption, and cleanup acceptance is complete. Numba is not a dependency.
+
+For chart releases, record the production-build shared and backtest-detail first-load sizes and verify that the Lightweight Charts chunk is separate. Use fixed fixtures for 1,500/5,000 equity points, 200 events, and 500 candles/100 markers; in one production Chromium, measure five runs and require median data-ready-to-chart-ready time at or below 100 ms, average pan/zoom at or above 55 FPS, and no chart main-thread task longer than 50 ms.

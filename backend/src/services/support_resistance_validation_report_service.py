@@ -35,7 +35,7 @@ ZH_STATIC_TEXT = {
     "Delistings without modeled consideration use zero recovery; last close is reported only as an upper-bound sensitivity.": "无法建模现金对价的退市按零回收计值；最后收盘价仅作为上界敏感性。",
     "A separate same-cost final-holdout replay must match events, signals, transactions, positions, and NAV exactly.": "独立的同成本最终留出重放必须在事件、信号、交易、持仓和 NAV 上完全一致。",
     "No result authorizes portfolio activation, scheduling, or order submission.": "任何结果都不授权激活组合、启用调度或提交订单。",
-    "pre-registered all-mode pivot-atr-v1 default": "预注册的全模式 pivot-atr-v1 默认策略",
+    "pre-registered all-mode pivot-slope-atr-v2 default; validity must be re-established": "预注册的全模式 pivot-slope-atr-v2 默认策略；必须重新建立有效性证据",
 }
 
 

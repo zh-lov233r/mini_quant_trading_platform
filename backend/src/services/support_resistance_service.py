@@ -8,7 +8,7 @@ bar.  Only after decisions and outcome resolution are complete is the current
 bar appended and a newly-confirmed pivot made available to the next session.
 """
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from hashlib import sha256
@@ -23,7 +23,7 @@ SETUP_TIE_PRIORITY: dict[SetupMode, int] = {
     "support_bounce": 1,
     "resistance_breakout": 2,
 }
-DETECTOR_IMPLEMENTATION_REVISION = 2
+DETECTOR_IMPLEMENTATION_REVISION = 6
 ZONE_PRICE_QUANTUM = Decimal("0.0000000001")
 
 
@@ -54,12 +54,43 @@ class Zone:
     first_pivot_date: date
     last_pivot_date: date
     valid_from: date
+    anchor_session_index: int = 0
+    anchor_center: float | None = None
+    anchor_lower: float | None = None
+    anchor_upper: float | None = None
+    slope_per_session: float = 0.0
+    fit_residual_atr: float = 0.0
+    recency_weight: float = 0.0
     last_inside: bool = False
+    timeline_effective_from: date | None = None
+
+    def __post_init__(self) -> None:
+        if self.anchor_center is None:
+            self.anchor_center = self.center
+        if self.anchor_lower is None:
+            self.anchor_lower = self.lower
+        if self.anchor_upper is None:
+            self.anchor_upper = self.upper
+
+    def projected(self, session_index: int) -> "Zone":
+        offset = session_index - self.anchor_session_index
+        delta = self.slope_per_session * offset
+        assert self.anchor_center is not None
+        assert self.anchor_lower is not None
+        assert self.anchor_upper is not None
+        return replace(
+            self,
+            center=_stored_zone_price(self.anchor_center + delta),
+            lower=_stored_zone_price(self.anchor_lower + delta),
+            upper=_stored_zone_price(self.anchor_upper + delta),
+        )
 
     def snapshot(self) -> dict[str, Any]:
         payload = asdict(self)
-        for key in ("first_pivot_date", "last_pivot_date", "valid_from"):
-            payload[key] = payload[key].isoformat()
+        for key in ("first_pivot_date", "last_pivot_date", "valid_from", "timeline_effective_from"):
+            if payload[key] is not None:
+                payload[key] = payload[key].isoformat()
+        payload.pop("timeline_effective_from", None)
         payload["pivot_keys"] = list(self.pivot_keys)
         return payload
 
@@ -70,8 +101,10 @@ class BreakoutRecord:
     breakout_date: date
     breakout_session_index: int
     breakout_volume: float
-    original_lower: float
-    original_upper: float
+    # Kept only for deserializing older in-memory fixtures; v2 always projects
+    # the live zone and never uses these horizontal bounds.
+    original_lower: float | None = None
+    original_upper: float | None = None
 
 
 @dataclass(slots=True)
@@ -132,11 +165,12 @@ def normalized_detector_params(params: dict[str, Any]) -> dict[str, Any]:
         "pivot_left_bars",
         "pivot_right_bars",
         "detection_window",
-        "cluster_radius_atr",
+        "min_line_pivots",
+        "min_line_span_sessions",
+        "line_inlier_tolerance_atr",
+        "max_abs_slope_atr_per_session",
         "zone_half_width_atr",
-        "min_touches",
         "decay_half_life",
-        "max_zones_per_side",
         "breakout_confirmation_atr",
         "breakout_volume_ratio_min",
         "retest_window",
@@ -164,7 +198,11 @@ def advance_symbol(
     session_index = len(state.history)
     if state.cached_zone_timeline:
         _activate_cached_zones(state, bar["dt_ny"])
-    frozen_zones = [zone for zone in state.zones.values() if zone.status == "active"]
+    frozen_zones = [
+        zone.projected(session_index)
+        for zone in state.zones.values()
+        if zone.status == "active"
+    ]
     frozen_zones.sort(key=lambda zone: (zone.role, zone.center, zone.zone_key))
 
     position = _number(snapshot.get("position")) or 0.0
@@ -319,22 +357,44 @@ def _activate_cached_zones(state: SupportResistanceSymbolState, trade_date: date
         if payload["status"] != "active":
             continue
         old = state.zones.get(zone_key)
+        center = float(payload["center"])
+        lower = float(payload["lower"])
+        upper = float(payload["upper"])
+        same_cached_version = (
+            old is not None and old.timeline_effective_from == payload["effective_from"]
+        )
         activated[zone_key] = Zone(
             zone_key=zone_key,
             source_kind=payload["source_kind"],
             role=payload["role"],
             status="active",
-            center=payload["center"],
-            lower=payload["lower"],
-            upper=payload["upper"],
+            center=center,
+            lower=lower,
+            upper=upper,
             atr=payload["atr"],
+            anchor_session_index=int(payload.get("anchor_session_index") or 0),
+            anchor_center=float(payload.get("anchor_center", center)),
+            anchor_lower=float(payload.get("anchor_lower", lower)),
+            anchor_upper=float(payload.get("anchor_upper", upper)),
+            slope_per_session=float(payload.get("slope_per_session") or 0.0),
+            fit_residual_atr=float(payload.get("fit_residual_atr") or 0.0),
+            recency_weight=float(payload.get("recency_weight") or 0.0),
             pivot_keys=tuple(payload["pivot_keys"]),
             pivot_count=payload["pivot_count"],
-            touch_count=max(payload["touch_count"], old.touch_count if old else 0),
+            touch_count=(
+                old.touch_count
+                if same_cached_version and old is not None
+                else int(payload["touch_count"])
+            ),
             first_pivot_date=payload["first_pivot_date"],
             last_pivot_date=payload["last_pivot_date"],
             valid_from=payload["valid_from"],
-            last_inside=old.last_inside if old else False,
+            last_inside=(
+                old.last_inside
+                if same_cached_version
+                else bool(payload.get("last_inside", False))
+            ),
+            timeline_effective_from=payload["effective_from"],
         )
     state.zones = activated
 
@@ -440,8 +500,6 @@ def _detect_candidates(
                 breakout_date=bar["dt_ny"],
                 breakout_session_index=session_index,
                 breakout_volume=bar["volume"],
-                original_lower=zone.lower,
-                original_upper=zone.upper,
             )
             state.events.append(
                 {
@@ -469,8 +527,8 @@ def _detect_candidates(
         if zone is None:
             continue
         if (
-            bar["low"] <= breakout.original_upper
-            and bar["close"] >= breakout.original_upper
+            bar["low"] <= zone.upper
+            and bar["close"] >= zone.upper
             and bar["volume"] <= breakout.breakout_volume * float(signal_cfg["retest_volume_ratio_max"])
         ):
             state.events.append(
@@ -480,8 +538,8 @@ def _detect_candidates(
                     "zone_key": zone.zone_key,
                     "setup": "breakout_retest",
                     "role": zone.role,
-                    "lower": breakout.original_lower,
-                    "upper": breakout.original_upper,
+                    "lower": zone.lower,
+                    "upper": zone.upper,
                     "breakout_date": breakout.breakout_date.isoformat(),
                     "breakout_volume": breakout.breakout_volume,
                     "retest_volume": bar["volume"],
@@ -605,7 +663,12 @@ def _apply_current_bar_zone_state(
     session_index: int,
     signal_cfg: dict[str, Any],
 ) -> None:
-    for zone in sorted(state.zones.values(), key=lambda item: item.zone_key):
+    projected_zones = {
+        zone_key: zone.projected(session_index)
+        for zone_key, zone in state.zones.items()
+    }
+    state.zones = projected_zones
+    for zone in sorted(projected_zones.values(), key=lambda item: item.zone_key):
         if zone.status != "active":
             continue
         inside = bar["high"] >= zone.lower and bar["low"] <= zone.upper
@@ -624,15 +687,7 @@ def _apply_current_bar_zone_state(
         zone.last_inside = inside
 
         breakout = state.breakouts.get(zone.zone_key)
-        if (
-            zone.role == "resistance"
-            and breakout is not None
-            and session_index > breakout.breakout_session_index
-            and session_index <= breakout.breakout_session_index + int(signal_cfg["retest_window"])
-            and bar["low"] <= breakout.original_upper
-            and bar["close"] >= breakout.original_upper
-            and bar["volume"] <= breakout.breakout_volume * float(signal_cfg["retest_volume_ratio_max"])
-        ):
+        if zone.role == "resistance" and bar["close"] > zone.upper:
             old_role = zone.role
             zone.role = "support"
             state.events.append(
@@ -642,9 +697,16 @@ def _apply_current_bar_zone_state(
                     "zone_key": zone.zone_key,
                     "from_role": old_role,
                     "to_role": zone.role,
+                    "lower": zone.lower,
+                    "upper": zone.upper,
+                    "reason": (
+                        "confirmed_breakout"
+                        if breakout is not None
+                        and session_index == breakout.breakout_session_index
+                        else "close_above_resistance"
+                    ),
                 }
             )
-            state.breakouts.pop(zone.zone_key, None)
         elif zone.role == "support" and bar["close"] < zone.lower:
             old_role = zone.role
             zone.role = "resistance"
@@ -655,8 +717,25 @@ def _apply_current_bar_zone_state(
                     "zone_key": zone.zone_key,
                     "from_role": old_role,
                     "to_role": zone.role,
+                    "lower": zone.lower,
+                    "upper": zone.upper,
+                    "reason": "support_breakdown",
                 }
             )
+            state.breakouts.pop(zone.zone_key, None)
+        elif (
+            zone.role == "support"
+            and breakout is not None
+            and session_index > breakout.breakout_session_index
+            and session_index <= breakout.breakout_session_index + int(signal_cfg["retest_window"])
+            and bar["low"] <= zone.upper
+            and bar["close"] >= zone.upper
+            and bar["volume"] <= breakout.breakout_volume * float(signal_cfg["retest_volume_ratio_max"])
+        ):
+            # Candidate detection already recorded the successful retest using
+            # this session's projected bounds. The breakout-day role change is
+            # retained while this record is consumed to prevent repeat setups.
+            state.breakouts.pop(zone.zone_key, None)
 
     expired_breakouts = [
         key
@@ -709,60 +788,59 @@ def _rebuild_zones(
     current_index = len(state.history) - 1
     lookback = int(signal_cfg["detection_window"])
     state.pivots = [pivot for pivot in state.pivots if current_index - pivot.session_index < lookback]
-    radius = float(signal_cfg["cluster_radius_atr"]) * bar["atr_14"]
     half_width = float(signal_cfg["zone_half_width_atr"]) * bar["atr_14"]
-    minimum = int(signal_cfg["min_touches"])
-    old_zones = dict(state.zones)
+    old_zones = {
+        key: zone.projected(current_index)
+        for key, zone in state.zones.items()
+    }
     rebuilt: dict[str, Zone] = {}
     for source_kind, default_role in (("low", "support"), ("high", "resistance")):
         pivots = sorted(
             (pivot for pivot in state.pivots if pivot.kind == source_kind),
-            key=lambda pivot: (pivot.price, pivot.trade_date),
+            key=lambda pivot: (pivot.session_index, pivot.trade_date, pivot.pivot_key),
         )
-        clusters = [cluster for cluster in _cluster_pivots(pivots, radius) if len(cluster) >= minimum]
-        memberships = {
-            tuple(sorted(pivot.pivot_key for pivot in cluster)) for cluster in clusters
-        }
-        for cluster in clusters:
-            center = _weighted_median(cluster, current_index, int(signal_cfg["decay_half_life"]))
-            pivot_keys = tuple(sorted(pivot.pivot_key for pivot in cluster))
-            matched = _match_zone(
-                old_zones.values(),
-                source_kind,
-                center,
-                half_width,
-                rebuilt,
-                pivot_keys=pivot_keys,
-                reserved_memberships=memberships,
+        fit = _fit_pivot_line(pivots, current_index, signal_cfg)
+        if fit is None:
+            continue
+        cluster, center, slope, residual_atr, recency_weight = fit
+        pivot_keys = tuple(sorted(pivot.pivot_key for pivot in cluster))
+        matched = _match_zone(old_zones.values(), source_kind, center, half_width, pivot_keys)
+        zone_key = matched.zone_key if matched else _new_zone_key(source_kind, cluster)
+        if matched is not None:
+            role: ZoneRole = matched.role
+        elif bar["close"] > center + half_width:
+            role = "support"
+        elif bar["close"] < center - half_width:
+            role = "resistance"
+        else:
+            role = default_role  # type: ignore[assignment]
+        unchanged_membership = matched is not None and matched.pivot_keys == pivot_keys
+        if unchanged_membership:
+            zone = replace(
+                matched,
+                role=role,
+                status="active",
+                touch_count=max(len(cluster), matched.touch_count),
             )
-            zone_key = matched.zone_key if matched else _new_zone_key(source_kind, cluster)
-            role: ZoneRole = matched.role if matched else default_role  # type: ignore[assignment]
-            unchanged_membership = matched is not None and matched.pivot_keys == pivot_keys
-            zone_center = matched.center if unchanged_membership else _stored_zone_price(center)
-            zone_lower = (
-                matched.lower
-                if unchanged_membership
-                else _stored_zone_price(center - half_width)
-            )
-            zone_upper = (
-                matched.upper
-                if unchanged_membership
-                else _stored_zone_price(center + half_width)
-            )
-            zone_atr = (
-                matched.atr
-                if unchanged_membership
-                else _stored_zone_price(bar["atr_14"])
-            )
+        else:
+            stored_center = _stored_zone_price(center)
+            stored_half_width = _stored_zone_price(half_width)
             zone = Zone(
                 zone_key=zone_key,
                 source_kind=source_kind,  # type: ignore[arg-type]
                 role=role,
                 status="active",
-                center=zone_center,
-                lower=zone_lower,
-                upper=zone_upper,
-                atr=zone_atr,
+                center=stored_center,
+                lower=_stored_zone_price(stored_center - stored_half_width),
+                upper=_stored_zone_price(stored_center + stored_half_width),
+                atr=_stored_zone_price(bar["atr_14"]),
+                anchor_session_index=current_index,
+                anchor_center=stored_center,
+                anchor_lower=_stored_zone_price(stored_center - stored_half_width),
+                anchor_upper=_stored_zone_price(stored_center + stored_half_width),
+                slope_per_session=_stored_zone_price(slope),
+                fit_residual_atr=_stored_zone_price(residual_atr),
+                recency_weight=recency_weight,
                 pivot_keys=pivot_keys,
                 pivot_count=len(cluster),
                 touch_count=max(len(cluster), matched.touch_count if matched else 0),
@@ -771,16 +849,21 @@ def _rebuild_zones(
                 valid_from=matched.valid_from if matched else bar["dt_ny"],
                 last_inside=matched.last_inside if matched else False,
             )
-            rebuilt[zone_key] = zone
+        rebuilt[zone_key] = zone
 
-    max_per_side = int(signal_cfg["max_zones_per_side"])
     selected: dict[str, Zone] = {}
     for role in ("support", "resistance"):
         role_zones = [zone for zone in rebuilt.values() if zone.role == role]
         role_zones.sort(
-            key=lambda zone: (-zone.pivot_count, abs(zone.center - bar["close"]), zone.center, zone.zone_key)
+            key=lambda zone: (
+                -zone.pivot_count,
+                -zone.recency_weight,
+                zone.fit_residual_atr,
+                abs(zone.center - bar["close"]),
+                zone.zone_key,
+            )
         )
-        for zone in role_zones[:max_per_side]:
+        for zone in role_zones[:1]:
             selected[zone.zone_key] = zone
 
     for zone_key, old in old_zones.items():
@@ -799,35 +882,92 @@ def _rebuild_zones(
         _record_zone_version(state, zone, bar["dt_ny"], status="active")
 
 
-def _cluster_pivots(pivots: list[Pivot], radius: float) -> list[list[Pivot]]:
-    clusters: list[list[Pivot]] = []
-    for pivot in pivots:
-        if not clusters:
-            clusters.append([pivot])
-            continue
-        center = sum(item.price for item in clusters[-1]) / len(clusters[-1])
-        if abs(pivot.price - center) <= radius:
-            clusters[-1].append(pivot)
-        else:
-            clusters.append([pivot])
-    return clusters
-
-
-def _weighted_median(pivots: list[Pivot], current_index: int, half_life: int) -> float:
-    weighted = sorted(
-        (
-            pivot.price,
-            0.5 ** (max(current_index - pivot.session_index, 0) / half_life),
-        )
-        for pivot in pivots
-    )
+def _weighted_median(values: list[tuple[float, float]]) -> float:
+    weighted = sorted(values, key=lambda item: item[0])
     threshold = sum(weight for _, weight in weighted) / 2.0
     cumulative = 0.0
-    for price, weight in weighted:
+    for value, weight in weighted:
         cumulative += weight
         if cumulative >= threshold:
-            return price
+            return value
     return weighted[-1][0]
+
+
+def _fit_pivot_line(
+    pivots: list[Pivot],
+    current_index: int,
+    signal_cfg: dict[str, Any],
+) -> tuple[list[Pivot], float, float, float, float] | None:
+    """Fit a deterministic two-stage recency-weighted Theil-Sen line."""
+    minimum = int(signal_cfg["min_line_pivots"])
+    minimum_span = int(signal_cfg["min_line_span_sessions"])
+    if len(pivots) < minimum or pivots[-1].session_index - pivots[0].session_index < minimum_span:
+        return None
+    half_life = int(signal_cfg["decay_half_life"])
+    weights = {
+        pivot.pivot_key: 0.5 ** (max(current_index - pivot.session_index, 0) / half_life)
+        for pivot in pivots
+    }
+
+    def fit(items: list[Pivot]) -> tuple[float, float] | None:
+        slopes = [
+            (
+                (right.price - left.price) / (right.session_index - left.session_index),
+                (weights[left.pivot_key] * weights[right.pivot_key]) ** 0.5,
+            )
+            for left_index, left in enumerate(items)
+            for right in items[left_index + 1 :]
+            if right.session_index - left.session_index >= minimum_span
+        ]
+        if not slopes:
+            return None
+        slope = _weighted_median(slopes)
+        intercept = _weighted_median(
+            [
+                (pivot.price - slope * pivot.session_index, weights[pivot.pivot_key])
+                for pivot in items
+            ]
+        )
+        return slope, intercept
+
+    initial = fit(pivots)
+    if initial is None:
+        return None
+    initial_slope, initial_intercept = initial
+    tolerance = float(signal_cfg["line_inlier_tolerance_atr"])
+    inliers = [
+        pivot
+        for pivot in pivots
+        if abs(pivot.price - (initial_intercept + initial_slope * pivot.session_index))
+        <= tolerance * pivot.atr
+    ]
+    if len(inliers) < minimum or inliers[-1].session_index - inliers[0].session_index < minimum_span:
+        return None
+    refined = fit(inliers)
+    if refined is None:
+        return None
+    slope, intercept = refined
+    representative_atr = _weighted_median(
+        [(pivot.atr, weights[pivot.pivot_key]) for pivot in inliers]
+    )
+    if representative_atr <= 0:
+        return None
+    if abs(slope) / representative_atr > float(signal_cfg["max_abs_slope_atr_per_session"]):
+        return None
+    total_weight = sum(weights[pivot.pivot_key] for pivot in inliers)
+    residual_atr = sum(
+        weights[pivot.pivot_key]
+        * abs(pivot.price - (intercept + slope * pivot.session_index))
+        / max(pivot.atr, 1e-12)
+        for pivot in inliers
+    ) / total_weight
+    return (
+        inliers,
+        intercept + slope * current_index,
+        slope,
+        residual_atr,
+        total_weight,
+    )
 
 
 def _match_zone(
@@ -835,16 +975,12 @@ def _match_zone(
     source_kind: str,
     center: float,
     half_width: float,
-    rebuilt: dict[str, Zone],
-    *,
     pivot_keys: tuple[str, ...],
-    reserved_memberships: set[tuple[str, ...]],
 ) -> Zone | None:
     candidates = [
         zone
         for zone in old_zones
         if zone.source_kind == source_kind
-        and zone.zone_key not in rebuilt
         and zone.lower <= center + half_width
         and zone.upper >= center - half_width
     ]
@@ -853,10 +989,7 @@ def _match_zone(
     exact = [zone for zone in candidates if zone.pivot_keys == pivot_keys]
     if exact:
         return min(exact, key=lambda zone: (abs(zone.center - center), zone.zone_key))
-    unreserved = [zone for zone in candidates if zone.pivot_keys not in reserved_memberships]
-    if not unreserved:
-        return None
-    return min(unreserved, key=lambda zone: (abs(zone.center - center), zone.zone_key))
+    return min(candidates, key=lambda zone: (abs(zone.center - center), zone.zone_key))
 
 
 def _new_zone_key(source_kind: str, pivots: list[Pivot]) -> str:
@@ -871,7 +1004,14 @@ def _record_zone_version(
     *,
     status: str,
 ) -> None:
-    signature = (zone.role, status, zone.pivot_keys)
+    signature = (
+        zone.role,
+        status,
+        zone.pivot_keys,
+        zone.anchor_session_index,
+        zone.anchor_center,
+        zone.slope_per_session,
+    )
     if state.version_signatures.get(zone.zone_key) == signature:
         return
     state.version_signatures[zone.zone_key] = signature

@@ -492,7 +492,7 @@ def cancel_experiment(db: Session, experiment_id: UUID | str) -> ResearchExperim
     experiment = get_experiment(db, experiment_id)
     if experiment.status in TERMINAL_STATUSES:
         return experiment
-    if experiment.study_kind == "support_resistance_effectiveness_v1":
+    if experiment.study_kind == "support_resistance_effectiveness_v2":
         child_ids = list(
             db.execute(
                 select(ResearchExperiment.id).where(

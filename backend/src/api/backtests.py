@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from bisect import bisect_left, bisect_right
 from datetime import date, datetime
 import json
 import logging
@@ -11,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from src.core.db import get_db
@@ -30,6 +31,9 @@ from src.models.tables import (
 from src.services.backtest_engine import (
     _available_details,
     _downsample_snapshots,
+)
+from src.services.backtest_equity_service import (
+    load_downsampled_chart_points,
 )
 from src.services.backtest_job_service import enqueue_backtest_job, request_backtest_cancel
 from src.services.data_service import get_historical_data
@@ -829,10 +833,13 @@ def get_backtest_summary(run_id: UUID, db: Session = Depends(get_db)):
 def get_backtest_equity(
     run_id: UUID,
     max_points: int = Query(default=1500, ge=2, le=5000),
+    shape: Literal["chart", "snapshot"] = Query(default="snapshot"),
     db: Session = Depends(get_db),
 ):
     if db.get(StrategyRun, run_id) is None:
         raise HTTPException(status_code=404, detail="backtest not found")
+    if shape == "chart":
+        return load_downsampled_chart_points(db, run_id, max_points=max_points)
     snapshots = db.execute(
         select(PortfolioSnapshot)
         .where(PortfolioSnapshot.run_id == run_id)
@@ -1010,6 +1017,12 @@ def get_backtest_support_resistance(
             SupportResistanceRunEvent.created_at,
         )
     ).scalars().all()
+    geometry_by_version = _build_clipped_zone_geometry(
+        db,
+        versions,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
     return SupportResistanceBacktestOut(
         run_id=run_id,
@@ -1043,9 +1056,17 @@ def get_backtest_support_resistance(
                 "lower_price": float(version.lower_price),
                 "upper_price": float(version.upper_price),
                 "atr_width": float(version.atr_width),
+                "anchor_session_index": version.anchor_session_index,
+                "slope_per_session": float(version.slope_per_session),
+                "fit_residual_atr": float(version.fit_residual_atr),
+                "projection_end": version.projection_end.isoformat(),
+                "end_center_price": float(version.end_center_price),
+                "end_lower_price": float(version.end_lower_price),
+                "end_upper_price": float(version.end_upper_price),
                 "pivot_count": version.pivot_count,
                 "touch_count": version.touch_count,
                 "source_metadata": version.source_metadata,
+                "geometry": geometry_by_version.get(version.id),
             }
             for version in versions
         ],
@@ -1067,3 +1088,83 @@ def get_backtest_support_resistance(
             for event in events
         ],
     )
+
+
+def _build_clipped_zone_geometry(
+    db: Session,
+    versions: list[SupportResistanceZoneVersion],
+    *,
+    start_date: date | None,
+    end_date: date | None,
+) -> dict[UUID, dict[str, Any]]:
+    """Project each version onto the nearest sessions inside the requested window."""
+    usable = [version for version in versions if version.instrument_id is not None]
+    if not usable:
+        return {}
+    if db.bind is None or db.bind.dialect.name != "postgresql":
+        return {
+            version.id: {
+                "start_date": version.effective_from.isoformat(),
+                "end_date": version.projection_end.isoformat(),
+                "start_center_price": float(version.center_price),
+                "start_lower_price": float(version.lower_price),
+                "start_upper_price": float(version.upper_price),
+                "end_center_price": float(version.end_center_price),
+                "end_lower_price": float(version.end_lower_price),
+                "end_upper_price": float(version.end_upper_price),
+                "slope_per_session": float(version.slope_per_session),
+            }
+            for version in usable
+        }
+    earliest = min(version.effective_from for version in usable)
+    latest = max(version.projection_end for version in usable)
+    rows = db.execute(
+        text(
+            """
+            SELECT instrument_id, dt_ny
+            FROM eod_bars
+            WHERE instrument_id = ANY(:instrument_ids)
+              AND dt_ny BETWEEN :earliest AND :latest
+            ORDER BY instrument_id, dt_ny
+            """
+        ),
+        {
+            "instrument_ids": sorted({version.instrument_id for version in usable}),
+            "earliest": earliest,
+            "latest": latest,
+        },
+    ).all()
+    dates_by_instrument: dict[int, list[date]] = {}
+    for instrument_id, trade_date in rows:
+        dates_by_instrument.setdefault(int(instrument_id), []).append(trade_date)
+
+    output: dict[UUID, dict[str, Any]] = {}
+    for version in usable:
+        dates = dates_by_instrument.get(int(version.instrument_id), [])
+        if not dates:
+            continue
+        lower_date = max(version.effective_from, start_date or version.effective_from)
+        upper_date = min(version.projection_end, end_date or version.projection_end)
+        start_index = bisect_left(dates, lower_date)
+        end_index = bisect_right(dates, upper_date) - 1
+        base_index = bisect_left(dates, version.effective_from)
+        if start_index >= len(dates) or end_index < start_index or base_index >= len(dates):
+            continue
+        start_offset = start_index - base_index
+        end_offset = end_index - base_index
+        slope = float(version.slope_per_session)
+        start_center = float(version.center_price) + slope * start_offset
+        end_center = float(version.center_price) + slope * end_offset
+        half_width = (float(version.upper_price) - float(version.lower_price)) / 2.0
+        output[version.id] = {
+            "start_date": dates[start_index].isoformat(),
+            "end_date": dates[end_index].isoformat(),
+            "start_center_price": start_center,
+            "start_lower_price": start_center - half_width,
+            "start_upper_price": start_center + half_width,
+            "end_center_price": end_center,
+            "end_lower_price": end_center - half_width,
+            "end_upper_price": end_center + half_width,
+            "slope_per_session": slope,
+        }
+    return output

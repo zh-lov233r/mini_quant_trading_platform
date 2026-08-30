@@ -69,12 +69,12 @@ class PointInTimeUniversePolicy(BaseModel):
 
 
 class SupportResistanceValidationProtocol(BaseModel):
-    """Pre-registered, bounded effectiveness protocol for pivot-atr-v1."""
+    """Pre-registered, bounded effectiveness protocol for pivot-slope-atr-v2."""
 
     model_config = ConfigDict(populate_by_name=True)
 
-    kind: Literal["support_resistance_effectiveness_v1"] = (
-        "support_resistance_effectiveness_v1"
+    kind: Literal["support_resistance_effectiveness_v2"] = (
+        "support_resistance_effectiveness_v2"
     )
     max_backtests: Literal[200] = Field(default=200, alias="maxBacktests")
     bootstrap_seed: Literal[20260828] = Field(default=20260828, alias="bootstrapSeed")

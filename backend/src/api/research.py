@@ -293,7 +293,7 @@ def retry_effectiveness_report(experiment_id: UUID, db: Session = Depends(get_db
     experiment = db.get(ResearchExperiment, experiment_id)
     if experiment is None:
         raise HTTPException(status_code=404, detail="experiment not found")
-    if experiment.study_kind != "support_resistance_effectiveness_v1":
+    if experiment.study_kind != "support_resistance_effectiveness_v2":
         raise HTTPException(status_code=422, detail="experiment is not an effectiveness study")
     from src.services.support_resistance_validation_report_service import (
         finalize_validation_report,

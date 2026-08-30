@@ -48,6 +48,7 @@
 - Agent 辅助策略研究
   - 通过 AgentOps 工作流生成策略草案、执行有界研究实验，并为新策略代码准备 Draft PR
   - 支持 engine-ready 的 `support_resistance` 大类研究，可独立搜索反弹、突破与回踩模式开关
+  - 提供独立预注册的 `pivot-slope-atr-v2` 有效性研究，包含历史动态股票池、封存留出、200 次回测上限和中英文 JSON/Markdown/PDF 报告；不继承已退役水平 v1 的结论
   - 持久化实验规格、确定性的 trial 展开、进度、token 用量、终止证据和稳健性报告
   - 支持按运行时长、工作流 token 用量或目标指标自动停止
   - Agent service API 不开放券商下单、组合激活或订单提交工具

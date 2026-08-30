@@ -118,7 +118,7 @@ def find_reusable_materialization(
     expected_data_fingerprint: str | None = None,
 ) -> SupportResistanceMaterialization | None:
     metadata = runtime["params"].get("metadata", {}) or {}
-    algorithm_version = str(metadata.get("algorithm_version") or "pivot-atr-v1")
+    algorithm_version = str(metadata.get("algorithm_version") or "pivot-slope-atr-v2")
     price_semantics = str(
         metadata.get("price_semantics")
         or "forward_adjusted_preferred_unadjusted_fallback"
@@ -132,8 +132,8 @@ def find_reusable_materialization(
         .where(SupportResistanceMaterialization.universe_hash == symbols_hash)
         .where(SupportResistanceMaterialization.source_data_fingerprint == fingerprint)
         .where(SupportResistanceMaterialization.price_semantics == price_semantics)
-        .where(SupportResistanceMaterialization.coverage_start <= coverage_start)
-        .where(SupportResistanceMaterialization.coverage_end >= coverage_end)
+        .where(SupportResistanceMaterialization.coverage_start == coverage_start)
+        .where(SupportResistanceMaterialization.coverage_end == coverage_end)
         .where(SupportResistanceMaterialization.status == "completed")
         .order_by(SupportResistanceMaterialization.coverage_start.desc())
     ).scalars().all()
@@ -171,6 +171,14 @@ def hydrate_state_from_materialization(
                 "lower": float(version.lower_price),
                 "upper": float(version.upper_price),
                 "atr": float(version.atr_width),
+                "anchor_session_index": version.anchor_session_index,
+                "anchor_center": float(metadata.get("anchor_center", version.center_price)),
+                "anchor_lower": float(metadata.get("anchor_lower", version.lower_price)),
+                "anchor_upper": float(metadata.get("anchor_upper", version.upper_price)),
+                "slope_per_session": float(version.slope_per_session),
+                "fit_residual_atr": float(version.fit_residual_atr),
+                "recency_weight": float(metadata.get("recency_weight") or 0.0),
+                "last_inside": bool(metadata.get("last_inside", False)),
                 "pivot_keys": list(metadata.get("pivot_keys") or []),
                 "pivot_count": version.pivot_count,
                 "touch_count": version.touch_count,
@@ -196,7 +204,7 @@ def persist_support_resistance_run(
 ) -> SupportResistanceMaterialization:
     """Reuse or build one immutable sparse cache, then attach run-scoped events."""
     metadata = runtime["params"].get("metadata", {}) or {}
-    algorithm_version = str(metadata.get("algorithm_version") or "pivot-atr-v1")
+    algorithm_version = str(metadata.get("algorithm_version") or "pivot-slope-atr-v2")
     price_semantics = str(
         metadata.get("price_semantics")
         or "forward_adjusted_preferred_unadjusted_fallback"
@@ -235,8 +243,8 @@ def persist_support_resistance_run(
         .where(SupportResistanceMaterialization.universe_hash == symbols_hash)
         .where(SupportResistanceMaterialization.source_data_fingerprint == data_fingerprint)
         .where(SupportResistanceMaterialization.price_semantics == price_semantics)
-        .where(SupportResistanceMaterialization.coverage_start <= coverage_start)
-        .where(SupportResistanceMaterialization.coverage_end >= coverage_end)
+        .where(SupportResistanceMaterialization.coverage_start == coverage_start)
+        .where(SupportResistanceMaterialization.coverage_end == coverage_end)
         .order_by(SupportResistanceMaterialization.coverage_start.desc())
     ).scalars().all()
     materialization = next(
@@ -392,12 +400,30 @@ def _write_zone_versions(
             grouped.setdefault(str(payload["zone_key"]), []).append(payload)
         for zone_key, versions in sorted(grouped.items()):
             ordered = sorted(versions, key=lambda item: item["effective_from"])
+            session_index_by_date = {
+                item["dt_ny"]: index for index, item in enumerate(symbol_state.history)
+            }
+            session_dates = sorted(session_index_by_date)
             for index, payload in enumerate(ordered):
                 effective_from = date.fromisoformat(str(payload["effective_from"]))
                 effective_to = (
                     date.fromisoformat(str(ordered[index + 1]["effective_from"])) - timedelta(days=1)
                     if index + 1 < len(ordered)
                     else None
+                )
+                projection_limit = min(
+                    effective_to or materialization.coverage_end,
+                    materialization.coverage_end,
+                )
+                projection_dates = [item for item in session_dates if effective_from <= item <= projection_limit]
+                projection_end = projection_dates[-1] if projection_dates else effective_from
+                start_index = session_index_by_date.get(effective_from, payload["anchor_session_index"])
+                end_index = session_index_by_date.get(projection_end, start_index)
+                start_delta = payload["slope_per_session"] * (
+                    start_index - payload["anchor_session_index"]
+                )
+                end_delta = payload["slope_per_session"] * (
+                    end_index - payload["anchor_session_index"]
                 )
                 db.add(
                     SupportResistanceZoneVersion(
@@ -410,10 +436,17 @@ def _write_zone_versions(
                         effective_to=effective_to,
                         role=payload["role"],
                         status=payload["status"],
-                        center_price=payload["center"],
-                        lower_price=payload["lower"],
-                        upper_price=payload["upper"],
+                        center_price=payload["anchor_center"] + start_delta,
+                        lower_price=payload["anchor_lower"] + start_delta,
+                        upper_price=payload["anchor_upper"] + start_delta,
                         atr_width=payload["atr"],
+                        anchor_session_index=payload["anchor_session_index"],
+                        slope_per_session=payload["slope_per_session"],
+                        fit_residual_atr=payload["fit_residual_atr"],
+                        projection_end=projection_end,
+                        end_center_price=payload["anchor_center"] + end_delta,
+                        end_lower_price=payload["anchor_lower"] + end_delta,
+                        end_upper_price=payload["anchor_upper"] + end_delta,
                         pivot_count=payload["pivot_count"],
                         touch_count=payload["touch_count"],
                         source_metadata={
@@ -422,6 +455,11 @@ def _write_zone_versions(
                             "first_pivot_date": payload["first_pivot_date"],
                             "last_pivot_date": payload["last_pivot_date"],
                             "valid_from": payload["valid_from"],
+                            "anchor_center": payload["anchor_center"],
+                            "anchor_lower": payload["anchor_lower"],
+                            "anchor_upper": payload["anchor_upper"],
+                            "recency_weight": payload["recency_weight"],
+                            "last_inside": payload["last_inside"],
                         },
                     )
                 )

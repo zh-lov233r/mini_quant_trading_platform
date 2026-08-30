@@ -110,7 +110,7 @@ class DeterministicReportTests(unittest.TestCase):
         report = {
             "schemaVersion": 1,
             "studyId": "fixture-study",
-            "studyKind": "support_resistance_effectiveness_v1",
+            "studyKind": "support_resistance_effectiveness_v2",
             "status": "completed",
             "decision": "not_validated",
             "disclaimer": "Research evidence only; no profitability guarantee.",

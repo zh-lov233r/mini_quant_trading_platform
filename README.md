@@ -48,7 +48,7 @@ The repository currently has two main parts:
 - Agent-assisted strategy research
   - Uses AgentOps workflows to propose draft strategies, run bounded research experiments, and prepare Draft PRs for new strategy code
   - Includes engine-ready `support_resistance` research with independent bounce, breakout, and retest mode switches
-  - Adds a pre-registered `pivot-atr-v1` effectiveness study with a historical dynamic universe, sealed holdout, 200-backtest ceiling, and bilingual JSON/Markdown/PDF reports
+  - Adds an independent pre-registered `pivot-slope-atr-v2` effectiveness study with a historical dynamic universe, sealed holdout, 200-backtest ceiling, and bilingual JSON/Markdown/PDF reports; retired horizontal-v1 findings are not inherited
   - Persists experiment specifications, deterministic trial expansions, progress, token usage, termination evidence, and robustness reports
   - Supports automatic stop policies based on elapsed time, workflow token usage, or a target metric
   - Keeps broker, portfolio activation, and order-submission tools outside the Agent service API

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/router";
 import { Fragment, useEffect, useMemo, useState } from "react";
 
@@ -17,6 +18,7 @@ import { useI18n } from "@/i18n/provider";
 import type {
   BacktestComparisonCurvePoint,
   BacktestDetailOut,
+  BacktestEquityPoint,
   BacktestSnapshotPoint,
   BacktestSignalOut,
   BacktestTransactionOut,
@@ -25,6 +27,28 @@ import type {
 } from "@/types/backtest";
 import type { CandleBarOut, CandleSeriesOut } from "@/types/quote";
 import { formatDateTime, formatDurationMs, formatPercent } from "@/utils/strategy";
+import {
+  buildEquityEventMarkers,
+  currentZoneOverlays,
+  isDisplayableSupportResistanceEventType,
+  normalizeEquityPoints,
+  toChartTime,
+} from "@/components/charts/chartModels";
+import type {
+  ChartGapOverlay,
+  ChartOverlayMarker,
+  ChartZoneOverlay,
+} from "@/components/charts/chartModels";
+
+// Keep the chart engine out of the shared application and server-rendered bundles.
+const EquityLightweightChart = dynamic(
+  () => import("@/components/charts/EquityLightweightChart"),
+  { ssr: false },
+);
+const CandlestickLightweightChart = dynamic(
+  () => import("@/components/charts/CandlestickLightweightChart"),
+  { ssr: false },
+);
 
 function actionLink(href: string, label: string, filled = false) {
   return (
@@ -53,6 +77,22 @@ function metricNumber(summary: Record<string, unknown>, key: string): number | n
 
 const SUMMARY_SYMBOLS_LIMIT = 20;
 const BACKTEST_DETAIL_LOAD_FAILED = "__BACKTEST_DETAIL_LOAD_FAILED__";
+const BACKTEST_EQUITY_LOAD_FAILED = "__BACKTEST_EQUITY_LOAD_FAILED__";
+const BACKTEST_SIGNALS_LOAD_FAILED = "__BACKTEST_SIGNALS_LOAD_FAILED__";
+const BACKTEST_TRANSACTIONS_LOAD_FAILED = "__BACKTEST_TRANSACTIONS_LOAD_FAILED__";
+
+function detailErrorMessage(error: string, isZh: boolean): string {
+  if (error === BACKTEST_EQUITY_LOAD_FAILED) {
+    return isZh ? "加载权益曲线失败" : "Failed to load equity curve";
+  }
+  if (error === BACKTEST_SIGNALS_LOAD_FAILED) {
+    return isZh ? "加载信号失败" : "Failed to load signals";
+  }
+  if (error === BACKTEST_TRANSACTIONS_LOAD_FAILED) {
+    return isZh ? "加载交易明细失败" : "Failed to load transactions";
+  }
+  return error;
+}
 
 function renderValue(value: unknown, locale = "en-US"): string {
   if (typeof value === "number") {
@@ -347,9 +387,15 @@ type SupportResistanceSignalSetup = {
 type LifecycleZoneOverlay = {
   key: string;
   startDate: string;
-  endDate: string | null;
-  lowerPrice: number;
-  upperPrice: number;
+  endDate: string;
+  startCenterPrice: number;
+  startLowerPrice: number;
+  startUpperPrice: number;
+  endCenterPrice: number;
+  endLowerPrice: number;
+  endUpperPrice: number;
+  slopePerSession: number;
+  slopeAtrPerSession: number | null;
   role: "support" | "resistance";
   description: string;
 };
@@ -2032,6 +2078,167 @@ function EquityCurveCard({
   );
 }
 
+function EquityCurveCardLightweight({
+  run,
+  points,
+  signals,
+  transactions,
+  initialCash,
+}: {
+  run: BacktestDetailOut;
+  points: BacktestEquityPoint[];
+  signals: BacktestSignalOut[];
+  transactions: BacktestTransactionOut[];
+  initialCash?: number | null;
+}) {
+  const { locale } = useI18n();
+  const isZh = locale === "zh-CN";
+  const [curveVisibility, setCurveVisibility] = useState<CurveVisibility>({
+    strategy: true,
+    SPY: true,
+    QQQ: true,
+  });
+  const [markerVisibility, setMarkerVisibility] = useState<MarkerVisibility>({
+    buy_signal: false,
+    sell_signal: false,
+    buy_fill: true,
+    sell_fill: true,
+  });
+  const normalizedPoints = useMemo(() => normalizeEquityPoints(points), [points]);
+  const values = normalizedPoints.map((point) => point.value);
+  const symbolPnlRows = useMemo(() => buildSymbolPnlRows(run), [run]);
+  const comparisonCurves = run.comparison_curves || {};
+  const comparisons = useMemo(
+    () => ([
+      {
+        key: "SPY" as const,
+        color: "#2563eb",
+        points: ((comparisonCurves.SPY || []).length > 0
+          ? comparisonCurves.SPY || []
+          : points
+              .filter((point) => point.benchmark_symbol?.toUpperCase() === "SPY")
+              .map((point) => ({ ts: point.ts, equity: point.benchmark_equity })))
+          .map((point) => ({ time: toChartTime(point.ts), value: point.equity }))
+          .filter((point): point is { time: string; value: number } =>
+            Boolean(point.time) && typeof point.value === "number" && Number.isFinite(point.value)),
+      },
+      {
+        key: "QQQ" as const,
+        color: "#f97316",
+        points: ((comparisonCurves.QQQ || []).length > 0
+          ? comparisonCurves.QQQ || []
+          : points
+              .filter((point) => point.benchmark_symbol?.toUpperCase() === "QQQ")
+              .map((point) => ({ ts: point.ts, equity: point.benchmark_equity })))
+          .map((point) => ({ time: toChartTime(point.ts), value: point.equity }))
+          .filter((point): point is { time: string; value: number } =>
+            Boolean(point.time) && typeof point.value === "number" && Number.isFinite(point.value)),
+      },
+    ]),
+    [comparisonCurves.QQQ, comparisonCurves.SPY, points],
+  );
+  const markers = useMemo(
+    () => buildEquityEventMarkers(
+      normalizedPoints,
+      signals.map((signal) => ({
+        id: signal.id,
+        ts: signal.ts,
+        symbol: signal.symbol,
+        action: signal.signal,
+        reason: signal.reason,
+      })),
+      transactions.map((transaction) => ({
+        id: transaction.id,
+        ts: transaction.ts,
+        symbol: transaction.symbol,
+        action: transaction.side,
+        reason: `${formatCurrency(transaction.price, locale)} × ${transaction.qty.toLocaleString(locale, { maximumFractionDigits: 4 })}`,
+      })),
+      locale,
+    ),
+    [locale, normalizedPoints, signals, transactions],
+  );
+  const setAllMarkers = (visible: boolean) => setMarkerVisibility({
+    buy_signal: visible,
+    sell_signal: visible,
+    buy_fill: visible,
+    sell_fill: visible,
+  });
+  const startValue = values[0] ?? initialCash ?? null;
+  const peakValue = values.length ? Math.max(...values) : null;
+  const troughValue = values.length ? Math.min(...values) : null;
+  const latestPoint = normalizedPoints[normalizedPoints.length - 1];
+  const benchmarkSymbol = run.benchmark_symbol || points.find((point) => point.benchmark_symbol)?.benchmark_symbol || null;
+  const benchmarkTotalReturn = metricNumber(run.summary_metrics || {}, "benchmark_total_return");
+  const excessReturn = metricNumber(run.summary_metrics || {}, "excess_return");
+  const comparisonReturn = (key: "SPY" | "QQQ") => {
+    const source = comparisonCurves[key] || [];
+    const value = source[source.length - 1]?.return;
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  };
+
+  if (normalizedPoints.length < 2) {
+    return (
+      <section style={sectionCardStyle}>
+        <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>{isZh ? "权益曲线" : "Equity Curve"}</h2>
+        <div style={emptyStateStyle}>
+          {isZh ? "至少需要两个有效权益点才能绘图" : "At least two valid equity points are required"}
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section style={sectionCardStyle}>
+      <h2 style={{ margin: "0 0 16px", fontSize: 24 }}>{isZh ? "权益曲线" : "Equity Curve"}</h2>
+      <RunOverviewPanel run={run} />
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "14px 0" }}>
+        <button type="button" style={markerToggleChipStyle(curveVisibility.strategy, "#0f766e")} onClick={() => setCurveVisibility((current) => ({ ...current, strategy: !current.strategy }))}>
+          {isZh ? "策略曲线" : "Strategy Curve"}
+        </button>
+        {(["SPY", "QQQ"] as const).map((key) => (
+          <button key={key} type="button" style={markerToggleChipStyle(curveVisibility[key], key === "SPY" ? "#2563eb" : "#f97316")} onClick={() => setCurveVisibility((current) => ({ ...current, [key]: !current[key] }))}>
+            {key}
+          </button>
+        ))}
+        <button type="button" style={markerToggleButtonStyle(true)} onClick={() => setAllMarkers(true)}>{isZh ? "全部开启" : "Enable All"}</button>
+        <button type="button" style={markerToggleButtonStyle(false)} onClick={() => setAllMarkers(false)}>{isZh ? "全部关闭" : "Disable All"}</button>
+        {([
+          ["buy_signal", isZh ? "BUY 信号" : "BUY Signals", "#2563eb"],
+          ["sell_signal", isZh ? "SELL 信号" : "SELL Signals", "#d97706"],
+          ["buy_fill", isZh ? "BUY 成交" : "BUY Fills", "#16a34a"],
+          ["sell_fill", isZh ? "SELL 成交" : "SELL Fills", "#dc2626"],
+        ] as const).map(([key, label, color]) => (
+          <button key={key} type="button" style={markerToggleChipStyle(markerVisibility[key], color)} onClick={() => setMarkerVisibility((current) => ({ ...current, [key]: !current[key] }))}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <EquityLightweightChart
+        points={normalizedPoints}
+        comparisons={comparisons}
+        markers={markers}
+        strategyVisible={curveVisibility.strategy}
+        comparisonVisibility={{ SPY: curveVisibility.SPY, QQQ: curveVisibility.QQQ }}
+        markerVisibility={markerVisibility}
+        initialValue={startValue}
+        locale={locale}
+      />
+      <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+        <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "快照点数" : "Snapshots"}</div><div style={miniMetricValueStyle}>{normalizedPoints.length}</div></div>
+        <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "曲线峰值" : "Peak Equity"}</div><div style={miniMetricValueStyle}>{formatCurrency(peakValue, locale)}</div></div>
+        <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "曲线谷值" : "Lowest Equity"}</div><div style={miniMetricValueStyle}>{formatCurrency(troughValue, locale)}</div></div>
+        <div style={miniMetricStyle}><div style={labelStyle}>SPY {isZh ? "收益" : "Return"}</div><div style={miniMetricValueStyle}>{formatPercent(comparisonReturn("SPY"), 2)}</div></div>
+        <div style={miniMetricStyle}><div style={labelStyle}>QQQ {isZh ? "收益" : "Return"}</div><div style={miniMetricValueStyle}>{formatPercent(comparisonReturn("QQQ"), 2)}</div></div>
+        {benchmarkSymbol ? <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "基准收益" : "Benchmark Return"} ({benchmarkSymbol})</div><div style={miniMetricValueStyle}>{formatPercent(benchmarkTotalReturn, 2)}</div></div> : null}
+        {benchmarkSymbol ? <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "超额收益" : "Excess Return"}</div><div style={miniMetricValueStyle}>{formatPercent(excessReturn, 2)}</div></div> : null}
+        <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "最后快照" : "Last Snapshot"}</div><div style={miniMetricValueStyle}>{formatDateTime(latestPoint?.sourceTs || null, locale)}</div></div>
+      </div>
+      <SymbolPnlCard rows={symbolPnlRows} />
+    </section>
+  );
+}
+
 function markerToggleButtonStyle(isPrimary: boolean) {
   return {
     border: "none",
@@ -2345,13 +2552,12 @@ function buildSupportResistanceMarkers(
     touch: "neckline",
     breakout: "breakout",
     retest: "right_bottom",
-    candidate: "buy_signal",
-    selection: "buy",
+    candidate: "mark",
+    selection: "breakout",
     role_transition: "right_bottom",
-    invalidation: "sell_signal",
   } as Record<string, LifecycleChartMarker["tone"]>;
   return events
-    .filter((event) => ["touch", "breakout", "retest", "candidate", "selection", "role_transition", "invalidation"].includes(event.event_type))
+    .filter((event) => isDisplayableSupportResistanceEventType(event.event_type))
     .map((event) => {
       const payload = event.payload || {};
       const zone = getObjectValue(payload.zone);
@@ -2365,7 +2571,6 @@ function buildSupportResistanceMarkers(
         candidate: isZh ? "候选" : "Candidate",
         selection: isZh ? "选中" : "Selected",
         role_transition: isZh ? "角色转换" : "Role Flip",
-        invalidation: isZh ? "失效" : "Invalidated",
       };
       return {
         key: `sr-${event.id}`,
@@ -2548,728 +2753,6 @@ function buildLifecycleGapOverlays(
   return overlays;
 }
 
-function formatChartAxisPrice(value: number, locale: string) {
-  return value.toLocaleString(locale, {
-    minimumFractionDigits: value >= 100 ? 0 : 2,
-    maximumFractionDigits: value >= 100 ? 2 : 2,
-  });
-}
-
-function formatCompactNumber(value: number, locale: string) {
-  if (!Number.isFinite(value)) {
-    return "-";
-  }
-  return new Intl.NumberFormat(locale, {
-    notation: "compact",
-    maximumFractionDigits: 1,
-  }).format(value);
-}
-
-function clampNumeric(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
-}
-
-function rectsOverlap(
-  leftA: number,
-  topA: number,
-  widthA: number,
-  heightA: number,
-  leftB: number,
-  topB: number,
-  widthB: number,
-  heightB: number,
-  gap = 6
-) {
-  return !(
-    leftA + widthA + gap <= leftB
-    || leftB + widthB + gap <= leftA
-    || topA + heightA + gap <= topB
-    || topB + heightB + gap <= topA
-  );
-}
-
-function layoutLifecycleLabels(
-  items: Array<{
-    key: string;
-    labelX: number;
-    labelY: number;
-    labelWidth: number;
-    labelHeight: number;
-  }>,
-  bounds: {
-    minX: number;
-    maxX: number;
-    minY: number;
-    maxY: number;
-  }
-) {
-  const placed: Array<{
-    key: string;
-    labelX: number;
-    labelY: number;
-    labelWidth: number;
-    labelHeight: number;
-  }> = [];
-  const nextPositions = new Map<string, { labelX: number; labelY: number }>();
-  const sortedItems = [...items].sort(
-    (left, right) => left.labelY - right.labelY || left.labelX - right.labelX
-  );
-
-  sortedItems.forEach((item) => {
-    let labelX = clampNumeric(
-      item.labelX,
-      bounds.minX,
-      bounds.maxX - item.labelWidth
-    );
-    let labelY = clampNumeric(
-      item.labelY,
-      bounds.minY,
-      bounds.maxY - item.labelHeight
-    );
-
-    for (let attempt = 0; attempt < 24; attempt += 1) {
-      const collision = placed.find((other) =>
-        rectsOverlap(
-          labelX,
-          labelY,
-          item.labelWidth,
-          item.labelHeight,
-          other.labelX,
-          other.labelY,
-          other.labelWidth,
-          other.labelHeight
-        )
-      );
-      if (!collision) {
-        break;
-      }
-
-      const shiftedY = collision.labelY + collision.labelHeight + 6;
-      if (shiftedY <= bounds.maxY - item.labelHeight) {
-        labelY = shiftedY;
-        continue;
-      }
-
-      const rightX = collision.labelX + collision.labelWidth + 10;
-      if (rightX <= bounds.maxX - item.labelWidth) {
-        labelX = rightX;
-        labelY = Math.max(bounds.minY, collision.labelY - 4);
-        continue;
-      }
-
-      const leftX = collision.labelX - item.labelWidth - 10;
-      if (leftX >= bounds.minX) {
-        labelX = leftX;
-        labelY = Math.max(bounds.minY, collision.labelY - 4);
-        continue;
-      }
-
-      labelY = clampNumeric(
-        collision.labelY + collision.labelHeight + 6,
-        bounds.minY,
-        bounds.maxY - item.labelHeight
-      );
-    }
-
-    placed.push({
-      key: item.key,
-      labelX,
-      labelY,
-      labelWidth: item.labelWidth,
-      labelHeight: item.labelHeight,
-    });
-    nextPositions.set(item.key, { labelX, labelY });
-  });
-
-  return nextPositions;
-}
-
-function LifecycleCandlestickChart({
-  bars,
-  markers,
-  gapOverlays,
-  zoneOverlays,
-  locale,
-}: {
-  bars: CandleBarOut[];
-  markers: LifecycleChartMarker[];
-  gapOverlays: LifecycleGapOverlay[];
-  zoneOverlays: LifecycleZoneOverlay[];
-  locale: string;
-}) {
-  const svgWidth = Math.max(760, bars.length * 13 + 120);
-  const svgHeight = 384;
-  const padding = { top: 18, right: 22, bottom: 34, left: 74 };
-  const labelRailHeight = 58;
-  const labelRailGap = 10;
-  const volumeAreaHeight = bars.length > 140 ? 82 : bars.length > 90 ? 74 : 64;
-  const volumeAreaGap = 12;
-  const lowestLow = Math.min(
-    ...bars.map((bar) => bar.low),
-    ...zoneOverlays.map((zone) => zone.lowerPrice)
-  );
-  const highestHigh = Math.max(
-    ...bars.map((bar) => bar.high),
-    ...zoneOverlays.map((zone) => zone.upperPrice)
-  );
-  const priceSpan = highestHigh - lowestLow || Math.max(highestHigh, 1);
-  const chartLow = lowestLow - priceSpan * 0.05;
-  const chartHigh = highestHigh + priceSpan * 0.05;
-  const chartSpan = chartHigh - chartLow || 1;
-  const plotWidth = svgWidth - padding.left - padding.right;
-  const plotHeight = svgHeight - padding.top - padding.bottom;
-  const labelRailTop = padding.top;
-  const labelRailBottom = labelRailTop + labelRailHeight;
-  const priceAreaTop = labelRailBottom + labelRailGap;
-  const pricePlotHeight = plotHeight - labelRailHeight - labelRailGap - volumeAreaHeight - volumeAreaGap;
-  const priceAreaBottom = priceAreaTop + pricePlotHeight;
-  const volumeAreaTop = priceAreaBottom + volumeAreaGap;
-  const volumeAreaBottom = volumeAreaTop + volumeAreaHeight;
-  const candleStep = plotWidth / Math.max(bars.length, 1);
-  const candleBodyWidth = Math.max(4, Math.min(10, candleStep * 0.55));
-  const volumeBarWidth = Math.max(4, Math.min(12, candleStep * 0.68));
-  const midBar = bars[Math.floor(bars.length / 2)] ?? bars[0];
-  const tickValues = Array.from({ length: 4 }, (_, index) => chartHigh - (chartSpan * index) / 3);
-  const maxVolume = Math.max(...bars.map((bar) => bar.volume ?? 0), 1);
-  const markerPalette: Record<LifecycleChartMarker["tone"], { stroke: string; fill: string; bubble: string }> = {
-    buy: {
-      stroke: "#22c55e",
-      fill: "#22c55e",
-      bubble: "rgba(20, 83, 45, 0.92)",
-    },
-    buy_signal: {
-      stroke: "#38bdf8",
-      fill: "#38bdf8",
-      bubble: "rgba(12, 74, 110, 0.94)",
-    },
-    sell: {
-      stroke: "#ef4444",
-      fill: "#ef4444",
-      bubble: "rgba(127, 29, 29, 0.92)",
-    },
-    sell_signal: {
-      stroke: "#f59e0b",
-      fill: "#f59e0b",
-      bubble: "rgba(120, 53, 15, 0.94)",
-    },
-    mark: {
-      stroke: "#38bdf8",
-      fill: "#38bdf8",
-      bubble: "rgba(8, 47, 73, 0.94)",
-    },
-    neckline: {
-      stroke: "#94a3b8",
-      fill: "#94a3b8",
-      bubble: "rgba(30, 41, 59, 0.94)",
-    },
-    breakout: {
-      stroke: "#f97316",
-      fill: "#f97316",
-      bubble: "rgba(124, 45, 18, 0.94)",
-    },
-    left_bottom: {
-      stroke: "#eab308",
-      fill: "#eab308",
-      bubble: "rgba(113, 63, 18, 0.94)",
-    },
-    right_bottom: {
-      stroke: "#14b8a6",
-      fill: "#14b8a6",
-      bubble: "rgba(17, 94, 89, 0.94)",
-    },
-  };
-  const gapOverlayPalette: Record<
-    LifecycleGapOverlay["tone"],
-    { stroke: string; fill: string; bubble: string }
-  > = {
-    left_gap: {
-      stroke: "#f59e0b",
-      fill: "rgba(245, 158, 11, 0.14)",
-      bubble: "rgba(120, 53, 15, 0.92)",
-    },
-    right_gap: {
-      stroke: "#06b6d4",
-      fill: "rgba(6, 182, 212, 0.14)",
-      bubble: "rgba(8, 47, 73, 0.94)",
-    },
-  };
-
-  function priceToY(price: number) {
-    return priceAreaTop + ((chartHigh - price) / chartSpan) * pricePlotHeight;
-  }
-
-  const projectedZoneOverlays = zoneOverlays.map((zone) => {
-    const startIndex = Math.max(0, bars.findIndex((bar) => bar.trade_date >= zone.startDate));
-    let endIndex = bars.length - 1;
-    if (zone.endDate) {
-      for (let index = bars.length - 1; index >= 0; index -= 1) {
-        if (bars[index].trade_date <= zone.endDate) {
-          endIndex = index;
-          break;
-        }
-      }
-    }
-    const x = padding.left + candleStep * startIndex;
-    const width = Math.max(candleStep, candleStep * (endIndex - startIndex + 1));
-    const top = priceToY(zone.upperPrice);
-    const bottom = priceToY(zone.lowerPrice);
-    return { ...zone, x, width, y: Math.min(top, bottom), height: Math.max(3, Math.abs(bottom - top)) };
-  });
-
-  const projectedGapOverlays = gapOverlays
-    .map((overlay) => {
-      const referenceIndex = bars.findIndex((bar) => bar.trade_date === overlay.referenceDate);
-      const anchorIndex = bars.findIndex((bar) => bar.trade_date === overlay.anchorDate);
-      if (referenceIndex < 0 || anchorIndex < 0) {
-        return null;
-      }
-
-      const leftIndex = Math.min(referenceIndex, anchorIndex);
-      const rightIndex = Math.max(referenceIndex, anchorIndex);
-      const leftCenter = padding.left + candleStep * leftIndex + candleStep / 2;
-      const rightCenter = padding.left + candleStep * rightIndex + candleStep / 2;
-      const x = clampNumeric(
-        Math.min(leftCenter, rightCenter) - candleStep * 0.2,
-        padding.left + 1,
-        svgWidth - padding.right - candleStep * 0.7
-      );
-      const width = Math.max(candleStep * 0.7, Math.abs(rightCenter - leftCenter) + candleStep * 0.4);
-      const topY = priceToY(clampNumeric(overlay.highPrice, chartLow, chartHigh));
-      const bottomY = priceToY(clampNumeric(overlay.lowPrice, chartLow, chartHigh));
-      const y = Math.min(topY, bottomY);
-      const height = Math.max(3, Math.abs(bottomY - topY));
-      const dotX = x + width / 2;
-      const dotY = clampNumeric(y - 9, priceAreaTop + 8, priceAreaBottom - 12);
-      const palette = gapOverlayPalette[overlay.tone];
-      const labelWidth = Math.max(52, overlay.label.length * 7.5 + 18);
-      const labelHeight = 18;
-      const labelX = clampNumeric(
-        dotX - labelWidth / 2,
-        padding.left + 2,
-        svgWidth - padding.right - labelWidth - 2
-      );
-      const labelY = clampNumeric(labelRailTop + 4, labelRailTop + 2, labelRailBottom - labelHeight - 2);
-
-      return {
-        ...overlay,
-        x,
-        y,
-        width,
-        height,
-        dotX,
-        dotY,
-        labelX,
-        labelY,
-        labelWidth,
-        labelHeight,
-        palette,
-      };
-    })
-    .filter((overlay): overlay is NonNullable<typeof overlay> => overlay !== null);
-
-  const projectedMarkers = markers
-    .map((marker) => {
-      const index = bars.findIndex((bar) => bar.trade_date === marker.date);
-      if (index < 0) {
-        return null;
-      }
-      const x = padding.left + candleStep * index + candleStep / 2;
-      const markerPrice = marker.price ?? bars[index].close;
-      const y = priceToY(clampNumeric(markerPrice, chartLow, chartHigh));
-      const dotY = clampNumeric(
-        priceToY(Math.max(bars[index].high, markerPrice)) - 10,
-        priceAreaTop + 8,
-        priceAreaBottom - 12
-      );
-      const palette = markerPalette[marker.tone];
-      const bubbleWidth = Math.max(50, marker.label.length * 7.5 + 16);
-      const bubbleHeight = 22;
-      const bubbleY = clampNumeric(
-        marker.tone === "buy" || marker.tone === "sell" ? labelRailTop + 30 : labelRailTop + 4,
-        labelRailTop + 2,
-        labelRailBottom - bubbleHeight - 2
-      );
-      const bubbleX = clampNumeric(
-        x - bubbleWidth / 2,
-        padding.left + 2,
-        svgWidth - padding.right - bubbleWidth - 2
-      );
-
-      return {
-        ...marker,
-        x,
-        y,
-        dotY,
-        bubbleX,
-        bubbleY,
-        bubbleWidth,
-        bubbleHeight,
-        palette,
-      };
-    })
-    .filter((marker): marker is NonNullable<typeof marker> => marker !== null);
-
-  const labelPositions = layoutLifecycleLabels(
-    [
-      ...projectedGapOverlays.map((overlay) => ({
-        key: `gap-${overlay.key}`,
-        labelX: overlay.labelX,
-        labelY: overlay.labelY,
-        labelWidth: overlay.labelWidth,
-        labelHeight: overlay.labelHeight,
-      })),
-      ...projectedMarkers.map((marker) => ({
-        key: `marker-${marker.key}`,
-        labelX: marker.bubbleX,
-        labelY: marker.bubbleY,
-        labelWidth: marker.bubbleWidth,
-        labelHeight: marker.bubbleHeight,
-      })),
-    ],
-    {
-      minX: padding.left + 2,
-      maxX: svgWidth - padding.right - 2,
-      minY: labelRailTop + 2,
-      maxY: labelRailBottom - 2,
-    }
-  );
-
-  const laidOutGapOverlays = projectedGapOverlays.map((overlay) => {
-    const nextPosition = labelPositions.get(`gap-${overlay.key}`);
-    return nextPosition
-      ? {
-          ...overlay,
-          labelX: nextPosition.labelX,
-          labelY: nextPosition.labelY,
-        }
-      : overlay;
-  });
-
-  const laidOutMarkers = projectedMarkers.map((marker) => {
-    const nextPosition = labelPositions.get(`marker-${marker.key}`);
-    if (!nextPosition) {
-      return marker;
-    }
-    return {
-      ...marker,
-      bubbleX: nextPosition.labelX,
-      bubbleY: nextPosition.labelY,
-    };
-  });
-
-  return (
-    <div
-      style={{
-        overflowX: "auto",
-        overflowY: "hidden",
-        borderRadius: 18,
-        border: "1px solid rgba(71, 85, 105, 0.24)",
-        background:
-          "radial-gradient(circle at top, rgba(14, 116, 144, 0.18), transparent 42%), rgba(3, 7, 18, 0.88)",
-        padding: 10,
-      }}
-    >
-      <svg
-        width={svgWidth}
-        height={svgHeight}
-        viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-        role="img"
-        aria-label="lifecycle candlestick chart"
-      >
-        <rect
-          x={padding.left}
-          y={labelRailTop}
-          width={plotWidth}
-          height={labelRailHeight}
-          rx="12"
-          fill="rgba(15, 23, 42, 0.22)"
-          stroke="rgba(71, 85, 105, 0.14)"
-        />
-        <line
-          x1={padding.left}
-          y1={priceAreaTop - labelRailGap / 2}
-          x2={svgWidth - padding.right}
-          y2={priceAreaTop - labelRailGap / 2}
-          stroke="rgba(148, 163, 184, 0.12)"
-          strokeDasharray="4 6"
-        />
-        {tickValues.map((value) => {
-          const y = priceToY(value);
-          return (
-            <g key={value}>
-              <line
-                x1={padding.left}
-                y1={y}
-                x2={svgWidth - padding.right}
-                y2={y}
-                stroke="rgba(148, 163, 184, 0.14)"
-                strokeDasharray="4 6"
-              />
-              <text
-                x={padding.left - 10}
-                y={y + 4}
-                textAnchor="end"
-                fill="rgba(226, 232, 240, 0.66)"
-                fontSize="11"
-                fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
-              >
-                {formatChartAxisPrice(value, locale)}
-              </text>
-            </g>
-          );
-        })}
-
-        <line
-          x1={padding.left}
-          y1={volumeAreaTop - 6}
-          x2={svgWidth - padding.right}
-          y2={volumeAreaTop - 6}
-          stroke="rgba(148, 163, 184, 0.12)"
-          strokeDasharray="4 6"
-        />
-        <rect
-          x={padding.left}
-          y={volumeAreaTop}
-          width={plotWidth}
-          height={volumeAreaHeight}
-          rx="10"
-          fill="rgba(15, 23, 42, 0.28)"
-          stroke="rgba(71, 85, 105, 0.18)"
-        />
-
-        {projectedZoneOverlays.map((zone) => (
-          <rect
-            key={zone.key}
-            x={zone.x}
-            y={zone.y}
-            width={zone.width}
-            height={zone.height}
-            rx="4"
-            fill={zone.role === "support" ? "rgba(34, 197, 94, 0.14)" : "rgba(239, 68, 68, 0.13)"}
-            stroke={zone.role === "support" ? "#22c55e" : "#ef4444"}
-            strokeDasharray="6 4"
-            strokeWidth="1.25"
-          >
-            <title>{zone.description}</title>
-          </rect>
-        ))}
-
-        {laidOutGapOverlays.map((overlay) => (
-          <g key={overlay.key}>
-            <line
-              x1={overlay.dotX}
-              y1={overlay.dotY}
-              x2={overlay.labelX + overlay.labelWidth / 2}
-              y2={overlay.labelY + overlay.labelHeight}
-              stroke={overlay.palette.stroke}
-              strokeWidth="1.2"
-              strokeDasharray="4 4"
-              opacity="0.88"
-            />
-            <rect
-              x={overlay.x}
-              y={overlay.y}
-              width={overlay.width}
-              height={overlay.height}
-              rx="4"
-              fill={overlay.palette.fill}
-              stroke={overlay.palette.stroke}
-              strokeDasharray="5 4"
-              strokeWidth="1.3"
-            />
-            <circle
-              cx={overlay.dotX}
-              cy={overlay.dotY}
-              r="5.2"
-              fill={overlay.palette.stroke}
-              stroke="#f8fafc"
-              strokeWidth="1.4"
-            />
-            <rect
-              x={overlay.labelX}
-              y={overlay.labelY}
-              width={overlay.labelWidth}
-              height={overlay.labelHeight}
-              rx="999"
-              fill={overlay.palette.bubble}
-              stroke={overlay.palette.stroke}
-              strokeWidth="1"
-            />
-            <text
-              x={overlay.labelX + overlay.labelWidth / 2}
-              y={overlay.labelY + 12.5}
-              textAnchor="middle"
-              fill="#f8fafc"
-              fontSize="10"
-              fontWeight="700"
-              fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
-            >
-              {overlay.label}
-            </text>
-            <title>{overlay.description}</title>
-          </g>
-        ))}
-
-        {bars.map((bar, index) => {
-          const centerX = padding.left + candleStep * index + candleStep / 2;
-          const highY = priceToY(bar.high);
-          const lowY = priceToY(bar.low);
-          const openY = priceToY(bar.open);
-          const closeY = priceToY(bar.close);
-          const bodyTop = Math.min(openY, closeY);
-          const bodyHeight = Math.max(1.8, Math.abs(closeY - openY));
-          const isUp = bar.close > bar.open;
-          const isFlat = bar.close === bar.open;
-          const color = isFlat ? "#fbbf24" : isUp ? "#34d399" : "#fb7185";
-
-          return (
-            <g key={`${bar.trade_date}-${index}`}>
-              <line
-                x1={centerX}
-                y1={highY}
-                x2={centerX}
-                y2={lowY}
-                stroke={color}
-                strokeWidth="1.4"
-              />
-              <rect
-                x={centerX - candleBodyWidth / 2}
-                y={bodyTop}
-                width={candleBodyWidth}
-                height={bodyHeight}
-                rx="1.5"
-                fill={color}
-                fillOpacity={isFlat ? 0.8 : 0.28}
-                stroke={color}
-                strokeWidth="1.3"
-              />
-            </g>
-          );
-        })}
-
-        {bars.map((bar, index) => {
-          const centerX = padding.left + candleStep * index + candleStep / 2;
-          const isUp = bar.close > bar.open;
-          const isFlat = bar.close === bar.open;
-          const color = isFlat ? "rgba(251, 191, 36, 0.9)" : isUp ? "rgba(52, 211, 153, 0.92)" : "rgba(251, 113, 133, 0.92)";
-          const volume = Math.max(bar.volume ?? 0, 0);
-          const volumeRatio = maxVolume > 0 ? volume / maxVolume : 0;
-          const emphasizedRatio = Math.sqrt(volumeRatio);
-          const barHeight = emphasizedRatio * (volumeAreaHeight - 6);
-
-          return (
-            <rect
-              key={`volume-${bar.trade_date}-${index}`}
-              x={centerX - volumeBarWidth / 2}
-              y={volumeAreaBottom - barHeight}
-              width={volumeBarWidth}
-              height={Math.max(barHeight, 1.5)}
-              rx="1.5"
-              fill={color}
-            />
-          );
-        })}
-
-        <text
-          x={padding.left}
-          y={volumeAreaTop + 10}
-          fill="rgba(148, 163, 184, 0.72)"
-          fontSize="11"
-          fontWeight="700"
-          fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
-        >
-          VOL
-        </text>
-        <text
-          x={padding.left}
-          y={volumeAreaTop + 24}
-          fill="rgba(148, 163, 184, 0.56)"
-          fontSize="10"
-          fontWeight="600"
-          fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
-        >
-          {formatCompactNumber(maxVolume, locale)}
-        </text>
-
-        {laidOutMarkers.map((marker) => (
-          <g key={marker.key}>
-            <line
-              x1={marker.x}
-              y1={marker.dotY}
-              x2={marker.bubbleX + marker.bubbleWidth / 2}
-              y2={marker.bubbleY + marker.bubbleHeight}
-              stroke={marker.palette.stroke}
-              strokeWidth="1.4"
-              strokeDasharray="4 4"
-              opacity="0.9"
-            />
-            <circle
-              cx={marker.x}
-              cy={marker.dotY}
-              r="5.5"
-              fill={marker.palette.fill}
-              stroke="#f8fafc"
-              strokeWidth="1.4"
-            />
-            <rect
-              x={marker.bubbleX}
-              y={marker.bubbleY}
-              width={marker.bubbleWidth}
-              height={marker.bubbleHeight}
-              rx="999"
-              fill={marker.palette.bubble}
-              stroke={marker.palette.stroke}
-              strokeWidth="1"
-            />
-            <text
-              x={marker.bubbleX + marker.bubbleWidth / 2}
-              y={marker.bubbleY + 15}
-              textAnchor="middle"
-              fill="#f8fafc"
-              fontSize="10.5"
-              fontWeight="700"
-              fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
-            >
-              {marker.label}
-            </text>
-            <title>{marker.description}</title>
-          </g>
-        ))}
-
-        <text
-          x={padding.left}
-          y={svgHeight - 8}
-          fill="rgba(226, 232, 240, 0.72)"
-          fontSize="11"
-          fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
-        >
-          {bars[0]?.trade_date}
-        </text>
-        <text
-          x={svgWidth / 2}
-          y={svgHeight - 8}
-          textAnchor="middle"
-          fill="rgba(226, 232, 240, 0.6)"
-          fontSize="11"
-          fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
-        >
-          {midBar.trade_date}
-        </text>
-        <text
-          x={svgWidth - padding.right}
-          y={svgHeight - 8}
-          textAnchor="end"
-          fill="rgba(226, 232, 240, 0.72)"
-          fontSize="11"
-          fontFamily="Avenir Next, Segoe UI, Helvetica Neue, sans-serif"
-        >
-          {bars[bars.length - 1]?.trade_date}
-        </text>
-      </svg>
-    </div>
-  );
-}
-
 function LifecycleDetailPanel({
   runId,
   row,
@@ -3425,31 +2908,6 @@ function LifecycleDetailPanel({
     };
   }, [fetchEndDate, fetchStartDate, isZh, row.symbol, series]);
 
-  useEffect(() => {
-    if (!supportResistanceSetup || !fetchStartDate || !fetchEndDate) {
-      setSupportResistanceDetail(null);
-      setSupportResistanceError(null);
-      return;
-    }
-    let active = true;
-    setSupportResistanceError(null);
-    void getBacktestSupportResistance(runId, {
-      symbol: row.symbol,
-      zone_key: supportResistanceSetup.zoneKey,
-      start_date: fetchStartDate,
-      end_date: fetchEndDate,
-    })
-      .then((detail) => {
-        if (active) setSupportResistanceDetail(detail);
-      })
-      .catch((err) => {
-        if (!active) return;
-        setSupportResistanceDetail(null);
-        setSupportResistanceError(err instanceof Error ? err.message : (isZh ? "加载支撑压力审计数据失败" : "Failed to load support/resistance audit data"));
-      });
-    return () => { active = false; };
-  }, [fetchEndDate, fetchStartDate, isZh, row.symbol, runId, supportResistanceSetup]);
-
   const bars = useMemo(
     () =>
       trimLifecycleBars(
@@ -3463,6 +2921,29 @@ function LifecycleDetailPanel({
   );
   const visibleStartDate = bars[0]?.trade_date || fetchStartDate;
   const visibleEndDate = bars[bars.length - 1]?.trade_date || baseEndDate;
+  useEffect(() => {
+    if (!supportResistanceSetup || !visibleStartDate || !visibleEndDate || bars.length === 0) {
+      setSupportResistanceDetail(null);
+      setSupportResistanceError(null);
+      return;
+    }
+    let active = true;
+    setSupportResistanceError(null);
+    void getBacktestSupportResistance(runId, {
+      symbol: row.symbol,
+      start_date: visibleStartDate,
+      end_date: visibleEndDate,
+    })
+      .then((detail) => {
+        if (active) setSupportResistanceDetail(detail);
+      })
+      .catch((err) => {
+        if (!active) return;
+        setSupportResistanceDetail(null);
+        setSupportResistanceError(err instanceof Error ? err.message : (isZh ? "加载支撑压力审计数据失败" : "Failed to load support/resistance audit data"));
+      });
+    return () => { active = false; };
+  }, [bars.length, isZh, row.symbol, runId, supportResistanceSetup, visibleEndDate, visibleStartDate]);
   const gapSetup = useMemo(
     () => extractIslandReversalGapSetup(entrySignal) || extractIslandReversalGapSetup(exitSignal),
     [entrySignal, exitSignal]
@@ -3493,38 +2974,52 @@ function LifecycleDetailPanel({
   const zoneOverlays = useMemo<LifecycleZoneOverlay[]>(() => {
     if (!supportResistanceSetup) return [];
     const versions = supportResistanceDetail?.zone_versions || [];
-    const activeVersions = versions.filter((version) => version.status === "active");
-    if (activeVersions.length > 0) {
-      return activeVersions.map((version) => ({
+    const availableDates = new Set(bars.map((bar) => bar.trade_date));
+    return versions
+      .filter((version) => version.status === "active" && version.geometry)
+      .filter((version) => {
+        const geometry = version.geometry!;
+        return geometry.end_date >= (visibleStartDate || "")
+          && geometry.start_date <= (visibleEndDate || "")
+          && availableDates.has(geometry.start_date)
+          && availableDates.has(geometry.end_date);
+      })
+      .map((version) => {
+        const geometry = version.geometry!;
+        const normalizedSlope = version.atr_width > 0
+          ? geometry.slope_per_session / version.atr_width
+          : null;
+        const direction = geometry.slope_per_session > 0
+          ? (isZh ? "上倾" : "Rising")
+          : geometry.slope_per_session < 0
+            ? (isZh ? "下倾" : "Falling")
+            : (isZh ? "水平" : "Flat");
+        return {
         key: `sr-zone-${version.id}`,
-        startDate: version.effective_from,
-        endDate: version.effective_to || visibleEndDate || null,
-        lowerPrice: version.lower_price,
-        upperPrice: version.upper_price,
+        startDate: geometry.start_date,
+        endDate: geometry.end_date,
+        startCenterPrice: geometry.start_center_price,
+        startLowerPrice: geometry.start_lower_price,
+        startUpperPrice: geometry.start_upper_price,
+        endCenterPrice: geometry.end_center_price,
+        endLowerPrice: geometry.end_lower_price,
+        endUpperPrice: geometry.end_upper_price,
+        slopePerSession: geometry.slope_per_session,
+        slopeAtrPerSession: normalizedSlope,
         role: version.role,
         description: [
           version.role === "support" ? (isZh ? "支撑区" : "Support Zone") : (isZh ? "压力区" : "Resistance Zone"),
-          `${formatCurrency(version.lower_price, locale)} - ${formatCurrency(version.upper_price, locale)}`,
-          `${isZh ? "触碰" : "Touches"} ${version.touch_count}`,
-        ].join(" · "),
-      }));
-    }
-    return [{
-      key: `sr-zone-frozen-${supportResistanceSetup.zoneKey}`,
-      startDate: supportResistanceSetup.validFrom || row.entrySignalTradeDate || entryTradeDate || visibleStartDate || "",
-      endDate: visibleEndDate || null,
-      lowerPrice: supportResistanceSetup.lower,
-      upperPrice: supportResistanceSetup.upper,
-      role: supportResistanceSetup.selectedSetup === "support_bounce" ? "support" : "resistance",
-      description: [
-        isZh ? "入场冻结区域" : "Frozen Entry Zone",
-        supportResistanceSetup.selectedSetup,
-        `${formatCurrency(supportResistanceSetup.lower, locale)} - ${formatCurrency(supportResistanceSetup.upper, locale)}`,
-        supportResistanceSetup.score != null ? `${isZh ? "后验" : "Posterior"} ${formatPercent(supportResistanceSetup.score, 2)}` : null,
-        supportResistanceSetup.resolvedSamples != null ? `n=${supportResistanceSetup.resolvedSamples}` : null,
-      ].filter(Boolean).join(" · "),
-    }];
-  }, [entryTradeDate, isZh, locale, row.entrySignalTradeDate, supportResistanceDetail?.zone_versions, supportResistanceSetup, visibleEndDate, visibleStartDate]);
+          `${formatCurrency(geometry.end_lower_price, locale)} - ${formatCurrency(geometry.end_upper_price, locale)}`,
+          direction,
+          normalizedSlope == null ? null : `${normalizedSlope.toFixed(3)} ATR/${isZh ? "日" : "session"}`,
+        ].filter(Boolean).join(" · "),
+      };
+    });
+  }, [bars, isZh, locale, supportResistanceDetail?.zone_versions, supportResistanceSetup, visibleEndDate, visibleStartDate]);
+  const zoneLegendItems = useMemo(
+    () => currentZoneOverlays(zoneOverlays, visibleEndDate),
+    [visibleEndDate, zoneOverlays],
+  );
 
   useEffect(() => {
     if (
@@ -3765,12 +3260,15 @@ function LifecycleDetailPanel({
         </div>
       ) : (
         <>
-          <LifecycleCandlestickChart
+          <CandlestickLightweightChart
             bars={bars}
-            markers={markers}
-            gapOverlays={gapOverlays}
-            zoneOverlays={zoneOverlays}
+            markers={markers as ChartOverlayMarker[]}
+            gaps={gapOverlays as ChartGapOverlay[]}
+            zones={zoneOverlays as ChartZoneOverlay[]}
             locale={locale}
+            showVolume
+            height={384}
+            ariaLabel={isZh ? "生命周期蜡烛图" : "Lifecycle candlestick chart"}
           />
           <div
             style={{
@@ -3783,7 +3281,7 @@ function LifecycleDetailPanel({
               fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
             }}
           >
-            {zoneOverlays.map((zone) => (
+            {zoneLegendItems.map((zone) => (
               <span key={zone.key} style={legendItemStyle} title={zone.description}>
                 <span style={{ ...legendDotStyle, background: zone.role === "support" ? "#22c55e" : "#ef4444" }} />
                 {zone.description}
@@ -4397,6 +3895,12 @@ export default function BacktestDetailPage() {
   const [run, setRun] = useState<BacktestDetailOut | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [equityLoading, setEquityLoading] = useState(true);
+  const [equityError, setEquityError] = useState<string | null>(null);
+  const [signalsLoading, setSignalsLoading] = useState(true);
+  const [signalsError, setSignalsError] = useState<string | null>(null);
+  const [transactionsLoading, setTransactionsLoading] = useState(true);
+  const [transactionsError, setTransactionsError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!router.isReady || !runId) {
@@ -4406,24 +3910,29 @@ export default function BacktestDetailPage() {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setRun(null);
+    setEquityLoading(true);
+    setEquityError(null);
+    setSignalsLoading(true);
+    setSignalsError(null);
+    setTransactionsLoading(true);
+    setTransactionsError(null);
 
-    Promise.all([
-      getBacktestSummary(runId),
-      getBacktestEquity(runId),
-      getBacktestTransactions(runId, { limit: 100 }),
-      getBacktestSignals(runId, { limit: 100 }),
-    ])
-      .then(([summary, equityCurve, transactionPage, signalPage]) => {
-        if (!cancelled) {
-          setRun({
-            ...summary,
-            equity_curve: equityCurve,
-            comparison_curves: {},
-            signals: signalPage.items,
-            transactions: transactionPage.items,
-            transaction_count: transactionPage.total,
-          });
-        }
+    const summaryPromise = getBacktestSummary(runId);
+    const equityPromise = getBacktestEquity(runId);
+    const transactionsPromise = getBacktestTransactions(runId, { limit: 100 });
+    const signalsPromise = getBacktestSignals(runId, { limit: 100 });
+
+    summaryPromise
+      .then((summary) => {
+        if (cancelled) return;
+        setRun({
+          ...summary,
+          equity_curve: [],
+          comparison_curves: {},
+          signals: [],
+          transactions: [],
+        });
       })
       .catch((err: Error) => {
         if (!cancelled) {
@@ -4434,6 +3943,39 @@ export default function BacktestDetailPage() {
         if (!cancelled) {
           setLoading(false);
         }
+      });
+
+    Promise.all([summaryPromise, equityPromise])
+      .then(([, equityCurve]) => {
+        if (!cancelled) setRun((current) => current ? { ...current, equity_curve: equityCurve } : current);
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setEquityError(err.message || BACKTEST_EQUITY_LOAD_FAILED);
+      })
+      .finally(() => {
+        if (!cancelled) setEquityLoading(false);
+      });
+
+    Promise.all([summaryPromise, transactionsPromise])
+      .then(([, page]) => {
+        if (!cancelled) setRun((current) => current ? { ...current, transactions: page.items, transaction_count: page.total } : current);
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setTransactionsError(err.message || BACKTEST_TRANSACTIONS_LOAD_FAILED);
+      })
+      .finally(() => {
+        if (!cancelled) setTransactionsLoading(false);
+      });
+
+    Promise.all([summaryPromise, signalsPromise])
+      .then(([, page]) => {
+        if (!cancelled) setRun((current) => current ? { ...current, signals: page.items } : current);
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setSignalsError(err.message || BACKTEST_SIGNALS_LOAD_FAILED);
+      })
+      .finally(() => {
+        if (!cancelled) setSignalsLoading(false);
       });
 
     return () => {
@@ -4545,21 +4087,40 @@ export default function BacktestDetailPage() {
               marginBottom: 18,
             }}
           >
-            <EquityCurveCard
-              run={run}
-              points={run.equity_curve}
-              signals={run.signals}
-              transactions={run.transactions}
-              initialCash={run.initial_cash}
-            />
+            {equityLoading ? (
+              <div style={emptyStateStyle}>{isZh ? "正在加载权益曲线..." : "Loading equity curve..."}</div>
+            ) : equityError ? (
+              <div style={{ ...emptyStateStyle, color: "#fecaca" }}>{detailErrorMessage(equityError, isZh)}</div>
+            ) : (
+              <EquityCurveCardLightweight
+                run={run}
+                points={run.equity_curve}
+                signals={run.signals}
+                transactions={run.transactions}
+                initialCash={run.initial_cash}
+              />
+            )}
+            {signalsError ? <div style={{ marginTop: 8, color: "#fbbf24", fontSize: 12 }}>{detailErrorMessage(signalsError, isZh)}</div> : null}
           </section>
 
           {run.available_details.includes("transactions") ? (
             <>
               <section style={{ marginBottom: 18 }}>
-                <PositionLifecycleCard run={run} />
+                {transactionsLoading || signalsLoading ? (
+                  <div style={emptyStateStyle}>{isZh ? "正在加载生命周期明细..." : "Loading lifecycle details..."}</div>
+                ) : transactionsError ? (
+                  <div style={{ ...emptyStateStyle, color: "#fecaca" }}>{detailErrorMessage(transactionsError, isZh)}</div>
+                ) : (
+                  <PositionLifecycleCard run={run} />
+                )}
               </section>
-              <TransactionsCard transactions={run.transactions} />
+              {transactionsLoading ? (
+                <div style={emptyStateStyle}>{isZh ? "正在加载交易明细..." : "Loading transactions..."}</div>
+              ) : transactionsError ? (
+                <div style={{ ...emptyStateStyle, color: "#fecaca" }}>{detailErrorMessage(transactionsError, isZh)}</div>
+              ) : (
+                <TransactionsCard transactions={run.transactions} />
+              )}
             </>
           ) : null}
 

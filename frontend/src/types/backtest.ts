@@ -52,18 +52,21 @@ export interface BacktestPageOut<T> {
   next_cursor?: string | null;
 }
 
-export interface BacktestSnapshotPoint {
-  ts?: string | null;
-  cash?: number | null;
-  equity?: number | null;
-  gross_exposure?: number | null;
-  net_exposure?: number | null;
+export interface BacktestEquityPoint {
+  ts: string;
+  equity: number;
   drawdown?: number | null;
   benchmark_symbol?: string | null;
   benchmark_close?: number | null;
   benchmark_equity?: number | null;
   benchmark_return?: number | null;
   benchmark_excess_return?: number | null;
+}
+
+export interface BacktestSnapshotPoint extends BacktestEquityPoint {
+  cash?: number | null;
+  gross_exposure?: number | null;
+  net_exposure?: number | null;
   positions?: Record<string, unknown>;
   metrics?: Record<string, unknown>;
 }
@@ -107,7 +110,7 @@ export interface BacktestComparisonCurvePoint {
 export interface BacktestDetailOut extends BacktestRunOut {
   latest_snapshot?: BacktestSnapshotPoint | null;
   transaction_count: number;
-  equity_curve: BacktestSnapshotPoint[];
+  equity_curve: BacktestEquityPoint[];
   comparison_curves?: Record<string, BacktestComparisonCurvePoint[]>;
   signals: BacktestSignalOut[];
   transactions: BacktestTransactionOut[];
@@ -141,9 +144,27 @@ export interface SupportResistanceZoneVersionOut {
   lower_price: number;
   upper_price: number;
   atr_width: number;
+  anchor_session_index: number;
+  slope_per_session: number;
+  fit_residual_atr: number;
+  projection_end: string;
+  end_center_price: number;
+  end_lower_price: number;
+  end_upper_price: number;
   pivot_count: number;
   touch_count: number;
   source_metadata: Record<string, unknown>;
+  geometry?: {
+    start_date: string;
+    end_date: string;
+    start_center_price: number;
+    start_lower_price: number;
+    start_upper_price: number;
+    end_center_price: number;
+    end_lower_price: number;
+    end_upper_price: number;
+    slope_per_session: number;
+  } | null;
 }
 
 export interface SupportResistanceRunEventOut {
