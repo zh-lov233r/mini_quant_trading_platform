@@ -15,6 +15,18 @@ This repository is a full-stack equity quant research and paper-trading system.
 
 Read `README.zh-CN.md` or `README.md` before changing an unfamiliar workflow. For execution behavior, prefer the implementation and tests over README prose when they disagree, and report the inconsistency.
 
+## Development lifecycle and compatibility policy
+
+This repository is currently a fast-moving development and testing platform, not a production or long-term archival system.
+
+- Prefer one current implementation over compatibility shims, parallel legacy engines, duplicated endpoints, or version-selection branches. When replacing an internal version, remove the obsolete path and update all in-repository consumers in the same coherent change unless the user explicitly requests a staged rollout.
+- Backward compatibility with earlier local releases, historical backtest runs, and locally persisted paper-trading records is not required by default. Breaking API, schema, and data-model changes are acceptable when the backend, OpenAPI contract, frontend, tests, and maintained documentation are updated together.
+- Historical backtest results and locally persisted paper-trading records are disposable test artifacts and may be recreated. Do not add migrations or compatibility layers solely to preserve those records.
+- This policy does not itself authorize a destructive database operation. Before a reset, drop, truncate, or bulk delete, identify the exact local database, affected tables, and expected row impact, then obtain explicit user authorization and use a read-only preflight or dry-run where practical.
+- This policy does not make raw/vendor market data, downloaded files, reports, credentials, or production-like databases disposable. Continue to apply the database and data-safety rules below to those assets.
+- Alpaca paper-account orders, positions, buying power, and other broker-side state remain external side effects. Local paper-trading records being disposable never authorizes cancelling orders, closing positions, or otherwise mutating the broker account.
+- Fast iteration does not relax quant correctness, deterministic execution, test coverage, API synchronization, bilingual documentation, or trading-safety requirements.
+
 ## Important entry points
 
 - Application wiring: `backend/src/main.py`
@@ -109,7 +121,7 @@ PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false
 - Use read-only queries and dry-run modes first. Resolve and report the exact target database, date range, symbols, and expected row impact before an apply mode.
 - Never run `backend/utils/wipe_schemas.py`, destructive SQL, `docker compose down -v`, or an equivalent destructive command without explicit user authorization.
 - Do not edit generated CSV reports or raw market-data artifacts by hand.
-- Schema changes must keep ORM models, creation SQL, API schemas, and relevant documentation in sync. The repository does not currently have an Alembic migration workflow, so call out rollout and backward-compatibility risks explicitly.
+- Schema changes must keep ORM models, creation SQL, API schemas, and relevant documentation in sync. The repository does not currently have an Alembic migration workflow. For disposable local test records, prefer an explicitly authorized reset/recreate path over compatibility-only migrations; for any production-like database, call out rollout and backward-compatibility risks explicitly.
 - Data repair and backfill operations should be resumable or idempotent and should expose dry-run behavior when practical.
 
 ## Backend conventions
@@ -145,7 +157,7 @@ database/model -> service -> FastAPI schema/route -> apps/openapi.yaml
 
 - Do not fix a contract mismatch with unchecked casts or `any` unless the boundary is genuinely untyped and the reason is documented.
 - Keep nullable and optional fields distinct.
-- Maintain backward compatibility unless the task explicitly authorizes a breaking change.
+- Do not preserve backward compatibility solely for earlier local test versions. Make breaking changes coherently across every in-repository consumer; add a compatibility path only when the user explicitly requests one or a currently supported external consumer requires it.
 
 ## Documentation impact checklist
 
