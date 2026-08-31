@@ -219,6 +219,7 @@ class MomentumBreakoutStrategyTests(unittest.TestCase):
         strategy_params = _runtime(symbols=["AAPL"])["params"]
         strategy_params["risk"]["position_size_pct"] = 0.50
         strategy_params["risk"]["take_profit_pct"] = 0.10
+        strategy_params["signal"]["min_strength_score"] = 0.0
         strategy = SimpleNamespace(
             id=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
             strategy_key="momentum-breakout",

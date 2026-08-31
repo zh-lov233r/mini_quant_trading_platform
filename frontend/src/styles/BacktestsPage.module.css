@@ -1,0 +1,48 @@
+.paginationBar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding-top: 4px;
+  font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+  font-size: 13px;
+}
+
+.paginationSize {
+  display: flex;
+  align-items: center;
+  justify-self: start;
+  gap: 8px;
+  color: rgba(148, 163, 184, 0.88);
+}
+
+.paginationControls {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
+.paginationPage {
+  justify-self: end;
+  color: rgba(148, 163, 184, 0.88);
+}
+
+@media (max-width: 680px) {
+  .paginationBar {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+  }
+
+  .paginationSize,
+  .paginationPage {
+    justify-self: center;
+  }
+
+  .paginationControls {
+    grid-row: 2;
+  }
+
+  .paginationButton {
+    min-height: 44px;
+  }
+}

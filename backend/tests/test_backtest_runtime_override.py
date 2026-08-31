@@ -82,6 +82,7 @@ class BacktestRuntimeOverrideTests(unittest.TestCase):
             symbol="AAPL",
             action="BUY",
             reason="explicit timing regression",
+            metadata={"position": 0, "strength_inputs": {"absolute_zscore": 3.0}},
         )
         handler_calls = 0
         observed_fills = []

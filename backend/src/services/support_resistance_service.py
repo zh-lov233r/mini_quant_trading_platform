@@ -15,6 +15,8 @@ from hashlib import sha256
 from math import isfinite
 from typing import Any, Literal
 
+from src.services.signal_strength_service import evaluate_support_resistance_strength
+
 
 ZoneRole = Literal["support", "resistance"]
 SetupMode = Literal["support_bounce", "resistance_breakout", "breakout_retest"]
@@ -285,6 +287,7 @@ def advance_symbol(
             "stop_price": selected["stop_price"],
             "target_price": selected["target_price"],
             "reward_risk": selected["reward_risk"],
+            "strength": selected["strength"],
             "score_evidence": selected["score_evidence"],
             "candidates": candidates,
             "price_semantics": "forward_adjusted_preferred_unadjusted_fallback",
@@ -517,7 +520,9 @@ def _detect_candidates(
                 setup = "resistance_breakout"
 
         if setup is not None:
-            candidates.append(_candidate_payload(state, setup, zone, zones, bar, risk_cfg))
+            candidates.append(
+                _candidate_payload(state, setup, zone, zones, bar, signal_cfg, risk_cfg)
+            )
 
     for zone_key, breakout in sorted(state.breakouts.items()):
         elapsed = session_index - breakout.breakout_session_index
@@ -547,7 +552,15 @@ def _detect_candidates(
             )
             if signal_cfg["breakout_retest_enabled"]:
                 candidates.append(
-                    _candidate_payload(state, "breakout_retest", zone, zones, bar, risk_cfg)
+                    _candidate_payload(
+                        state,
+                        "breakout_retest",
+                        zone,
+                        zones,
+                        bar,
+                        signal_cfg,
+                        risk_cfg,
+                    )
                 )
     candidates.sort(key=lambda item: (SETUP_TIE_PRIORITY[item["setup"]], item["zone_key"]))
     return candidates
@@ -559,6 +572,7 @@ def _candidate_payload(
     zone: Zone,
     zones: list[Zone],
     bar: dict[str, Any],
+    signal_cfg: dict[str, Any],
     risk_cfg: dict[str, Any],
 ) -> dict[str, Any]:
     entry = bar["close"]
@@ -579,7 +593,23 @@ def _candidate_payload(
     reward_risk = (target - entry) / risk if risk > 0 else 0.0
     eligible = reward_risk >= float(risk_cfg["min_reward_risk"])
     stats = state.stats[setup]
-    return {
+    breakout = state.breakouts.get(zone.zone_key)
+    strength_inputs = {
+        "confirmation_atr": (entry - zone.upper) / bar["atr_14"],
+        "hold_margin_atr": (entry - zone.upper) / bar["atr_14"],
+        "volume_ratio": (
+            bar["volume"] / bar["volume_sma_20"]
+            if bar["volume_sma_20"] > 0
+            else None
+        ),
+        "retest_volume_ratio": (
+            bar["volume"] / breakout.breakout_volume
+            if breakout is not None and breakout.breakout_volume > 0
+            else None
+        ),
+        "reward_risk": reward_risk,
+    }
+    candidate = {
         "setup": setup,
         "zone_key": zone.zone_key,
         "zone": zone.snapshot(),
@@ -602,7 +632,14 @@ def _candidate_payload(
             "resistance_breakout": "volume-confirmed close above a frozen resistance zone",
             "breakout_retest": "low-volume retest held the former resistance zone",
         }[setup],
+        "strength_inputs": strength_inputs,
     }
+    candidate["strength"] = evaluate_support_resistance_strength(
+        signal_cfg,
+        risk_cfg,
+        candidate,
+    )
+    return candidate
 
 
 def _select_candidate(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -611,7 +648,11 @@ def _select_candidate(candidates: list[dict[str, Any]]) -> dict[str, Any] | None
         return None
     return min(
         eligible,
-        key=lambda item: (-float(item["score"]), SETUP_TIE_PRIORITY[item["setup"]], item["zone_key"]),
+        key=lambda item: (
+            -float(item["strength"]["score"]),
+            SETUP_TIE_PRIORITY[item["setup"]],
+            item["zone_key"],
+        ),
     )
 
 

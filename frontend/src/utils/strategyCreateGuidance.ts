@@ -25,18 +25,32 @@ const commonRisk: GuidedFieldDefinition[] = [
   { key: "positionSizePct", path: "risk.position_size_pct", kind: "percent", min: 0.01, max: 1, step: 1 },
 ];
 
+const commonSignal: GuidedFieldDefinition[] = [
+  { key: "minStrengthScore", path: "signal.min_strength_score", kind: "number", min: 0, max: 100, step: 1 },
+];
+
+const stagedRisk: GuidedFieldDefinition[] = [
+  { key: "stage1TargetPct", path: "risk.stage_1_target_pct", kind: "percent", min: 0.01, max: 0.98, step: 1 },
+  { key: "stage2TargetPct", path: "risk.stage_2_target_pct", kind: "percent", min: 0.02, max: 0.99, step: 1 },
+  { key: "stage3TargetPct", path: "risk.stage_3_target_pct", kind: "percent", min: 1, max: 1, step: 1 },
+];
+
 export const ENGINE_READY_TYPES: StrategyType[] = [
   "trend",
   "mean_reversion",
   "momentum_breakout",
   "island_reversal",
   "double_bottom",
+  "head_shoulders_bottom",
+  "rounded_bottom",
+  "v_reversal",
   "support_resistance",
 ];
 
 export const STRATEGY_GUIDANCE: Record<Exclude<StrategyType, "custom">, StrategyGuidanceDefinition> = {
   trend: {
     signal: [
+      ...commonSignal,
       { key: "fastKind", path: "signal.fast_indicator.kind", kind: "select", options: [{ label: "EMA", value: "ema" }, { label: "SMA", value: "sma" }] },
       { key: "fastWindow", path: "signal.fast_indicator.window", kind: "select", dynamicOptions: "fast_window" },
       { key: "slowKind", path: "signal.slow_indicator.kind", kind: "select", options: [{ label: "EMA", value: "ema" }, { label: "SMA", value: "sma" }] },
@@ -53,6 +67,7 @@ export const STRATEGY_GUIDANCE: Record<Exclude<StrategyType, "custom">, Strategy
   },
   mean_reversion: {
     signal: [
+      ...commonSignal,
       { key: "lookbackWindow", path: "signal.lookback_window", kind: "select", options: [5, 10, 20].map((value) => ({ label: String(value), value })) },
       { key: "zscoreEntry", path: "signal.zscore_entry", kind: "number", min: 0.01, step: 0.1 },
       { key: "zscoreExit", path: "signal.zscore_exit", kind: "number", min: 0.01, step: 0.1 },
@@ -66,6 +81,7 @@ export const STRATEGY_GUIDANCE: Record<Exclude<StrategyType, "custom">, Strategy
   },
   momentum_breakout: {
     signal: [
+      ...commonSignal,
       { key: "minimumReturn20d", path: "signal.minimum_return_20d", kind: "percent", min: 0, max: 1, step: 0.5 },
       { key: "breakoutBufferPct", path: "signal.breakout_buffer_pct", kind: "percent", min: 0, max: 1, step: 0.1 },
       { key: "volumeMultiplier", path: "signal.volume_multiplier", kind: "number", min: 0.01, step: 0.1 },
@@ -79,6 +95,7 @@ export const STRATEGY_GUIDANCE: Record<Exclude<StrategyType, "custom">, Strategy
   },
   island_reversal: {
     signal: [
+      ...commonSignal,
       { key: "downtrendLookback", path: "signal.downtrend_lookback", kind: "number", integer: true, min: 1, step: 1 },
       { key: "downtrendMinDropPct", path: "signal.downtrend_min_drop_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 },
       { key: "leftGapMinPct", path: "signal.left_gap_min_pct", kind: "percent", min: 0.0001, max: 1, step: 0.1 },
@@ -93,6 +110,7 @@ export const STRATEGY_GUIDANCE: Record<Exclude<StrategyType, "custom">, Strategy
     ],
     risk: [
       ...commonRisk,
+      ...stagedRisk,
       { key: "stopLossAtr", path: "risk.stop_loss_atr", kind: "number", min: 0.01, step: 0.1 },
       { key: "maxLossPct", path: "risk.max_loss_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 },
       { key: "takeProfitAtr", path: "risk.take_profit_atr", kind: "number", min: 0.01, step: 0.1 },
@@ -100,6 +118,7 @@ export const STRATEGY_GUIDANCE: Record<Exclude<StrategyType, "custom">, Strategy
   },
   double_bottom: {
     signal: [
+      ...commonSignal,
       { key: "downtrendLookback", path: "signal.downtrend_lookback", kind: "number", integer: true, min: 1, step: 1 },
       { key: "downtrendMinDropPct", path: "signal.downtrend_min_drop_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 },
       { key: "downtrendMaxUpDayRatio", path: "signal.downtrend_max_up_day_ratio", kind: "percent", min: 0.0001, max: 1, step: 1, advanced: true },
@@ -121,13 +140,57 @@ export const STRATEGY_GUIDANCE: Record<Exclude<StrategyType, "custom">, Strategy
     ],
     risk: [
       ...commonRisk,
+      ...stagedRisk,
       { key: "stopLossAtr", path: "risk.stop_loss_atr", kind: "number", min: 0.01, step: 0.1 },
       { key: "maxLossPct", path: "risk.max_loss_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 },
       { key: "takeProfitAtr", path: "risk.take_profit_atr", kind: "number", min: 0.01, step: 0.1 },
     ],
   },
+  head_shoulders_bottom: {
+    signal: [
+      ...commonSignal,
+      { key: "downtrendLookback", path: "signal.downtrend_lookback", kind: "number", integer: true, min: 1, step: 1 },
+      { key: "headDepthMinPct", path: "signal.head_depth_min_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 },
+      { key: "shoulderTolerancePct", path: "signal.shoulder_tolerance_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 },
+      { key: "breakoutVolumeRatioMin", path: "signal.breakout_volume_ratio_min", kind: "number", min: 0.01, step: 0.1 },
+      { key: "pivotLeftBars", path: "signal.pivot_left_bars", kind: "number", integer: true, min: 1, step: 1, advanced: true },
+      { key: "pivotRightBars", path: "signal.pivot_right_bars", kind: "number", integer: true, min: 1, step: 1, advanced: true },
+      { key: "minSegmentBars", path: "signal.min_segment_bars", kind: "number", integer: true, min: 1, step: 1, advanced: true },
+      { key: "maxSegmentBars", path: "signal.max_segment_bars", kind: "number", integer: true, min: 1, step: 1, advanced: true },
+    ],
+    risk: [...commonRisk, ...stagedRisk, { key: "stopLossAtr", path: "risk.stop_loss_atr", kind: "number", min: 0.01, step: 0.1 }, { key: "maxLossPct", path: "risk.max_loss_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 }, { key: "takeProfitAtr", path: "risk.take_profit_atr", kind: "number", min: 0.01, step: 0.1 }],
+  },
+  rounded_bottom: {
+    signal: [
+      ...commonSignal,
+      { key: "minLookback", path: "signal.min_lookback", kind: "number", integer: true, min: 3, step: 1 },
+      { key: "maxLookback", path: "signal.max_lookback", kind: "number", integer: true, min: 3, step: 1 },
+      { key: "minDepthPct", path: "signal.min_depth_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 },
+      { key: "minRSquared", path: "signal.min_r_squared", kind: "percent", min: 0.0001, max: 1, step: 1 },
+      { key: "breakoutVolumeRatioMin", path: "signal.breakout_volume_ratio_min", kind: "number", min: 0.01, step: 0.1 },
+      { key: "minPullbackSpacing", path: "signal.min_pullback_spacing", kind: "number", integer: true, min: 1, step: 1, advanced: true },
+      { key: "pivotLeftBars", path: "signal.pivot_left_bars", kind: "number", integer: true, min: 1, step: 1, advanced: true },
+      { key: "pivotRightBars", path: "signal.pivot_right_bars", kind: "number", integer: true, min: 1, step: 1, advanced: true },
+    ],
+    risk: [...commonRisk, ...stagedRisk, { key: "stopLossAtr", path: "risk.stop_loss_atr", kind: "number", min: 0.01, step: 0.1 }, { key: "maxLossPct", path: "risk.max_loss_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 }, { key: "takeProfitAtr", path: "risk.take_profit_atr", kind: "number", min: 0.01, step: 0.1 }],
+  },
+  v_reversal: {
+    signal: [
+      ...commonSignal,
+      { key: "downtrendLookback", path: "signal.downtrend_lookback", kind: "number", integer: true, min: 1, step: 1 },
+      { key: "downtrendMinDropPct", path: "signal.downtrend_min_drop_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 },
+      { key: "reversalMinReturnPct", path: "signal.reversal_min_return_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 },
+      { key: "pivotVolumeRatioMin", path: "signal.pivot_volume_ratio_min", kind: "number", min: 0.01, step: 0.1 },
+      { key: "continuationWindow", path: "signal.continuation_window", kind: "number", integer: true, min: 1, step: 1, advanced: true },
+      { key: "consolidationMinBars", path: "signal.consolidation_min_bars", kind: "number", integer: true, min: 1, step: 1, advanced: true },
+      { key: "consolidationMaxBars", path: "signal.consolidation_max_bars", kind: "number", integer: true, min: 1, step: 1, advanced: true },
+      { key: "retestWindow", path: "signal.retest_window", kind: "number", integer: true, min: 1, step: 1, advanced: true },
+    ],
+    risk: [...commonRisk, ...stagedRisk, { key: "stopLossAtr", path: "risk.stop_loss_atr", kind: "number", min: 0.01, step: 0.1 }, { key: "maxLossPct", path: "risk.max_loss_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 }, { key: "takeProfitAtr", path: "risk.take_profit_atr", kind: "number", min: 0.01, step: 0.1 }],
+  },
   support_resistance: {
     signal: [
+      ...commonSignal,
       { key: "supportBounceEnabled", path: "signal.support_bounce_enabled", kind: "boolean" },
       { key: "resistanceBreakoutEnabled", path: "signal.resistance_breakout_enabled", kind: "boolean" },
       { key: "breakoutRetestEnabled", path: "signal.breakout_retest_enabled", kind: "boolean" },

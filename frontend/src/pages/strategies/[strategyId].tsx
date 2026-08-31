@@ -489,6 +489,16 @@ export default function StrategyDetailPage() {
               accent="#ca8a04"
             />
             <MetricCard
+              label={isZh ? "最低信号强度" : "Minimum Strength"}
+              value={String(getStrategyFieldNumber(strategy, "signal", "min_strength_score") ?? "-")}
+              hint={
+                isZh
+                  ? "低于该阈值的 BUY 信号会保留审计记录，但不会进入选仓。"
+                  : "BUY signals below this threshold remain auditable but are excluded from position selection."
+              }
+              accent="#7c3aed"
+            />
+            <MetricCard
               label={isZh ? "单票仓位" : "Position Size"}
               value={formatPercent(
                 getStrategyFieldNumber(strategy, "risk", "position_size_pct"),

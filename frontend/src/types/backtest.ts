@@ -138,8 +138,26 @@ export interface BacktestSignalOut {
   symbol: string;
   signal: string;
   score?: number | null;
+  strength?: SignalStrengthRecord | null;
   reason?: string | null;
   features?: Record<string, unknown>;
+}
+
+export interface SignalStrengthComponent {
+  key: string;
+  raw_value: number;
+  normalized_score: number;
+  weight: number;
+}
+
+export interface SignalStrengthRecord {
+  score: number;
+  level: "weak" | "medium" | "strong" | "very_strong";
+  threshold: number;
+  passes_threshold: boolean;
+  rank: number | null;
+  model_version: string;
+  components: SignalStrengthComponent[];
 }
 
 export interface BacktestComparisonCurvePoint {
@@ -148,6 +166,11 @@ export interface BacktestComparisonCurvePoint {
   close?: number | null;
   equity?: number | null;
   return?: number | null;
+}
+
+export interface BacktestComparisonCurvesOut {
+  run_id: string;
+  comparison_curves: Record<string, BacktestComparisonCurvePoint[]>;
 }
 
 export interface BacktestDetailOut extends BacktestRunOut {

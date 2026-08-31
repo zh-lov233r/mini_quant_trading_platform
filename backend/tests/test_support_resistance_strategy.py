@@ -158,7 +158,7 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         pivot = next(pivot for pivot in state.pivots if pivot.trade_date == bars[1]["dt_ny"])
         self.assertEqual(pivot.confirmed_on, bars[3]["dt_ny"])
 
-    def test_same_day_candidates_emit_one_buy_with_deterministic_tie_break(self) -> None:
+    def test_same_day_candidates_emit_strongest_buy_deterministically(self) -> None:
         state = SupportResistanceSymbolState()
         state.history.append(_bar(-1, high=106, low=102, close=103.2))
         state.zones = {
@@ -180,7 +180,12 @@ class SupportResistanceStrategyTests(unittest.TestCase):
 
         self.assertIsNotNone(decision)
         self.assertEqual(decision["action"], "BUY")
-        self.assertEqual(decision["support_resistance"]["selected_setup"], "breakout_retest")
+        self.assertEqual(decision["support_resistance"]["selected_setup"], "support_bounce")
+        selected_strength = decision["support_resistance"]["strength"]["score"]
+        self.assertEqual(
+            selected_strength,
+            max(candidate["strength"]["score"] for candidate in decision["support_resistance"]["candidates"]),
+        )
         self.assertEqual(
             set(decision["support_resistance"]["candidate_setups"]),
             {"support_bounce", "resistance_breakout", "breakout_retest"},

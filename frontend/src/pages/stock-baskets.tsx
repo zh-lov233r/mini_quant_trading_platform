@@ -232,11 +232,16 @@ export default function StockBasketsPage() {
                   rows={6}
                   style={{ ...inputStyle, resize: "vertical" }}
                 />
-                <SelectControl aria-label={isZh ? "股票组合状态" : "Basket status"} value={status} onChange={(e) => setStatus(e.target.value)}>
-                  <option value="active">active</option>
-                  <option value="draft">draft</option>
-                  <option value="archived">archived</option>
-                </SelectControl>
+                <SelectControl
+                  aria-label={isZh ? "股票组合状态" : "Basket status"}
+                  value={status}
+                  onValueChange={setStatus}
+                  options={[
+                    { value: "active", label: "active" },
+                    { value: "draft", label: "draft" },
+                    { value: "archived", label: "archived" },
+                  ]}
+                />
 
                 <div
                   style={{

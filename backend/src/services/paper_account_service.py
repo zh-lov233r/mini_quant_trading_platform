@@ -899,6 +899,9 @@ def build_paper_account_workspace(
 
         if len(recent_transactions) < transaction_limit:
             meta = transaction.meta or {}
+            entry_features = meta.get("entry_signal_features") if isinstance(meta.get("entry_signal_features"), dict) else {}
+            setup = entry_features.get("setup") if isinstance(entry_features.get("setup"), dict) else {}
+            staged_audit = entry_features.get("staged_entry_audit") if isinstance(entry_features.get("staged_entry_audit"), dict) else {}
             recent_transactions.append(
                 {
                     "id": str(transaction.id),
@@ -916,6 +919,11 @@ def build_paper_account_workspace(
                     "source": str(meta.get("source") or "").strip() or None,
                     "broker_status": str(meta.get("broker_status") or "").strip() or None,
                     "net_cash_flow": net_cash_flow,
+                    "setup_id": setup.get("setup_id"),
+                    "stage_key": setup.get("stage_key"),
+                    "stage_target_pct": setup.get("stage_target_pct"),
+                    "added_notional": staged_audit.get("added_notional"),
+                    "weighted_avg_cost": staged_audit.get("weighted_avg_cost"),
                 }
             )
 

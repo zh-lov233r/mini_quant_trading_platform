@@ -16,11 +16,15 @@ from src.models.tables import Base, Strategy, StrategyRun, Transaction  # noqa: 
 from src.services.paper_account_service import _transaction_net_cash_flow  # noqa: E402
 from src.services.paper_trading_service import (  # noqa: E402
     VirtualSubportfolioConfig,
+    VirtualSubportfolioState,
+    _execute_paper_orders,
     _rebuild_virtual_subportfolio_state,
     _submit_paper_order,
     _sync_strategy_pending_orders,
 )
+from src.services.signal_strength_service import annotate_and_rank_signals  # noqa: E402
 from src.services.strategy_engine import SignalEvent  # noqa: E402
+from src.services.strategy_registry import normalize_strategy_params  # noqa: E402
 
 
 class StubAlpacaClient:
@@ -278,6 +282,67 @@ class PaperTradingServiceTests(unittest.TestCase):
         self.assertEqual(sleeve.cash, 1000.0)
         self.assertEqual(sleeve.positions_by_symbol, {})
 
+    def test_paper_orders_use_shared_strength_order_and_threshold(self) -> None:
+        params = normalize_strategy_params(
+            "double_bottom",
+            {"risk": {"max_positions": 1, "position_size_pct": 0.5}},
+        )
+        runtime = {"strategy_type": "double_bottom", "params": params}
+        signals = [
+            self._strength_event("WEAK", 0.25),
+            self._strength_event("STRONG", 0.80),
+            self._strength_event("MEDIUM", 0.50),
+        ]
+        annotate_and_rank_signals(runtime, signals)
+        client = StubAlpacaClient(
+            submit_order_response=_make_order(
+                order_id="paper-strength-order",
+                symbol="STRONG",
+                side="buy",
+                qty=50,
+                status="filled",
+                filled_qty=50,
+                filled_avg_price=10,
+                filled_at="2026-04-14T20:00:05Z",
+            )
+        )
+
+        outcomes, sleeve, _broker_cash = _execute_paper_orders(
+            db=self.db,
+            strategy=self.strategy,
+            run=self.run,
+            runtime=runtime,
+            trade_date=date(2026, 4, 14),
+            client=client,
+            broker_cash=1000.0,
+            sleeve_state=VirtualSubportfolioState(
+                cash=1000.0,
+                equity=1000.0,
+                gross_exposure=0.0,
+                net_exposure=0.0,
+            ),
+            allocation_cfg=VirtualSubportfolioConfig(
+                portfolio_name="default",
+                allocation_pct=1.0,
+                capital_base=1000.0,
+                allow_fractional=True,
+                source="unit-test",
+            ),
+            open_orders=[],
+            signals=signals,
+            snapshots={symbol: {"close": 10.0} for symbol in ("WEAK", "STRONG", "MEDIUM")},
+            submit_orders=True,
+        )
+
+        self.assertEqual(["STRONG", "MEDIUM", "WEAK"], [item.symbol for item in outcomes])
+        self.assertEqual("submitted", outcomes[0].status)
+        self.assertEqual("max_positions reached", outcomes[1].reason)
+        self.assertEqual("signal strength below minimum threshold", outcomes[2].reason)
+        self.assertEqual(1, len(client.submissions))
+        self.assertEqual("STRONG", client.submissions[0]["symbol"])
+        self.assertEqual(1, sleeve.long_position_count)
+        self.assertEqual(1, outcomes[0].signal_strength["rank"])
+
     def _create_strategy_and_run(self) -> tuple[Strategy, StrategyRun]:
         strategy = Strategy(
             id=uuid4(),
@@ -314,7 +379,42 @@ class PaperTradingServiceTests(unittest.TestCase):
             symbol="AAPL",
             action="BUY",
             reason="unit-test buy",
-            metadata={"setup": "unit"},
+            metadata={
+                "position": 0,
+                "setup": "unit",
+                "strength_inputs": {
+                    "bottom_distance_pct": 0.015,
+                    "rebound_up_day_ratio": 0.8,
+                    "breakout_volume_ratio": 2.25,
+                    "breakout_extension_pct": 0.0075,
+                    "retest_volume_ratio": 0.4,
+                },
+            },
+        )
+
+    def _strength_event(self, symbol: str, normalized: float) -> SignalEvent:
+        signal = normalize_strategy_params("double_bottom", {})["signal"]
+        tolerance = signal["bottom_tolerance_pct"]
+        rebound_minimum = signal["rebound_up_day_ratio_min"]
+        volume_minimum = signal["breakout_volume_ratio_min"]
+        breakout_buffer = signal["breakout_buffer_pct"]
+        retest_maximum = signal["retest_volume_ratio_max"]
+        return SignalEvent(
+            strategy_id=str(self.strategy.id),
+            ts=datetime(2026, 4, 14, 20, 0, tzinfo=timezone.utc),
+            symbol=symbol,
+            action="BUY",
+            reason="paper strength ordering",
+            metadata={
+                "position": 0,
+                "strength_inputs": {
+                    "bottom_distance_pct": tolerance * (1.0 - normalized),
+                    "rebound_up_day_ratio": rebound_minimum + ((1.0 - rebound_minimum) * normalized),
+                    "breakout_volume_ratio": volume_minimum * (1.0 + normalized),
+                    "breakout_extension_pct": breakout_buffer * (1.0 + normalized),
+                    "retest_volume_ratio": retest_maximum * (1.0 - normalized),
+                },
+            },
         )
 
     def _single_transaction(self) -> Transaction:

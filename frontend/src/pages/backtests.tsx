@@ -27,6 +27,7 @@ import {
 } from "@/utils/strategy";
 import { clampPageIndex, pageCount, paginateItems } from "@/utils/pagination";
 import { filterBacktestRuns } from "@/utils/backtestFilters";
+import styles from "@/styles/BacktestsPage.module.css";
 
 function actionLink(href: string, label: string, filled = false) {
   return (
@@ -1046,35 +1047,36 @@ export default function BacktestsPage() {
                     <span style={runFilterLabelStyle}>{isZh ? "策略大类" : "Strategy category"}</span>
                     <SelectControl
                       value={runTypeFilter}
-                      onChange={(event) => {
-                        setRunTypeFilter(event.target.value);
+                      onValueChange={(value) => {
+                        setRunTypeFilter(value);
                         setRunPageIndex(0);
                       }}
-                    >
-                      <option value="all">{isZh ? "全部大类" : "All categories"}</option>
-                      {runStrategyTypes.map((strategyType) => (
-                        <option key={strategyType} value={strategyType}>
-                          {getStrategyCategoryPresentation(
+                      options={[
+                        { value: "all", label: isZh ? "全部大类" : "All categories" },
+                        ...runStrategyTypes.map((strategyType) => {
+                          const presentation = getStrategyCategoryPresentation(
                             strategyType,
                             locale,
                             isZh ? "未知策略类型" : "Unknown Strategy Type"
-                          ).label}
-                        </option>
-                      ))}
-                    </SelectControl>
+                          );
+                          return { value: strategyType, label: presentation.label, accent: presentation.accent };
+                        }),
+                      ]}
+                    />
                   </label>
                   <label style={runFilterFieldStyle}>
                     <span style={runFilterLabelStyle}>{isZh ? "运行状态" : "Run status"}</span>
                     <SelectControl
                       value={runStatusFilter}
-                      onChange={(event) => {
-                        setRunStatusFilter(event.target.value);
+                      onValueChange={(value) => {
+                        setRunStatusFilter(value);
                         setRunPageIndex(0);
                       }}
-                    >
-                      <option value="all">{isZh ? "全部状态" : "All statuses"}</option>
-                      {runStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
-                    </SelectControl>
+                      options={[
+                        { value: "all", label: isZh ? "全部状态" : "All statuses" },
+                        ...runStatuses.map((status) => ({ value: status, label: status })),
+                      ]}
+                    />
                   </label>
                   <button
                     type="button"
@@ -1309,32 +1311,27 @@ export default function BacktestsPage() {
                       </Link>
                     );
                   })}
-                  <nav aria-label={isZh ? "回测结果分页" : "Backtest results pagination"} style={paginationBarStyle}>
-                    <label style={paginationSizeStyle}>
+                  <nav aria-label={isZh ? "回测结果分页" : "Backtest results pagination"} className={styles.paginationBar}>
+                    <label className={styles.paginationSize}>
                       <span>{isZh ? "每页" : "Per page"}</span>
                       <SelectControl
                         aria-label={isZh ? "每页回测数量" : "Backtests per page"}
                         value={runPageSize}
-                        onChange={(event) => {
-                          setRunPageSize(Number(event.target.value));
+                        onValueChange={(value) => {
+                          setRunPageSize(Number(value));
                           setRunPageIndex(0);
                         }}
                         density="compact"
-                      >
-                        {RUN_PAGE_SIZE_OPTIONS.map((pageSize) => (
-                          <option key={pageSize} value={pageSize}>{pageSize}</option>
-                        ))}
-                      </SelectControl>
+                        options={RUN_PAGE_SIZE_OPTIONS.map((pageSize) => ({ value: pageSize, label: pageSize }))}
+                      />
                     </label>
-                    <span style={{ color: "rgba(148, 163, 184, 0.88)" }}>
-                      {isZh ? `第 ${runPageIndex + 1} / ${runPageCount} 页` : `Page ${runPageIndex + 1} of ${runPageCount}`}
-                    </span>
-                    <div style={{ display: "flex", gap: 8 }}>
+                    <div className={styles.paginationControls}>
                       <button
                         type="button"
                         disabled={runPageIndex === 0}
                         onClick={() => setRunPageIndex((current) => Math.max(0, current - 1))}
                         style={paginationButtonStyle}
+                        className={styles.paginationButton}
                       >
                         {isZh ? "上一页" : "Previous"}
                       </button>
@@ -1343,10 +1340,14 @@ export default function BacktestsPage() {
                         disabled={runPageIndex >= runPageCount - 1}
                         onClick={() => setRunPageIndex((current) => Math.min(runPageCount - 1, current + 1))}
                         style={paginationButtonStyle}
+                        className={styles.paginationButton}
                       >
                         {isZh ? "下一页" : "Next"}
                       </button>
                     </div>
+                    <span className={styles.paginationPage}>
+                      {isZh ? `第 ${runPageIndex + 1} / ${runPageCount} 页` : `Page ${runPageIndex + 1} of ${runPageCount}`}
+                    </span>
                   </nav>
                 </div>
               )}
@@ -1468,24 +1469,6 @@ const emptyRunFilterStateStyle: CSSProperties = {
   background: "rgba(15, 23, 42, 0.76)",
   color: "rgba(148, 163, 184, 0.88)",
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-};
-
-const paginationBarStyle: CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: 12,
-  flexWrap: "wrap",
-  paddingTop: 4,
-  fontSize: 13,
-  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-};
-
-const paginationSizeStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  color: "rgba(148, 163, 184, 0.88)",
 };
 
 const paginationButtonStyle: CSSProperties = {

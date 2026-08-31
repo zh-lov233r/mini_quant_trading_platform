@@ -166,7 +166,7 @@ class DoubleBottomStateMachineTests(unittest.TestCase):
         self.assertEqual(pattern.right_bottom_idx, 17)
         self.assertEqual(pattern.breakout_idx, 18)
 
-    def test_stateful_backtest_runner_waits_for_retest_after_trading_breakout(self) -> None:
+    def test_stateful_backtest_runner_emits_full_target_on_trading_breakout(self) -> None:
         state = build_stateful_backtest_signal_state(self.runtime_strategy)
         self.assertIsNotNone(state)
 
@@ -186,7 +186,10 @@ class DoubleBottomStateMachineTests(unittest.TestCase):
             emit_signals=True,
         )
 
-        self.assertEqual(breakout_signals, [])
+        self.assertEqual(len(breakout_signals), 1)
+        self.assertEqual(breakout_signals[0].action, "BUY")
+        self.assertEqual(breakout_signals[0].metadata.get("setup", {}).get("stage_index"), 3)
+        self.assertEqual(breakout_signals[0].metadata.get("setup", {}).get("stage_target_pct"), 1.0)
 
         retest_signals = generate_stateful_backtest_signals(
             self.runtime_strategy,
@@ -195,11 +198,9 @@ class DoubleBottomStateMachineTests(unittest.TestCase):
             emit_signals=True,
         )
 
-        self.assertEqual(len(retest_signals), 1)
-        self.assertEqual(retest_signals[0].action, "BUY")
-        self.assertEqual(retest_signals[0].metadata.get("setup", {}).get("stage"), "retest")
+        self.assertEqual(retest_signals, [])
 
-    def test_stateful_backtest_runner_supports_retest_after_warmup_breakout(self) -> None:
+    def test_stateful_backtest_runner_does_not_backfill_a_warmup_breakout(self) -> None:
         state = build_stateful_backtest_signal_state(self.runtime_strategy)
         self.assertIsNotNone(state)
 
@@ -219,9 +220,7 @@ class DoubleBottomStateMachineTests(unittest.TestCase):
             emit_signals=True,
         )
 
-        self.assertEqual(len(retest_signals), 1)
-        self.assertEqual(retest_signals[0].action, "BUY")
-        self.assertEqual(retest_signals[0].metadata.get("setup", {}).get("stage"), "retest")
+        self.assertEqual(retest_signals, [])
 
     def test_double_bottom_downtrend_only_uses_lookback_drop(self) -> None:
         bars = [

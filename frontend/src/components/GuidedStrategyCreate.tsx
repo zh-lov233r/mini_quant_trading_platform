@@ -19,6 +19,7 @@ import type {
   StrategyType,
   StrategyValidation,
 } from "@/types/strategy";
+import { getStrategyCategoryPresentation } from "@/utils/strategy";
 import {
   cloneRecord,
   ENGINE_READY_TYPES,
@@ -229,6 +230,9 @@ export default function GuidedStrategyCreate() {
         if (selectedType === "double_bottom" && Number(getPathValue(params, "signal.max_bottom_spacing")) < Number(getPathValue(params, "signal.min_bottom_spacing"))) {
           next["signal.max_bottom_spacing"] = copy.errors.bottomSpacing;
         }
+        if (selectedType === "head_shoulders_bottom" && Number(getPathValue(params, "signal.max_segment_bars")) < Number(getPathValue(params, "signal.min_segment_bars"))) next["signal.max_segment_bars"] = copy.errors.segmentRange;
+        if (selectedType === "rounded_bottom" && Number(getPathValue(params, "signal.max_lookback")) < Number(getPathValue(params, "signal.min_lookback"))) next["signal.max_lookback"] = copy.errors.lookbackRange;
+        if (selectedType === "v_reversal" && Number(getPathValue(params, "signal.consolidation_max_bars")) < Number(getPathValue(params, "signal.consolidation_min_bars"))) next["signal.consolidation_max_bars"] = copy.errors.consolidationRange;
         if (selectedType === "support_resistance") {
           const modes = ["support_bounce_enabled", "resistance_breakout_enabled", "breakout_retest_enabled"];
           if (!modes.some((key) => Boolean(getPathValue(params, `signal.${key}`)))) next["signal.support_bounce_enabled"] = copy.errors.supportMode;
@@ -237,7 +241,15 @@ export default function GuidedStrategyCreate() {
         }
       }
     }
-    if (step === 3 && selectedType && selectedType !== "custom") next = validateFields(STRATEGY_GUIDANCE[selectedType].risk);
+    if (step === 3 && selectedType && selectedType !== "custom") {
+      next = validateFields(STRATEGY_GUIDANCE[selectedType].risk);
+      if (["island_reversal", "double_bottom", "head_shoulders_bottom", "rounded_bottom", "v_reversal"].includes(selectedType)) {
+        const stage1 = Number(getPathValue(params, "risk.stage_1_target_pct"));
+        const stage2 = Number(getPathValue(params, "risk.stage_2_target_pct"));
+        const stage3 = Number(getPathValue(params, "risk.stage_3_target_pct"));
+        if (!(stage1 < stage2 && stage2 < stage3 && stage3 === 1)) next["risk.stage_3_target_pct"] = copy.errors.stageTargets;
+      }
+    }
     setErrors(next);
     const first = Object.keys(next)[0];
     if (first && typeof document !== "undefined") {
@@ -355,23 +367,29 @@ export default function GuidedStrategyCreate() {
             if (!item) return null;
             const guidance = typeCopy[strategyType];
             const selected = selectedType === strategyType;
+            const presentation = getStrategyCategoryPresentation(
+              strategyType,
+              locale,
+              guidance.title,
+              guidance.summary,
+            );
             return (
               <button
                 key={strategyType}
                 type="button"
                 aria-pressed={selected}
                 onClick={() => chooseType(strategyType)}
-                style={templateCardStyle(selected)}
+                style={templateCardStyle(presentation.accent, presentation.accentRgb, selected)}
               >
                 <div style={cardHeaderStyle}>
-                  <strong style={{ fontSize: 18 }}>{guidance.title}</strong>
+                  <strong style={{ fontSize: 18, color: presentation.accent }}>{guidance.title}</strong>
                   <Badge tone="success">{copy.catalog.engineReady}</Badge>
                 </div>
-                <code style={codeStyle}>{strategyType}</code>
+                <code style={codeStyle(presentation.accent)}>{strategyType}</code>
                 <p style={cardTextStyle}>{guidance.summary}</p>
                 <p style={miniTextStyle}><strong>{isZh ? "适用：" : "Suitable: "}</strong>{guidance.suitable}</p>
                 <p style={miniTextStyle}><strong>{isZh ? "数据：" : "Data: "}</strong>{guidance.data}</p>
-                {selected ? <span style={selectedPillStyle}>{copy.wizard.selected}</span> : null}
+                {selected ? <span style={selectedPillStyle(presentation.accent, presentation.accentRgb)}>{copy.wizard.selected}</span> : null}
               </button>
             );
           })}
@@ -382,6 +400,9 @@ export default function GuidedStrategyCreate() {
             <summary style={summaryStyle}>{copy.catalog.customTitle}</summary>
             <p style={cardTextStyle}>{copy.catalog.customDescription}</p>
             <button type="button" onClick={() => chooseType("custom")} style={secondaryButtonStyle}>{copy.catalog.customAction}</button>
+            {selectedType === "custom" ? (
+              <span style={selectedPillStyle("#94a3b8", "148, 163, 184")}>{copy.wizard.selected}</span>
+            ) : null}
           </details>
         ) : null}
       </section>
@@ -465,14 +486,13 @@ export default function GuidedStrategyCreate() {
           <SelectControl
             id={fieldId(field.path)}
             value={String(value ?? "")}
-            onChange={(event) => {
-              const option = options.find((candidate) => String(candidate.value) === event.target.value);
-              updateField(field, option?.value ?? event.target.value);
+            onValueChange={(nextValue) => {
+              const option = options.find((candidate) => String(candidate.value) === nextValue);
+              updateField(field, option?.value ?? nextValue);
             }}
             invalid={Boolean(error)}
-          >
-            {options.map((option) => <option key={String(option.value)} value={String(option.value)}>{option.label}</option>)}
-          </SelectControl>
+            options={options.map((option) => ({ value: String(option.value), label: option.label }))}
+          />
         ) : (
           <div style={{ position: "relative" }}>
             <input
@@ -677,10 +697,10 @@ const stepperStyle: CSSProperties = { display: "grid", gridTemplateColumns: "rep
 const stepStyle = (index: number, current: number): CSSProperties => ({ display: "flex", alignItems: "center", gap: 8, minWidth: 130, padding: "11px 12px", borderRadius: 13, border: `1px solid ${index === current ? "rgba(34,211,238,.58)" : "rgba(71,85,105,.3)"}`, color: index <= current ? "#e2e8f0" : "#64748b", background: index === current ? "rgba(8,145,178,.15)" : "rgba(2,6,23,.28)", fontSize: 13, fontWeight: 750, fontFamily: font });
 const stepNumberStyle = (index: number, current: number): CSSProperties => ({ display: "grid", placeItems: "center", width: 24, height: 24, flex: "0 0 auto", borderRadius: 999, color: index <= current ? "#ecfeff" : "#64748b", background: index <= current ? "#0e7490" : "#1e293b" });
 const templateGridStyle: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(250px,1fr))", gap: 13 };
-const templateCardStyle = (selected: boolean): CSSProperties => ({ position: "relative", padding: 17, textAlign: "left", borderRadius: 17, border: `1px solid ${selected ? "#22d3ee" : "rgba(71,85,105,.34)"}`, color: "#e2e8f0", background: selected ? "rgba(8,145,178,.14)" : "rgba(2,6,23,.4)", cursor: "pointer", fontFamily: font });
+const templateCardStyle = (accent: string, accentRgb: string, selected: boolean): CSSProperties => ({ position: "relative", padding: 17, textAlign: "left", borderRadius: 17, border: `1px solid ${selected ? accent : `rgba(${accentRgb},.34)`}`, color: "#e2e8f0", background: selected ? `rgba(${accentRgb},.18)` : `linear-gradient(180deg,rgba(${accentRgb},.09),rgba(2,6,23,.4))`, boxShadow: selected ? `0 0 0 3px rgba(${accentRgb},.13), 0 18px 36px rgba(2,6,23,.24)` : undefined, cursor: "pointer", fontFamily: font });
 const cardHeaderStyle: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 };
-const codeStyle: CSSProperties = { display: "inline-block", marginTop: 8, color: "#67e8f9", fontSize: 12 };
-const selectedPillStyle: CSSProperties = { display: "inline-block", marginTop: 10, padding: "5px 9px", borderRadius: 999, color: "#cffafe", background: "rgba(8,145,178,.35)", fontSize: 12, fontWeight: 800 };
+const codeStyle = (accent: string): CSSProperties => ({ display: "inline-block", marginTop: 8, color: accent, fontSize: 12 });
+const selectedPillStyle = (accent: string, accentRgb: string): CSSProperties => ({ display: "inline-block", marginTop: 10, marginLeft: 8, padding: "5px 9px", borderRadius: 999, border: `1px solid rgba(${accentRgb},.52)`, color: accent, background: `rgba(${accentRgb},.2)`, fontSize: 12, fontWeight: 800 });
 const detailsStyle: CSSProperties = { padding: 15, borderRadius: 15, border: "1px solid rgba(71,85,105,.32)", background: "rgba(2,6,23,.32)" };
 const summaryStyle: CSSProperties = { cursor: "pointer", color: "#bae6fd", fontWeight: 800, fontFamily: font };
 const formGridStyle: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(250px,1fr))", gap: 16 };

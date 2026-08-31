@@ -16,8 +16,9 @@
   - 从 `/strategies/new` 引导中心开始：可用五步向导手工配置已有引擎策略，也可转入 Agent 的已有大类研究或新算法研究
   - 手工创建在落库前完成校验和标准化，并且始终保存为 `draft`；不会激活 portfolio、创建 allocation、启动调度或提交订单
   - 获取策略 catalog 和 normalized runtime payload
-  - 当前策略类型包含 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`、`support_resistance`、`custom`
-  - 当前 engine-ready 的执行型策略包含 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`、`support_resistance`
+  - 当前策略类型包含 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`、`head_shoulders_bottom`、`rounded_bottom`、`v_reversal`、`support_resistance`、`custom`
+  - 五类底部反转策略使用 20% / 50% / 100% 累计目标分批建仓；详见 [底部反转策略](docs/bottom-reversal-strategies.zh-CN.md)
+  - 当前 engine-ready 的执行型策略包含 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`、`head_shoulders_bottom`、`rounded_bottom`、`v_reversal`、`support_resistance`
   - `momentum_breakout` 只使用现有优先前复权的日线收盘价、SMA20、20 日收益和成交量特征；T 日收盘信号继续在下一交易日开盘成交
 
 - 市场数据与特征工程
@@ -31,6 +32,7 @@
   - 支持 `summary`、`trades`、`full` 三种持久化级别；手动回测默认 `full`
   - 通过增量接口加载摘要、下采样权益、signals 和 transactions
   - v1 继续作为默认引擎，v2 的 instrument 身份与批量持久化在验收后受控切换
+  - 按 T 日冻结的信号强度对同策略 BUY 排名，再于 T+1 尝试成交；详见[信号强度](docs/signal-strength.zh-CN.md)
 
 - Paper trading
   - 支持多个 Alpaca paper account
@@ -118,7 +120,11 @@
 - `/research/[experimentId]`
 - `/agent-runs/[runId]`
 
-13 个正式工作台页面统一使用宽屏紧凑布局。主导航位于可收缩左侧栏，其余宽度始终归主工作区使用，不再保留固定右侧上下文栏。页面相关的配置、创建、身份和风险详情通过带明确标签、支持键盘操作的弹窗按需打开；低于 768px 时弹窗切换为全屏。重要进度、校验结果、券商警告和 engine-ready 状态仍直接显示在主区。全平台的短枚举与分页选择统一使用深色、青色强调的原生控件，并共享 hover、focus、错误、禁用和移动端状态；回测与 Paper Trading 中的策略、股票组合和 Portfolio 实体选择器支持搜索和完整键盘导航，同时保留原有请求值。总览不再显示重复的“风险与待办”和“今日待办”卡片；回测工作台从页面右上角发起新回测，结果列表支持按策略名或股票组合搜索，并按策略大类和运行状态筛选，默认每页显示 10 条且支持切换页容量，每张结果卡片复用策略库的大类颜色与标签；回测详情取消原始摘要指标列表，最新持仓只保留数量、成本价、收盘价和市值。密集表格支持排序、筛选、列显示、列宽调整以及明确的客户端/服务端分页；较小结果集保留语义化表格，达到 200 行后才启用可视区域虚拟化。窄屏下详情页双栏会切换为单栏，紧凑指标卡也会在卡片宽度不足时上下排列，以完整保留标签、金额和技术字段。开发服务与 production build 使用不同的 Next.js 输出目录，验证构建不会破坏正在运行的开发服务。
+13 个正式工作台页面统一使用宽屏紧凑布局。主导航位于可收缩左侧栏，其余宽度始终归主工作区使用，不再保留固定右侧上下文栏。页面相关的配置、创建、身份和风险详情通过带明确标签、支持键盘操作的弹窗按需打开；低于 768px 时弹窗切换为全屏。重要进度、校验结果、券商警告和 engine-ready 状态仍直接显示在主区。全平台的短枚举与分页选择统一使用深色、青色强调的 Radix 自定义选项面板，不再调用操作系统菜单，并共享键盘、hover、focus、错误、禁用和移动端状态；回测与 Paper Trading 中的策略、股票组合和 Portfolio 实体选择器继续支持搜索和完整键盘导航，同时保留原有请求值。总览不再显示重复的“风险与待办”和“今日待办”卡片；回测工作台从页面右上角发起新回测，结果列表支持按策略名或股票组合搜索，并按策略大类和运行状态筛选，默认每页显示 10 条、支持切换页容量，上一页/下一页固定居中，每张结果卡片复用策略库的大类颜色与标签；创建策略的大类卡片和选中状态也使用同一套颜色。回测详情独立加载 SPY/QQQ 对比曲线，不扩大紧凑 summary/equity payload，同时取消原始摘要指标列表，最新持仓只保留数量、成本价、收盘价和市值。密集表格支持排序、筛选、列显示、列宽调整以及明确的客户端/服务端分页；较小结果集保留语义化表格，达到 200 行后才启用可视区域虚拟化。窄屏下详情页双栏会切换为单栏，紧凑指标卡也会在卡片宽度不足时上下排列，以完整保留标签、金额和技术字段。开发服务与 production build 使用不同的 Next.js 输出目录，验证构建不会破坏正在运行的开发服务。
+
+持仓生命周期按纽约交易日显示事件；未平仓行明确区分“期末估值日/期末标记价（非成交）”与真实卖出成交，并直接按可见 K 线窗口加载支撑/压力审计数据，不依赖首批信号分页。
+
+回测详情把个股盈亏、信号强度排名、生命周期、交易明细和最新持仓收纳进同一个复盘工作台，通过标签页切换。窗口内容区独立滚动，并保留各模块原有的筛选、排序、分页和展开交互。
 
 ## 后端 API 模块
 

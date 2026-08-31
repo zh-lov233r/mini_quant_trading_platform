@@ -15,6 +15,9 @@ from sqlalchemy import bindparam, delete, select, text
 from sqlalchemy.orm import Session
 
 from src.models.tables import Signal, Strategy, StrategyRun
+from src.services.bottom_reversal_service import evaluate_bottom_reversal
+from src.services.signal_strength_service import annotate_and_rank_signals
+from src.services.staged_entry_service import build_pattern_setup, pattern_setup_from_metadata
 from src.services.support_resistance_service import (
     SupportResistanceState,
     SupportResistanceSymbolState,
@@ -369,6 +372,7 @@ def generate_and_persist_signals_for_trade_date(
             )
         else:
             strategy_signals = handler(runtime, snapshots)
+        annotate_and_rank_signals(runtime, strategy_signals)
         run = _get_or_create_signal_run(
             db=db,
             strategy=strategy,
@@ -458,7 +462,9 @@ def generate_signals(
         if handler is None:
             continue
 
-        signals.extend(handler(runtime, market_data_by_symbol))
+        strategy_signals = handler(runtime, market_data_by_symbol)
+        annotate_and_rank_signals(runtime, strategy_signals)
+        signals.extend(strategy_signals)
 
     return signals
 
@@ -560,6 +566,24 @@ def required_recent_bar_count_for_runtime(runtime_strategy: RuntimeStrategy) -> 
             recent_bar_count,
             downtrend_lookback + max_bottom_spacing + left_bottom_before_bars + max_breakout_wait + retest_window + 10,
         )
+
+    if strategy_type == "head_shoulders_bottom":
+        downtrend_lookback = _safe_positive_int(signal_cfg.get("downtrend_lookback"), 60)
+        max_segment_bars = _safe_positive_int(signal_cfg.get("max_segment_bars"), 40)
+        pivot_right_bars = _safe_positive_int(signal_cfg.get("pivot_right_bars"), 2)
+        return max(recent_bar_count, downtrend_lookback + max_segment_bars * 2 + pivot_right_bars + 10)
+
+    if strategy_type == "rounded_bottom":
+        max_lookback = _safe_positive_int(signal_cfg.get("max_lookback"), 240)
+        pivot_right_bars = _safe_positive_int(signal_cfg.get("pivot_right_bars"), 2)
+        return max(recent_bar_count, max_lookback + pivot_right_bars + 10)
+
+    if strategy_type == "v_reversal":
+        downtrend_lookback = _safe_positive_int(signal_cfg.get("downtrend_lookback"), 60)
+        continuation_window = _safe_positive_int(signal_cfg.get("continuation_window"), 5)
+        consolidation_max_bars = _safe_positive_int(signal_cfg.get("consolidation_max_bars"), 10)
+        retest_window = _safe_positive_int(signal_cfg.get("retest_window"), 5)
+        return max(recent_bar_count, downtrend_lookback + continuation_window + consolidation_max_bars + retest_window + 10)
 
     if strategy_type == "support_resistance":
         detection_window = _safe_positive_int(signal_cfg.get("detection_window"), 120)
@@ -1082,6 +1106,19 @@ def _trend_following_handler(
                         "stop_loss_atr": risk_cfg["stop_loss_atr"],
                         "take_profit_atr": risk_cfg["take_profit_atr"],
                     },
+                    "strength_inputs": {
+                        "separation_atr": (
+                            float(fast_now - slow_now) / current_atr
+                            if current_atr is not None and current_atr > 0
+                            else None
+                        ),
+                        "crossover_impulse_atr": (
+                            float((fast_now - slow_now) - (prev_fast - prev_slow)) / current_atr
+                            if current_atr is not None and current_atr > 0
+                            else None
+                        ),
+                        "volume_ratio": volume / avg_volume,
+                    },
                 },
             )
         )
@@ -1219,6 +1256,9 @@ def _mean_reversion_handler(
                             "take_profit_pct": take_profit_pct,
                             "max_holding_days": max_holding_days,
                         },
+                        "strength_inputs": {
+                            "absolute_zscore": abs(zscore) if zscore is not None else None,
+                        },
                     },
                 )
             )
@@ -1333,6 +1373,11 @@ def _momentum_breakout_handler(
                         "stop_loss_pct": stop_loss_pct,
                         "take_profit_pct": take_profit_pct,
                     },
+                    "strength_inputs": {
+                        "return_20d": return_20d,
+                        "price_extension": price_extension,
+                        "volume_ratio": volume_ratio,
+                    },
                 },
             )
         )
@@ -1359,27 +1404,93 @@ def _island_reversal_handler(
             continue
 
         recent_bars = snapshot.get("recent_bars") or []
-        pattern = _find_latest_island_reversal_pattern(recent_bars, signal_cfg)
-        if pattern is None:
-            continue
-
         position = float(snapshot.get("position", 0) or 0.0)
-        action, reason, stage = _resolve_island_reversal_action(
+        avg_entry_price = _safe_float_or_none(snapshot.get("avg_entry_price"))
+        stored_setup = pattern_setup_from_metadata(snapshot.get("entry_signal_features"))
+        exit_decision = _resolve_standard_staged_exit(
             recent_bars=recent_bars,
-            pattern=pattern,
-            signal_cfg=signal_cfg,
+            setup=stored_setup,
             risk_cfg=risk_cfg,
             position=position,
-            avg_entry_price=_safe_float_or_none(snapshot.get("avg_entry_price")),
+            avg_entry_price=avg_entry_price,
         )
+        pattern = _find_latest_island_reversal_pattern(recent_bars, signal_cfg)
+        exhaustion = None if pattern is not None else _find_current_island_exhaustion_gap(recent_bars, signal_cfg)
+        if exit_decision is not None:
+            action, reason, stage = exit_decision
+        elif pattern is not None:
+            action, reason, stage = _resolve_island_reversal_action(
+                recent_bars=recent_bars,
+                pattern=pattern,
+                signal_cfg=signal_cfg,
+                risk_cfg=risk_cfg,
+                position=0,
+                avg_entry_price=avg_entry_price,
+            )
+        elif exhaustion is not None:
+            action, reason, stage = "BUY", "confirmed a low-volume downside exhaustion gap", "exhaustion_gap"
+        else:
+            continue
         if action is None or reason is None:
             continue
 
-        score = (
-            pattern.left_gap_pct * 100.0
-            + pattern.breakout_gap_pct * 100.0
-            + pattern.breakout_volume_ratio
-        )
+        if pattern is not None:
+            score = pattern.left_gap_pct * 100.0 + pattern.breakout_gap_pct * 100.0 + pattern.breakout_volume_ratio
+        else:
+            score = float(exhaustion["left_gap_pct"] * 100.0) if exhaustion is not None else None
+        current_close = _safe_float_or_none(snapshot.get("close"))
+        current_volume = _safe_float_or_none(snapshot.get("volume"))
+        current_atr = _safe_float_or_none(snapshot.get("atr_14"))
+        if action == "SELL" and stored_setup is not None:
+            setup_payload = {**stored_setup, "exit_stage": stage}
+        elif pattern is not None:
+            stage_index = 2 if stage == "breakout" else 3
+            stage_key = "upside_gap" if stage_index == 2 else "gap_retest"
+            setup_payload = build_pattern_setup(
+                pattern_type="island_reversal",
+                symbol=symbol,
+                stage_index=stage_index,
+                stage_key=stage_key,
+                risk_cfg=risk_cfg,
+                anchors={
+                    "left_gap_trade_date": str(recent_bars[pattern.left_gap_idx]["dt_ny"]),
+                    "breakout_trade_date": str(recent_bars[pattern.breakout_idx]["dt_ny"]),
+                    "left_gap_price": pattern.island_high,
+                    "breakout_price": pattern.breakout_close,
+                },
+                invalidation_price=pattern.island_low * (1.0 - float(signal_cfg["support_tolerance_pct"])),
+                setup_id_anchors=(recent_bars[pattern.left_gap_idx]["dt_ny"],),
+                extra={
+                    "island_low": pattern.island_low,
+                    "island_high": pattern.island_high,
+                    "breakout_gap_low": pattern.breakout_gap_low,
+                    "left_gap_pct": pattern.left_gap_pct,
+                    "breakout_gap_pct": pattern.breakout_gap_pct,
+                    "breakout_volume": pattern.breakout_volume,
+                    "breakout_volume_ratio": pattern.breakout_volume_ratio,
+                },
+            )
+        else:
+            assert exhaustion is not None
+            setup_payload = build_pattern_setup(
+                pattern_type="island_reversal",
+                symbol=symbol,
+                stage_index=1,
+                stage_key="exhaustion_gap",
+                risk_cfg=risk_cfg,
+                anchors={
+                    "left_gap_trade_date": str(exhaustion["trade_date"]),
+                    "left_gap_price": exhaustion["high"],
+                },
+                invalidation_price=float(exhaustion["low"]) * (1.0 - float(signal_cfg["support_tolerance_pct"])),
+                setup_id_anchors=(exhaustion["trade_date"],),
+                extra={
+                    "island_low": exhaustion["low"],
+                    "island_high": exhaustion["high"],
+                    "left_gap_pct": exhaustion["left_gap_pct"],
+                    "left_volume_ratio": exhaustion["volume_ratio"],
+                },
+            )
         signals.append(
             SignalEvent(
                 strategy_id=runtime_strategy["strategy_id"],
@@ -1393,20 +1504,11 @@ def _island_reversal_handler(
                     "open": snapshot.get("open"),
                     "high": snapshot.get("high"),
                     "low": snapshot.get("low"),
+                    "volume": snapshot.get("volume"),
                     "atr_14": snapshot.get("atr_14"),
                     "position": position,
                     "avg_entry_price": snapshot.get("avg_entry_price"),
-                    "setup": {
-                        "stage": stage,
-                        "left_gap_trade_date": str(recent_bars[pattern.left_gap_idx]["dt_ny"]),
-                        "breakout_trade_date": str(recent_bars[pattern.breakout_idx]["dt_ny"]),
-                        "island_low": pattern.island_low,
-                        "island_high": pattern.island_high,
-                        "breakout_gap_low": pattern.breakout_gap_low,
-                        "left_gap_pct": pattern.left_gap_pct,
-                        "breakout_gap_pct": pattern.breakout_gap_pct,
-                        "breakout_volume_ratio": pattern.breakout_volume_ratio,
-                    },
+                    "setup": setup_payload,
                     "config": {
                         "downtrend_min_drop_pct": signal_cfg["downtrend_min_drop_pct"],
                         "left_gap_min_pct": signal_cfg["left_gap_min_pct"],
@@ -1416,11 +1518,97 @@ def _island_reversal_handler(
                         "max_loss_pct": risk_cfg["max_loss_pct"],
                         "take_profit_atr": risk_cfg["take_profit_atr"],
                     },
+                    "strength_inputs": {
+                        "stage": stage,
+                        "left_gap_pct": setup_payload.get("left_gap_pct"),
+                        "right_gap_pct": setup_payload.get("breakout_gap_pct"),
+                        "breakout_volume_ratio": setup_payload.get("breakout_volume_ratio"),
+                        "left_volume_ratio": setup_payload.get("left_volume_ratio"),
+                        "retest_volume_ratio": (
+                            current_volume / float(setup_payload["breakout_volume"])
+                            if current_volume is not None and float(setup_payload.get("breakout_volume") or 0) > 0
+                            else None
+                        ),
+                        "hold_margin_atr": (
+                            (current_close - float(setup_payload["island_high"])) / current_atr
+                            if current_close is not None and current_atr is not None and current_atr > 0
+                            else None
+                        ),
+                    },
                 },
             )
         )
 
     return signals
+
+
+def _find_current_island_exhaustion_gap(
+    recent_bars: list[HistoryBar],
+    signal_cfg: Dict[str, Any],
+) -> Dict[str, Any] | None:
+    """Detect only today's causally available first-stage island candidate."""
+    if len(recent_bars) < 2:
+        return None
+    idx = len(recent_bars) - 1
+    bar = recent_bars[idx]
+    previous = recent_bars[idx - 1]
+    high = _safe_float_or_none(bar.get("high"))
+    low = _safe_float_or_none(bar.get("low"))
+    open_price = _safe_float_or_none(bar.get("open"))
+    close = _safe_float_or_none(bar.get("close"))
+    volume = _safe_float_or_none(bar.get("volume"))
+    average_volume = _safe_float_or_none(bar.get("volume_sma_20"))
+    previous_low = _safe_float_or_none(previous.get("low"))
+    if any(value is None for value in (high, low, open_price, close, volume, average_volume, previous_low)):
+        return None
+    assert high is not None and low is not None and open_price is not None and close is not None
+    assert volume is not None and average_volume is not None and previous_low is not None
+    if average_volume <= 0 or previous_low <= 0 or close >= open_price:
+        return None
+    gap_pct = (previous_low - high) / previous_low
+    volume_ratio = volume / average_volume
+    if gap_pct < float(signal_cfg["left_gap_min_pct"]) or volume_ratio > float(signal_cfg["left_volume_ratio_max"]):
+        return None
+    if not _has_island_downtrend_context(
+        recent_bars,
+        left_gap_idx=idx,
+        downtrend_lookback=int(signal_cfg["downtrend_lookback"]),
+        min_drop_pct=float(signal_cfg["downtrend_min_drop_pct"]),
+    ):
+        return None
+    return {
+        "trade_date": bar.get("dt_ny"),
+        "high": high,
+        "low": low,
+        "left_gap_pct": gap_pct,
+        "volume_ratio": volume_ratio,
+    }
+
+
+def _resolve_standard_staged_exit(
+    *,
+    recent_bars: list[HistoryBar],
+    setup: Dict[str, Any] | None,
+    risk_cfg: Dict[str, Any],
+    position: float,
+    avg_entry_price: float | None,
+) -> tuple[Literal["SELL"] | None, str | None, str | None] | None:
+    if position <= 0 or setup is None or not recent_bars:
+        return None
+    current = recent_bars[-1]
+    close = _safe_float_or_none(current.get("close"))
+    low = _safe_float_or_none(current.get("low"))
+    atr = _safe_float_or_none(current.get("atr_14")) or _compute_recent_atr(recent_bars, 20)
+    invalidation = _safe_float_or_none(setup.get("invalidation_price"))
+    if invalidation is not None and low is not None and low < invalidation:
+        return "SELL", "price broke the staged pattern invalidation level", "pattern_invalidation"
+    if close is not None and avg_entry_price is not None and close <= avg_entry_price * (1.0 - float(risk_cfg["max_loss_pct"])):
+        return "SELL", "price fell more than the configured max-loss threshold from entry", "max_loss_stop"
+    if close is not None and atr is not None and avg_entry_price is not None and close <= avg_entry_price - float(risk_cfg["stop_loss_atr"]) * atr:
+        return "SELL", "price hit the ATR stop", "atr_stop"
+    if close is not None and atr is not None and avg_entry_price is not None and close >= avg_entry_price + float(risk_cfg["take_profit_atr"]) * atr:
+        return "SELL", "price reached the ATR take-profit target", "take_profit"
+    return None
 
 
 # ============================================================================
@@ -1833,46 +2021,37 @@ def _double_bottom_backtest_handler(
         recent_bars = symbol_state.history_bars
         position = float(snapshot.get("position", 0) or 0.0)
         avg_entry_price = _safe_float_or_none(snapshot.get("avg_entry_price"))
-
+        action = reason = stage = None
+        setup_payload: Dict[str, Any] | None = None
         if position > 0:
             exit_setup = _extract_double_bottom_position_setup(snapshot)
             if exit_setup is None and pattern is not None:
                 exit_setup = _build_double_bottom_setup_payload(recent_bars, pattern)
-            if exit_setup is None:
-                continue
-
-            action, reason, stage = _resolve_double_bottom_exit_action(
+            if exit_setup is not None:
+                action, reason, stage = _resolve_double_bottom_exit_action(
+                    recent_bars=recent_bars,
+                    setup=exit_setup,
+                    signal_cfg=signal_cfg,
+                    risk_cfg=risk_cfg,
+                    avg_entry_price=avg_entry_price,
+                )
+                if action is not None:
+                    setup_payload = {**exit_setup, "exit_stage": stage}
+        if action is None:
+            candidate = symbol_state.right_candidates[-1] if symbol_state.right_candidates else None
+            entry = _resolve_double_bottom_staged_entry(
+                symbol=symbol,
                 recent_bars=recent_bars,
-                setup=exit_setup,
-                signal_cfg=signal_cfg,
-                risk_cfg=risk_cfg,
-                avg_entry_price=avg_entry_price,
-            )
-            if action is None or reason is None or stage is None:
-                continue
-
-            setup_payload = dict(exit_setup)
-            setup_payload["stage"] = stage
-        else:
-            if pattern is None:
-                continue
-
-            action, reason, stage = _resolve_double_bottom_action(
-                recent_bars=recent_bars,
+                candidate=candidate,
                 pattern=pattern,
                 signal_cfg=signal_cfg,
                 risk_cfg=risk_cfg,
-                position=position,
-                avg_entry_price=avg_entry_price,
             )
-            if action is None or reason is None or stage is None:
-                continue
+            if entry is not None:
+                action, reason, stage, setup_payload = entry
 
-            setup_payload = _build_double_bottom_setup_payload(
-                recent_bars,
-                pattern,
-                stage=stage,
-            )
+        if action is None or reason is None or stage is None or setup_payload is None:
+            continue
 
         score = _compute_double_bottom_signal_score(setup_payload)
         signals.append(
@@ -1892,6 +2071,7 @@ def _double_bottom_backtest_handler(
                     "position": position,
                     "avg_entry_price": avg_entry_price,
                     "setup": setup_payload,
+                    "strength_inputs": _double_bottom_strength_inputs(snapshot, setup_payload),
                     "config": {
                         "downtrend_min_drop_pct": signal_cfg["downtrend_min_drop_pct"],
                         "downtrend_max_up_day_ratio": signal_cfg["downtrend_max_up_day_ratio"],
@@ -1934,49 +2114,39 @@ def _double_bottom_handler(
             continue
 
         recent_bars = snapshot.get("recent_bars") or []
-        pattern = _find_latest_double_bottom_pattern(recent_bars, signal_cfg)
+        candidate, pattern = _replay_double_bottom_state(recent_bars, signal_cfg)
         position = float(snapshot.get("position", 0) or 0.0)
         avg_entry_price = _safe_float_or_none(snapshot.get("avg_entry_price"))
-
+        action = reason = stage = None
+        setup_payload: Dict[str, Any] | None = None
         if position > 0:
             exit_setup = _extract_double_bottom_position_setup(snapshot)
             if exit_setup is None and pattern is not None:
                 exit_setup = _build_double_bottom_setup_payload(recent_bars, pattern)
-            if exit_setup is None:
-                continue
-
-            action, reason, stage = _resolve_double_bottom_exit_action(
+            if exit_setup is not None:
+                action, reason, stage = _resolve_double_bottom_exit_action(
+                    recent_bars=recent_bars,
+                    setup=exit_setup,
+                    signal_cfg=signal_cfg,
+                    risk_cfg=risk_cfg,
+                    avg_entry_price=avg_entry_price,
+                )
+                if action is not None:
+                    setup_payload = {**exit_setup, "exit_stage": stage}
+        if action is None:
+            entry = _resolve_double_bottom_staged_entry(
+                symbol=symbol,
                 recent_bars=recent_bars,
-                setup=exit_setup,
-                signal_cfg=signal_cfg,
-                risk_cfg=risk_cfg,
-                avg_entry_price=avg_entry_price,
-            )
-            if action is None or reason is None or stage is None:
-                continue
-
-            setup_payload = dict(exit_setup)
-            setup_payload["stage"] = stage
-        else:
-            if pattern is None:
-                continue
-
-            action, reason, stage = _resolve_double_bottom_action(
-                recent_bars=recent_bars,
+                candidate=candidate,
                 pattern=pattern,
                 signal_cfg=signal_cfg,
                 risk_cfg=risk_cfg,
-                position=position,
-                avg_entry_price=avg_entry_price,
             )
-            if action is None or reason is None or stage is None:
-                continue
+            if entry is not None:
+                action, reason, stage, setup_payload = entry
 
-            setup_payload = _build_double_bottom_setup_payload(
-                recent_bars,
-                pattern,
-                stage=stage,
-            )
+        if action is None or reason is None or stage is None or setup_payload is None:
+            continue
 
         score = _compute_double_bottom_signal_score(setup_payload)
         if action is None or reason is None:
@@ -1995,10 +2165,12 @@ def _double_bottom_handler(
                     "open": snapshot.get("open"),
                     "high": snapshot.get("high"),
                     "low": snapshot.get("low"),
+                    "volume": snapshot.get("volume"),
                     "atr_14": snapshot.get("atr_14"),
                     "position": position,
                     "avg_entry_price": avg_entry_price,
                     "setup": setup_payload,
+                    "strength_inputs": _double_bottom_strength_inputs(snapshot, setup_payload),
                     "config": {
                         "downtrend_min_drop_pct": signal_cfg["downtrend_min_drop_pct"],
                         "downtrend_max_up_day_ratio": signal_cfg["downtrend_max_up_day_ratio"],
@@ -2020,6 +2192,82 @@ def _double_bottom_handler(
         )
 
     return signals
+
+
+def _bottom_reversal_handler(
+    pattern_type: str,
+    runtime_strategy: RuntimeStrategy,
+    market_data_by_symbol: MarketDataBySymbol,
+) -> list[SignalEvent]:
+    """Route one of the new causal bottom-pattern detectors into normalized signals."""
+    params = runtime_strategy["params"]
+    universe = _resolve_strategy_universe(params["universe"], market_data_by_symbol)
+    signals: list[SignalEvent] = []
+    for symbol in universe:
+        snapshot = market_data_by_symbol.get(symbol)
+        if not snapshot:
+            continue
+        position = float(snapshot.get("position", 0) or 0.0)
+        decision = evaluate_bottom_reversal(
+            pattern_type=pattern_type,
+            symbol=symbol,
+            recent_bars=snapshot.get("recent_bars") or [],
+            signal_cfg=params["signal"],
+            risk_cfg=params["risk"],
+            position=position,
+            avg_entry_price=_safe_float_or_none(snapshot.get("avg_entry_price")),
+            entry_signal_features=(
+                snapshot.get("entry_signal_features")
+                if isinstance(snapshot.get("entry_signal_features"), dict)
+                else None
+            ),
+        )
+        if decision is None:
+            continue
+        signals.append(
+            SignalEvent(
+                strategy_id=runtime_strategy["strategy_id"],
+                ts=snapshot.get("ts") or datetime.now(timezone.utc),
+                symbol=symbol,
+                action=decision.action,
+                reason=decision.reason,
+                metadata={
+                    "close": snapshot.get("close"),
+                    "open": snapshot.get("open"),
+                    "high": snapshot.get("high"),
+                    "low": snapshot.get("low"),
+                    "volume": snapshot.get("volume"),
+                    "atr_14": snapshot.get("atr_14"),
+                    "position": position,
+                    "avg_entry_price": snapshot.get("avg_entry_price"),
+                    "setup": decision.setup,
+                    "strength_inputs": decision.strength_inputs,
+                    "price_semantics": "forward_adjusted_fallback_unadjusted",
+                },
+            )
+        )
+    return signals
+
+
+def _head_shoulders_bottom_handler(
+    runtime_strategy: RuntimeStrategy,
+    market_data_by_symbol: MarketDataBySymbol,
+) -> list[SignalEvent]:
+    return _bottom_reversal_handler("head_shoulders_bottom", runtime_strategy, market_data_by_symbol)
+
+
+def _rounded_bottom_handler(
+    runtime_strategy: RuntimeStrategy,
+    market_data_by_symbol: MarketDataBySymbol,
+) -> list[SignalEvent]:
+    return _bottom_reversal_handler("rounded_bottom", runtime_strategy, market_data_by_symbol)
+
+
+def _v_reversal_handler(
+    runtime_strategy: RuntimeStrategy,
+    market_data_by_symbol: MarketDataBySymbol,
+) -> list[SignalEvent]:
+    return _bottom_reversal_handler("v_reversal", runtime_strategy, market_data_by_symbol)
 
 
 # ============================================================================
@@ -2106,7 +2354,7 @@ def _advance_double_bottom_backtest_symbol_state(
         if current_idx <= candidate.left_bottom_idx + max_bottom_spacing + 1
     ]
 
-    right_bottom_idx = current_idx - 1
+    right_bottom_idx = current_idx - left_bottom_after_bars
     if right_bottom_idx >= 0:
         new_right_candidates = _promote_double_bottom_right_candidates(
             recent_bars,
@@ -2118,6 +2366,8 @@ def _advance_double_bottom_backtest_symbol_state(
             neckline_min_rebound_pct=neckline_min_rebound_pct,
             rebound_up_day_ratio_min=rebound_up_day_ratio_min,
             bottom_volume_ratio_max=second_bottom_volume_ratio_max,
+            pivot_before_bars=left_bottom_before_bars,
+            pivot_after_bars=left_bottom_after_bars,
         )
         existing_pairs = {
             (candidate.left_bottom_idx, candidate.right_bottom_idx)
@@ -2151,6 +2401,162 @@ def _advance_double_bottom_backtest_symbol_state(
     symbol_state.right_candidates = active_right_candidates
     return symbol_state.best_pattern
 
+
+def _replay_double_bottom_state(
+    recent_bars: list[HistoryBar],
+    signal_cfg: Dict[str, Any],
+) -> tuple[DoubleBottomRightCandidate | None, DoubleBottomPattern | None]:
+    """Rebuild the causal state for daily/Paper evaluation without future bars."""
+    state = DoubleBottomBacktestSymbolState()
+    pattern = None
+    for bar in recent_bars:
+        state.history_bars.append(dict(bar))
+        pattern = _advance_double_bottom_backtest_symbol_state(state, signal_cfg)
+    candidate = state.right_candidates[-1] if state.right_candidates else None
+    return candidate, pattern
+
+
+def _resolve_double_bottom_staged_entry(
+    *,
+    symbol: str,
+    recent_bars: list[HistoryBar],
+    candidate: DoubleBottomRightCandidate | None,
+    pattern: DoubleBottomPattern | None,
+    signal_cfg: Dict[str, Any],
+    risk_cfg: Dict[str, Any],
+) -> tuple[Literal["BUY"], str, str, Dict[str, Any]] | None:
+    if not recent_bars:
+        return None
+    current_idx = len(recent_bars) - 1
+    if pattern is not None and current_idx == pattern.breakout_idx:
+        setup = _build_staged_double_bottom_setup(
+            symbol=symbol,
+            recent_bars=recent_bars,
+            candidate=DoubleBottomRightCandidate(
+                left_bottom_idx=pattern.left_bottom_idx,
+                neckline_idx=pattern.neckline_idx,
+                right_bottom_idx=pattern.right_bottom_idx,
+                left_bottom_low=pattern.left_bottom_low,
+                right_bottom_low=pattern.right_bottom_low,
+                neckline_price=pattern.neckline_price,
+                bottom_distance_pct=pattern.bottom_distance_pct,
+                rebound_up_day_ratio=pattern.rebound_up_day_ratio,
+            ),
+            risk_cfg=risk_cfg,
+            signal_cfg=signal_cfg,
+            stage_index=3,
+            stage_key="neckline_breakout",
+            pattern=pattern,
+        )
+        return "BUY", "broke above the double-bottom neckline on confirming volume", "neckline_breakout", setup
+    if candidate is None:
+        return None
+    confirmation_bars = int(signal_cfg.get("left_bottom_after_bars", 1))
+    if current_idx == candidate.right_bottom_idx + confirmation_bars:
+        setup = _build_staged_double_bottom_setup(
+            symbol=symbol,
+            recent_bars=recent_bars,
+            candidate=candidate,
+            risk_cfg=risk_cfg,
+            signal_cfg=signal_cfg,
+            stage_index=1,
+            stage_key="second_bottom",
+        )
+        return "BUY", "confirmed a low-volume second bottom", "second_bottom", setup
+    if not _is_first_double_bottom_right_pullback(recent_bars, candidate, signal_cfg):
+        return None
+    setup = _build_staged_double_bottom_setup(
+        symbol=symbol,
+        recent_bars=recent_bars,
+        candidate=candidate,
+        risk_cfg=risk_cfg,
+        signal_cfg=signal_cfg,
+        stage_index=2,
+        stage_key="right_side_pullback",
+    )
+    return "BUY", "confirmed the first low-volume right-side pullback above the second bottom", "right_side_pullback", setup
+
+
+def _is_first_double_bottom_right_pullback(
+    recent_bars: list[HistoryBar],
+    candidate: DoubleBottomRightCandidate,
+    signal_cfg: Dict[str, Any],
+) -> bool:
+    current_idx = len(recent_bars) - 1
+    start = candidate.right_bottom_idx + int(signal_cfg.get("left_bottom_after_bars", 1)) + 1
+    if current_idx < start + 1:
+        return False
+    halfway = candidate.right_bottom_low + (candidate.neckline_price - candidate.right_bottom_low) * 0.5
+    prior_closes = [_safe_float_or_none(bar.get("close")) for bar in recent_bars[start:current_idx]]
+    if not prior_closes or max((value for value in prior_closes if value is not None), default=0.0) < halfway:
+        return False
+
+    def qualifies(idx: int) -> bool:
+        bar = recent_bars[idx]
+        close = _safe_float_or_none(bar.get("close"))
+        low = _safe_float_or_none(bar.get("low"))
+        previous_close = _safe_float_or_none(recent_bars[idx - 1].get("close"))
+        volume = _safe_float_or_none(bar.get("volume"))
+        average_volume = _safe_float_or_none(bar.get("volume_sma_20"))
+        return bool(
+            close is not None
+            and low is not None
+            and previous_close is not None
+            and volume is not None
+            and average_volume is not None
+            and average_volume > 0
+            and close < previous_close
+            and low > candidate.right_bottom_low
+            and close > candidate.right_bottom_low
+            and volume / average_volume <= float(signal_cfg["second_bottom_volume_ratio_max"])
+        )
+
+    if not qualifies(current_idx):
+        return False
+    return not any(qualifies(idx) for idx in range(start, current_idx))
+
+
+def _build_staged_double_bottom_setup(
+    *,
+    symbol: str,
+    recent_bars: list[HistoryBar],
+    candidate: DoubleBottomRightCandidate,
+    risk_cfg: Dict[str, Any],
+    signal_cfg: Dict[str, Any],
+    stage_index: int,
+    stage_key: str,
+    pattern: DoubleBottomPattern | None = None,
+) -> Dict[str, Any]:
+    extra: Dict[str, Any] = {
+        "left_bottom_trade_date": str(recent_bars[candidate.left_bottom_idx]["dt_ny"]),
+        "neckline_trade_date": str(recent_bars[candidate.neckline_idx]["dt_ny"]),
+        "right_bottom_trade_date": str(recent_bars[candidate.right_bottom_idx]["dt_ny"]),
+        "left_bottom_low": candidate.left_bottom_low,
+        "right_bottom_low": candidate.right_bottom_low,
+        "neckline_price": candidate.neckline_price,
+        "bottom_distance_pct": candidate.bottom_distance_pct,
+        "rebound_up_day_ratio": candidate.rebound_up_day_ratio,
+    }
+    if pattern is not None:
+        extra.update(_build_double_bottom_setup_payload(recent_bars, pattern))
+    return build_pattern_setup(
+        pattern_type="double_bottom",
+        symbol=symbol,
+        stage_index=stage_index,
+        stage_key=stage_key,
+        risk_cfg=risk_cfg,
+        anchors={
+            "left_bottom_trade_date": extra["left_bottom_trade_date"],
+            "right_bottom_trade_date": extra["right_bottom_trade_date"],
+            "left_bottom_price": candidate.left_bottom_low,
+            "right_bottom_price": candidate.right_bottom_low,
+            "neckline_price": candidate.neckline_price,
+        },
+        invalidation_price=min(candidate.left_bottom_low, candidate.right_bottom_low) * (1.0 - float(signal_cfg["support_tolerance_pct"])),
+        setup_id_anchors=(extra["left_bottom_trade_date"], extra["right_bottom_trade_date"]),
+        extra=extra,
+    )
+
 def _build_double_bottom_setup_payload(
     recent_bars: list[HistoryBar],
     pattern: DoubleBottomPattern,
@@ -2170,6 +2576,7 @@ def _build_double_bottom_setup_payload(
         "right_bottom_low": pattern.right_bottom_low,
         "neckline_price": pattern.neckline_price,
         "breakout_close": pattern.breakout_close,
+        "breakout_volume": pattern.breakout_volume,
         "breakout_atr": breakout_atr,
         "breakout_wait_bars": pattern.breakout_idx - pattern.right_bottom_idx,
         "bottom_distance_pct": pattern.bottom_distance_pct,
@@ -2193,12 +2600,10 @@ def _extract_double_bottom_position_setup(snapshot: MarketSnapshot) -> Dict[str,
     left_bottom_low = _safe_float_or_none(raw_setup.get("left_bottom_low"))
     right_bottom_low = _safe_float_or_none(raw_setup.get("right_bottom_low"))
     neckline_price = _safe_float_or_none(raw_setup.get("neckline_price"))
-    breakout_close = _safe_float_or_none(raw_setup.get("breakout_close"))
     if (
         left_bottom_low is None
         or right_bottom_low is None
         or neckline_price is None
-        or breakout_close is None
     ):
         return None
 
@@ -2206,7 +2611,7 @@ def _extract_double_bottom_position_setup(snapshot: MarketSnapshot) -> Dict[str,
     setup["left_bottom_low"] = left_bottom_low
     setup["right_bottom_low"] = right_bottom_low
     setup["neckline_price"] = neckline_price
-    setup["breakout_close"] = breakout_close
+    setup["breakout_close"] = _safe_float_or_none(raw_setup.get("breakout_close"))
     setup["breakout_atr"] = _safe_float_or_none(raw_setup.get("breakout_atr"))
     setup["breakout_wait_bars"] = _safe_float_or_none(raw_setup.get("breakout_wait_bars"))
     setup["bottom_distance_pct"] = _safe_float_or_none(raw_setup.get("bottom_distance_pct"))
@@ -2220,6 +2625,45 @@ def _compute_double_bottom_signal_score(setup: Dict[str, Any]) -> float:
     breakout_volume_ratio = _safe_float_or_none(setup.get("breakout_volume_ratio")) or 0.0
     rebound_up_day_ratio = _safe_float_or_none(setup.get("rebound_up_day_ratio")) or 0.0
     return ((1.0 - bottom_distance_pct) * 100.0) + breakout_volume_ratio + (rebound_up_day_ratio * 10.0)
+
+
+def _double_bottom_strength_inputs(
+    snapshot: MarketSnapshot,
+    setup: Dict[str, Any],
+) -> Dict[str, Any]:
+    neckline_price = _safe_float_or_none(setup.get("neckline_price"))
+    breakout_close = _safe_float_or_none(setup.get("breakout_close"))
+    breakout_volume = _safe_float_or_none(setup.get("breakout_volume"))
+    current_volume = _safe_float_or_none(snapshot.get("volume"))
+    return {
+        "stage": setup.get("stage_key") or setup.get("stage"),
+        "bottom_distance_pct": _safe_float_or_none(setup.get("bottom_distance_pct")),
+        "rebound_up_day_ratio": _safe_float_or_none(setup.get("rebound_up_day_ratio")),
+        "current_volume_ratio": (
+            current_volume / float(snapshot["volume_sma_20"])
+            if current_volume is not None and _safe_float_or_none(snapshot.get("volume_sma_20")) not in {None, 0}
+            else None
+        ),
+        "pullback_hold_pct": (
+            (_safe_float_or_none(snapshot.get("close")) - _safe_float_or_none(setup.get("right_bottom_low")))
+            / max(_safe_float_or_none(setup.get("neckline_price")) - _safe_float_or_none(setup.get("right_bottom_low")), 1e-12)
+            if _safe_float_or_none(snapshot.get("close")) is not None
+            and _safe_float_or_none(setup.get("right_bottom_low")) is not None
+            and _safe_float_or_none(setup.get("neckline_price")) is not None
+            else None
+        ),
+        "breakout_volume_ratio": _safe_float_or_none(setup.get("breakout_volume_ratio")),
+        "breakout_extension_pct": (
+            (breakout_close / neckline_price) - 1.0
+            if breakout_close is not None and neckline_price is not None and neckline_price > 0
+            else None
+        ),
+        "retest_volume_ratio": (
+            current_volume / breakout_volume
+            if current_volume is not None and breakout_volume is not None and breakout_volume > 0
+            else None
+        ),
+    }
 
 
 def _resolve_double_bottom_exit_action(
@@ -2241,11 +2685,7 @@ def _resolve_double_bottom_exit_action(
     breakout_atr = _safe_float_or_none(setup.get("breakout_atr"))
     left_bottom_low = _safe_float_or_none(setup.get("left_bottom_low"))
     right_bottom_low = _safe_float_or_none(setup.get("right_bottom_low"))
-    if (
-        breakout_close is None
-        or left_bottom_low is None
-        or right_bottom_low is None
-    ):
+    if left_bottom_low is None or right_bottom_low is None:
         return None, None, None
 
     support_tolerance_pct = float(signal_cfg["support_tolerance_pct"])
@@ -2265,6 +2705,7 @@ def _resolve_double_bottom_exit_action(
         return "SELL", "price broke below the double-bottom base", "base_break"
     if (
         current_close is not None
+        and breakout_close is not None
         and breakout_atr is not None
         and current_close >= breakout_close + (float(risk_cfg["take_profit_atr"]) * breakout_atr)
     ):
@@ -2272,7 +2713,8 @@ def _resolve_double_bottom_exit_action(
     if (
         current_close is not None
         and current_atr is not None
-        and current_close < breakout_close - (float(risk_cfg["stop_loss_atr"]) * current_atr)
+        and (breakout_close is not None or avg_entry_price is not None)
+        and current_close < (breakout_close if breakout_close is not None else float(avg_entry_price)) - (float(risk_cfg["stop_loss_atr"]) * current_atr)
     ):
         return "SELL", "price hit the ATR stop from the breakout confirmation", "atr_stop"
     return None, None, None
@@ -2323,7 +2765,7 @@ def _find_latest_double_bottom_pattern(
         if left_candidate is not None:
             left_candidates.append(left_candidate)
 
-        right_bottom_idx = current_idx - 1
+        right_bottom_idx = current_idx - left_bottom_after_bars
         if right_bottom_idx >= 0:
             right_candidates.extend(
                 _promote_double_bottom_right_candidates(
@@ -2336,6 +2778,8 @@ def _find_latest_double_bottom_pattern(
                     neckline_min_rebound_pct=neckline_min_rebound_pct,
                     rebound_up_day_ratio_min=rebound_up_day_ratio_min,
                     bottom_volume_ratio_max=second_bottom_volume_ratio_max,
+                    pivot_before_bars=left_bottom_before_bars,
+                    pivot_after_bars=left_bottom_after_bars,
                 )
             )
 
@@ -2434,8 +2878,15 @@ def _promote_double_bottom_right_candidates(
     neckline_min_rebound_pct: float,
     rebound_up_day_ratio_min: float,
     bottom_volume_ratio_max: float,
+    pivot_before_bars: int = 1,
+    pivot_after_bars: int = 1,
 ) -> list[DoubleBottomRightCandidate]:
-    if not left_candidates or not _is_local_minimum(recent_bars, right_bottom_idx):
+    if not left_candidates or not _is_local_minimum(
+        recent_bars,
+        right_bottom_idx,
+        before_span=pivot_before_bars,
+        after_span=pivot_after_bars,
+    ):
         return []
 
     candidates: list[DoubleBottomRightCandidate] = []
@@ -2878,5 +3329,8 @@ STRATEGY_HANDLERS: dict[str, StrategyHandler] = {
     "momentum_breakout": _momentum_breakout_handler,
     "island_reversal": _island_reversal_handler,
     "double_bottom": _double_bottom_handler,
+    "head_shoulders_bottom": _head_shoulders_bottom_handler,
+    "rounded_bottom": _rounded_bottom_handler,
+    "v_reversal": _v_reversal_handler,
     "support_resistance": _support_resistance_handler,
 }

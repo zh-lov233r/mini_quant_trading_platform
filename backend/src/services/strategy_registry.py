@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 import json
+import math
 import re
 from typing import Any, Dict, Iterable
 
@@ -13,6 +14,9 @@ ENGINE_SUPPORTED_TYPES = {
     "momentum_breakout",
     "island_reversal",
     "double_bottom",
+    "head_shoulders_bottom",
+    "rounded_bottom",
+    "v_reversal",
     "support_resistance",
 }
 _INDICATOR_PATTERN = re.compile(r"^(EMA|SMA)(\d+)$", re.IGNORECASE)
@@ -55,6 +59,24 @@ STRATEGY_DATA_REQUIREMENTS: dict[str, StrategyDataRequirements] = {
         history_length=150,
         signal_metadata_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
     ),
+    "head_shoulders_bottom": StrategyDataRequirements(
+        current_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
+        history_fields=(*_OHLCV, "atr_14", "volume_sma_20", "ret_60d"),
+        history_length=180,
+        signal_metadata_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
+    ),
+    "rounded_bottom": StrategyDataRequirements(
+        current_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
+        history_fields=(*_OHLCV, "atr_14", "volume_sma_20", "ret_60d"),
+        history_length=260,
+        signal_metadata_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
+    ),
+    "v_reversal": StrategyDataRequirements(
+        current_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
+        history_fields=(*_OHLCV, "atr_14", "volume_sma_20", "ret_60d"),
+        history_length=120,
+        signal_metadata_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
+    ),
     "support_resistance": StrategyDataRequirements(
         current_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
         history_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
@@ -72,6 +94,7 @@ def strategy_data_requirements(strategy_type: str) -> StrategyDataRequirements:
 
 TREND_DEFAULTS: Dict[str, Any] = {
     "signal": {
+        "min_strength_score": 50.0,
         "fast_indicator": {"kind": "ema", "window": 15},
         "slow_indicator": {"kind": "sma", "window": 200},
         "volume_multiplier": 1.5,
@@ -103,6 +126,7 @@ TREND_DEFAULTS: Dict[str, Any] = {
 
 MEAN_REVERSION_DEFAULTS: Dict[str, Any] = {
     "signal": {
+        "min_strength_score": 50.0,
         "lookback_window": 20,
         "zscore_entry": 2.0,
         "zscore_exit": 0.5,
@@ -132,6 +156,7 @@ MEAN_REVERSION_DEFAULTS: Dict[str, Any] = {
 
 MOMENTUM_BREAKOUT_DEFAULTS: Dict[str, Any] = {
     "signal": {
+        "min_strength_score": 50.0,
         "minimum_return_20d": 0.10,
         "breakout_buffer_pct": 0.02,
         "volume_multiplier": 1.5,
@@ -159,8 +184,15 @@ MOMENTUM_BREAKOUT_DEFAULTS: Dict[str, Any] = {
     },
 }
 
+STAGED_ENTRY_RISK_DEFAULTS: Dict[str, float] = {
+    "stage_1_target_pct": 0.20,
+    "stage_2_target_pct": 0.50,
+    "stage_3_target_pct": 1.00,
+}
+
 ISLAND_REVERSAL_DEFAULTS: Dict[str, Any] = {
     "signal": {
+        "min_strength_score": 50.0,
         "downtrend_lookback": 60,
         "downtrend_min_drop_pct": 0.15,
         "left_gap_min_pct": 0.02,
@@ -180,6 +212,7 @@ ISLAND_REVERSAL_DEFAULTS: Dict[str, Any] = {
     "risk": {
         "max_positions": 6,
         "position_size_pct": 0.15,
+        **STAGED_ENTRY_RISK_DEFAULTS,
         "stop_loss_atr": 1.5,
         "max_loss_pct": 0.10,
         "take_profit_atr": 3.0,
@@ -197,6 +230,7 @@ ISLAND_REVERSAL_DEFAULTS: Dict[str, Any] = {
 
 DOUBLE_BOTTOM_DEFAULTS: Dict[str, Any] = {
     "signal": {
+        "min_strength_score": 50.0,
         "downtrend_lookback": 60,
         "downtrend_min_drop_pct": 0.20,
         "downtrend_max_up_day_ratio": 0.35,
@@ -223,6 +257,7 @@ DOUBLE_BOTTOM_DEFAULTS: Dict[str, Any] = {
     "risk": {
         "max_positions": 6,
         "position_size_pct": 0.15,
+        **STAGED_ENTRY_RISK_DEFAULTS,
         "stop_loss_atr": 1.5,
         "max_loss_pct": 0.08,
         "take_profit_atr": 3.0,
@@ -238,8 +273,100 @@ DOUBLE_BOTTOM_DEFAULTS: Dict[str, Any] = {
     },
 }
 
+HEAD_SHOULDERS_BOTTOM_DEFAULTS: Dict[str, Any] = {
+    "signal": {
+        "min_strength_score": 50.0,
+        "downtrend_lookback": 60,
+        "downtrend_min_drop_pct": 0.20,
+        "pivot_left_bars": 2,
+        "pivot_right_bars": 2,
+        "min_segment_bars": 5,
+        "max_segment_bars": 40,
+        "shoulder_tolerance_pct": 0.05,
+        "head_depth_min_pct": 0.05,
+        "head_volume_ratio_max": 0.80,
+        "right_shoulder_volume_ratio_max": 0.90,
+        "breakout_volume_ratio_min": 1.50,
+        "breakout_buffer_pct": 0.005,
+    },
+    "universe": {"symbols": [], "selection_mode": "all_common_stock"},
+    "risk": {
+        "max_positions": 6,
+        "position_size_pct": 0.15,
+        **STAGED_ENTRY_RISK_DEFAULTS,
+        "stop_loss_atr": 1.5,
+        "max_loss_pct": 0.08,
+        "take_profit_atr": 3.0,
+    },
+    "execution": {"timeframe": "1d", "rebalance": "daily", "run_at": "close"},
+    "metadata": {"description": "", "schema_version": 1, "algorithm_version": "confirmed-pivots-v1"},
+}
+
+ROUNDED_BOTTOM_DEFAULTS: Dict[str, Any] = {
+    "signal": {
+        "min_strength_score": 50.0,
+        "min_lookback": 80,
+        "max_lookback": 240,
+        "min_depth_pct": 0.20,
+        "min_r_squared": 0.75,
+        "vertex_position_min": 0.35,
+        "vertex_position_max": 0.65,
+        "pivot_left_bars": 2,
+        "pivot_right_bars": 2,
+        "min_pullback_spacing": 5,
+        "right_volume_ratio_min": 1.30,
+        "pullback_volume_ratio_max": 0.80,
+        "breakout_volume_ratio_min": 1.50,
+        "breakout_buffer_pct": 0.005,
+    },
+    "universe": {"symbols": [], "selection_mode": "all_common_stock"},
+    "risk": {
+        "max_positions": 6,
+        "position_size_pct": 0.15,
+        **STAGED_ENTRY_RISK_DEFAULTS,
+        "stop_loss_atr": 1.5,
+        "max_loss_pct": 0.08,
+        "take_profit_atr": 3.0,
+    },
+    "execution": {"timeframe": "1d", "rebalance": "daily", "run_at": "close"},
+    "metadata": {"description": "", "schema_version": 1, "algorithm_version": "log-quadratic-v1"},
+}
+
+V_REVERSAL_DEFAULTS: Dict[str, Any] = {
+    "signal": {
+        "min_strength_score": 50.0,
+        "downtrend_lookback": 60,
+        "downtrend_min_drop_pct": 0.20,
+        "pivot_max_bars": 3,
+        "reversal_min_return_pct": 0.05,
+        "reversal_min_atr": 1.50,
+        "pivot_volume_ratio_min": 2.00,
+        "continuation_window": 5,
+        "continuation_volume_ratio_min": 1.20,
+        "consolidation_min_bars": 3,
+        "consolidation_max_bars": 10,
+        "breakout_volume_ratio_min": 1.50,
+        "retest_window": 5,
+        "retest_volume_ratio_max": 0.80,
+        "support_tolerance_pct": 0.02,
+        "bearish_reversal_volume_ratio_min": 2.00,
+    },
+    "universe": {"symbols": [], "selection_mode": "all_common_stock"},
+    "risk": {
+        "max_positions": 6,
+        "position_size_pct": 0.15,
+        **STAGED_ENTRY_RISK_DEFAULTS,
+        "stop_loss_atr": 1.5,
+        "max_loss_pct": 0.08,
+        "take_profit_atr": 3.0,
+    },
+    "execution": {"timeframe": "1d", "rebalance": "daily", "run_at": "close"},
+    "metadata": {"description": "", "schema_version": 1, "algorithm_version": "volume-v-reversal-v1"},
+}
+
 SUPPORT_RESISTANCE_DEFAULTS: Dict[str, Any] = {
     "signal": {
+        "min_strength_score": 50.0,
         "support_bounce_enabled": True,
         "resistance_breakout_enabled": True,
         "breakout_retest_enabled": True,
@@ -352,6 +479,27 @@ def build_strategy_catalog() -> list[Dict[str, Any]]:
             "defaults": copy.deepcopy(DOUBLE_BOTTOM_DEFAULTS),
         },
         {
+            "strategy_type": "head_shoulders_bottom",
+            "label": "Head and Shoulders Bottom",
+            "description": "头肩底反转策略，分阶段识别缩量头部、右肩回踩与放量突破动态颈线。",
+            "engine_ready": True,
+            "defaults": copy.deepcopy(HEAD_SHOULDERS_BOTTOM_DEFAULTS),
+        },
+        {
+            "strategy_type": "rounded_bottom",
+            "label": "Rounded Bottom",
+            "description": "圆弧底反转策略，使用因果二次曲线拟合、右侧更高回踩与放量突破碗口。",
+            "engine_ready": True,
+            "defaults": copy.deepcopy(ROUNDED_BOTTOM_DEFAULTS),
+        },
+        {
+            "strategy_type": "v_reversal",
+            "label": "V Reversal",
+            "description": "V 型反转策略，识别底部放量转折、连续上升与顶部突破回踩。",
+            "engine_ready": True,
+            "defaults": copy.deepcopy(V_REVERSAL_DEFAULTS),
+        },
+        {
             "strategy_type": "support_resistance",
             "label": "Support / Resistance Zones",
             "description": "使用已确认 Pivot 与 ATR 聚类识别动态支撑/压力区，并交易反弹、突破和突破回踩。",
@@ -392,12 +540,29 @@ def normalize_strategy_params(
         normalized = _normalize_island_reversal_params(raw)
     elif strategy_type == "double_bottom":
         normalized = _normalize_double_bottom_params(raw)
+    elif strategy_type == "head_shoulders_bottom":
+        normalized = _normalize_head_shoulders_bottom_params(raw)
+    elif strategy_type == "rounded_bottom":
+        normalized = _normalize_rounded_bottom_params(raw)
+    elif strategy_type == "v_reversal":
+        normalized = _normalize_v_reversal_params(raw)
     elif strategy_type == "support_resistance":
         normalized = _normalize_support_resistance_params(raw)
     elif strategy_type == "custom":
         normalized = _normalize_custom_params(raw)
     else:
         raise ValueError(f"unsupported strategy_type: {strategy_type}")
+
+    if strategy_type in ENGINE_SUPPORTED_TYPES:
+        signal = normalized.setdefault("signal", {})
+        raw_signal = raw.get("signal") if isinstance(raw.get("signal"), dict) else {}
+        signal["min_strength_score"] = _strength_score(
+            raw_signal.get(
+                "min_strength_score",
+                raw.get("min_strength_score", signal.get("min_strength_score", 50.0)),
+            ),
+            "signal.min_strength_score",
+        )
 
     metadata = normalized.setdefault("metadata", {})
     metadata["description"] = (description or metadata.get("description") or "").strip()
@@ -455,6 +620,8 @@ def is_engine_ready(strategy_type: str, params: Dict[str, Any]) -> bool:
             and signal.get("breakout_volume_ratio_min")
             and signal.get("retest_window")
         )
+    if strategy_type in {"head_shoulders_bottom", "rounded_bottom", "v_reversal"}:
+        return bool(signal and params.get("risk") and execution.get("run_at") == "close")
     if strategy_type == "support_resistance":
         return bool(
             signal.get("detection_window")
@@ -548,6 +715,17 @@ def required_feature_keys(strategy_type: str, params: Dict[str, Any]) -> list[st
             "volume_sma_20",
             "atr_14",
             "sma_20",
+        ]
+    if strategy_type in {"head_shoulders_bottom", "rounded_bottom", "v_reversal"}:
+        return [
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "volume_sma_20",
+            "atr_14",
+            "ret_60d",
         ]
     if strategy_type == "support_resistance":
         return [
@@ -984,6 +1162,7 @@ def _normalize_island_reversal_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         normalized["risk"].get("take_profit_atr", ISLAND_REVERSAL_DEFAULTS["risk"]["take_profit_atr"]),
         "risk.take_profit_atr",
     )
+    _normalize_staged_risk(normalized["risk"])
     normalized["execution"]["timeframe"] = str(
         normalized["execution"].get("timeframe", ISLAND_REVERSAL_DEFAULTS["execution"]["timeframe"])
     )
@@ -1155,6 +1334,7 @@ def _normalize_double_bottom_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         normalized["risk"].get("take_profit_atr", DOUBLE_BOTTOM_DEFAULTS["risk"]["take_profit_atr"]),
         "risk.take_profit_atr",
     )
+    _normalize_staged_risk(normalized["risk"])
     normalized["execution"]["timeframe"] = str(
         normalized["execution"].get("timeframe", DOUBLE_BOTTOM_DEFAULTS["execution"]["timeframe"])
     )
@@ -1170,6 +1350,172 @@ def _normalize_double_bottom_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         "metadata.schema_version",
     )
     return normalized
+
+
+def _normalize_head_shoulders_bottom_params(raw: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = _normalize_staged_pattern_params(
+        raw,
+        HEAD_SHOULDERS_BOTTOM_DEFAULTS,
+        integer_fields=(
+            "downtrend_lookback",
+            "pivot_left_bars",
+            "pivot_right_bars",
+            "min_segment_bars",
+            "max_segment_bars",
+        ),
+        fraction_fields=(
+            "downtrend_min_drop_pct",
+            "shoulder_tolerance_pct",
+            "head_depth_min_pct",
+            "breakout_buffer_pct",
+        ),
+        positive_float_fields=(
+            "head_volume_ratio_max",
+            "right_shoulder_volume_ratio_max",
+            "breakout_volume_ratio_min",
+        ),
+    )
+    if normalized["signal"]["min_segment_bars"] > normalized["signal"]["max_segment_bars"]:
+        raise ValueError("signal.min_segment_bars cannot exceed signal.max_segment_bars")
+    return normalized
+
+
+def _normalize_rounded_bottom_params(raw: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = _normalize_staged_pattern_params(
+        raw,
+        ROUNDED_BOTTOM_DEFAULTS,
+        integer_fields=(
+            "min_lookback",
+            "max_lookback",
+            "pivot_left_bars",
+            "pivot_right_bars",
+            "min_pullback_spacing",
+        ),
+        fraction_fields=(
+            "min_depth_pct",
+            "min_r_squared",
+            "vertex_position_min",
+            "vertex_position_max",
+            "breakout_buffer_pct",
+        ),
+        positive_float_fields=(
+            "right_volume_ratio_min",
+            "pullback_volume_ratio_max",
+            "breakout_volume_ratio_min",
+        ),
+    )
+    signal = normalized["signal"]
+    if signal["min_lookback"] > signal["max_lookback"]:
+        raise ValueError("signal.min_lookback cannot exceed signal.max_lookback")
+    if signal["vertex_position_min"] >= signal["vertex_position_max"]:
+        raise ValueError("signal.vertex_position_min must be below vertex_position_max")
+    return normalized
+
+
+def _normalize_v_reversal_params(raw: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = _normalize_staged_pattern_params(
+        raw,
+        V_REVERSAL_DEFAULTS,
+        integer_fields=(
+            "downtrend_lookback",
+            "pivot_max_bars",
+            "continuation_window",
+            "consolidation_min_bars",
+            "consolidation_max_bars",
+            "retest_window",
+        ),
+        fraction_fields=(
+            "downtrend_min_drop_pct",
+            "reversal_min_return_pct",
+            "support_tolerance_pct",
+        ),
+        positive_float_fields=(
+            "reversal_min_atr",
+            "pivot_volume_ratio_min",
+            "continuation_volume_ratio_min",
+            "breakout_volume_ratio_min",
+            "retest_volume_ratio_max",
+            "bearish_reversal_volume_ratio_min",
+        ),
+    )
+    signal = normalized["signal"]
+    if signal["consolidation_min_bars"] > signal["consolidation_max_bars"]:
+        raise ValueError("signal.consolidation_min_bars cannot exceed consolidation_max_bars")
+    return normalized
+
+
+def _normalize_staged_pattern_params(
+    raw: Dict[str, Any],
+    defaults: Dict[str, Any],
+    *,
+    integer_fields: Iterable[str],
+    fraction_fields: Iterable[str],
+    positive_float_fields: Iterable[str],
+) -> Dict[str, Any]:
+    normalized = copy.deepcopy(defaults)
+    for section in ("signal", "risk", "execution", "metadata"):
+        normalized[section] = _merge_nested_section(normalized[section], raw.get(section))
+    normalized["universe"] = _merge_nested_section(
+        normalized["universe"],
+        raw.get("universe"),
+        symbols=raw.get("symbols") or raw.get("universe_symbols"),
+    )
+    for field in defaults["signal"]:
+        if field in raw:
+            normalized["signal"][field] = raw[field]
+    for field in defaults["risk"]:
+        if field in raw:
+            normalized["risk"][field] = raw[field]
+
+    signal = normalized["signal"]
+    for field in integer_fields:
+        signal[field] = _positive_int(signal.get(field), f"signal.{field}")
+    for field in fraction_fields:
+        signal[field] = _fraction(signal.get(field), f"signal.{field}")
+    for field in positive_float_fields:
+        signal[field] = _positive_float(signal.get(field), f"signal.{field}")
+
+    normalized["universe"]["symbols"] = _normalize_symbols(normalized["universe"].get("symbols", []))
+    normalized["universe"]["selection_mode"] = _normalize_selection_mode(
+        normalized["universe"].get("selection_mode"),
+        normalized["universe"]["symbols"],
+    )
+    risk = normalized["risk"]
+    risk["max_positions"] = _positive_int(risk.get("max_positions"), "risk.max_positions")
+    risk["position_size_pct"] = _fraction(risk.get("position_size_pct"), "risk.position_size_pct")
+    risk["stop_loss_atr"] = _positive_float(risk.get("stop_loss_atr"), "risk.stop_loss_atr")
+    risk["max_loss_pct"] = _fraction(risk.get("max_loss_pct"), "risk.max_loss_pct")
+    risk["take_profit_atr"] = _positive_float(risk.get("take_profit_atr"), "risk.take_profit_atr")
+    _normalize_staged_risk(risk)
+
+    execution = normalized["execution"]
+    execution["timeframe"] = str(execution.get("timeframe"))
+    execution["rebalance"] = str(execution.get("rebalance"))
+    execution["run_at"] = str(execution.get("run_at"))
+    if any(
+        execution.get(key) != expected
+        for key, expected in {"timeframe": "1d", "rebalance": "daily", "run_at": "close"}.items()
+    ):
+        raise ValueError("staged pattern strategies require daily close execution")
+    normalized["metadata"]["description"] = str(normalized["metadata"].get("description", "")).strip()
+    normalized["metadata"]["schema_version"] = _positive_int(
+        normalized["metadata"].get("schema_version", 1),
+        "metadata.schema_version",
+    )
+    return normalized
+
+
+def _normalize_staged_risk(risk: Dict[str, Any]) -> None:
+    stage_1 = _fraction(risk.get("stage_1_target_pct", 0.20), "risk.stage_1_target_pct")
+    stage_2 = _fraction(risk.get("stage_2_target_pct", 0.50), "risk.stage_2_target_pct")
+    stage_3 = _fraction(risk.get("stage_3_target_pct", 1.00), "risk.stage_3_target_pct")
+    if not stage_1 < stage_2 < stage_3:
+        raise ValueError("staged entry targets must be strictly increasing")
+    if not math.isclose(stage_3, 1.0, rel_tol=0.0, abs_tol=1e-9):
+        raise ValueError("risk.stage_3_target_pct must equal 1")
+    risk["stage_1_target_pct"] = stage_1
+    risk["stage_2_target_pct"] = stage_2
+    risk["stage_3_target_pct"] = stage_3
 
 
 def _normalize_support_resistance_params(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -1437,6 +1783,16 @@ def _positive_float(value: Any, label: str) -> float:
         raise ValueError(f"{label} must be a positive number") from exc
     if fvalue <= 0:
         raise ValueError(f"{label} must be a positive number")
+    return fvalue
+
+
+def _strength_score(value: Any, label: str) -> float:
+    try:
+        fvalue = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a number within [0, 100]") from exc
+    if not math.isfinite(fvalue) or fvalue < 0 or fvalue > 100:
+        raise ValueError(f"{label} must be within [0, 100]")
     return fvalue
 
 

@@ -1,6 +1,7 @@
 import http from "@/api/client";
 import type {
   BacktestCreate,
+  BacktestComparisonCurvesOut,
   BacktestDetailOut,
   BacktestEquityPoint,
   BacktestPageOut,
@@ -73,6 +74,17 @@ export function getBacktestEquity(
   const query = new URLSearchParams({ max_points: String(maxPoints), shape: "chart" });
   return http<BacktestEquityPoint[]>(
     `/api/backtests/${encodeURIComponent(runId)}/equity?${query.toString()}`,
+    { method: "GET" },
+  );
+}
+
+export function getBacktestComparisonCurves(
+  runId: string,
+  maxPoints = 1500,
+): Promise<BacktestComparisonCurvesOut> {
+  const query = new URLSearchParams({ max_points: String(maxPoints) });
+  return http<BacktestComparisonCurvesOut>(
+    `/api/backtests/${encodeURIComponent(runId)}/comparison-curves?${query.toString()}`,
     { method: "GET" },
   );
 }

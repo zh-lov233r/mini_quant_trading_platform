@@ -277,6 +277,11 @@ class PaperAccountTransactionOut(BaseModel):
     source: str | None = None
     broker_status: str | None = None
     net_cash_flow: float
+    setup_id: str | None = None
+    stage_key: str | None = None
+    stage_target_pct: float | None = None
+    added_notional: float | None = None
+    weighted_avg_cost: float | None = None
 
 
 class StrategyPortfolioWorkspaceOut(StrategyPortfolioOverviewOut):

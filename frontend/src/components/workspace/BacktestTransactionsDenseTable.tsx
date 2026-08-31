@@ -16,6 +16,11 @@ export interface BacktestTransactionDenseRow {
   fee: number | null;
   netCashFlow: number | null;
   signalTs: string | null;
+  stage: string | null;
+  setupId: string | null;
+  targetPct: number | null;
+  addedNotional: number | null;
+  weightedCost: number | null;
   reason: string;
 }
 
@@ -31,6 +36,11 @@ export default function BacktestTransactionsDenseTable({ rows }: { rows: Backtes
     { id: "fee", header: isZh ? "费用" : "Fee", accessor: (row: BacktestTransactionDenseRow) => row.fee, cell: (value: unknown) => formatCurrency(typeof value === "number" ? value : null, locale), sortable: true, width: 120 },
     { id: "cash", header: isZh ? "现金流" : "Cash Flow", accessor: (row: BacktestTransactionDenseRow) => row.netCashFlow, cell: (value: unknown) => formatCurrency(typeof value === "number" ? value : null, locale), sortable: true, width: 140 },
     { id: "signal", header: isZh ? "信号时间" : "Signal Time", accessor: (row: BacktestTransactionDenseRow) => row.signalTs || "", cell: (value: unknown) => formatDateTime(String(value || ""), locale), sortable: true, width: 190 },
+    { id: "stage", header: isZh ? "阶段" : "Stage", accessor: (row: BacktestTransactionDenseRow) => row.stage || "-", filterable: true, width: 150 },
+    { id: "target", header: isZh ? "累计目标" : "Cumulative Target", accessor: (row: BacktestTransactionDenseRow) => row.targetPct, cell: (value: unknown) => typeof value === "number" ? `${(value * 100).toFixed(0)}%` : "-", sortable: true, width: 145 },
+    { id: "added", header: isZh ? "本批增持" : "Added Notional", accessor: (row: BacktestTransactionDenseRow) => row.addedNotional, cell: (value: unknown) => formatCurrency(typeof value === "number" ? value : null, locale), sortable: true, width: 150 },
+    { id: "weighted", header: isZh ? "加权成本" : "Weighted Cost", accessor: (row: BacktestTransactionDenseRow) => row.weightedCost, cell: (value: unknown) => formatCurrency(typeof value === "number" ? value : null, locale), sortable: true, width: 145 },
+    { id: "setup", header: "Setup", accessor: (row: BacktestTransactionDenseRow) => row.setupId || "-", filterable: true, width: 220 },
     { id: "reason", header: isZh ? "原因" : "Reason", accessor: (row: BacktestTransactionDenseRow) => row.reason || "-", filterable: true, width: 220 },
   ], [isZh, locale]);
 

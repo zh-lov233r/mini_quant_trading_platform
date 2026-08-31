@@ -85,6 +85,8 @@ NEXT_PUBLIC_AGENTOPS_PROJECT_ID=<project-id>
 
 引擎大类工作流支持 `support_resistance`，且不会替换用户选定类型。Planner 可以搜索已有的标量模式开关和数值型 `signal.*` / `risk.*` 叶子；三个入场模式全部关闭的候选会被 Quant 拒绝。这不会新增 portfolio、scheduler 或订单权限。
 
+同一工作流也把 `head_shoulders_bottom`、`rounded_bottom` 和 `v_reversal` 作为锁定的 engine-ready 大类。Planner 可以研究现有形态阈值和三阶段目标，但 Quant 会拒绝非严格递增或第三阶段不等于 100% 的目标组合；生成策略仍固定为 Draft。
+
 workflow 处于 `waiting_external` 时，AgentOps 会定期向认证后的实验用量接口发送累计用量。Quant 保存用量并重新检查全部停止条件。触发停止后会记录终止证据、取消排队 trial，并允许运行中的同步工作安全结束。具体字段和语义见[研究实验](research-experiments.zh-CN.md)。
 
 ## 恢复与限制

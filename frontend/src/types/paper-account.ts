@@ -237,6 +237,11 @@ export interface PaperAccountTransactionOut {
   source?: string | null;
   broker_status?: string | null;
   net_cash_flow: number;
+  setup_id?: string | null;
+  stage_key?: string | null;
+  stage_target_pct?: number | null;
+  added_notional?: number | null;
+  weighted_avg_cost?: number | null;
 }
 
 export interface StrategyPortfolioWorkspaceOut extends StrategyPortfolioOverviewOut {

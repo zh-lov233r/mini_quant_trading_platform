@@ -60,6 +60,9 @@ class StrategyCreate(BaseModel):
         "momentum_breakout",
         "island_reversal",
         "double_bottom",
+        "head_shoulders_bottom",
+        "rounded_bottom",
+        "v_reversal",
         "support_resistance",
         "custom",
     ] = Field(..., description="策略类型")
@@ -145,6 +148,9 @@ class StrategyProposal(BaseModel):
         "momentum_breakout",
         "island_reversal",
         "double_bottom",
+        "head_shoulders_bottom",
+        "rounded_bottom",
+        "v_reversal",
         "support_resistance",
     ]
     overrides: list[StrategyParameterOverride] = Field(default_factory=list, max_length=30)

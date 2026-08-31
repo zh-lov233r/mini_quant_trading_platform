@@ -229,6 +229,11 @@ export default function PortfolioDetailPage() {
     { id: "qty", header: txt("数量", "Qty"), accessor: (item: (typeof portfolioTransactions)[number]) => item.qty, cell: (value: unknown) => formatNumber(Number(value), locale, 4), sortable: true, width: 120 },
     { id: "price", header: txt("价格", "Price"), accessor: (item: (typeof portfolioTransactions)[number]) => item.price, cell: (value: unknown) => formatMoney(Number(value), locale, brokerCurrency), sortable: true, width: 130 },
     { id: "cash", header: txt("净现金流", "Net Cash Flow"), accessor: (item: (typeof portfolioTransactions)[number]) => item.net_cash_flow, cell: (value: unknown) => <span style={{ color: Number(value) >= 0 ? "#34d399" : "#fb7185", fontWeight: 700 }}>{formatMoney(Number(value), locale, brokerCurrency)}</span>, sortable: true, width: 150 },
+    { id: "stage", header: txt("阶段", "Stage"), accessor: (item: (typeof portfolioTransactions)[number]) => item.stage_key || "-", filterable: true, width: 150 },
+    { id: "target", header: txt("累计目标", "Cumulative Target"), accessor: (item: (typeof portfolioTransactions)[number]) => item.stage_target_pct, cell: (value: unknown) => typeof value === "number" ? formatPercent(value, 0) : "-", sortable: true, width: 145 },
+    { id: "added", header: txt("本批增持", "Added Notional"), accessor: (item: (typeof portfolioTransactions)[number]) => item.added_notional, cell: (value: unknown) => formatMoney(typeof value === "number" ? value : null, locale, brokerCurrency), sortable: true, width: 145 },
+    { id: "cost", header: txt("加权成本", "Weighted Cost"), accessor: (item: (typeof portfolioTransactions)[number]) => item.weighted_avg_cost, cell: (value: unknown) => formatMoney(typeof value === "number" ? value : null, locale, brokerCurrency), sortable: true, width: 140 },
+    { id: "setup", header: "Setup", accessor: (item: (typeof portfolioTransactions)[number]) => item.setup_id || "-", filterable: true, width: 220 },
   ], [brokerCurrency, locale, txt]);
 
   return (

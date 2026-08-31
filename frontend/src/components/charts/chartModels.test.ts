@@ -7,6 +7,7 @@ import {
   currentZoneOverlays,
   groupCandleOverlayMarkers,
   isDisplayableSupportResistanceEventType,
+  latestVisibleZoneOverlaysByRole,
   normalizeCandleBars,
   normalizeEquityPoints,
   normalizeGapOverlays,
@@ -220,6 +221,30 @@ describe("chart models", () => {
       "2025-01-03",
     ).map((zone) => zone.key)).toEqual(["current-resistance", "current-support"]);
     expect(currentZoneOverlays([base], "2025-01-03")).toEqual([]);
+  });
+
+  it("keeps the latest visible support and resistance segments in the lifecycle legend", () => {
+    const base = {
+      key: "old-resistance",
+      startDate: "2025-01-01",
+      endDate: "2025-01-05",
+      startCenterPrice: 10,
+      startLowerPrice: 9,
+      startUpperPrice: 11,
+      endCenterPrice: 10,
+      endLowerPrice: 9,
+      endUpperPrice: 11,
+      slopePerSession: 0,
+      slopeAtrPerSession: 0,
+      role: "resistance" as const,
+      description: "old resistance",
+    };
+    const latestResistance = { ...base, key: "latest-resistance", startDate: "2025-01-06", endDate: "2025-01-10" };
+    const flippedSupport = { ...base, key: "flipped-support", startDate: "2025-01-11", endDate: "2025-01-12", role: "support" as const };
+
+    expect(latestVisibleZoneOverlaysByRole(
+      [flippedSupport, base, latestResistance],
+    ).map((zone) => zone.key)).toEqual(["latest-resistance", "flipped-support"]);
   });
 
   it("keeps text only on primary trade markers and groups same-day secondary events", () => {

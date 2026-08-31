@@ -2,8 +2,10 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/router";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 
 import {
+  getBacktestComparisonCurves,
   getBacktestEquity,
   getBacktestSignals,
   getBacktestSummary,
@@ -34,7 +36,20 @@ import type {
 import type { CandleBarOut, CandleSeriesOut } from "@/types/quote";
 import { formatDateTime, formatDurationMs, formatPercent } from "@/utils/strategy";
 import { compactBacktestPositions } from "@/utils/backtestPositions";
+import { comparisonCurveReturn } from "@/utils/comparisonCurves";
 import { shouldLoadBacktestDetails } from "@/utils/backtestProgress";
+import {
+  BACKTEST_REVIEW_TABS,
+  backtestReviewTabLabel,
+  nextBacktestReviewTab,
+} from "@/utils/backtestReviewTabs";
+import type { BacktestReviewTab, BacktestReviewTabKey } from "@/utils/backtestReviewTabs";
+import { toTradeDateKey } from "@/utils/tradingDate";
+import {
+  signalStrengthLevelLabel,
+  signalStrengthResultLabel,
+  sortBuySignalsByStrength,
+} from "@/utils/signalStrength";
 import {
   BacktestTransactionPageError,
   INITIAL_LIFECYCLE_TRANSACTION_LIMIT,
@@ -49,8 +64,8 @@ import {
 } from "@/utils/backtestTransactions";
 import {
   buildEquityEventMarkers,
-  currentZoneOverlays,
   isDisplayableSupportResistanceEventType,
+  latestVisibleZoneOverlaysByRole,
   normalizeEquityPoints,
   toChartTime,
 } from "@/components/charts/chartModels";
@@ -99,8 +114,148 @@ function metricNumber(summary: Record<string, unknown>, key: string): number | n
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function BacktestReviewWindow({
+  activeTab,
+  onTabChange,
+  children,
+}: {
+  activeTab: BacktestReviewTab;
+  onTabChange: (tab: BacktestReviewTab) => void;
+  children: ReactNode;
+}) {
+  const { locale } = useI18n();
+  const isZh = locale === "zh-CN";
+
+  const moveFocus = (nextTab: BacktestReviewTab) => {
+    onTabChange(nextTab);
+    requestAnimationFrame(() => {
+      document.getElementById(`backtest-review-tab-${nextTab}`)?.focus();
+    });
+  };
+
+  return (
+    <section style={{ ...sectionCardStyle, marginTop: 18, marginBottom: 18 }}>
+      <div style={{ marginBottom: 14 }}>
+        <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>
+          {isZh ? "回测复盘工作台" : "Backtest Review Workbench"}
+        </h2>
+        <p style={sectionSubtitleStyle}>
+          {isZh
+            ? "在一个窗口内切换个股结果、信号、持仓生命周期、成交和期末持仓。"
+            : "Switch between symbol results, signals, position lifecycles, fills, and ending positions in one window."}
+        </p>
+      </div>
+
+      <div
+        role="tablist"
+        aria-label={isZh ? "回测复盘模块" : "Backtest review modules"}
+        style={reviewTabListStyle}
+      >
+        {BACKTEST_REVIEW_TABS.map((tab) => {
+          const active = tab === activeTab;
+          return (
+            <button
+              key={tab}
+              id={`backtest-review-tab-${tab}`}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              aria-controls="backtest-review-panel"
+              tabIndex={active ? 0 : -1}
+              onClick={() => onTabChange(tab)}
+              onKeyDown={(event) => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                moveFocus(nextBacktestReviewTab(activeTab, event.key as BacktestReviewTabKey));
+              }}
+              style={reviewTabButtonStyle(active)}
+            >
+              {backtestReviewTabLabel(tab, locale)}
+            </button>
+          );
+        })}
+      </div>
+
+      <div
+        id="backtest-review-panel"
+        role="tabpanel"
+        aria-labelledby={`backtest-review-tab-${activeTab}`}
+        tabIndex={0}
+        style={reviewTabPanelStyle}
+      >
+        {children}
+      </div>
+    </section>
+  );
+}
+
+function BuySignalStrengthPanel({
+  signals,
+  transactions,
+  locale,
+}: {
+  signals: BacktestSignalOut[];
+  transactions: BacktestTransactionOut[];
+  locale: string;
+}) {
+  const isZh = locale === "zh-CN";
+  const rows = sortBuySignalsByStrength(signals);
+  if (rows.length === 0) {
+    return (
+      <div style={emptyStateStyle}>
+        {isZh ? "这次回测没有可排名的 BUY 信号" : "This backtest has no BUY signals to rank"}
+      </div>
+    );
+  }
+
+  const filledSignalKeys = new Set(
+    transactions
+      .filter((transaction) => transaction.side === "BUY")
+      .map((transaction) => `${transaction.symbol.toUpperCase()}|${String(transaction.meta?.signal_ts || "")}`),
+  );
+  return (
+    <div>
+      <h2 style={{ margin: "0 0 6px", fontSize: 20 }}>{isZh ? "BUY 信号强度排名" : "BUY Signal Strength Ranking"}</h2>
+      <p style={{ margin: "0 0 14px", color: "#94a3b8", fontSize: 13 }}>
+        {isZh
+          ? "排名在 T 日收盘冻结；低于阈值的信号保留审计记录，但不会进入 T+1 开盘选仓。"
+          : "Ranks are frozen at the T-day close. Signals below threshold remain auditable but cannot enter T+1 open selection."}
+      </p>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead><tr>{[
+            isZh ? "信号时间" : "Signal Time",
+            isZh ? "股票" : "Symbol",
+            isZh ? "强度" : "Strength",
+            isZh ? "等级" : "Level",
+            isZh ? "排名" : "Rank",
+            isZh ? "阈值" : "Threshold",
+            isZh ? "结果" : "Result",
+          ].map((label) => <th key={label} style={{ padding: "9px 10px", textAlign: "left", color: "#94a3b8", borderBottom: "1px solid rgba(148,163,184,.18)" }}>{label}</th>)}</tr></thead>
+          <tbody>{rows.map((signal) => {
+            const strength = signal.strength;
+            const filled = filledSignalKeys.has(`${signal.symbol.toUpperCase()}|${String(signal.ts || "")}`);
+            return <tr key={signal.id}>
+              <td style={{ padding: "9px 10px", borderBottom: "1px solid rgba(148,163,184,.1)" }}>{formatDateTime(signal.ts, locale)}</td>
+              <td style={{ padding: "9px 10px", borderBottom: "1px solid rgba(148,163,184,.1)", fontWeight: 700 }}>{signal.symbol}</td>
+              <td style={{ padding: "9px 10px", borderBottom: "1px solid rgba(148,163,184,.1)" }}>{strength ? strength.score.toFixed(2) : "-"}</td>
+              <td style={{ padding: "9px 10px", borderBottom: "1px solid rgba(148,163,184,.1)" }}>{signalStrengthLevelLabel(strength?.level, locale)}</td>
+              <td style={{ padding: "9px 10px", borderBottom: "1px solid rgba(148,163,184,.1)" }}>{strength?.rank ?? "-"}</td>
+              <td style={{ padding: "9px 10px", borderBottom: "1px solid rgba(148,163,184,.1)" }}>{strength?.threshold ?? "-"}</td>
+              <td style={{ padding: "9px 10px", borderBottom: "1px solid rgba(148,163,184,.1)", color: filled ? "#5eead4" : strength?.passes_threshold === false ? "#fca5a5" : "#cbd5e1" }}>
+                {signalStrengthResultLabel(strength, filled, locale)}
+              </td>
+            </tr>;
+          })}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 const BACKTEST_DETAIL_LOAD_FAILED = "__BACKTEST_DETAIL_LOAD_FAILED__";
 const BACKTEST_EQUITY_LOAD_FAILED = "__BACKTEST_EQUITY_LOAD_FAILED__";
+const BACKTEST_COMPARISON_CURVES_LOAD_FAILED = "__BACKTEST_COMPARISON_CURVES_LOAD_FAILED__";
 const BACKTEST_SIGNALS_LOAD_FAILED = "__BACKTEST_SIGNALS_LOAD_FAILED__";
 const BACKTEST_TRANSACTIONS_LOAD_FAILED = "__BACKTEST_TRANSACTIONS_LOAD_FAILED__";
 
@@ -123,6 +278,9 @@ const EMPTY_TRANSACTION_COLLECTION: TransactionCollectionState = {
 function detailErrorMessage(error: string, isZh: boolean): string {
   if (error === BACKTEST_EQUITY_LOAD_FAILED) {
     return isZh ? "加载权益曲线失败" : "Failed to load equity curve";
+  }
+  if (error === BACKTEST_COMPARISON_CURVES_LOAD_FAILED) {
+    return isZh ? "加载 SPY / QQQ 对比曲线失败" : "Failed to load SPY / QQQ comparison curves";
   }
   if (error === BACKTEST_SIGNALS_LOAD_FAILED) {
     return isZh ? "加载信号失败" : "Failed to load signals";
@@ -355,16 +513,6 @@ type LifecycleChartMarker = {
   description: string;
 };
 
-type SupportResistanceSignalSetup = {
-  zoneKey: string;
-  selectedSetup: string;
-  lower: number;
-  upper: number;
-  validFrom: string | null;
-  score: number | null;
-  resolvedSamples: number | null;
-};
-
 type LifecycleZoneOverlay = {
   key: string;
   startDate: string;
@@ -448,24 +596,6 @@ function toTimeValue(value?: string | null): number | null {
   }
   const time = new Date(value).getTime();
   return Number.isFinite(time) ? time : null;
-}
-
-function toTradeDateKey(value?: string | null): string | null {
-  if (!value) {
-    return null;
-  }
-  if (value.includes("T")) {
-    const [datePart] = value.split("T");
-    return datePart || null;
-  }
-  if (/^\d{4}-\d{2}-\d{2}/.test(value)) {
-    return value.slice(0, 10);
-  }
-  const parsed = new Date(value);
-  if (!Number.isFinite(parsed.getTime())) {
-    return null;
-  }
-  return parsed.toISOString().slice(0, 10);
 }
 
 function formatTradeDate(value?: string | null, locale = "en-US"): string {
@@ -1072,7 +1202,7 @@ function buildEventMarkers(
 
   const groupedTransactions = new Map<
     string,
-    { ts: string; side: "BUY" | "SELL"; items: BacktestTransactionOut[] }
+    { ts: string; side: "BUY" | "SELL"; stageIndex: number | null; items: BacktestTransactionOut[] }
   >();
   transactions.forEach((txn) => {
     if (txn.side !== "BUY" && txn.side !== "SELL") {
@@ -1082,7 +1212,8 @@ function buildEventMarkers(
     if (!dateKey || !txn.ts) {
       return;
     }
-    const groupKey = `${dateKey}-${txn.side}`;
+    const stageIndex = txn.side === "BUY" ? getMetaNumber(txn.meta, "stage_index") : null;
+    const groupKey = `${dateKey}-${txn.side}-${stageIndex || 0}`;
     const existing = groupedTransactions.get(groupKey);
     if (existing) {
       existing.items.push(txn);
@@ -1091,6 +1222,7 @@ function buildEventMarkers(
     groupedTransactions.set(groupKey, {
       ts: txn.ts,
       side: txn.side,
+      stageIndex,
       items: [txn],
     });
   });
@@ -1103,27 +1235,31 @@ function buildEventMarkers(
         return;
       }
       const isBuy = group.side === "BUY";
+      const stagedBuy = isBuy && group.stageIndex != null;
+      const stageColor = group.stageIndex === 1 ? "#0ea5e9" : group.stageIndex === 2 ? "#f59e0b" : "#16a34a";
       const stackKey = `transaction-${isBuy ? "buy" : "sell"}-${index}`;
       const stack = occupancy.get(stackKey) || 0;
       occupancy.set(stackKey, stack + 1);
       const position = pointPosition(index);
       markers.push({
-        key: `transaction-${group.side}-${group.ts}`,
+        key: `transaction-${group.side}-${group.stageIndex || 0}-${group.ts}`,
         x: position.x,
         y: markerY(position.y, isBuy ? "below" : "above", 12 + stack * 7),
         category: isBuy ? "buy_fill" : "sell_fill",
-        shape: isBuy ? "triangle-up" : "triangle-down",
-        stroke: isBuy ? "#16a34a" : "#dc2626",
-        fill: isBuy ? "#16a34a" : "#dc2626",
+        shape: stagedBuy && group.stageIndex === 1 ? "circle" : isBuy ? "triangle-up" : "triangle-down",
+        stroke: isBuy ? stageColor : "#dc2626",
+        fill: isBuy ? stageColor : "#dc2626",
         title:
-          locale === "zh-CN"
-            ? `${group.side} 成交 ${group.items.length} 个`
-            : `${group.side} Fills (${group.items.length})`,
+          stagedBuy
+            ? locale === "zh-CN"
+              ? `${group.stageIndex === 1 ? "试仓" : group.stageIndex === 2 ? "加仓" : "确认仓"}成交 ${group.items.length} 个`
+              : `${group.stageIndex === 1 ? "Probe" : group.stageIndex === 2 ? "Add" : "Confirmed"} fills (${group.items.length})`
+            : locale === "zh-CN" ? `${group.side} 成交 ${group.items.length} 个` : `${group.side} Fills (${group.items.length})`,
         details: group.items.map(
           (txn) =>
             `${txn.symbol} ${txn.qty.toLocaleString(locale, { maximumFractionDigits: 4 })} @ ${txn.price.toLocaleString(locale, {
               maximumFractionDigits: 2,
-            })}`
+            })}${getMetaText(txn.meta, "stage_key") ? ` · ${getMetaText(txn.meta, "stage_key")}` : ""}`
         ),
       });
     });
@@ -1256,7 +1392,7 @@ function SymbolPnlCard({ rows }: { rows: SymbolPnlRow[] }) {
   const visibleRows = showAllSymbols ? rows : rows.slice(0, 20);
 
   return (
-    <div style={{ marginTop: 18 }}>
+    <div>
       <div
         style={{
           display: "flex",
@@ -1411,7 +1547,6 @@ function EquityCurveCard({
       Number.isFinite(point.equity)
   );
   const values = normalizedPoints.map((point) => point.equity);
-  const symbolPnlRows = useMemo(() => buildSymbolPnlRows(run), [run]);
   const comparisonCurves = run.comparison_curves || {};
   const normalizedComparisonCurves = useMemo(() => {
     const buildMap = (pointsInput: BacktestComparisonCurvePoint[] | undefined) =>
@@ -1432,18 +1567,10 @@ function EquityCurveCard({
     };
   }, [comparisonCurves.QQQ, comparisonCurves.SPY]);
   const spyTotalReturn = useMemo(() => {
-    const pointsInput = comparisonCurves.SPY || [];
-    const lastPoint = pointsInput[pointsInput.length - 1];
-    return typeof lastPoint?.return === "number" && Number.isFinite(lastPoint.return)
-      ? lastPoint.return
-      : null;
+    return comparisonCurveReturn(comparisonCurves.SPY);
   }, [comparisonCurves.SPY]);
   const qqqTotalReturn = useMemo(() => {
-    const pointsInput = comparisonCurves.QQQ || [];
-    const lastPoint = pointsInput[pointsInput.length - 1];
-    return typeof lastPoint?.return === "number" && Number.isFinite(lastPoint.return)
-      ? lastPoint.return
-      : null;
+    return comparisonCurveReturn(comparisonCurves.QQQ);
   }, [comparisonCurves.QQQ]);
   const benchmarkSymbol =
     run.benchmark_symbol ||
@@ -2054,7 +2181,6 @@ function EquityCurveCard({
           </div>
         </div>
 
-      <SymbolPnlCard rows={symbolPnlRows} />
     </section>
   );
 }
@@ -2087,7 +2213,6 @@ function EquityCurveCardLightweight({
   });
   const normalizedPoints = useMemo(() => normalizeEquityPoints(points), [points]);
   const values = normalizedPoints.map((point) => point.value);
-  const symbolPnlRows = useMemo(() => buildSymbolPnlRows(run), [run]);
   const comparisonCurves = run.comparison_curves || {};
   const comparisons = useMemo(
     () => ([
@@ -2126,7 +2251,12 @@ function EquityCurveCardLightweight({
         ts: signal.ts,
         symbol: signal.symbol,
         action: signal.signal,
-        reason: signal.reason,
+        reason: [
+          signal.reason,
+          signal.strength
+            ? `${locale === "zh-CN" ? "强度" : "Strength"} ${signal.strength.score.toFixed(2)} · #${signal.strength.rank ?? "-"}`
+            : null,
+        ].filter(Boolean).join(" · "),
       })),
       transactions.map((transaction) => ({
         id: transaction.id,
@@ -2153,9 +2283,7 @@ function EquityCurveCardLightweight({
   const benchmarkTotalReturn = metricNumber(run.summary_metrics || {}, "benchmark_total_return");
   const excessReturn = metricNumber(run.summary_metrics || {}, "excess_return");
   const comparisonReturn = (key: "SPY" | "QQQ") => {
-    const source = comparisonCurves[key] || [];
-    const value = source[source.length - 1]?.return;
-    return typeof value === "number" && Number.isFinite(value) ? value : null;
+    return comparisonCurveReturn(comparisonCurves[key]);
   };
 
   if (normalizedPoints.length < 2) {
@@ -2215,7 +2343,6 @@ function EquityCurveCardLightweight({
         {benchmarkSymbol ? <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "超额收益" : "Excess Return"}</div><div style={miniMetricValueStyle}>{formatPercent(excessReturn, 2)}</div></div> : null}
         <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "最后快照" : "Last Snapshot"}</div><div style={miniMetricValueStyle}>{formatDateTime(latestPoint?.sourceTs || null, locale)}</div></div>
       </div>
-      <SymbolPnlCard rows={symbolPnlRows} />
     </section>
   );
 }
@@ -2500,30 +2627,6 @@ function extractDoubleBottomSetup(signal: BacktestSignalOut | null): DoubleBotto
   };
 }
 
-function extractSupportResistanceSetup(
-  signal: BacktestSignalOut | null
-): SupportResistanceSignalSetup | null {
-  const features = getObjectValue(signal?.features);
-  const supportResistance = getObjectValue(features?.support_resistance);
-  const zone = getObjectValue(supportResistance?.zone);
-  const evidence = getObjectValue(supportResistance?.score_evidence);
-  if (!supportResistance || !zone) return null;
-  const zoneKey = getRecordText(supportResistance, "zone_key");
-  const selectedSetup = getRecordText(supportResistance, "selected_setup");
-  const lower = getRecordNumber(zone, "lower");
-  const upper = getRecordNumber(zone, "upper");
-  if (!zoneKey || !selectedSetup || lower == null || upper == null) return null;
-  return {
-    zoneKey,
-    selectedSetup,
-    lower,
-    upper,
-    validFrom: getRecordText(zone, "valid_from"),
-    score: typeof signal?.score === "number" ? signal.score : null,
-    resolvedSamples: evidence ? getRecordNumber(evidence, "resolved_samples") : null,
-  };
-}
-
 function buildSupportResistanceMarkers(
   events: SupportResistanceRunEventOut[],
   locale: string,
@@ -2802,10 +2905,6 @@ function LifecycleDetailPanel({
     () => extractDoubleBottomSetup(entrySignal) || extractDoubleBottomSetup(exitSignal),
     [entrySignal, exitSignal]
   );
-  const supportResistanceSetup = useMemo(
-    () => extractSupportResistanceSetup(entrySignal) || extractSupportResistanceSetup(exitSignal),
-    [entrySignal, exitSignal]
-  );
   const markers = useMemo(
     () => [
       ...buildLifecycleChartMarkers(row, locale, isZh),
@@ -2903,7 +3002,7 @@ function LifecycleDetailPanel({
   const visibleStartDate = bars[0]?.trade_date || fetchStartDate;
   const visibleEndDate = bars[bars.length - 1]?.trade_date || baseEndDate;
   useEffect(() => {
-    if (!supportResistanceSetup || !visibleStartDate || !visibleEndDate || bars.length === 0) {
+    if (!visibleStartDate || !visibleEndDate || bars.length === 0) {
       setSupportResistanceDetail(null);
       setSupportResistanceError(null);
       return;
@@ -2924,7 +3023,7 @@ function LifecycleDetailPanel({
         setSupportResistanceError(err instanceof Error ? err.message : (isZh ? "加载支撑压力审计数据失败" : "Failed to load support/resistance audit data"));
       });
     return () => { active = false; };
-  }, [bars.length, isZh, row.symbol, runId, supportResistanceSetup, visibleEndDate, visibleStartDate]);
+  }, [bars.length, isZh, row.symbol, runId, visibleEndDate, visibleStartDate]);
   const gapSetup = useMemo(
     () => extractIslandReversalGapSetup(entrySignal) || extractIslandReversalGapSetup(exitSignal),
     [entrySignal, exitSignal]
@@ -2953,7 +3052,6 @@ function LifecycleDetailPanel({
     [bars, gapSetup, isZh, locale]
   );
   const zoneOverlays = useMemo<LifecycleZoneOverlay[]>(() => {
-    if (!supportResistanceSetup) return [];
     const versions = supportResistanceDetail?.zone_versions || [];
     const availableDates = new Set(bars.map((bar) => bar.trade_date));
     return versions
@@ -2996,10 +3094,10 @@ function LifecycleDetailPanel({
         ].filter(Boolean).join(" · "),
       };
     });
-  }, [bars, isZh, locale, supportResistanceDetail?.zone_versions, supportResistanceSetup, visibleEndDate, visibleStartDate]);
+  }, [bars, isZh, locale, supportResistanceDetail?.zone_versions, visibleEndDate, visibleStartDate]);
   const zoneLegendItems = useMemo(
-    () => currentZoneOverlays(zoneOverlays, visibleEndDate),
-    [visibleEndDate, zoneOverlays],
+    () => latestVisibleZoneOverlaysByRole(zoneOverlays),
+    [zoneOverlays],
   );
 
   useEffect(() => {
@@ -3056,6 +3154,11 @@ function LifecycleDetailPanel({
           <Badge tone="info">
             {isZh ? "收益率" : "Return"} {formatPercent(row.returnPct, 2)}
           </Badge>
+          {initialEntrySignal?.strength ? (
+            <Badge tone={initialEntrySignal.strength.passes_threshold ? "success" : "warning"}>
+              {isZh ? "入场强度" : "Entry Strength"} {initialEntrySignal.strength.score.toFixed(2)} · #{initialEntrySignal.strength.rank ?? "-"}
+            </Badge>
+          ) : null}
         </div>
       </div>
 
@@ -3206,7 +3309,11 @@ function LifecycleDetailPanel({
           </div>
         </div>
         <div style={miniMetricStyle}>
-          <div style={labelStyle}>{isZh ? "卖出 / 标记交易日" : "Sell / Mark Trade Date"}</div>
+          <div style={labelStyle}>
+            {row.status === "closed"
+              ? isZh ? "卖出交易日" : "Sell Trade Date"
+              : isZh ? "期末估值日（未卖出）" : "Valuation Date (Not Sold)"}
+          </div>
           <div style={miniMetricValueStyle}>
             {formatLifecycleEventMoment(row.exitTs || row.markTs, row.exitTradeDate || row.markTradeDate, locale)}
           </div>
@@ -3401,10 +3508,10 @@ function PositionLifecycleCard({
   const lifecycleSortLabels: Record<PositionLifecycleSortKey, string> = {
     symbol: isZh ? "标的" : "symbol",
     entryTime: isZh ? "入场时间" : "entry time",
-    endTime: isZh ? "出场 / 标记时间" : "exit / mark time",
+    endTime: isZh ? "卖出 / 估值时间" : "sell / valuation time",
     qty: isZh ? "股数" : "quantity",
     entryPrice: isZh ? "入场价" : "entry price",
-    endPrice: isZh ? "出场 / 标记价" : "exit / mark price",
+    endPrice: isZh ? "卖出 / 估值价" : "sell / valuation price",
     pnl: isZh ? "盈亏" : "PnL",
     returnPct: isZh ? "收益率" : "return",
     holdingDays: isZh ? "持有天数" : "days held",
@@ -3419,10 +3526,10 @@ function PositionLifecycleCard({
     { key: "sequence", label: isZh ? "周期" : "Cycle" },
     { key: "status", label: isZh ? "状态" : "Status" },
     { key: "entryTime", label: isZh ? "入场时间" : "Entry Time", sortKey: "entryTime" },
-    { key: "endTime", label: isZh ? "出场 / 标记时间" : "Exit / Mark Time", sortKey: "endTime" },
+    { key: "endTime", label: isZh ? "卖出 / 估值时间" : "Sell / Valuation Time", sortKey: "endTime" },
     { key: "qty", label: isZh ? "股数" : "Qty", sortKey: "qty" },
     { key: "entryPrice", label: isZh ? "入场价" : "Entry Px", sortKey: "entryPrice" },
-    { key: "endPrice", label: isZh ? "出场 / 标记价" : "Exit / Mark Px", sortKey: "endPrice" },
+    { key: "endPrice", label: isZh ? "卖出 / 估值价" : "Sell / Valuation Px", sortKey: "endPrice" },
     { key: "pnl", label: isZh ? "盈亏" : "PnL", sortKey: "pnl" },
     { key: "returnPct", label: isZh ? "收益率" : "Return", sortKey: "returnPct" },
     { key: "holdingDays", label: isZh ? "持有天数" : "Days Held", sortKey: "holdingDays" },
@@ -3476,7 +3583,7 @@ function PositionLifecycleCard({
   ];
 
   return (
-    <section style={sectionCardStyle}>
+    <div>
       <div
         style={{
           display: "flex",
@@ -3711,17 +3818,31 @@ function PositionLifecycleCard({
                         </td>
                         <td style={cellStyle}>{formatDateTime(row.entryTs, locale)}</td>
                         <td style={cellStyle}>
-                          {displayEndTs
-                            ? formatDateTime(displayEndTs, locale)
-                            : row.status === "open"
-                              ? isZh
-                                ? "仍在持有"
-                                : "Still Open"
-                              : "-"}
+                          {displayEndTs ? (
+                            <span style={{ display: "grid", gap: 3 }}>
+                              <span>{formatLifecycleEventMoment(displayEndTs, row.exitTradeDate || row.markTradeDate, locale)}</span>
+                              <span style={{ color: "rgba(148, 163, 184, 0.82)", fontSize: 11 }}>
+                                {row.status === "open"
+                                  ? isZh ? "期末估值日（未卖出）" : "Valuation date (not sold)"
+                                  : isZh ? "卖出交易日" : "Sell trade date"}
+                              </span>
+                            </span>
+                          ) : row.status === "open" ? (
+                            isZh ? "仍在持有" : "Still Open"
+                          ) : "-"}
                         </td>
                         <td style={cellStyle}>{row.qty.toLocaleString(locale, { maximumFractionDigits: 4 })}</td>
                         <td style={cellStyle}>{formatCurrency(row.entryPrice, locale)}</td>
-                        <td style={cellStyle}>{formatCurrency(displayEndPrice, locale)}</td>
+                        <td style={cellStyle}>
+                          <span style={{ display: "grid", gap: 3 }}>
+                            <span>{formatCurrency(displayEndPrice, locale)}</span>
+                            <span style={{ color: "rgba(148, 163, 184, 0.82)", fontSize: 11 }}>
+                              {row.status === "open"
+                                ? isZh ? "期末标记价（非成交）" : "Closing mark (not a fill)"
+                                : isZh ? "卖出成交价" : "Sell fill price"}
+                            </span>
+                          </span>
+                        </td>
                         <td style={{ ...cellStyle, color: row.pnl == null ? cellStyle.color : pnlTone, fontWeight: 700 }}>
                           {formatCurrency(row.pnl, locale)}
                         </td>
@@ -3758,7 +3879,7 @@ function PositionLifecycleCard({
           </div>
         </>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -3793,11 +3914,16 @@ function TransactionsCard({
     fee: txn.fee ?? null,
     netCashFlow: getMetaNumber(txn.meta, "net_cash_flow"),
     signalTs: getMetaText(txn.meta, "signal_ts"),
+    stage: getMetaText(txn.meta, "stage_key"),
+    setupId: getMetaText(txn.meta, "setup_id"),
+    targetPct: getMetaNumber(txn.meta, "stage_target_pct"),
+    addedNotional: getMetaNumber(txn.meta, "gross_notional"),
+    weightedCost: getMetaNumber(txn.meta, "position_avg_entry_price_after"),
     reason: getMetaText(txn.meta, "reason") || "-",
   })), [visibleTransactions]);
 
   return (
-    <section style={sectionCardStyle}>
+    <div>
       <div
         style={{
           display: "flex",
@@ -3849,7 +3975,7 @@ function TransactionsCard({
           <BacktestTransactionsDenseTable rows={transactionRows} />
         </>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -3864,16 +3990,22 @@ export default function BacktestDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [equityLoading, setEquityLoading] = useState(true);
   const [equityError, setEquityError] = useState<string | null>(null);
+  const [comparisonCurvesError, setComparisonCurvesError] = useState<string | null>(null);
   const [signalsLoading, setSignalsLoading] = useState(true);
   const [signalsError, setSignalsError] = useState<string | null>(null);
   const [transactionsLoading, setTransactionsLoading] = useState(true);
   const [transactionsError, setTransactionsError] = useState<string | null>(null);
   const [workerStatus, setWorkerStatus] = useState<BacktestWorkerStatus | null>(null);
   const [workerStatusUnavailable, setWorkerStatusUnavailable] = useState(false);
+  const [reviewTab, setReviewTab] = useState<BacktestReviewTab>("symbolPnl");
   const [transactionCollection, setTransactionCollection] = useState<TransactionCollectionState>(
     EMPTY_TRANSACTION_COLLECTION,
   );
   const transactionLoadGenerationRef = useRef(0);
+
+  useEffect(() => {
+    setReviewTab("symbolPnl");
+  }, [runId]);
 
   const loadTransactionPages = useCallback(async (
     targetRunId: string,
@@ -4000,6 +4132,7 @@ export default function BacktestDetailPage() {
     setRun(null);
     setEquityLoading(true);
     setEquityError(null);
+    setComparisonCurvesError(null);
     setSignalsLoading(true);
     setSignalsError(null);
     setTransactionsLoading(true);
@@ -4010,9 +4143,10 @@ export default function BacktestDetailPage() {
 
     const loadCompletedDetails = async () => {
       void loadTransactionPages(runId, transactionLoadGeneration, null, true);
-      const [equityResult, signalsResult] = await Promise.allSettled([
+      const [equityResult, signalsResult, comparisonCurvesResult] = await Promise.allSettled([
         getBacktestEquity(runId),
         getBacktestSignals(runId, { limit: 100 }),
+        getBacktestComparisonCurves(runId),
       ]);
       if (cancelled) return;
 
@@ -4029,6 +4163,19 @@ export default function BacktestDetailPage() {
         setSignalsError(signalsResult.reason instanceof Error ? signalsResult.reason.message : BACKTEST_SIGNALS_LOAD_FAILED);
       }
       setSignalsLoading(false);
+
+      if (comparisonCurvesResult.status === "fulfilled") {
+        setRun((current) => current ? {
+          ...current,
+          comparison_curves: comparisonCurvesResult.value.comparison_curves,
+        } : current);
+      } else {
+        setComparisonCurvesError(
+          comparisonCurvesResult.reason instanceof Error
+            ? comparisonCurvesResult.reason.message
+            : BACKTEST_COMPARISON_CURVES_LOAD_FAILED,
+        );
+      }
     };
 
     const refreshSummary = async () => {
@@ -4097,6 +4244,10 @@ export default function BacktestDetailPage() {
 
   const latestPositions = useMemo(
     () => compactBacktestPositions(run?.latest_snapshot?.positions),
+    [run]
+  );
+  const symbolPnlRows = useMemo(
+    () => (run ? buildSymbolPnlRows(run) : []),
     [run]
   );
   const totalReturn = metricNumber(run?.summary_metrics || {}, "total_return");
@@ -4291,24 +4442,50 @@ export default function BacktestDetailPage() {
               </div>
             ) : null}
             {signalsError ? <div style={{ marginTop: 8, color: "#fbbf24", fontSize: 12 }}>{detailErrorMessage(signalsError, isZh)}</div> : null}
+            {comparisonCurvesError ? <div style={{ marginTop: 8, color: "#fbbf24", fontSize: 12 }}>{detailErrorMessage(comparisonCurvesError, isZh)}</div> : null}
           </section>
 
-          {run.available_details.includes("transactions") ? (
-            <>
-              <section style={{ marginBottom: 18 }}>
-                {transactionsLoading || signalsLoading ? (
-                  <div style={emptyStateStyle}>{isZh ? "正在加载生命周期明细..." : "Loading lifecycle details..."}</div>
-                ) : transactionsError ? (
-                  <div style={{ ...emptyStateStyle, color: "#fecaca" }}>{detailErrorMessage(transactionsError, isZh)}</div>
-                ) : (
-                  <PositionLifecycleCard
-                    run={run}
-                    transactions={run.transactions}
-                    totalTransactions={totalTransactionCount}
-                  />
-                )}
-              </section>
-              {transactionsLoading ? (
+          <BacktestReviewWindow activeTab={reviewTab} onTabChange={setReviewTab}>
+            {reviewTab === "symbolPnl" ? <SymbolPnlCard rows={symbolPnlRows} /> : null}
+
+            {reviewTab === "signalStrength" ? (
+              signalsLoading ? (
+                <div style={emptyStateStyle}>{isZh ? "正在加载信号强度排名..." : "Loading signal strength ranking..."}</div>
+              ) : signalsError ? (
+                <div style={{ ...emptyStateStyle, color: "#fecaca" }}>{detailErrorMessage(signalsError, isZh)}</div>
+              ) : (
+                <BuySignalStrengthPanel
+                  signals={run.signals}
+                  transactions={run.transactions}
+                  locale={locale}
+                />
+              )
+            ) : null}
+
+            {reviewTab === "lifecycles" ? (
+              !run.available_details.includes("transactions") ? (
+                <div style={emptyStateStyle}>
+                  {isZh ? "当前持久化级别没有保存生命周期所需的交易明细。" : "The current persistence level did not save the transactions required for lifecycle review."}
+                </div>
+              ) : transactionsLoading || signalsLoading ? (
+                <div style={emptyStateStyle}>{isZh ? "正在加载生命周期明细..." : "Loading lifecycle details..."}</div>
+              ) : transactionsError ? (
+                <div style={{ ...emptyStateStyle, color: "#fecaca" }}>{detailErrorMessage(transactionsError, isZh)}</div>
+              ) : (
+                <PositionLifecycleCard
+                  run={run}
+                  transactions={run.transactions}
+                  totalTransactions={totalTransactionCount}
+                />
+              )
+            ) : null}
+
+            {reviewTab === "transactions" ? (
+              !run.available_details.includes("transactions") ? (
+                <div style={emptyStateStyle}>
+                  {isZh ? "当前持久化级别没有保存交易明细。" : "The current persistence level did not save transaction details."}
+                </div>
+              ) : transactionsLoading ? (
                 <div style={emptyStateStyle}>{isZh ? "正在加载交易明细..." : "Loading transactions..."}</div>
               ) : transactionsError ? (
                 <div style={{ ...emptyStateStyle, color: "#fecaca" }}>{detailErrorMessage(transactionsError, isZh)}</div>
@@ -4318,36 +4495,38 @@ export default function BacktestDetailPage() {
                   transactions={run.transactions}
                   totalTransactions={totalTransactionCount}
                 />
-              )}
-            </>
-          ) : null}
+              )
+            ) : null}
 
-          <section style={{ ...sectionCardStyle, marginTop: 18 }}>
-            <div style={{ marginBottom: 16 }}>
-              <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>{isZh ? "最新持仓" : "Latest Positions"}</h2>
-              <p style={sectionSubtitleStyle}>
-                {isZh ? "仅展示复盘最常用的数量、成本、收盘价和市值。" : "Shows only quantity, cost, closing price, and market value for a quick review."}
-              </p>
-            </div>
+            {reviewTab === "positions" ? (
+              <div>
+                <div style={{ marginBottom: 16 }}>
+                  <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>{isZh ? "最新持仓" : "Latest Positions"}</h2>
+                  <p style={sectionSubtitleStyle}>
+                    {isZh ? "仅展示复盘最常用的数量、成本、收盘价和市值。" : "Shows only quantity, cost, closing price, and market value for a quick review."}
+                  </p>
+                </div>
 
-            {latestPositions.length === 0 ? (
-              <div style={emptyStateStyle}>{isZh ? "当前没有持仓，或回测结束时已经全部平仓" : "There are no positions, or all positions were closed by the end of the backtest"}</div>
-            ) : (
-              <div style={positionGridStyle}>
-                {latestPositions.map((position) => (
-                  <article key={position.symbol} style={positionCardStyle}>
-                    <strong style={{ color: "#f8fafc", fontSize: 18 }}>{position.symbol}</strong>
-                    <div style={positionMetricsStyle}>
-                      <div><span style={positionLabelStyle}>{isZh ? "数量" : "Quantity"}</span><strong>{position.quantity?.toLocaleString(locale, { maximumFractionDigits: 4 }) ?? "-"}</strong></div>
-                      <div><span style={positionLabelStyle}>{isZh ? "成本价" : "Avg. cost"}</span><strong>{formatCurrency(position.averageEntryPrice, locale)}</strong></div>
-                      <div><span style={positionLabelStyle}>{isZh ? "收盘价" : "Close"}</span><strong>{formatCurrency(position.closePrice, locale)}</strong></div>
-                      <div><span style={positionLabelStyle}>{isZh ? "市值" : "Market value"}</span><strong>{formatCurrency(position.marketValue, locale)}</strong></div>
-                    </div>
-                  </article>
-                ))}
+                {latestPositions.length === 0 ? (
+                  <div style={emptyStateStyle}>{isZh ? "当前没有持仓，或回测结束时已经全部平仓" : "There are no positions, or all positions were closed by the end of the backtest"}</div>
+                ) : (
+                  <div style={positionGridStyle}>
+                    {latestPositions.map((position) => (
+                      <article key={position.symbol} style={positionCardStyle}>
+                        <strong style={{ color: "#f8fafc", fontSize: 18 }}>{position.symbol}</strong>
+                        <div style={positionMetricsStyle}>
+                          <div><span style={positionLabelStyle}>{isZh ? "数量" : "Quantity"}</span><strong>{position.quantity?.toLocaleString(locale, { maximumFractionDigits: 4 }) ?? "-"}</strong></div>
+                          <div><span style={positionLabelStyle}>{isZh ? "成本价" : "Avg. cost"}</span><strong>{formatCurrency(position.averageEntryPrice, locale)}</strong></div>
+                          <div><span style={positionLabelStyle}>{isZh ? "收盘价" : "Close"}</span><strong>{formatCurrency(position.closePrice, locale)}</strong></div>
+                          <div><span style={positionLabelStyle}>{isZh ? "市值" : "Market value"}</span><strong>{formatCurrency(position.marketValue, locale)}</strong></div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
-          </section>
+            ) : null}
+          </BacktestReviewWindow>
             </>
           ) : null}
         </>
@@ -4363,6 +4542,45 @@ const sectionCardStyle = {
   background: "linear-gradient(180deg, rgba(8,15,24,0.92), rgba(15,23,42,0.88))",
   color: "#e2e8f0",
   boxShadow: "0 18px 44px rgba(2, 6, 23, 0.22)",
+} as const;
+
+const reviewTabListStyle = {
+  display: "flex",
+  gap: 8,
+  overflowX: "auto",
+  padding: 6,
+  marginBottom: 12,
+  borderRadius: 16,
+  border: "1px solid rgba(71, 85, 105, 0.28)",
+  background: "rgba(2, 6, 23, 0.42)",
+  scrollbarWidth: "thin",
+} as const;
+
+function reviewTabButtonStyle(active: boolean) {
+  return {
+    flex: "0 0 auto",
+    padding: "9px 14px",
+    borderRadius: 12,
+    border: active ? "1px solid rgba(34, 211, 238, 0.36)" : "1px solid transparent",
+    background: active ? "rgba(8, 145, 178, 0.2)" : "transparent",
+    color: active ? "#67e8f9" : "#94a3b8",
+    fontSize: 13,
+    fontWeight: 700,
+    whiteSpace: "nowrap",
+    cursor: "pointer",
+    outlineOffset: 2,
+  } as const;
+}
+
+const reviewTabPanelStyle = {
+  minHeight: 240,
+  maxHeight: "min(72vh, 920px)",
+  overflow: "auto",
+  padding: 16,
+  borderRadius: 18,
+  border: "1px solid rgba(71, 85, 105, 0.28)",
+  background: "rgba(2, 6, 23, 0.34)",
+  outline: "none",
 } as const;
 
 const sectionSubtitleStyle = {

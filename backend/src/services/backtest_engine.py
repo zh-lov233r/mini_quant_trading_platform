@@ -26,6 +26,17 @@ from src.services.backtest_universe_service import (
 )
 from src.services.backtest_repository import BacktestRepository
 from src.services.market_data_loader import MarketDataLoader
+from src.services.signal_strength_service import (
+    annotate_and_rank_signals,
+    ordered_entry_buy_signals,
+    passes_strength_threshold,
+)
+from src.services.staged_entry_service import (
+    can_apply_staged_entry,
+    merge_entry_features,
+    pattern_setup_from_metadata,
+    select_highest_stage_signals,
+)
 from src.services.stateless_signal_kernel import vectorized_stateless_prefilter
 from src.services.stock_basket_service import (
     DEFAULT_COMMON_STOCK_BASKET_NAME,
@@ -941,6 +952,7 @@ def run_backtest(
                 event_snapshot = day_snapshots.get(event.symbol)
                 if event_snapshot is not None and event_snapshot.get("instrument_id") is not None:
                     event.instrument_id = int(event_snapshot["instrument_id"])
+            annotate_and_rank_signals(runtime, signals)
             performance["signal_generation_ms"] += _elapsed_ms(signal_started)
             pending_signals = signals
             signal_count += len(signals)
@@ -1874,25 +1886,37 @@ def _apply_buy_signals(
 ) -> ExecutionStats:
     """Open new long positions for queued BUY signals on the next session open."""
     stats = ExecutionStats()
-    for event in signals:
-        if event.action != "BUY":
+    candidate_signals = select_highest_stage_signals(signals)
+    for event in ordered_entry_buy_signals(candidate_signals):
+        if not passes_strength_threshold(event):
             continue
         position_key = _event_position_key(
             event,
             stable_instrument_identity=stable_instrument_identity,
         )
-        if position_key in holdings:
-            continue
-        if len(holdings) >= max_positions:
-            continue
-
         price = execution_prices.get(position_key)
         execution_snapshot = execution_snapshots.get(position_key)
         if price is None or price <= 0 or execution_snapshot is None:
             continue
 
-        # Size each entry off current equity, but never spend more cash than we have.
-        target_value = min(float(cash_ref["cash"]), float(equity_before) * position_size_pct)
+        current_qty = float(holdings.get(position_key, 0.0) or 0.0)
+        current_features = entry_signal_features.get(position_key)
+        staged_setup = pattern_setup_from_metadata(event.metadata)
+        if current_qty > 0:
+            # Existing single-entry strategies retain their prior behavior. Only
+            # a later stage from the same pattern setup may add to a position.
+            if staged_setup is None or not can_apply_staged_entry(event.metadata, current_features):
+                continue
+        elif len(holdings) >= max_positions:
+            continue
+
+        target_fraction = float(staged_setup["stage_target_pct"]) if staged_setup else 1.0
+        desired_position_value = float(equity_before) * position_size_pct * target_fraction
+        current_position_value = current_qty * float(price)
+        incremental_target = max(desired_position_value - current_position_value, 0.0)
+        # Size each cumulative entry off current equity and the current execution
+        # mark, while never spending more cash than remains in the sleeve.
+        target_value = min(float(cash_ref["cash"]), incremental_target)
         qty, execution_price, fee, gross_notional = _estimate_buy_order(
             target_value,
             float(price),
@@ -1907,11 +1931,15 @@ def _apply_buy_signals(
 
         slippage_cost = qty * max(execution_price - float(price), 0.0)
         cash_ref["cash"] -= total_cash_out
-        holdings[position_key] = qty
-        avg_entry_prices[position_key] = execution_price
-        entry_trade_dates[position_key] = trade_day
-        entry_day_indices[position_key] = trade_day_index
-        entry_signal_features[position_key] = event.metadata if isinstance(event.metadata, dict) else {}
+        new_qty = current_qty + qty
+        current_average = float(avg_entry_prices.get(position_key, 0.0) or 0.0)
+        weighted_cost = (current_qty * current_average) + (qty * execution_price)
+        holdings[position_key] = new_qty
+        avg_entry_prices[position_key] = weighted_cost / new_qty
+        entry_trade_dates.setdefault(position_key, trade_day)
+        entry_day_indices.setdefault(position_key, trade_day_index)
+        merged_features = merge_entry_features(current_features, event.metadata)
+        entry_signal_features[position_key] = merged_features
         display_symbol = str(execution_snapshot.get("symbol") or event.symbol).upper()
         stats.trade_count += 1
         stats.total_fees += fee
@@ -1938,7 +1966,14 @@ def _apply_buy_signals(
                         "reason": event.reason,
                         "source": "backtest",
                         "signal_ts": event.ts.isoformat(),
-                        "entry_signal_features": event.metadata if isinstance(event.metadata, dict) else {},
+                        "entry_signal_features": merged_features,
+                        "setup_id": staged_setup.get("setup_id") if staged_setup else None,
+                        "stage_index": staged_setup.get("stage_index") if staged_setup else None,
+                        "stage_key": staged_setup.get("stage_key") if staged_setup else None,
+                        "stage_target_pct": target_fraction,
+                        "position_qty_before": current_qty,
+                        "position_qty_after": new_qty,
+                        "position_avg_entry_price_after": avg_entry_prices[position_key],
                         "execution_trade_date": _execution_trade_date(execution_snapshot),
                         "reference_price": float(price),
                         "slippage_bps": cost_config.slippage_bps,

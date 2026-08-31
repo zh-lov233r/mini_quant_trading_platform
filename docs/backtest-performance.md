@@ -44,17 +44,18 @@ Progress phases are `queued` (0%), `preparing` (0%), `running` (completed tradin
 - `GET /api/backtests/{id}/summary`
 - `GET /api/backtests/worker-status`
 - `GET /api/backtests/{id}/equity?max_points=1500&shape=chart`
+- `GET /api/backtests/{id}/comparison-curves?max_points=1500`
 - `GET /api/backtests/{id}/signals?limit=100&cursor=...&symbol=...`
 - `GET /api/backtests/{id}/transactions?limit=100&cursor=...&symbol=...`
 - `POST /api/backtests/{id}/cancel`
 
-`shape` defaults to `snapshot` for backward compatibility and retains the original full-row/Python downsampling path as a rollback option. `shape=chart` returns only `ts`, `equity`, `drawdown`, and nullable benchmark values; it never transfers positions or the complete metrics document. For this compact shape, PostgreSQL applies the existing deterministic first/last plus bucket min/max selection before returning rows, including odd, even, and very small `max_points` values. Snapshot persistence and the default `max_points=1500` are unchanged.
+`shape` defaults to `snapshot` for backward compatibility and retains the original full-row/Python downsampling path as a rollback option. `shape=chart` returns only `ts`, `equity`, `drawdown`, and nullable benchmark values; it never transfers positions or the complete metrics document. For this compact shape, PostgreSQL applies the existing deterministic first/last plus bucket min/max selection before returning rows, including odd, even, and very small `max_points` values. The comparison endpoint returns cached SPY/QQQ points and reconstructs a missing legacy curve from snapshots and adjusted historical bars without committing database changes; it applies the same endpoint-preserving point cap. Snapshot persistence and the default `max_points=1500` are unchanged.
 
 The legacy detail endpoint remains for one migration cycle. The list endpoint returns scalar metrics only. Signal ordering is `(ts, symbol, id)` ascending; transaction ordering is `(ts, id)` descending. Cursors are opaque.
 
 ## Chart loading and rendering
 
-The list page polls active runs every four seconds and shows a shared accessible percentage bar. The detail page polls only summary and worker status while a run is queued or running. It does not request equity, signals, or transactions until status is `completed`; those payloads then load independently with separate error states. Failed and cancelled runs stop polling and preserve their terminal progress. When manager automation is unavailable, both pages warn that queueing remains available but execution is paused.
+The list page polls active runs every four seconds and shows a shared accessible percentage bar. The detail page polls only summary and worker status while a run is queued or running. It does not request equity, comparison curves, signals, or transactions until status is `completed`; those payloads then load independently with separate error states. A comparison-curve failure leaves the strategy curve available and shows a non-blocking warning. Failed and cancelled runs stop polling and preserve their terminal progress. When manager automation is unavailable, both pages warn that queueing remains available but execution is paused.
 
 After completion, the first 100 newest transactions make the detail tables available immediately. The page then follows the opaque transaction cursor in batches of up to 500 until the overview chart and symbol P&L cover the full run. Progress is shown as loaded/total; a failed tail page keeps the partial markers visible and can resume from its failed cursor. Equity-chart signal and fill markers retain their shapes, colors, filters, counts, and hover details, but do not render repeated `BUY`/`SELL` text on the plot. The transaction table initially renders the latest 10 rows and adds 10 at a time. Position lifecycles initially use the latest 100 transactions and render 12 rows; loading more expands the calculation window by 100 transactions when needed and renders 12 more lifecycle rows. Because that lifecycle scope is intentionally partial, the UI always reports its loaded transaction count against the run total.
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -27,6 +28,18 @@ from src.services.paper_account_service import (
 from src.services.stock_basket_service import (
     DEFAULT_COMMON_STOCK_BASKET_NAME,
     load_default_common_stock_symbols,
+)
+from src.services.signal_strength_service import (
+    annotate_and_rank_signals,
+    get_signal_strength,
+    ordered_entry_buy_signals,
+    passes_strength_threshold,
+)
+from src.services.staged_entry_service import (
+    can_apply_staged_entry,
+    merge_entry_features,
+    pattern_setup_from_metadata,
+    select_highest_stage_signals,
 )
 from src.services.strategy_allocation_service import (
     DEFAULT_PORTFOLIO_NAME,
@@ -119,6 +132,7 @@ class PaperTradingOrderOutcome:
     reference_price: float | None = None
     execution_price: float | None = None
     broker_status: str | None = None
+    signal_strength: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -341,6 +355,7 @@ def run_paper_trading(
             )
         else:
             signals = handler(runtime, snapshots)
+        annotate_and_rank_signals(runtime, signals)
         _persist_signals(db, strategy, run, signals)
 
         order_outcomes, sleeve_after, broker_cash_after = _execute_paper_orders(
@@ -458,6 +473,7 @@ def run_paper_trading(
                     "reference_price": item.reference_price,
                     "execution_price": item.execution_price,
                     "broker_status": item.broker_status,
+                    "signal_strength": item.signal_strength,
                 }
                 for item in order_outcomes
             ],
@@ -766,7 +782,9 @@ def _execute_paper_orders(
     projected_sleeve = _clone_virtual_state(sleeve_state)
     open_order_keys = _open_order_keys(open_orders)
 
-    ordered_signals = sorted(signals, key=lambda item: 0 if item.action == "SELL" else 1)
+    ordered_signals = [event for event in signals if event.action == "SELL"]
+    staged_candidates = select_highest_stage_signals(signals)
+    ordered_signals.extend(ordered_entry_buy_signals(staged_candidates))
     for event in ordered_signals:
         if event.action not in {"BUY", "SELL"}:
             continue
@@ -858,19 +876,38 @@ def _execute_paper_orders(
                 open_order_keys.add(open_order_key)
             continue
 
-        if current_qty > 0:
+        staged_setup = pattern_setup_from_metadata(event.metadata)
+        current_features = current_position.entry_signal_features if current_position else None
+        if current_qty > 0 and (
+            staged_setup is None
+            or not can_apply_staged_entry(event.metadata, current_features)
+        ):
             outcomes.append(
                 PaperTradingOrderOutcome(
                     symbol=symbol,
                     action=event.action,
                     status="skipped",
-                    reason="virtual long position already exists",
+                    reason="virtual long position already exists or staged entry is not newer",
                     client_order_id=client_order_id,
                     reference_price=reference_price,
                 )
             )
             continue
-        if projected_sleeve.long_position_count >= max_positions:
+        if not passes_strength_threshold(event):
+            strength = get_signal_strength(event) or {}
+            outcomes.append(
+                PaperTradingOrderOutcome(
+                    symbol=symbol,
+                    action=event.action,
+                    status="skipped",
+                    reason="signal strength below minimum threshold",
+                    client_order_id=client_order_id,
+                    reference_price=reference_price,
+                    signal_strength=strength,
+                )
+            )
+            continue
+        if current_qty <= 0 and projected_sleeve.long_position_count >= max_positions:
             outcomes.append(
                 PaperTradingOrderOutcome(
                     symbol=symbol,
@@ -883,9 +920,13 @@ def _execute_paper_orders(
             )
             continue
 
+        target_fraction = float(staged_setup["stage_target_pct"]) if staged_setup else 1.0
+        desired_position_value = projected_sleeve.equity * position_size_pct * target_fraction
+        current_position_value = current_qty * reference_price
+        incremental_target = max(desired_position_value - current_position_value, 0.0)
         target_value = min(
             projected_sleeve.cash,
-            projected_sleeve.equity * position_size_pct,
+            incremental_target,
             projected_broker_cash,
         )
         qty = _estimate_paper_buy_qty(
@@ -906,6 +947,23 @@ def _execute_paper_orders(
             )
             continue
 
+        merged_features = merge_entry_features(current_features, event.metadata)
+        projected_qty = current_qty + qty
+        current_average = current_position.avg_entry_price if current_position is not None else 0.0
+        projected_average = (
+            ((current_qty * current_average) + (qty * reference_price)) / projected_qty
+            if projected_qty > 0
+            else 0.0
+        )
+        merged_features["staged_entry_audit"] = {
+            "target_position_value": desired_position_value,
+            "incremental_target_value": incremental_target,
+            "added_notional": qty * reference_price,
+            "position_qty_before": current_qty,
+            "position_qty_after": projected_qty,
+            "weighted_avg_cost": projected_average,
+        }
+        event.metadata = merged_features
         outcome = _submit_paper_order(
             db=db,
             strategy=strategy,
@@ -934,7 +992,7 @@ def _execute_paper_orders(
                     price=fill_price,
                     fee=0.0,
                     trade_date=trade_date,
-                    entry_signal_features=event.metadata if isinstance(event.metadata, dict) else None,
+                    entry_signal_features=merged_features,
                 )
                 projected_sleeve = _mark_virtual_subportfolio_to_market(
                     projected_sleeve,
@@ -1044,6 +1102,7 @@ def _submit_paper_order(
             client_order_id=client_order_id,
             qty=qty,
             reference_price=reference_price,
+            signal_strength=get_signal_strength(event),
         )
 
     try:
@@ -1129,6 +1188,7 @@ def _submit_paper_order(
         reference_price=reference_price,
         execution_price=execution_price,
         broker_status=broker_status,
+        signal_strength=get_signal_strength(event),
     )
 
 
@@ -1275,6 +1335,11 @@ def _upsert_paper_broker_order_transaction(
         signal_ts = _parse_iso_datetime(order_meta.get("signal_ts"))
     if entry_signal_features is None and isinstance(order_meta.get("entry_signal_features"), dict):
         entry_signal_features = order_meta.get("entry_signal_features")
+    if isinstance(entry_signal_features, dict) and fill_applied:
+        entry_signal_features = dict(entry_signal_features)
+        audit = dict(entry_signal_features.get("staged_entry_audit") or {})
+        audit["added_notional"] = filled_qty * executed_price
+        entry_signal_features["staged_entry_audit"] = audit
     if allocation_pct <= 0:
         allocation_pct = _to_float(order_meta.get("allocation_pct"))
 
@@ -1649,6 +1714,21 @@ def _client_order_id(
     symbol = event.symbol.upper()
     action = event.action.lower()
     portfolio_token = normalize_portfolio_name(portfolio_name).replace(" ", "-").lower()[:20]
+    setup = pattern_setup_from_metadata(event.metadata)
+    if setup is not None:
+        identity = "|".join(
+            (
+                normalize_portfolio_name(portfolio_name),
+                str(strategy_id),
+                trade_date.isoformat(),
+                symbol,
+                action,
+                str(setup["setup_id"]),
+                str(setup["stage_index"]),
+            )
+        )
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
+        return f"paper-{trade_date:%Y%m%d}-{symbol[:8]}-{action[0]}-{digest}-s{int(setup['stage_index'])}"
     return f"paper-{portfolio_token}-{str(strategy_id)[:8]}-{trade_date:%Y%m%d}-{symbol}-{action}"
 
 

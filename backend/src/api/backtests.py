@@ -138,6 +138,11 @@ class BacktestSummaryOut(BacktestRunOut):
     transaction_count: int = 0
 
 
+class BacktestComparisonCurvesOut(BaseModel):
+    run_id: UUID
+    comparison_curves: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+
+
 class BacktestPageOut(BaseModel):
     items: list[dict[str, Any]] = Field(default_factory=list)
     total: int
@@ -292,6 +297,54 @@ def _build_comparison_curves_from_bars(
             curves[symbol] = points
 
     return curves
+
+
+def _load_comparison_curves_read_only(
+    db: Session,
+    run: StrategyRun,
+    *,
+    max_points: int,
+) -> dict[str, list[dict[str, Any]]]:
+    """Return display comparison curves without mutating the run cache."""
+    cached_curves = _extract_cached_comparison_curves(dict(run.summary_metrics or {}))
+    missing_symbols = [symbol for symbol in DISPLAY_COMPARISON_SYMBOLS if symbol not in cached_curves]
+    computed_curves: dict[str, list[dict[str, Any]]] = {}
+
+    if missing_symbols and run.initial_cash is not None and float(run.initial_cash) > 0:
+        snapshots = db.execute(
+            select(PortfolioSnapshot)
+            .where(PortfolioSnapshot.run_id == run.id)
+            .order_by(PortfolioSnapshot.ts.asc())
+        ).scalars().all()
+        ordered_snapshots = [snapshot for snapshot in snapshots if snapshot.ts is not None]
+        if ordered_snapshots:
+            start_date = ordered_snapshots[0].ts.astimezone(NEW_YORK).date()
+            end_date = ordered_snapshots[-1].ts.astimezone(NEW_YORK).date()
+            bars_by_symbol = get_historical_data(
+                db,
+                missing_symbols,
+                start_date,
+                end_date,
+                adjusted=True,
+            )
+            computed_curves = _build_comparison_curves_from_bars(
+                float(run.initial_cash),
+                ordered_snapshots,
+                bars_by_symbol,
+                missing_symbols,
+            )
+
+    all_curves = {**cached_curves, **computed_curves}
+    result: dict[str, list[dict[str, Any]]] = {}
+    for symbol in DISPLAY_COMPARISON_SYMBOLS:
+        valid_points = [
+            point
+            for point in all_curves.get(symbol, [])
+            if isinstance(point.get("equity"), (int, float))
+        ]
+        if valid_points:
+            result[symbol] = _downsample_snapshots(valid_points, max_points=max_points)
+    return result
 
 
 def _build_benchmark_snapshot_overrides(
@@ -481,6 +534,8 @@ def _serialize_transaction(txn: Transaction) -> dict[str, Any]:
 
 
 def _serialize_signal(signal: Signal) -> dict[str, Any]:
+    features = signal.features or {}
+    strength = features.get("strength") if isinstance(features, dict) else None
     return {
         "id": str(signal.id),
         "run_id": str(signal.run_id),
@@ -490,8 +545,9 @@ def _serialize_signal(signal: Signal) -> dict[str, Any]:
         "symbol": signal.symbol,
         "signal": signal.signal,
         "score": float(signal.score) if signal.score is not None else None,
+        "strength": strength if isinstance(strength, dict) else None,
         "reason": signal.reason,
-        "features": signal.features or {},
+        "features": features,
     }
 
 
@@ -897,6 +953,25 @@ def get_backtest_equity(
     ).scalars().all()
     rows = [_serialize_snapshot(snapshot) for snapshot in snapshots]
     return _downsample_snapshots(rows, max_points=max_points)
+
+
+@router.get("/{run_id}/comparison-curves", response_model=BacktestComparisonCurvesOut)
+def get_backtest_comparison_curves(
+    run_id: UUID,
+    max_points: int = Query(default=1500, ge=2, le=5000),
+    db: Session = Depends(get_db),
+):
+    run = db.get(StrategyRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="backtest not found")
+    return BacktestComparisonCurvesOut(
+        run_id=run.id,
+        comparison_curves=_load_comparison_curves_read_only(
+            db,
+            run,
+            max_points=max_points,
+        ),
+    )
 
 
 @router.get("/{run_id}/signals", response_model=BacktestPageOut)

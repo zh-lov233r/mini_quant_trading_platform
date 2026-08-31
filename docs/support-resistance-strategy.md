@@ -67,7 +67,7 @@ The read-only audit endpoint is:
 GET /api/backtests/{run_id}/support-resistance?symbol=AAPL&start_date=2025-01-01&end_date=2025-12-31
 ```
 
-Each returned version includes query-clipped `geometry`: start/end trading dates, both endpoint centers and bounds, and `slope_per_session`. Lifecycle charts discard versions without visible-bar intersection, render the bounds as Canvas quadrilaterals, keep text only for BUY/SELL signals and fills, aggregate secondary audit markers by date/type, and expose hover plus click-pinned details. Zone autoscaling is bounded to overlays that intersect the visible candle price range or its 25% span padding, so distant historical zones remain auditable without flattening the active candles.
+Each returned version includes query-clipped `geometry`: start/end trading dates, both endpoint centers and bounds, and `slope_per_session`. Lifecycle charts request audit data directly for the visible candle window instead of depending on whether the initial signal page contains that entry, then discard versions without visible-bar intersection and render the bounds as Canvas quadrilaterals. The legend keeps the latest visible support and resistance segment separately, so both sides of a role transition remain identifiable. Only BUY/SELL signals and fills keep text; same-day secondary audit markers are grouped with hover plus click-pinned details. Zone autoscaling is bounded to overlays that intersect the visible candle price range or its 25% span padding, so distant historical zones remain auditable without flattening the active candles.
 
 ## Database Rollout and Recovery
 

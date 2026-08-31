@@ -1251,7 +1251,7 @@ components:
 
     StrategyType:
       type: string
-      enum: [trend, mean_reversion, momentum_breakout, island_reversal, double_bottom, support_resistance, custom]
+      enum: [trend, mean_reversion, momentum_breakout, island_reversal, double_bottom, head_shoulders_bottom, rounded_bottom, v_reversal, support_resistance, custom]
 
     StrategyStatus:
       type: string
@@ -1317,6 +1317,11 @@ components:
             trigger:
               type: string
               example: cross_over
+            min_strength_score:
+              type: number
+              minimum: 0
+              maximum: 100
+              default: 50
         universe:
           $ref: "#/components/schemas/UniverseConfig"
         risk:
@@ -1358,6 +1363,11 @@ components:
             price_field:
               type: string
               example: close
+            min_strength_score:
+              type: number
+              minimum: 0
+              maximum: 100
+              default: 50
         universe:
           $ref: "#/components/schemas/UniverseConfig"
         risk:
@@ -1408,6 +1418,11 @@ components:
             price_field:
               type: string
               enum: [close]
+            min_strength_score:
+              type: number
+              minimum: 0
+              maximum: 100
+              default: 50
         universe:
           $ref: "#/components/schemas/UniverseConfig"
         risk:
@@ -1482,6 +1497,11 @@ components:
               type: number
               exclusiveMinimum: 0
               maximum: 1
+            min_strength_score:
+              type: number
+              minimum: 0
+              maximum: 100
+              default: 50
         universe:
           $ref: "#/components/schemas/UniverseConfig"
         risk:
@@ -1503,6 +1523,53 @@ components:
         metadata:
           $ref: "#/components/schemas/MetadataConfig"
 
+    DoubleBottomStrategyParams:
+      type: object
+      required: [signal, universe, risk, execution, metadata]
+      properties:
+        signal:
+          type: object
+          required:
+            [downtrend_lookback, downtrend_min_drop_pct, downtrend_max_up_day_ratio,
+             downtrend_min_r_squared, min_bottom_spacing, max_bottom_spacing,
+             left_bottom_before_bars, left_bottom_after_bars, bottom_tolerance_pct,
+             neckline_min_rebound_pct, rebound_up_day_ratio_min,
+             second_bottom_volume_ratio_max, breakout_volume_ratio_min,
+             max_breakout_bars_after_right_bottom, breakout_buffer_pct, retest_window,
+             retest_volume_ratio_max, support_tolerance_pct]
+          properties:
+            min_strength_score: {type: number, minimum: 0, maximum: 100, default: 50}
+            downtrend_lookback: {type: integer, minimum: 1}
+            downtrend_min_drop_pct: {type: number, exclusiveMinimum: 0, maximum: 1}
+            downtrend_max_up_day_ratio: {type: number, minimum: 0, maximum: 1}
+            downtrend_min_r_squared: {type: number, minimum: 0, maximum: 1}
+            min_bottom_spacing: {type: integer, minimum: 1}
+            max_bottom_spacing: {type: integer, minimum: 1}
+            left_bottom_before_bars: {type: integer, minimum: 1}
+            left_bottom_after_bars: {type: integer, minimum: 1}
+            bottom_tolerance_pct: {type: number, exclusiveMinimum: 0, maximum: 1}
+            neckline_min_rebound_pct: {type: number, exclusiveMinimum: 0, maximum: 1}
+            rebound_up_day_ratio_min: {type: number, minimum: 0, maximum: 1}
+            second_bottom_volume_ratio_max: {type: number, exclusiveMinimum: 0}
+            breakout_volume_ratio_min: {type: number, exclusiveMinimum: 0}
+            max_breakout_bars_after_right_bottom: {type: integer, minimum: 1}
+            breakout_buffer_pct: {type: number, minimum: 0, maximum: 1}
+            retest_window: {type: integer, minimum: 1}
+            retest_volume_ratio_max: {type: number, exclusiveMinimum: 0}
+            support_tolerance_pct: {type: number, exclusiveMinimum: 0, maximum: 1}
+        universe: {$ref: "#/components/schemas/UniverseConfig"}
+        risk:
+          type: object
+          required: [max_positions, position_size_pct, stop_loss_atr, max_loss_pct, take_profit_atr]
+          properties:
+            max_positions: {type: integer, minimum: 1}
+            position_size_pct: {type: number, exclusiveMinimum: 0, maximum: 1}
+            stop_loss_atr: {type: number, exclusiveMinimum: 0}
+            max_loss_pct: {type: number, exclusiveMinimum: 0, maximum: 1}
+            take_profit_atr: {type: number, exclusiveMinimum: 0}
+        execution: {$ref: "#/components/schemas/ExecutionConfig"}
+        metadata: {$ref: "#/components/schemas/MetadataConfig"}
+
     SupportResistanceStrategyParams:
       type: object
       description: >-
@@ -1523,6 +1590,7 @@ components:
              retest_window, retest_volume_ratio_max, score_outcome_window,
              score_target_atr, score_stop_atr]
           properties:
+            min_strength_score: {type: number, minimum: 0, maximum: 100, default: 50}
             support_bounce_enabled: {type: boolean, default: true}
             resistance_breakout_enabled: {type: boolean, default: true}
             breakout_retest_enabled: {type: boolean, default: true}
@@ -1666,6 +1734,7 @@ components:
             - $ref: "#/components/schemas/MeanReversionStrategyParams"
             - $ref: "#/components/schemas/MomentumBreakoutStrategyParams"
             - $ref: "#/components/schemas/IslandReversalStrategyParams"
+            - $ref: "#/components/schemas/DoubleBottomStrategyParams"
             - $ref: "#/components/schemas/SupportResistanceStrategyParams"
             - $ref: "#/components/schemas/FreeFormObject"
 
@@ -1689,6 +1758,7 @@ components:
             - $ref: "#/components/schemas/MeanReversionStrategyParams"
             - $ref: "#/components/schemas/MomentumBreakoutStrategyParams"
             - $ref: "#/components/schemas/IslandReversalStrategyParams"
+            - $ref: "#/components/schemas/DoubleBottomStrategyParams"
             - $ref: "#/components/schemas/SupportResistanceStrategyParams"
             - $ref: "#/components/schemas/FreeFormObject"
         status:
@@ -1779,7 +1849,7 @@ components:
         description: {type: [string, "null"], maxLength: 500}
         strategy_type:
           type: string
-          enum: [trend, mean_reversion, momentum_breakout, island_reversal, double_bottom, support_resistance]
+          enum: [trend, mean_reversion, momentum_breakout, island_reversal, double_bottom, head_shoulders_bottom, rounded_bottom, v_reversal, support_resistance]
         overrides:
           type: array
           maxItems: 30
@@ -1870,7 +1940,7 @@ components:
       properties:
         workflowRunId: {type: string}
         goal: {type: string}
-        strategyType: {type: string, enum: [trend, mean_reversion, momentum_breakout, island_reversal, double_bottom, support_resistance]}
+        strategyType: {type: string, enum: [trend, mean_reversion, momentum_breakout, island_reversal, double_bottom, head_shoulders_bottom, rounded_bottom, v_reversal, support_resistance]}
         strategy: {$ref: "#/components/schemas/FreeFormObject"}
         name: {type: string}
         hypothesis: {type: string}
@@ -2357,7 +2427,7 @@ components:
 
     SignalRecord:
       type: object
-      required: [id, run_id, strategy_id, ts, symbol, signal, features]
+      required: [id, run_id, strategy_id, ts, symbol, signal, features, strength]
       properties:
         id:
           type: string
@@ -2382,6 +2452,10 @@ components:
         score:
           type: number
           nullable: true
+        strength:
+          oneOf:
+            - $ref: "#/components/schemas/SignalStrengthRecord"
+            - {type: "null"}
         reason:
           type: string
           nullable: true
@@ -2391,6 +2465,27 @@ components:
           type: string
           format: date-time
           nullable: true
+
+    SignalStrengthRecord:
+      type: object
+      required: [score, level, threshold, passes_threshold, rank, model_version, components]
+      properties:
+        score: {type: number, minimum: 0, maximum: 100}
+        level: {type: string, enum: [weak, medium, strong, very_strong]}
+        threshold: {type: number, minimum: 0, maximum: 100}
+        passes_threshold: {type: boolean}
+        rank: {type: [integer, "null"], minimum: 1}
+        model_version: {type: string}
+        components:
+          type: array
+          items:
+            type: object
+            required: [key, raw_value, normalized_score, weight]
+            properties:
+              key: {type: string}
+              raw_value: {type: number}
+              normalized_score: {type: number, minimum: 0, maximum: 100}
+              weight: {type: number, exclusiveMinimum: 0}
 
     TransactionRecord:
       type: object
@@ -2455,6 +2550,27 @@ components:
         benchmark_equity: {type: number, nullable: true}
         benchmark_return: {type: number, nullable: true}
         benchmark_excess_return: {type: number, nullable: true}
+
+    BacktestComparisonCurvePoint:
+      type: object
+      required: [ts, symbol, close, equity, return]
+      properties:
+        ts: {type: string, format: date-time}
+        symbol: {type: string}
+        close: {type: number, nullable: true}
+        equity: {type: number}
+        return: {type: number, nullable: true}
+
+    BacktestComparisonCurves:
+      type: object
+      required: [run_id, comparison_curves]
+      properties:
+        run_id: {type: string, format: uuid}
+        comparison_curves:
+          type: object
+          additionalProperties:
+            type: array
+            items: {$ref: "#/components/schemas/BacktestComparisonCurvePoint"}
 
     PortfolioSnapshotRecord:
       type: object
@@ -2749,6 +2865,26 @@ components:
                   oneOf:
                     - {$ref: "#/components/schemas/BacktestEquityPoint"}
                     - {$ref: "#/components/schemas/PortfolioSnapshotRecord"}
+        "404": {$ref: "#/components/responses/NotFound"}
+
+  /api/backtests/{run_id}/comparison-curves:
+    get:
+      tags: [Backtests]
+      summary: Get lightweight SPY and QQQ comparison curves
+      operationId: getBacktestComparisonCurves
+      x-implementation-status: implemented
+      parameters:
+        - $ref: "#/components/parameters/RunIdPath"
+        - in: query
+          name: max_points
+          required: false
+          schema: {type: integer, minimum: 2, maximum: 5000, default: 1500}
+      responses:
+        "200":
+          description: Cached or read-only reconstructed comparison curves with deterministic endpoint-preserving downsampling
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BacktestComparisonCurves"}
         "404": {$ref: "#/components/responses/NotFound"}
 
   /api/backtests/{run_id}/cancel:

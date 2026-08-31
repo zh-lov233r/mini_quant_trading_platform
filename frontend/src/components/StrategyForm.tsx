@@ -17,8 +17,16 @@ import type {
   StrategyStatus,
   StrategyType,
 } from "@/types/strategy";
+import { getStrategyCategoryPresentation } from "@/utils/strategy";
 
 const MEAN_REVERSION_LOOKBACK_OPTIONS = [5, 10, 20];
+const STATUS_OPTIONS = ["draft", "active", "archived"].map((value) => ({ value, label: value }));
+const LINE_KIND_OPTIONS = [
+  { value: "ema", label: "EMA" },
+  { value: "sma", label: "SMA" },
+];
+const REBALANCE_OPTIONS = ["daily", "weekly", "monthly"].map((value) => ({ value, label: value }));
+const RUN_AT_OPTIONS = ["close", "open"].map((value) => ({ value, label: value }));
 
 function toRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -49,6 +57,12 @@ function toSymbolText(value: unknown): string {
     .join(",");
 }
 
+function withMinStrengthScore(value: unknown, score: number): Record<string, unknown> {
+  const params = { ...toRecord(value) };
+  params.signal = { ...toRecord(params.signal), min_strength_score: score };
+  return params;
+}
+
 function isStrategyType(value: unknown): value is StrategyType {
   return (
     value === "trend"
@@ -56,6 +70,9 @@ function isStrategyType(value: unknown): value is StrategyType {
     || value === "momentum_breakout"
     || value === "island_reversal"
     || value === "double_bottom"
+    || value === "head_shoulders_bottom"
+    || value === "rounded_bottom"
+    || value === "v_reversal"
     || value === "support_resistance"
     || value === "custom"
   );
@@ -123,6 +140,9 @@ export default function StrategyForm({
   );
   const [atrMul, setAtrMul] = useState(
     toFiniteNumber(initialSignal.atr_multiplier, 2.0)
+  );
+  const [minStrengthScore, setMinStrengthScore] = useState(
+    toFiniteNumber(initialSignal.min_strength_score, 50)
   );
   const [trendStopLossPct, setTrendStopLossPct] = useState(
     toFiniteNumber(initialRisk.stop_loss_pct, 0.1)
@@ -320,6 +340,7 @@ export default function StrategyForm({
     setSymbols(toSymbolText(universe.symbols));
     setMaxPositions(toFiniteNumber(risk.max_positions, 10));
     setPositionSizePct(toFiniteNumber(risk.position_size_pct, 0.1));
+    setMinStrengthScore(toFiniteNumber(signal.min_strength_score, 50));
     setRebalance(toStringValue(execution.rebalance, "daily"));
     setRunAt(toStringValue(execution.run_at, "close"));
 
@@ -632,6 +653,7 @@ export default function StrategyForm({
 
       return {
       signal: {
+        min_strength_score: Number(minStrengthScore),
         fast_indicator: {
           kind: fastKind,
           window: Number(fastWindow),
@@ -673,6 +695,7 @@ export default function StrategyForm({
       fastKind,
       fastWindow,
       maxPositions,
+      minStrengthScore,
       positionSizePct,
       rebalance,
       runAt,
@@ -694,6 +717,7 @@ export default function StrategyForm({
 
       return {
         signal: {
+          min_strength_score: Number(minStrengthScore),
           lookback_window: Number(meanReversionLookback),
           zscore_entry: Number(meanReversionZscoreEntry),
           zscore_exit: Number(meanReversionZscoreExit),
@@ -730,6 +754,7 @@ export default function StrategyForm({
       meanReversionMaxHoldingDays,
       meanReversionZscoreEntry,
       meanReversionZscoreExit,
+      minStrengthScore,
       positionSizePct,
       rebalance,
       runAt,
@@ -746,6 +771,7 @@ export default function StrategyForm({
 
       return {
         signal: {
+          min_strength_score: Number(minStrengthScore),
           downtrend_lookback: Number(islandDowntrendLookback),
           downtrend_min_drop_pct: Number(islandDowntrendMinDropPct),
           left_gap_min_pct: Number(leftGapMinPct),
@@ -792,6 +818,7 @@ export default function StrategyForm({
       maxIslandBars,
       maxPositions,
       minIslandBars,
+      minStrengthScore,
       positionSizePct,
       rebalance,
       retestVolumeRatioMax,
@@ -813,6 +840,7 @@ export default function StrategyForm({
 
       return {
         signal: {
+          min_strength_score: Number(minStrengthScore),
           downtrend_lookback: Number(doubleBottomDowntrendLookback),
           downtrend_min_drop_pct: Number(doubleBottomDowntrendMinDropPct),
           downtrend_max_up_day_ratio: Number(doubleBottomDowntrendMaxUpDayRatio),
@@ -875,6 +903,7 @@ export default function StrategyForm({
       maxBreakoutBarsAfterRightBottom,
       maxPositions,
       minBottomSpacing,
+      minStrengthScore,
       necklineMinReboundPct,
       positionSizePct,
       reboundUpDayRatioMin,
@@ -892,6 +921,7 @@ export default function StrategyForm({
       .filter(Boolean);
     return {
       signal: {
+        min_strength_score: Number(minStrengthScore),
         support_bounce_enabled: supportBounceEnabled,
         resistance_breakout_enabled: resistanceBreakoutEnabled,
         breakout_retest_enabled: breakoutRetestEnabled,
@@ -939,7 +969,7 @@ export default function StrategyForm({
     resistanceBreakoutEnabled, runAt, srBounceConfirmationAtr, srBreakoutConfirmationAtr,
     srBreakoutVolumeRatioMin, srDecayHalfLife, srDetectionWindow,
     srLineInlierToleranceAtr, srMaxAbsSlopeAtrPerSession, srMaxHoldingDays, srMaxLossPct,
-    srMinLinePivots, srMinLineSpanSessions, srMinRewardRisk,
+    srMinLinePivots, srMinLineSpanSessions, srMinRewardRisk, minStrengthScore,
     srPivotLeftBars, srPivotRightBars, srRetestVolumeRatioMax, srRetestWindow,
     srScoreOutcomeWindow, srScoreStopAtr, srScoreTargetAtr, srStopLossAtr,
     srTakeProfitAtr, srZoneHalfWidthAtr, supportBounceEnabled, symbols,
@@ -993,12 +1023,15 @@ export default function StrategyForm({
     }
 
     try {
+      const parsed = JSON.parse(rawJson);
       return {
         name,
         description,
         strategy_type: strategyType,
         status,
-        params: JSON.parse(rawJson),
+        params: strategyType === "momentum_breakout"
+          ? withMinStrengthScore(parsed, Number(minStrengthScore))
+          : parsed,
       };
     } catch {
       return {
@@ -1009,7 +1042,7 @@ export default function StrategyForm({
         params: {},
       };
     }
-  }, [description, doubleBottomParams, islandReversalParams, meanReversionParams, name, rawJson, status, strategyType, supportResistanceParams, trendParams]);
+  }, [description, doubleBottomParams, islandReversalParams, meanReversionParams, minStrengthScore, name, rawJson, status, strategyType, supportResistanceParams, trendParams]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1020,6 +1053,9 @@ export default function StrategyForm({
     try {
       if (!name.trim()) {
         throw new Error(isZh ? "策略名不能为空" : "Strategy name cannot be empty");
+      }
+      if (!(Number(minStrengthScore) >= 0 && Number(minStrengthScore) <= 100)) {
+        throw new Error(isZh ? "最低信号强度必须在 0–100 之间" : "Minimum signal strength must be within 0–100");
       }
 
       let payload: StrategyCreate;
@@ -1273,7 +1309,9 @@ export default function StrategyForm({
           description: description.trim(),
           strategy_type: strategyType,
           status,
-          params: JSON.parse(rawJson),
+          params: strategyType === "momentum_breakout"
+            ? withMinStrengthScore(JSON.parse(rawJson), Number(minStrengthScore))
+            : JSON.parse(rawJson),
         };
       }
 
@@ -1548,35 +1586,53 @@ export default function StrategyForm({
                 <label>{isZh ? "策略类型" : "Strategy Type"}</label>
                 <SelectControl
                   value={strategyType}
-                  onChange={(e) => {
-                    const nextType = e.target.value as StrategyType;
+                  onValueChange={(value) => {
+                    const nextType = value as StrategyType;
                     setStrategyType(nextType);
                     const nextTemplate = catalog.find((item) => item.strategy_type === nextType);
                     if (nextTemplate) applyTemplateDefaults(nextTemplate);
                   }}
                   disabled={isEditMode}
-                >
-                  {catalog.length === 0 && <option value="trend">trend</option>}
-                  {catalog.map((item) => (
-                    <option key={item.strategy_type} value={item.strategy_type}>
-                      {item.label}
-                    </option>
-                  ))}
-                </SelectControl>
+                  options={(catalog.length === 0
+                    ? [{ strategy_type: "trend", label: "trend" }]
+                    : catalog
+                  ).map((item) => ({
+                    value: item.strategy_type,
+                    label: item.label,
+                    accent: getStrategyCategoryPresentation(item.strategy_type, locale, item.label).accent,
+                  }))}
+                />
               </div>
 
               <div style={boxStyle}>
                 <label>{isZh ? "状态" : "Status"}</label>
                 <SelectControl
                   value={status}
-                  onChange={(e) => setStatus(e.target.value as StrategyStatus)}
-                >
-                  <option value="draft">draft</option>
-                  <option value="active">active</option>
-                  <option value="archived">archived</option>
-                </SelectControl>
+                  onValueChange={(value) => setStatus(value as StrategyStatus)}
+                  options={STATUS_OPTIONS}
+                />
               </div>
             </div>
+
+            {strategyType !== "custom" ? (
+              <div style={{ ...boxStyle, marginTop: 12 }}>
+                <label>{isZh ? "最低 BUY 信号强度（0–100）" : "Minimum BUY Signal Strength (0–100)"}</label>
+                <input
+                  style={inputStyle}
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={minStrengthScore}
+                  onChange={(event) => setMinStrengthScore(Number(event.target.value))}
+                />
+                <small style={{ color: "#94a3b8", lineHeight: 1.5 }}>
+                  {isZh
+                    ? "低于阈值的 BUY 信号仍会保存用于审计，但不会占用持仓名额。"
+                    : "BUY signals below this threshold remain auditable but cannot consume a position slot."}
+                </small>
+              </div>
+            ) : null}
           </section>
 
           {strategyType === "trend" ? (
@@ -1595,55 +1651,39 @@ export default function StrategyForm({
                   <label>{isZh ? "快线类型" : "Fast Line Type"}</label>
                   <SelectControl
                     value={fastKind}
-                    onChange={(e) => setFastKind(e.target.value as "ema" | "sma")}
-                  >
-                    <option value="ema">EMA</option>
-                    <option value="sma">SMA</option>
-                  </SelectControl>
+                    onValueChange={(value) => setFastKind(value as "ema" | "sma")}
+                    options={LINE_KIND_OPTIONS}
+                  />
                 </div>
                 <div style={boxStyle}>
                   <label>{isZh ? "快线周期" : "Fast Window"}</label>
                   <SelectControl
                     value={fastWindow}
-                    onChange={(e) => setFastWindow(Number(e.target.value))}
-                  >
-                    {fastWindowOptions.length === 0 ? (
-                      <option value={fastWindow}>{fastWindow}</option>
-                    ) : (
-                      fastWindowOptions.map((window) => (
-                        <option key={`fast-${fastKind}-${window}`} value={window}>
-                          {window}
-                        </option>
-                      ))
-                    )}
-                  </SelectControl>
+                    onValueChange={(value) => setFastWindow(Number(value))}
+                    options={(fastWindowOptions.length === 0 ? [fastWindow] : fastWindowOptions).map((window) => ({
+                      value: window,
+                      label: window,
+                    }))}
+                  />
                 </div>
                 <div style={boxStyle}>
                   <label>{isZh ? "慢线类型" : "Slow Line Type"}</label>
                   <SelectControl
                     value={slowKind}
-                    onChange={(e) => setSlowKind(e.target.value as "ema" | "sma")}
-                  >
-                    <option value="ema">EMA</option>
-                    <option value="sma">SMA</option>
-                  </SelectControl>
+                    onValueChange={(value) => setSlowKind(value as "ema" | "sma")}
+                    options={LINE_KIND_OPTIONS}
+                  />
                 </div>
                 <div style={boxStyle}>
                   <label>{isZh ? "慢线周期" : "Slow Window"}</label>
                   <SelectControl
                     value={slowWindow}
-                    onChange={(e) => setSlowWindow(Number(e.target.value))}
-                  >
-                    {slowWindowOptions.length === 0 ? (
-                      <option value={slowWindow}>{slowWindow}</option>
-                    ) : (
-                      slowWindowOptions.map((window) => (
-                        <option key={`slow-${slowKind}-${window}`} value={window}>
-                          {window}
-                        </option>
-                      ))
-                    )}
-                  </SelectControl>
+                    onValueChange={(value) => setSlowWindow(Number(value))}
+                    options={(slowWindowOptions.length === 0 ? [slowWindow] : slowWindowOptions).map((window) => ({
+                      value: window,
+                      label: window,
+                    }))}
+                  />
                 </div>
                 <div style={boxStyle}>
                   <label>{isZh ? "成交量过滤倍数" : "Volume Multiplier"}</label>
@@ -1738,12 +1778,9 @@ export default function StrategyForm({
                   <label>{isZh ? "调仓频率" : "Rebalance Frequency"}</label>
                   <SelectControl
                     value={rebalance}
-                    onChange={(e) => setRebalance(e.target.value)}
-                  >
-                    <option value="daily">daily</option>
-                    <option value="weekly">weekly</option>
-                    <option value="monthly">monthly</option>
-                  </SelectControl>
+                    onValueChange={setRebalance}
+                    options={REBALANCE_OPTIONS}
+                  />
                 </div>
               </div>
 
@@ -1751,11 +1788,9 @@ export default function StrategyForm({
                 <label>{isZh ? "运行时机" : "Run Timing"}</label>
                 <SelectControl
                   value={runAt}
-                  onChange={(e) => setRunAt(e.target.value)}
-                >
-                  <option value="close">close</option>
-                  <option value="open">open</option>
-                </SelectControl>
+                  onValueChange={setRunAt}
+                  options={RUN_AT_OPTIONS}
+                />
               </div>
             </section>
           ) : strategyType === "mean_reversion" ? (
@@ -1772,14 +1807,9 @@ export default function StrategyForm({
                   <label>{isZh ? "回看窗口" : "Lookback Window"}</label>
                   <SelectControl
                     value={meanReversionLookback}
-                    onChange={(e) => setMeanReversionLookback(Number(e.target.value))}
-                  >
-                    {MEAN_REVERSION_LOOKBACK_OPTIONS.map((window) => (
-                      <option key={`mr-lookback-${window}`} value={window}>
-                        {window}
-                      </option>
-                    ))}
-                  </SelectControl>
+                    onValueChange={(value) => setMeanReversionLookback(Number(value))}
+                    options={MEAN_REVERSION_LOOKBACK_OPTIONS.map((window) => ({ value: window, label: window }))}
+                  />
                 </div>
                 <div style={boxStyle}>
                   <label>{isZh ? "Z-score 入场阈值" : "Z-score Entry"}</label>
@@ -1889,12 +1919,9 @@ export default function StrategyForm({
                   <label>{isZh ? "调仓频率" : "Rebalance Frequency"}</label>
                   <SelectControl
                     value={rebalance}
-                    onChange={(e) => setRebalance(e.target.value)}
-                  >
-                    <option value="daily">daily</option>
-                    <option value="weekly">weekly</option>
-                    <option value="monthly">monthly</option>
-                  </SelectControl>
+                    onValueChange={setRebalance}
+                    options={REBALANCE_OPTIONS}
+                  />
                 </div>
               </div>
 
@@ -1902,11 +1929,9 @@ export default function StrategyForm({
                 <label>{isZh ? "运行时机" : "Run Timing"}</label>
                 <SelectControl
                   value={runAt}
-                  onChange={(e) => setRunAt(e.target.value)}
-                >
-                  <option value="close">close</option>
-                  <option value="open">open</option>
-                </SelectControl>
+                  onValueChange={setRunAt}
+                  options={RUN_AT_OPTIONS}
+                />
               </div>
             </section>
           ) : strategyType === "island_reversal" ? (
@@ -2126,12 +2151,9 @@ export default function StrategyForm({
                   <label>{isZh ? "调仓频率" : "Rebalance Frequency"}</label>
                   <SelectControl
                     value={rebalance}
-                    onChange={(e) => setRebalance(e.target.value)}
-                  >
-                    <option value="daily">daily</option>
-                    <option value="weekly">weekly</option>
-                    <option value="monthly">monthly</option>
-                  </SelectControl>
+                    onValueChange={setRebalance}
+                    options={REBALANCE_OPTIONS}
+                  />
                 </div>
               </div>
 
@@ -2139,11 +2161,9 @@ export default function StrategyForm({
                 <label>{isZh ? "运行时机" : "Run Timing"}</label>
                 <SelectControl
                   value={runAt}
-                  onChange={(e) => setRunAt(e.target.value)}
-                >
-                  <option value="close">close</option>
-                  <option value="open">open</option>
-                </SelectControl>
+                  onValueChange={setRunAt}
+                  options={RUN_AT_OPTIONS}
+                />
               </div>
             </section>
           ) : strategyType === "double_bottom" ? (
@@ -2463,22 +2483,17 @@ export default function StrategyForm({
                       <label>{isZh ? "调仓频率" : "Rebalance Frequency"}</label>
                       <SelectControl
                         value={rebalance}
-                        onChange={(e) => setRebalance(e.target.value)}
-                      >
-                        <option value="daily">daily</option>
-                        <option value="weekly">weekly</option>
-                        <option value="monthly">monthly</option>
-                      </SelectControl>
+                        onValueChange={setRebalance}
+                        options={REBALANCE_OPTIONS}
+                      />
                     </div>
                     <div style={groupedBoxStyle}>
                       <label>{isZh ? "运行时机" : "Run Timing"}</label>
                       <SelectControl
                         value={runAt}
-                        onChange={(e) => setRunAt(e.target.value)}
-                      >
-                        <option value="close">close</option>
-                        <option value="open">open</option>
-                      </SelectControl>
+                        onValueChange={setRunAt}
+                        options={RUN_AT_OPTIONS}
+                      />
                     </div>
                   </div>
                 </div>
@@ -2568,11 +2583,11 @@ export default function StrategyForm({
                     ))}
                     <div style={groupedBoxStyle}>
                       <label>{isZh ? "调仓频率" : "Rebalance"}</label>
-                      <SelectControl value={rebalance} onChange={(event) => setRebalance(event.target.value)}><option value="daily">daily</option></SelectControl>
+                      <SelectControl value={rebalance} onValueChange={setRebalance} options={[{ value: "daily", label: "daily" }]} />
                     </div>
                     <div style={groupedBoxStyle}>
                       <label>{isZh ? "运行时机" : "Run Timing"}</label>
-                      <SelectControl value={runAt} onChange={(event) => setRunAt(event.target.value)}><option value="close">close</option></SelectControl>
+                      <SelectControl value={runAt} onValueChange={setRunAt} options={[{ value: "close", label: "close" }]} />
                     </div>
                   </div>
                 </div>

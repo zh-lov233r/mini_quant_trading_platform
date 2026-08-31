@@ -234,6 +234,28 @@ export function currentZoneOverlays(
   return Array.from(current.values()).sort((left, right) => left.role.localeCompare(right.role));
 }
 
+export function latestVisibleZoneOverlaysByRole(
+  zones: ChartZoneOverlay[],
+): ChartZoneOverlay[] {
+  const latest = new Map<"support" | "resistance", ChartZoneOverlay>();
+  zones.forEach((zone) => {
+    const existing = latest.get(zone.role);
+    if (
+      !existing
+      || existing.endDate < zone.endDate
+      || (existing.endDate === zone.endDate && existing.startDate < zone.startDate)
+      || (
+        existing.endDate === zone.endDate
+        && existing.startDate === zone.startDate
+        && existing.key < zone.key
+      )
+    ) {
+      latest.set(zone.role, zone);
+    }
+  });
+  return Array.from(latest.values()).sort((left, right) => left.role.localeCompare(right.role));
+}
+
 export function groupCandleOverlayMarkers(markers: ChartOverlayMarker[]): ChartOverlayMarker[] {
   const criticalTones = new Set(["buy", "sell", "buy_signal", "sell_signal"]);
   const grouped = new Map<string, ChartOverlayMarker>();

@@ -4,6 +4,9 @@ export type StrategyType =
   | "momentum_breakout"
   | "island_reversal"
   | "double_bottom"
+  | "head_shoulders_bottom"
+  | "rounded_bottom"
+  | "v_reversal"
   | "support_resistance"
   | "custom";
 export type StrategyStatus = "draft" | "active" | "archived";
@@ -15,6 +18,7 @@ export interface IndicatorSpec {
 
 export interface MeanReversionStrategyParams {
   signal: {
+    min_strength_score: number;
     lookback_window: number;
     zscore_entry: number;
     zscore_exit: number;
@@ -44,6 +48,7 @@ export interface MeanReversionStrategyParams {
 
 export interface TrendStrategyParams {
   signal: {
+    min_strength_score: number;
     fast_indicator: IndicatorSpec;
     slow_indicator: IndicatorSpec;
     volume_multiplier: number;
@@ -75,6 +80,7 @@ export interface TrendStrategyParams {
 
 export interface MomentumBreakoutStrategyParams {
   signal: {
+    min_strength_score: number;
     minimum_return_20d: number;
     breakout_buffer_pct: number;
     volume_multiplier: number;
@@ -109,6 +115,7 @@ export interface MomentumBreakoutStrategyParams {
 
 export interface IslandReversalStrategyParams {
   signal: {
+    min_strength_score: number;
     downtrend_lookback: number;
     downtrend_min_drop_pct: number;
     left_gap_min_pct: number;
@@ -131,6 +138,9 @@ export interface IslandReversalStrategyParams {
     stop_loss_atr: number;
     max_loss_pct: number;
     take_profit_atr: number;
+    stage_1_target_pct: number;
+    stage_2_target_pct: number;
+    stage_3_target_pct: number;
   };
   execution: {
     timeframe: string;
@@ -145,6 +155,7 @@ export interface IslandReversalStrategyParams {
 
 export interface DoubleBottomStrategyParams {
   signal: {
+    min_strength_score: number;
     downtrend_lookback: number;
     downtrend_min_drop_pct: number;
     downtrend_max_up_day_ratio: number;
@@ -174,6 +185,9 @@ export interface DoubleBottomStrategyParams {
     stop_loss_atr: number;
     max_loss_pct: number;
     take_profit_atr: number;
+    stage_1_target_pct: number;
+    stage_2_target_pct: number;
+    stage_3_target_pct: number;
   };
   execution: {
     timeframe: string;
@@ -186,8 +200,26 @@ export interface DoubleBottomStrategyParams {
   };
 }
 
+export interface StagedBottomStrategyParams {
+  signal: Record<string, number>;
+  universe: { symbols: string[]; selection_mode: string };
+  risk: {
+    max_positions: number;
+    position_size_pct: number;
+    stage_1_target_pct: number;
+    stage_2_target_pct: number;
+    stage_3_target_pct: number;
+    stop_loss_atr: number;
+    max_loss_pct: number;
+    take_profit_atr: number;
+  };
+  execution: { timeframe: "1d"; rebalance: "daily"; run_at: "close" };
+  metadata: { description: string; schema_version: number; algorithm_version?: string };
+}
+
 export interface SupportResistanceStrategyParams {
   signal: {
+    min_strength_score: number;
     support_bounce_enabled: boolean;
     resistance_breakout_enabled: boolean;
     breakout_retest_enabled: boolean;
@@ -234,6 +266,7 @@ export type StrategyParams =
   | MomentumBreakoutStrategyParams
   | IslandReversalStrategyParams
   | DoubleBottomStrategyParams
+  | StagedBottomStrategyParams
   | SupportResistanceStrategyParams
   | Record<string, unknown>;
 

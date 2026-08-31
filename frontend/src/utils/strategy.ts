@@ -99,6 +99,21 @@ export function getStrategyTemplateCopy(
           ? "保守版双底形态策略，确认长期下跌后的双底、放量突破颈线与缩量回踩。"
           : "Conservative double-bottom strategy focused on a confirmed neckline breakout and low-volume retest after a prolonged decline.",
       };
+    case "head_shoulders_bottom":
+      return {
+        label: isZh ? "头肩底" : "Head And Shoulders Bottom",
+        description: isZh ? "按头部候选、右肩与动态颈线突破分三阶段建仓。" : "Stages entries across the head candidate, right shoulder, and dynamic-neckline breakout.",
+      };
+    case "rounded_bottom":
+      return {
+        label: isZh ? "圆弧底" : "Rounded Bottom",
+        description: isZh ? "使用对数价格二次拟合、两次更高回踩和碗口突破确认圆弧底。" : "Confirms a rounded bottom with a log-price quadratic fit, two higher pullbacks, and a rim breakout.",
+      };
+    case "v_reversal":
+      return {
+        label: isZh ? "V 型反转" : "V Reversal",
+        description: isZh ? "按放量底部转折、放量延续和整理区突破回踩分阶段建仓。" : "Stages entries across a high-volume pivot, continuation, and consolidation breakout retest.",
+      };
     case "support_resistance":
       return {
         label: isZh ? "支撑 / 压力区域" : "Support / Resistance Zones",
@@ -137,6 +152,9 @@ const STRATEGY_CATEGORY_VISUALS: Record<
   momentum_breakout: { accent: "#fbbf24", accentRgb: "251, 191, 36" },
   island_reversal: { accent: "#fb7185", accentRgb: "251, 113, 133" },
   double_bottom: { accent: "#38bdf8", accentRgb: "56, 189, 248" },
+  head_shoulders_bottom: { accent: "#818cf8", accentRgb: "129, 140, 248" },
+  rounded_bottom: { accent: "#34d399", accentRgb: "52, 211, 153" },
+  v_reversal: { accent: "#f472b6", accentRgb: "244, 114, 182" },
   support_resistance: { accent: "#fb923c", accentRgb: "251, 146, 60" },
   custom: { accent: "#94a3b8", accentRgb: "148, 163, 184" },
 };

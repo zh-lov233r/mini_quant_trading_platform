@@ -418,36 +418,39 @@ export default function StrategiesPage() {
               <SelectControl
                 aria-label={isZh ? "策略状态" : "Strategy status"}
                 value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-              >
-                <option value="all">{isZh ? "全部状态" : "All Statuses"}</option>
-                <option value="draft">draft</option>
-                <option value="active">active</option>
-                <option value="archived">archived</option>
-              </SelectControl>
+                onValueChange={setStatusFilter}
+                options={[
+                  { value: "all", label: isZh ? "全部状态" : "All Statuses" },
+                  { value: "draft", label: "draft" },
+                  { value: "active", label: "active" },
+                  { value: "archived", label: "archived" },
+                ]}
+              />
 
               <SelectControl
                 aria-label={isZh ? "策略大类" : "Strategy category"}
                 value={typeFilter}
-                onChange={(e) => setTypeFilter(e.target.value)}
-              >
-                <option value="all">{isZh ? "全部类型" : "All Types"}</option>
-                {categoryEntries.map((entry) => (
-                  <option key={entry.strategyType} value={entry.strategyType}>
-                    {entry.presentation.label}
-                  </option>
-                ))}
-              </SelectControl>
+                onValueChange={setTypeFilter}
+                options={[
+                  { value: "all", label: isZh ? "全部类型" : "All Types" },
+                  ...categoryEntries.map((entry) => ({
+                    value: entry.strategyType,
+                    label: entry.presentation.label,
+                    accent: entry.presentation.accent,
+                  })),
+                ]}
+              />
 
               <SelectControl
                 aria-label={isZh ? "引擎状态" : "Engine status"}
                 value={engineFilter}
-                onChange={(e) => setEngineFilter(e.target.value)}
-              >
-                <option value="all">{isZh ? "全部可执行状态" : "All Execution States"}</option>
-                <option value="ready">{isZh ? "仅 engine-ready" : "Engine-ready Only"}</option>
-                <option value="stored">{isZh ? "仅 stored-only" : "Stored-only Only"}</option>
-              </SelectControl>
+                onValueChange={setEngineFilter}
+                options={[
+                  { value: "all", label: isZh ? "全部可执行状态" : "All Execution States" },
+                  { value: "ready", label: isZh ? "仅 engine-ready" : "Engine-ready Only" },
+                  { value: "stored", label: isZh ? "仅 stored-only" : "Stored-only Only" },
+                ]}
+              />
             </div>
           </section>
 
