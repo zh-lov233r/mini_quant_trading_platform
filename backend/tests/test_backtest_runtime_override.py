@@ -85,6 +85,7 @@ class BacktestRuntimeOverrideTests(unittest.TestCase):
         )
         handler_calls = 0
         observed_fills = []
+        progress_updates = []
 
         def handler(_runtime, _snapshots):
             nonlocal handler_calls
@@ -117,6 +118,7 @@ class BacktestRuntimeOverrideTests(unittest.TestCase):
                 date(2026, 1, 6),
                 universe_symbols=["AAPL"],
                 runtime_params_override=override,
+                progress_callback=progress_updates.append,
             )
 
         self.assertEqual("next_session_open", db.run.summary_metrics["execution_lag"])
@@ -124,6 +126,14 @@ class BacktestRuntimeOverrideTests(unittest.TestCase):
         self.assertEqual(0.07, db.run.config_snapshot["risk"]["position_size_pct"])
         self.assertEqual(base_params, strategy.params)
         self.assertEqual("completed", result.status)
+        running = [item for item in progress_updates if item["phase"] == "running"]
+        finalizing = [item for item in progress_updates if item["phase"] == "finalizing"]
+        self.assertEqual(running[-1]["percent"], 85.0)
+        self.assertEqual(finalizing[0]["finalizing_stage"], "backtest_details")
+        self.assertEqual(finalizing[0]["percent"], 85.0)
+        self.assertEqual(finalizing[-1]["finalizing_stage"], "committing")
+        self.assertEqual(finalizing[-1]["percent"], 99.0)
+        self.assertIn("total_ms", db.run.summary_metrics["performance"])
 
 
 if __name__ == "__main__":

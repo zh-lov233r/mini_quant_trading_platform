@@ -16,6 +16,7 @@ import {
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
+import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogNote as ContextNote, DialogStack as ContextStack, DialogStat as ContextStat, DialogStats as ContextStats, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
 import type { BacktestDetailOut, BacktestRunOut } from "@/types/backtest";
 import type {
@@ -409,6 +410,15 @@ export default function StrategyDetailPage() {
             isZh ? "用它回测" : "Backtest It"
           )}
           {actionLink("/strategies/new", isZh ? "创建新策略" : "Create New Strategy", true)}
+          {strategy ? (
+            <WorkspaceDialog triggerLabel={isZh ? "策略摘要" : "Strategy Summary"} title={isZh ? "策略上下文" : "Strategy Context"}>
+              <ContextStack>
+                <ContextGroup title={strategy.name}><ContextStats><ContextStat label={isZh ? "类型" : "Type"} value={strategy.strategy_type} /><ContextStat label={isZh ? "版本" : "Version"} value={`v${strategy.version}`} /><ContextStat label={isZh ? "状态" : "Status"} value={strategy.status} /><ContextStat label="Engine ready" value={strategy.engine_ready ? (isZh ? "是" : "Yes") : (isZh ? "否" : "No")} /><ContextStat label={isZh ? "近期回测" : "Recent runs"} value={recentRuns.length} /></ContextStats></ContextGroup>
+                <ContextGroup title={isZh ? "运行时" : "Runtime"}><ContextNote>{runtime ? jsonSummary(runtime, locale) : (isZh ? "运行时信息尚不可用。" : "Runtime information is unavailable.")}</ContextNote></ContextGroup>
+                <ContextGroup title={isZh ? "快速入口" : "Quick Links"}><ContextLinks><ContextLink href={`/strategies/${encodeURIComponent(strategy.id)}/edit`}>{isZh ? "编辑参数" : "Edit parameters"}</ContextLink><ContextLink href={`/backtests?strategyId=${encodeURIComponent(strategy.id)}`}>{isZh ? "使用此策略回测" : "Backtest this strategy"}</ContextLink></ContextLinks></ContextGroup>
+              </ContextStack>
+            </WorkspaceDialog>
+          ) : null}
         </>
       }
     >
@@ -641,7 +651,7 @@ export default function StrategyDetailPage() {
                 onSubmit={handleRename}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "minmax(260px, 1fr) auto",
+                  gridTemplateColumns: "minmax(0, 1fr) auto",
                   gap: 12,
                   alignItems: "end",
                   fontFamily:

@@ -118,6 +118,8 @@
 - `/research/[experimentId]`
 - `/agent-runs/[runId]`
 
+13 个正式工作台页面统一使用宽屏紧凑布局。主导航位于可收缩左侧栏，其余宽度始终归主工作区使用，不再保留固定右侧上下文栏。页面相关的配置、创建、身份和风险详情通过带明确标签、支持键盘操作的弹窗按需打开；低于 768px 时弹窗切换为全屏。重要进度、校验结果、券商警告和 engine-ready 状态仍直接显示在主区。密集表格支持排序、筛选、列显示、列宽调整以及明确的客户端/服务端分页；较小结果集保留语义化表格，达到 200 行后才启用可视区域虚拟化。开发服务与 production build 使用不同的 Next.js 输出目录，验证构建不会破坏正在运行的开发服务。
+
 ## 后端 API 模块
 
 当前主要路由模块包括：
@@ -135,12 +137,13 @@
 
 `/api/agent/*` 路由要求 Bearer service token，只提供受控的策略草案和研究实验操作，不开放券商订单或组合激活能力。
 
-Web 进程不再执行 CPU 回测。显式应用附加 schema 后，使用 `make backtest-worker` 单独启动 worker；该命令会明确关闭 paper scheduler 和订单提交。详见[回测性能与 worker 运维](docs/backtest-performance.zh-CN.md)。
+Web 进程不执行 CPU 回测。完整平台命令会常驻轻量 manager，只在存在 durable queued 任务时启动并发 1 的 worker。`GET /api/backtests/worker-status` 返回自动执行健康状态，列表页和详情页显示结构化阶段、百分比和收尾条目进度。详见[回测性能与 worker 运维](docs/backtest-performance.zh-CN.md)。
 
 应用健康检查：
 
 - `/`
 - `/healthz`
+- `/readyz`（完整平台 readiness；要求存在健康的 backtest manager leader）
 
 项目还维护了一份 API 规格文件：[apps/openapi.yaml](apps/openapi.yaml)
 
@@ -206,21 +209,19 @@ ALPACA_BASE_URL=https://paper-api.alpaca.markets
 
 ### 5. 启动开发环境
 
-启动 backend 也会启动 paper trading scheduler。除非明确需要修改券商侧 paper 状态，本地开发、smoke 检查和 Agent 联调都必须显式关闭调度和订单提交：
-
-```bash
-PAPER_TRADING_SCHEDULER_ENABLED=false \
-PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false \
-make dev
-```
-
-同时启动前后端：
+`make dev` 会启动 backend、frontend 和按需 backtest manager。该完整平台入口会强制关闭 paper 调度与订单提交：
 
 ```bash
 make dev
 ```
 
-只启动 backend：
+启动完整本地平台：
+
+```bash
+make dev
+```
+
+只启动 backend（部分启动方式，不自动消费队列；需要时仍须显式设置 paper 安全变量）：
 
 ```bash
 make dev-backend
@@ -243,6 +244,7 @@ make dev-frontend
 
 - `frontend`: Next.js，默认 `http://localhost:3000`
 - `backend`: FastAPI，默认 `http://localhost:8000`
+- `backtest-worker-manager`: 轻量队列 manager；仅在有 eligible 任务时存在 worker 子进程
 - `db`: PostgreSQL 16，默认 `localhost:5432`
 
 ### 1. 准备 Docker 环境变量
@@ -300,6 +302,8 @@ make docker-down
 ### 5. Docker 运行说明
 
 - backend 容器启动时会先执行 `python utils/create_db.py`
+- frontend 会等待健康的 manager leader；空队列时 manager 健康且无需 worker 子进程
+- backend 与 manager 都强制关闭 paper 调度和订单提交
 - `./data` 会挂载到容器 `/app/data`
 - `./logs` 会挂载到容器 `/app/logs`
 - 修改 `NEXT_PUBLIC_API_BASE_URL` 后需要重新 build frontend 镜像
@@ -313,6 +317,7 @@ make dev-agent-all
 make dev-agent-safe
 make dev-backend
 make dev-frontend
+make backtest-worker-manager
 make backfill-daily
 make check-data
 make docker-build

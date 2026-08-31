@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { getStrategy } from "@/api/strategies";
 import AppShell from "@/components/AppShell";
 import StrategyForm from "@/components/StrategyForm";
+import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogNote as ContextNote, DialogStack as ContextStack, DialogStat as ContextStat, DialogStats as ContextStats, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
 import type { StrategyOut } from "@/types/strategy";
 
@@ -84,6 +85,15 @@ export default function EditStrategyPage() {
             isZh ? "返回详情" : "Back To Detail"
           )}
           {actionLink("/strategies", isZh ? "返回策略库" : "Back To Strategies")}
+          {strategy ? (
+            <WorkspaceDialog triggerLabel={isZh ? "策略摘要" : "Strategy Summary"} title={isZh ? "策略上下文" : "Strategy Context"}>
+              <ContextStack>
+                <ContextGroup title={strategy.name}><ContextStats><ContextStat label={isZh ? "技术类型" : "Technical type"} value={strategy.strategy_type} /><ContextStat label={isZh ? "版本" : "Version"} value={`v${strategy.version}`} /><ContextStat label={isZh ? "状态" : "Status"} value={strategy.status} /><ContextStat label="Engine ready" value={strategy.engine_ready ? (isZh ? "是" : "Yes") : (isZh ? "否" : "No")} /></ContextStats></ContextGroup>
+                <ContextGroup title={isZh ? "保存影响" : "Save Impact"}><ContextNote>{isZh ? "保存后，新回测和后续执行会读取更新后的配置；既有历史回测保持不变。" : "New backtests and future execution use the updated configuration; existing historical runs remain unchanged."}</ContextNote></ContextGroup>
+                <ContextGroup title={isZh ? "快速入口" : "Quick Links"}><ContextLinks><ContextLink href={`/strategies/${encodeURIComponent(strategy.id)}`}>{isZh ? "策略详情" : "Strategy detail"}</ContextLink><ContextLink href="/backtests">{isZh ? "回测工作台" : "Backtest workspace"}</ContextLink></ContextLinks></ContextGroup>
+              </ContextStack>
+            </WorkspaceDialog>
+          ) : null}
         </>
       }
     >

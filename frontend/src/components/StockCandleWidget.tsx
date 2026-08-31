@@ -112,8 +112,10 @@ export default function StockCandleWidget() {
     }
 
     window.addEventListener("resize", handleViewportResize);
+    window.addEventListener("workspace-layout-change", handleViewportResize);
     return () => {
       window.removeEventListener("resize", handleViewportResize);
+      window.removeEventListener("workspace-layout-change", handleViewportResize);
     };
   }, []);
 
@@ -319,8 +321,8 @@ export default function StockCandleWidget() {
         onClick={() => setOpen((current) => !current)}
         style={{
           position: "fixed",
-          top: 20,
-          right: 24,
+          bottom: "calc(var(--workspace-floating-bottom, 24px) + 58px)",
+          right: "var(--workspace-floating-right, 24px)",
           zIndex: BUTTON_Z_INDEX,
           display: "inline-flex",
           alignItems: "center",
@@ -997,8 +999,9 @@ function formatVolume(value: number | null | undefined, locale: string) {
 }
 
 function getDefaultPanelLayout(): PanelLayout {
+  const bounds = getWorkspaceBounds(window.innerWidth);
   return clampPanelLayout({
-    x: window.innerWidth - PANEL_DEFAULT_WIDTH - VIEWPORT_MARGIN,
+    x: window.innerWidth - PANEL_DEFAULT_WIDTH - bounds.right,
     y: 72,
     width: PANEL_DEFAULT_WIDTH,
     height: Math.min(PANEL_DEFAULT_HEIGHT, window.innerHeight - 88),
@@ -1010,20 +1013,34 @@ function clampPanelLayout(
   viewportWidth = window.innerWidth,
   viewportHeight = window.innerHeight
 ): PanelLayout {
-  const maxWidth = Math.max(240, viewportWidth - VIEWPORT_MARGIN * 2);
+  const bounds = getWorkspaceBounds(viewportWidth);
+  const maxWidth = Math.max(240, viewportWidth - bounds.left - bounds.right);
   const maxHeight = Math.max(280, viewportHeight - VIEWPORT_MARGIN * 2);
   const minWidth = Math.min(PANEL_MIN_WIDTH, maxWidth);
   const minHeight = Math.min(PANEL_MIN_HEIGHT, maxHeight);
   const width = clampNumber(layout.width, minWidth, maxWidth);
   const height = clampNumber(layout.height, minHeight, maxHeight);
-  const maxX = Math.max(VIEWPORT_MARGIN, viewportWidth - width - VIEWPORT_MARGIN);
+  const maxX = Math.max(bounds.left, viewportWidth - width - bounds.right);
   const maxY = Math.max(VIEWPORT_MARGIN, viewportHeight - height - VIEWPORT_MARGIN);
 
   return {
-    x: clampNumber(layout.x, VIEWPORT_MARGIN, maxX),
+    x: clampNumber(layout.x, bounds.left, maxX),
     y: clampNumber(layout.y, VIEWPORT_MARGIN, maxY),
     width,
     height,
+  };
+}
+
+function getWorkspaceBounds(viewportWidth: number): { left: number; right: number } {
+  if (viewportWidth < 768) {
+    return { left: VIEWPORT_MARGIN, right: VIEWPORT_MARGIN };
+  }
+  const sidebarCollapsed =
+    document.querySelector('[data-workspace-sidebar-collapsed="true"]') != null;
+  const sidebarWidth = viewportWidth >= 1600 && !sidebarCollapsed ? 216 : 72;
+  return {
+    left: sidebarWidth + VIEWPORT_MARGIN,
+    right: VIEWPORT_MARGIN,
   };
 }
 

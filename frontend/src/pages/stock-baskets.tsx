@@ -6,6 +6,7 @@ import { createStockBasket, listStockBaskets } from "@/api/stock-baskets";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
+import { WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
 import type { StockBasketCreate, StockBasketOut } from "@/types/stock-basket";
 import { formatDateTime } from "@/utils/strategy";
@@ -183,15 +184,13 @@ export default function StockBasketsPage() {
             />
           </section>
 
-          <section
-            style={{
-              display: "grid",
-              gridTemplateColumns: "minmax(320px, 0.95fr) minmax(0, 1.2fr)",
-              gap: 18,
-              alignItems: "start",
-            }}
+          <WorkspaceDialog
+            triggerLabel={isZh ? "创建股票组合" : "Create Stock Basket"}
+            title={isZh ? "创建股票组合" : "Create Stock Basket"}
+            description={isZh ? "创建可供策略和回测复用的股票池。" : "Create a reusable stock universe for strategies and backtests."}
+            size="form"
+            triggerTone="primary"
           >
-            <section style={cardStyle}>
               <div style={{ marginBottom: 14 }}>
                 <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>
                   {isZh ? "创建股票组合" : "Create Stock Basket"}
@@ -262,9 +261,9 @@ export default function StockBasketsPage() {
               </form>
 
               {submitError ? <p style={{ color: "#fda4af", marginTop: 12 }}>{submitError}</p> : null}
-            </section>
+          </WorkspaceDialog>
 
-            <section style={cardStyle}>
+          <section style={cardStyle}>
               <div
                 style={{
                   display: "flex",
@@ -331,7 +330,6 @@ export default function StockBasketsPage() {
                   ))}
                 </div>
               )}
-            </section>
           </section>
         </>
       ) : null}

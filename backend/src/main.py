@@ -3,9 +3,10 @@
 
 
 # backends/src/main.py
+from datetime import datetime, timezone
 import os
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
 # 引入 API routers 和数据库初始化函数
@@ -23,6 +24,7 @@ from src.core.db import SessionLocal, ensure_extensions, ensure_strategy_allocat
 from src.services.paper_trading_scheduler import PaperTradingDailyScheduler
 from src.services.research_experiment_service import ResearchExperimentWorker
 from src.services.stock_basket_service import ensure_default_common_stock_basket
+from src.services.backtest_worker_status_service import load_backtest_worker_status
 
 # -----------------------------
 # 基本配置（可用环境变量覆盖）
@@ -106,3 +108,20 @@ def root():
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
+
+
+@app.get("/readyz")
+def readyz(response: Response):
+    db = SessionLocal()
+    try:
+        worker_status = load_backtest_worker_status(db, checked_at=datetime.now(timezone.utc))
+    except Exception:
+        log.exception("Readiness check failed")
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "not_ready", "backtest_automation_available": False}
+    finally:
+        db.close()
+    if not worker_status["automation_available"]:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "not_ready", "backtest_automation_available": False}
+    return {"status": "ready", "backtest_automation_available": True}

@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
-from typing import Any
+from time import perf_counter
+from typing import Any, Callable, Iterable
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, insert, select, text
 from sqlalchemy.orm import Session
 
 from src.models.tables import (
@@ -35,6 +36,9 @@ SELECT
   (SELECT count(*) FROM daily_features) AS feature_count,
   (SELECT max(asof) FROM daily_features) AS feature_max_asof
 """
+
+BATCH_INSERT_SIZE = 5_000
+PersistenceProgressCallback = Callable[[str, int, int], None]
 
 
 class SupportResistanceMaterializationBuildError(RuntimeError):
@@ -201,8 +205,12 @@ def persist_support_resistance_run(
     coverage_end: date,
     expected_data_fingerprint: str | None = None,
     persist_run_events: bool = True,
+    performance: dict[str, Any] | None = None,
+    progress_callback: PersistenceProgressCallback | None = None,
+    batch_size: int = BATCH_INSERT_SIZE,
 ) -> SupportResistanceMaterialization:
     """Reuse or build one immutable sparse cache, then attach run-scoped events."""
+    persist_started = perf_counter()
     metadata = runtime["params"].get("metadata", {}) or {}
     algorithm_version = str(metadata.get("algorithm_version") or "pivot-slope-atr-v2")
     price_semantics = str(
@@ -307,30 +315,75 @@ def persist_support_resistance_run(
 
     try:
         instrument_ids = _instrument_ids(db, normalized_symbols)
+        zone_version_total = (
+            sum(len(symbol_state.zone_versions) for symbol_state in state.symbols.values())
+            if should_write_zones
+            else 0
+        )
+        event_count_at_build = sum(len(symbol_state.events) for symbol_state in state.symbols.values())
+        run_event_total = event_count_at_build if persist_run_events else 0
+        total_items = zone_version_total + run_event_total
+        completed_items = 0
+
+        if progress_callback is not None and zone_version_total:
+            progress_callback("zone_versions", completed_items, total_items)
         if should_write_zones:
+            zone_started = perf_counter()
+
+            def report_zone_batch(written: int) -> None:
+                if progress_callback is not None:
+                    progress_callback("zone_versions", written, total_items)
+
             version_count = _write_zone_versions(
                 db,
                 materialization,
                 state,
                 instrument_ids,
+                batch_size=batch_size,
+                batch_callback=report_zone_batch,
             )
+            completed_items = version_count
+            if performance is not None:
+                performance["support_resistance_zone_versions_ms"] = _elapsed_ms(zone_started)
             materialization.statistics = {
                 "symbol_count": len(normalized_symbols),
                 "zone_version_count": version_count,
-                "event_count_at_build": sum(len(item.events) for item in state.symbols.values()),
+                "event_count_at_build": event_count_at_build,
             }
             materialization.status = "completed"
             materialization.completed_at = datetime.now(timezone.utc)
+        elif performance is not None:
+            performance["support_resistance_zone_versions_ms"] = 0.0
 
-        _replace_run_audit_rows(
+        if progress_callback is not None and run_event_total:
+            progress_callback("run_events", completed_items, total_items)
+        events_started = perf_counter()
+
+        def report_event_batch(written: int) -> None:
+            if progress_callback is not None:
+                progress_callback("run_events", completed_items + written, total_items)
+
+        event_count = _replace_run_audit_rows(
             db,
             run=run,
             materialization=materialization,
             state=state,
             instrument_ids=instrument_ids,
             persist_run_events=persist_run_events,
+            batch_size=batch_size,
+            batch_callback=report_event_batch,
         )
         db.flush()
+        if performance is not None:
+            performance.update(
+                {
+                    "support_resistance_cache_reused": not should_write_zones,
+                    "support_resistance_zone_versions": zone_version_total,
+                    "support_resistance_run_events": event_count,
+                    "support_resistance_run_events_ms": _elapsed_ms(events_started),
+                    "support_resistance_persist_total_ms": _elapsed_ms(persist_started),
+                }
+            )
         return materialization
     except Exception as exc:
         materialization.status = "failed"
@@ -392,8 +445,24 @@ def _write_zone_versions(
     materialization: SupportResistanceMaterialization,
     state: SupportResistanceState,
     instrument_ids: dict[str, int],
+    *,
+    batch_size: int = BATCH_INSERT_SIZE,
+    batch_callback: Callable[[int], None] | None = None,
 ) -> int:
-    written = 0
+    return _insert_in_batches(
+        db,
+        SupportResistanceZoneVersion,
+        _zone_version_rows(materialization, state, instrument_ids),
+        batch_size=batch_size,
+        batch_callback=batch_callback,
+    )
+
+
+def _zone_version_rows(
+    materialization: SupportResistanceMaterialization,
+    state: SupportResistanceState,
+    instrument_ids: dict[str, int],
+) -> Iterable[dict[str, Any]]:
     for symbol, symbol_state in sorted(state.symbols.items()):
         grouped: dict[str, list[dict[str, Any]]] = {}
         for payload in symbol_state.zone_versions:
@@ -425,46 +494,42 @@ def _write_zone_versions(
                 end_delta = payload["slope_per_session"] * (
                     end_index - payload["anchor_session_index"]
                 )
-                db.add(
-                    SupportResistanceZoneVersion(
-                        materialization_id=materialization.id,
-                        instrument_id=instrument_ids.get(symbol),
-                        symbol=symbol,
-                        zone_key=zone_key,
-                        version=index + 1,
-                        effective_from=effective_from,
-                        effective_to=effective_to,
-                        role=payload["role"],
-                        status=payload["status"],
-                        center_price=payload["anchor_center"] + start_delta,
-                        lower_price=payload["anchor_lower"] + start_delta,
-                        upper_price=payload["anchor_upper"] + start_delta,
-                        atr_width=payload["atr"],
-                        anchor_session_index=payload["anchor_session_index"],
-                        slope_per_session=payload["slope_per_session"],
-                        fit_residual_atr=payload["fit_residual_atr"],
-                        projection_end=projection_end,
-                        end_center_price=payload["anchor_center"] + end_delta,
-                        end_lower_price=payload["anchor_lower"] + end_delta,
-                        end_upper_price=payload["anchor_upper"] + end_delta,
-                        pivot_count=payload["pivot_count"],
-                        touch_count=payload["touch_count"],
-                        source_metadata={
-                            "source_kind": payload["source_kind"],
-                            "pivot_keys": payload["pivot_keys"],
-                            "first_pivot_date": payload["first_pivot_date"],
-                            "last_pivot_date": payload["last_pivot_date"],
-                            "valid_from": payload["valid_from"],
-                            "anchor_center": payload["anchor_center"],
-                            "anchor_lower": payload["anchor_lower"],
-                            "anchor_upper": payload["anchor_upper"],
-                            "recency_weight": payload["recency_weight"],
-                            "last_inside": payload["last_inside"],
-                        },
-                    )
-                )
-                written += 1
-    return written
+                yield {
+                    "materialization_id": materialization.id,
+                    "instrument_id": instrument_ids.get(symbol),
+                    "symbol": symbol,
+                    "zone_key": zone_key,
+                    "version": index + 1,
+                    "effective_from": effective_from,
+                    "effective_to": effective_to,
+                    "role": payload["role"],
+                    "status": payload["status"],
+                    "center_price": payload["anchor_center"] + start_delta,
+                    "lower_price": payload["anchor_lower"] + start_delta,
+                    "upper_price": payload["anchor_upper"] + start_delta,
+                    "atr_width": payload["atr"],
+                    "anchor_session_index": payload["anchor_session_index"],
+                    "slope_per_session": payload["slope_per_session"],
+                    "fit_residual_atr": payload["fit_residual_atr"],
+                    "projection_end": projection_end,
+                    "end_center_price": payload["anchor_center"] + end_delta,
+                    "end_lower_price": payload["anchor_lower"] + end_delta,
+                    "end_upper_price": payload["anchor_upper"] + end_delta,
+                    "pivot_count": payload["pivot_count"],
+                    "touch_count": payload["touch_count"],
+                    "source_metadata": {
+                        "source_kind": payload["source_kind"],
+                        "pivot_keys": payload["pivot_keys"],
+                        "first_pivot_date": payload["first_pivot_date"],
+                        "last_pivot_date": payload["last_pivot_date"],
+                        "valid_from": payload["valid_from"],
+                        "anchor_center": payload["anchor_center"],
+                        "anchor_lower": payload["anchor_lower"],
+                        "anchor_upper": payload["anchor_upper"],
+                        "recency_weight": payload["recency_weight"],
+                        "last_inside": payload["last_inside"],
+                    },
+                }
 
 
 def _replace_run_audit_rows(
@@ -475,7 +540,9 @@ def _replace_run_audit_rows(
     state: SupportResistanceState,
     instrument_ids: dict[str, int],
     persist_run_events: bool = True,
-) -> None:
+    batch_size: int = BATCH_INSERT_SIZE,
+    batch_callback: Callable[[int], None] | None = None,
+) -> int:
     db.execute(delete(SupportResistanceRunEvent).where(SupportResistanceRunEvent.run_id == run.id))
     db.execute(
         delete(SupportResistanceRunMaterialization).where(
@@ -489,7 +556,22 @@ def _replace_run_audit_rows(
         )
     )
     if not persist_run_events:
-        return
+        return 0
+    return _insert_in_batches(
+        db,
+        SupportResistanceRunEvent,
+        _run_event_rows(run, materialization, state, instrument_ids),
+        batch_size=batch_size,
+        batch_callback=batch_callback,
+    )
+
+
+def _run_event_rows(
+    run: StrategyRun,
+    materialization: SupportResistanceMaterialization,
+    state: SupportResistanceState,
+    instrument_ids: dict[str, int],
+) -> Iterable[dict[str, Any]]:
     for symbol, symbol_state in sorted(state.symbols.items()):
         for payload in symbol_state.events:
             zone = payload.get("zone") or {}
@@ -497,24 +579,55 @@ def _replace_run_audit_rows(
             posterior_sample_count = score_evidence.get("resolved_samples")
             if posterior_sample_count is None:
                 posterior_sample_count = payload.get("resolved_samples")
-            db.add(
-                SupportResistanceRunEvent(
-                    run_id=run.id,
-                    materialization_id=materialization.id,
-                    instrument_id=instrument_ids.get(symbol),
-                    symbol=symbol,
-                    event_date=date.fromisoformat(str(payload["event_date"])),
-                    event_type=str(payload["event_type"]),
-                    zone_key=payload.get("zone_key"),
-                    setup=payload.get("setup"),
-                    selected=payload.get("event_type") == "selection",
-                    score=payload.get("score"),
-                    posterior_sample_count=posterior_sample_count,
-                    lower_price=payload.get("lower") or zone.get("lower"),
-                    upper_price=payload.get("upper") or zone.get("upper"),
-                    payload=payload,
-                )
-            )
+            yield {
+                "run_id": run.id,
+                "materialization_id": materialization.id,
+                "instrument_id": instrument_ids.get(symbol),
+                "symbol": symbol,
+                "event_date": date.fromisoformat(str(payload["event_date"])),
+                "event_type": str(payload["event_type"]),
+                "zone_key": payload.get("zone_key"),
+                "setup": payload.get("setup"),
+                "selected": payload.get("event_type") == "selection",
+                "score": payload.get("score"),
+                "posterior_sample_count": posterior_sample_count,
+                "lower_price": payload.get("lower") or zone.get("lower"),
+                "upper_price": payload.get("upper") or zone.get("upper"),
+                "payload": payload,
+            }
+
+
+def _insert_in_batches(
+    db: Session,
+    model: type[Any],
+    rows: Iterable[dict[str, Any]],
+    *,
+    batch_size: int,
+    batch_callback: Callable[[int], None] | None = None,
+) -> int:
+    resolved_batch_size = max(1, int(batch_size))
+    batch: list[dict[str, Any]] = []
+    written = 0
+    for row in rows:
+        batch.append(row)
+        if len(batch) < resolved_batch_size:
+            continue
+        db.execute(insert(model), batch)
+        written += len(batch)
+        batch.clear()
+        if batch_callback is not None:
+            batch_callback(written)
+    if batch:
+        db.execute(insert(model), batch)
+        written += len(batch)
+        batch.clear()
+        if batch_callback is not None:
+            batch_callback(written)
+    return written
+
+
+def _elapsed_ms(started_at: float) -> float:
+    return round((perf_counter() - started_at) * 1000.0, 3)
 
 
 def _instrument_ids(db: Session, symbols: list[str]) -> dict[str, int]:

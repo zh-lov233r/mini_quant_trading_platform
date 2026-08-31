@@ -26,6 +26,7 @@ tmp/pdfs/
 # Frontend dependencies and build output
 frontend/node_modules/
 frontend/.next/
+frontend/.next-dev/
 
 # Local raw market-data downloads
 data/massive/

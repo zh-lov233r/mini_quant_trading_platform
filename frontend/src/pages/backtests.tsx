@@ -3,14 +3,16 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { createBacktest, listBacktests } from "@/api/backtests";
+import { createBacktest, getBacktestWorkerStatus, listBacktests } from "@/api/backtests";
 import { listStockBaskets } from "@/api/stock-baskets";
 import { listStrategies } from "@/api/strategies";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
+import BacktestProgressBar from "@/components/BacktestProgressBar";
 import MetricCard from "@/components/MetricCard";
+import { WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
-import type { BacktestCreate, BacktestRunOut } from "@/types/backtest";
+import type { BacktestCreate, BacktestRunOut, BacktestWorkerStatus } from "@/types/backtest";
 import type { StockBasketOut } from "@/types/stock-basket";
 import type { StrategyOut } from "@/types/strategy";
 import {
@@ -188,6 +190,8 @@ export default function BacktestsPage() {
   const [strategies, setStrategies] = useState<StrategyOut[]>([]);
   const [baskets, setBaskets] = useState<StockBasketOut[]>([]);
   const [runs, setRuns] = useState<BacktestRunOut[]>([]);
+  const [workerStatus, setWorkerStatus] = useState<BacktestWorkerStatus | null>(null);
+  const [workerStatusUnavailable, setWorkerStatusUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -247,14 +251,21 @@ export default function BacktestsPage() {
 
     let cancelled = false;
 
-    Promise.all([listStrategies(), listBacktests(), listStockBaskets()])
-      .then(([strategyItems, runItems, basketItems]) => {
+    Promise.all([
+      listStrategies(),
+      listBacktests(),
+      listStockBaskets(),
+      getBacktestWorkerStatus().catch(() => null),
+    ])
+      .then(([strategyItems, runItems, basketItems, statusItem]) => {
         if (cancelled) {
           return;
         }
         setStrategies(strategyItems);
         setRuns(runItems);
         setBaskets(basketItems);
+        setWorkerStatus(statusItem);
+        setWorkerStatusUnavailable(statusItem == null);
         const eligibleStrategyItems = strategyItems.filter((item) => item.engine_ready);
         setStrategyId((current) => {
           if (
@@ -354,6 +365,28 @@ export default function BacktestsPage() {
     };
   }, [loading, runs]);
 
+  useEffect(() => {
+    if (loading) return;
+    let cancelled = false;
+    const refreshWorkerStatus = () => {
+      getBacktestWorkerStatus()
+        .then((statusItem) => {
+          if (!cancelled) {
+            setWorkerStatus(statusItem);
+            setWorkerStatusUnavailable(false);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setWorkerStatusUnavailable(true);
+        });
+    };
+    const timer = window.setInterval(refreshWorkerStatus, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [loading]);
+
   const eligibleStrategies = useMemo(
     () => strategies.filter((item) => item.engine_ready),
     [strategies]
@@ -440,6 +473,24 @@ export default function BacktestsPage() {
       {loading ? <p>{isZh ? "加载中..." : "Loading..."}</p> : null}
       {error ? <p style={{ color: "#fda4af" }}>{error}</p> : null}
 
+      {!loading && (workerStatusUnavailable || workerStatus?.automation_available === false) ? (
+        <div
+          role="status"
+          style={{
+            marginBottom: 18,
+            padding: 14,
+            borderRadius: 16,
+            border: "1px solid rgba(251, 191, 36, 0.32)",
+            background: "rgba(120, 53, 15, 0.2)",
+            color: "#fde68a",
+          }}
+        >
+          {isZh
+            ? "任务可排队，但自动执行服务不可用。完整平台恢复 manager 后会自动处理已有任务。"
+            : "Jobs can still be queued, but automatic execution is unavailable. Existing jobs will resume when the full platform manager recovers."}
+        </div>
+      ) : null}
+
       {!loading && !error ? (
         <>
           <section
@@ -492,24 +543,13 @@ export default function BacktestsPage() {
             />
           </section>
 
-          <section
-            style={{
-              display: "grid",
-              gridTemplateColumns: "minmax(0, 1fr)",
-              gap: 18,
-              alignItems: "start",
-            }}
+          <WorkspaceDialog
+            triggerLabel={isZh ? "发起回测" : "Start Backtest"}
+            title={isZh ? "发起回测" : "Start Backtest"}
+            description={isZh ? "配置策略、时间窗口、资金和交易成本后提交后台任务。" : "Configure the strategy, window, capital, and trading costs before submitting the background job."}
+            size="form"
+            triggerTone="primary"
           >
-            <section
-              style={{
-                padding: 22,
-                borderRadius: 24,
-                border: "1px solid rgba(148, 163, 184, 0.18)",
-                background: "linear-gradient(180deg, rgba(8,15,24,0.92), rgba(15,23,42,0.88))",
-                color: "#e2e8f0",
-                boxShadow: "0 18px 44px rgba(2, 6, 23, 0.22)",
-              }}
-            >
               <div
                 style={{
                   marginBottom: 16,
@@ -845,9 +885,9 @@ export default function BacktestsPage() {
                   </Link>
                 </div>
               ) : null}
-            </section>
+          </WorkspaceDialog>
 
-            <section
+          <section
               style={{
                 padding: 22,
                 borderRadius: 24,
@@ -975,6 +1015,12 @@ export default function BacktestsPage() {
                             </div>
                           </div>
 
+                          {(run.status === "queued" || run.status === "running") && run.progress ? (
+                            <div style={{ marginBottom: 14 }}>
+                              <BacktestProgressBar progress={run.progress} isZh={isZh} />
+                            </div>
+                          ) : null}
+
                           <div
                             style={{
                               display: "grid",
@@ -1053,7 +1099,6 @@ export default function BacktestsPage() {
                   })}
                 </div>
               )}
-            </section>
           </section>
         </>
       ) : null}

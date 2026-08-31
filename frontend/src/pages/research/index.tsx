@@ -8,6 +8,7 @@ import { listResearchExperiments } from "@/api/research";
 import { getStrategyCatalog, getStrategyFeatureSupport } from "@/api/strategies";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
+import { WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
 import type { ResearchExperiment } from "@/types/research";
 import type { StrategyCatalogItem, StrategyFeatureSupport } from "@/types/strategy";
@@ -92,13 +93,23 @@ export default function ResearchHomePage() {
       subtitle={isZh
         ? "选择已有引擎大类进行多轮 Pareto 研究，或为没有 handler 的算法交付 Draft PR。"
         : "Run multi-round Pareto research on an existing engine category, or deliver a Draft PR for an algorithm without a handler."}
-      actions={router.query.source === "strategy-create" ? (
-        <Link href="/strategies/new" style={returnLinkStyle}>
-          {isZh ? "返回策略创建" : "Back To Strategy Creation"}
-        </Link>
-      ) : undefined}
+      actions={(
+        <>
+          {router.query.source === "strategy-create" ? (
+            <Link href="/strategies/new" style={returnLinkStyle}>
+              {isZh ? "返回策略创建" : "Back To Strategy Creation"}
+            </Link>
+          ) : null}
+        </>
+      )}
     >
-      <section style={panelStyle}>
+      <WorkspaceDialog
+        triggerLabel={isZh ? "创建研究实验" : "Create Research Experiment"}
+        title={isZh ? "创建研究实验" : "Create Research Experiment"}
+        description={isZh ? "选择研究模式、资源上限和目标后生成待审批提案。" : "Choose the research mode, resource limits, and goal to generate a proposal for approval."}
+        size="form"
+        triggerTone="primary"
+      >
         <div style={modeGridStyle}>
           <ModeCard active={mode === "category"} title={isZh ? "已有引擎大类研究" : "Existing engine category research"} description={isZh ? "只选择策略大类。Agent 自动创建可执行 draft，再由你审批实验。" : "Choose only an engine category. The agent creates an executable draft before experiment approval."} onClick={() => setMode("category")} />
           <ModeCard active={mode === "algorithm"} title={isZh ? "新算法研究" : "New algorithm research"} description={isZh ? "Planner → Codex → Quant Verifier → Draft PR；不会自动合并、部署或回测。" : "Planner → Codex → Quant Verifier → Draft PR; no automatic merge, deploy, or backtest."} onClick={() => setMode("algorithm")} />
@@ -125,7 +136,7 @@ export default function ResearchHomePage() {
           <div style={actionRowStyle}><span style={{ color: "#94a3b8" }}>{isZh ? "Agent 无权激活策略、创建 allocation 或触发订单。" : "The agent cannot activate strategies, allocate capital, or submit orders."}</span><button disabled={submitting || !goal.trim() || (mode === "category" && !strategyType)} style={primaryButton}>{submitting ? (isZh ? "正在启动…" : "Starting…") : (isZh ? "生成研究提案" : "Generate research proposal")}</button></div>
         </form>
         {error ? <p style={{ color: "#fda4af" }}>{error}</p> : null}
-      </section>
+      </WorkspaceDialog>
       <section style={{ ...panelStyle, marginTop: 20 }}>
         <h2 style={{ marginTop: 0 }}>{isZh ? "历史与当前实验" : "Historical and current experiments"}</h2>
         {loading ? <p>{isZh ? "加载中…" : "Loading…"}</p> : null}

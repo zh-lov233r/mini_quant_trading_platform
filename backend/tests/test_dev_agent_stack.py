@@ -45,7 +45,7 @@ class DevAgentStackTest(unittest.TestCase):
                 json.dumps(
                     {
                         "controllerPid": os.getpid(),
-                        "processPids": [os.getpid(), os.getpid(), os.getpid()],
+                        "processPids": [os.getpid(), os.getpid(), os.getpid(), os.getpid()],
                         "quantRepo": str(root),
                         "paperSchedulerEnabled": False,
                         "paperOrderSubmissionEnabled": False,
@@ -65,7 +65,7 @@ class DevAgentStackTest(unittest.TestCase):
                 json.dumps(
                     {
                         "controllerPid": 999_999_999,
-                        "processPids": [os.getpid(), os.getpid(), os.getpid()],
+                        "processPids": [os.getpid(), os.getpid(), os.getpid(), os.getpid()],
                         "quantRepo": str(root),
                     }
                 ),

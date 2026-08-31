@@ -451,6 +451,12 @@ def run_backtest(
         "execution_simulation_ms": 0.0,
         "persist_details_ms": 0.0,
         "persist_summary_ms": 0.0,
+        "support_resistance_zone_versions_ms": 0.0,
+        "support_resistance_run_events_ms": 0.0,
+        "support_resistance_persist_total_ms": 0.0,
+        "support_resistance_zone_versions": 0,
+        "support_resistance_run_events": 0,
+        "support_resistance_cache_reused": None,
     }
     resolved_persist_level = _normalize_persist_level(persist_level)
     resolved_engine_version = str(
@@ -1071,12 +1077,30 @@ def run_backtest(
             if progress_callback is not None:
                 progress_callback(
                     {
+                        "phase": "running",
                         "trade_date": trade_day.isoformat(),
                         "completed_days": trade_day_index + 1,
                         "total_days": trading_day_count,
-                        "percent": round(((trade_day_index + 1) / trading_day_count) * 100.0, 3),
+                        "percent": round(
+                            ((trade_day_index + 1) / trading_day_count) * 85.0,
+                            3,
+                        ),
                     }
                 )
+
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "phase": "finalizing",
+                    "trade_date": trade_day.isoformat(),
+                    "completed_days": trading_day_count,
+                    "total_days": trading_day_count,
+                    "percent": 85.0,
+                    "finalizing_stage": "backtest_details",
+                    "completed_items": None,
+                    "total_items": None,
+                }
+            )
 
         final_equity = _portfolio_equity(cash, holdings, last_prices)
         ending_positions = _serialize_positions(
@@ -1105,7 +1129,29 @@ def run_backtest(
             if curve_state["points"]
         }
         support_resistance_materialization = None
+        persist_started = perf_counter()
         if isinstance(stateful_signal_state, SupportResistanceState):
+            def report_support_resistance_persistence(
+                stage: str,
+                completed_items: int,
+                total_items: int,
+            ) -> None:
+                if progress_callback is None:
+                    return
+                item_ratio = completed_items / total_items if total_items else 0.0
+                progress_callback(
+                    {
+                        "phase": "finalizing",
+                        "trade_date": trade_day.isoformat(),
+                        "completed_days": trading_day_count,
+                        "total_days": trading_day_count,
+                        "percent": min(99.0, round(85.0 + (item_ratio * 14.0), 3)),
+                        "finalizing_stage": stage,
+                        "completed_items": completed_items,
+                        "total_items": total_items,
+                    }
+                )
+
             support_resistance_materialization = persist_support_resistance_run(
                 db,
                 run=run,
@@ -1116,14 +1162,28 @@ def run_backtest(
                 coverage_end=end_date,
                 expected_data_fingerprint=support_resistance_source_fingerprint,
                 persist_run_events=resolved_persist_level == "full",
+                performance=performance,
+                progress_callback=report_support_resistance_persistence,
             )
-        persist_started = perf_counter()
         if repository is not None:
             repository.flush()
         flush = getattr(db, "flush", None)
         if callable(flush):
             flush()
         performance["persist_details_ms"] = _elapsed_ms(persist_started)
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "phase": "finalizing",
+                    "trade_date": trade_day.isoformat(),
+                    "completed_days": trading_day_count,
+                    "total_days": trading_day_count,
+                    "percent": 99.0,
+                    "finalizing_stage": "committing",
+                    "completed_items": None,
+                    "total_items": None,
+                }
+            )
         run.status = "completed"
         run.finished_at = datetime.now(timezone.utc)
         run.final_equity = final_equity
@@ -1190,7 +1250,7 @@ def run_backtest(
             "comparison_curves": comparison_curves,
             "persist_level": resolved_persist_level,
             "available_details": _available_details(resolved_persist_level),
-            "performance": performance,
+            "performance": dict(performance),
             "support_resistance_materialization_id": (
                 str(support_resistance_materialization.id)
                 if support_resistance_materialization is not None

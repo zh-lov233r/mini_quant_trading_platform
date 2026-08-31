@@ -60,9 +60,22 @@ describe("chart models", () => {
     expect(markers).toHaveLength(2);
     const buySignal = markers.find((marker) => marker.category === "buy_signal");
     const sellFill = markers.find((marker) => marker.category === "sell_fill");
-    expect(buySignal).toMatchObject({ category: "buy_signal", price: 102, text: "BUY 2" });
+    expect(buySignal).toMatchObject({
+      category: "buy_signal",
+      price: 102,
+      shape: "circle",
+      color: "#2563eb",
+      text: "",
+      title: "BUY 信号 (2)",
+    });
     expect(buySignal?.details).toEqual(["AAA: one", "BBB: two"]);
-    expect(sellFill).toMatchObject({ category: "sell_fill", shape: "arrowDown" });
+    expect(sellFill).toMatchObject({
+      category: "sell_fill",
+      shape: "arrowDown",
+      color: "#dc2626",
+      text: "",
+      title: "SELL 成交 (1)",
+    });
   });
 
   it("validates gap and support/resistance overlay bounds", () => {

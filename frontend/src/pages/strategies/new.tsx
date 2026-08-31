@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import AppShell from "@/components/AppShell";
 import GuidedStrategyCreate from "@/components/GuidedStrategyCreate";
+import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogNote as ContextNote, DialogStack as ContextStack, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
 
 function actionLink(href: string, label: string, filled = false) {
@@ -25,14 +26,23 @@ function actionLink(href: string, label: string, filled = false) {
 }
 
 export default function NewStrategyPage() {
-  const { messages } = useI18n();
+  const { locale, messages } = useI18n();
+  const isZh = locale === "zh-CN";
   const copy = messages.strategyCreate;
   return (
     <AppShell
       title={copy.page.title}
       subtitle={copy.page.subtitle}
       actions={
-        actionLink("/strategies", copy.page.back)
+        <>
+          {actionLink("/strategies", copy.page.back)}
+          <WorkspaceDialog triggerLabel={isZh ? "创建指引" : "Creation Guide"} title={isZh ? "创建指引" : "Creation Guide"}>
+            <ContextStack>
+              <ContextGroup title={isZh ? "安全边界" : "Safety Boundary"}><ContextNote>{isZh ? "新策略首先保存为 Draft。只有通过验证并明确发布为 engine-ready 后，回测引擎才会使用它。" : "New strategies are saved as drafts first. The backtest engine only uses them after validation and explicit engine-ready publication."}</ContextNote></ContextGroup>
+              <ContextGroup title={isZh ? "相关入口" : "Related Workspaces"}><ContextLinks><ContextLink href="/research">{isZh ? "打开 Agent 研究" : "Open agent research"}</ContextLink><ContextLink href="/strategies">{isZh ? "查看策略库" : "View strategy library"}</ContextLink></ContextLinks></ContextGroup>
+            </ContextStack>
+          </WorkspaceDialog>
+        </>
       }
     >
       <GuidedStrategyCreate />

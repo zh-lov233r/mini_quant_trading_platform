@@ -1,7 +1,7 @@
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/router";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   getBacktestEquity,
@@ -9,11 +9,16 @@ import {
   getBacktestSummary,
   getBacktestSupportResistance,
   getBacktestTransactions,
+  getBacktestWorkerStatus,
 } from "@/api/backtests";
 import { getCandleSeries } from "@/api/quotes";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
+import BacktestProgressBar from "@/components/BacktestProgressBar";
+import BacktestPerformanceProbe from "@/components/charts/BacktestPerformanceProbe";
 import MetricCard from "@/components/MetricCard";
+import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogNote as ContextNote, DialogStack as ContextStack, DialogStat as ContextStat, DialogStats as ContextStats, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
+import type { BacktestTransactionDenseRow } from "@/components/workspace/BacktestTransactionsDenseTable";
 import { useI18n } from "@/i18n/provider";
 import type {
   BacktestComparisonCurvePoint,
@@ -22,11 +27,25 @@ import type {
   BacktestSnapshotPoint,
   BacktestSignalOut,
   BacktestTransactionOut,
+  BacktestWorkerStatus,
   SupportResistanceBacktestOut,
   SupportResistanceRunEventOut,
 } from "@/types/backtest";
 import type { CandleBarOut, CandleSeriesOut } from "@/types/quote";
 import { formatDateTime, formatDurationMs, formatPercent } from "@/utils/strategy";
+import { shouldLoadBacktestDetails } from "@/utils/backtestProgress";
+import {
+  BacktestTransactionPageError,
+  INITIAL_LIFECYCLE_TRANSACTION_LIMIT,
+  INITIAL_TRANSACTION_PAGE_SIZE,
+  LIFECYCLE_ROW_BATCH_SIZE,
+  LIFECYCLE_TRANSACTION_BATCH_SIZE,
+  mergeBacktestTransactions,
+  nextVisibleItemCount,
+  streamBacktestTransactionPages,
+  TRANSACTION_TABLE_BATCH_SIZE,
+  TRANSACTION_TAIL_PAGE_SIZE,
+} from "@/utils/backtestTransactions";
 import {
   buildEquityEventMarkers,
   currentZoneOverlays,
@@ -48,6 +67,10 @@ const EquityLightweightChart = dynamic(
 const CandlestickLightweightChart = dynamic(
   () => import("@/components/charts/CandlestickLightweightChart"),
   { ssr: false },
+);
+const BacktestTransactionsDenseTable = dynamic(
+  () => import("@/components/workspace/BacktestTransactionsDenseTable"),
+  { ssr: false }
 );
 
 function actionLink(href: string, label: string, filled = false) {
@@ -80,6 +103,22 @@ const BACKTEST_DETAIL_LOAD_FAILED = "__BACKTEST_DETAIL_LOAD_FAILED__";
 const BACKTEST_EQUITY_LOAD_FAILED = "__BACKTEST_EQUITY_LOAD_FAILED__";
 const BACKTEST_SIGNALS_LOAD_FAILED = "__BACKTEST_SIGNALS_LOAD_FAILED__";
 const BACKTEST_TRANSACTIONS_LOAD_FAILED = "__BACKTEST_TRANSACTIONS_LOAD_FAILED__";
+
+interface TransactionCollectionState {
+  total: number;
+  nextCursor: string | null;
+  loading: boolean;
+  complete: boolean;
+  error: string | null;
+}
+
+const EMPTY_TRANSACTION_COLLECTION: TransactionCollectionState = {
+  total: 0,
+  nextCursor: null,
+  loading: false,
+  complete: false,
+  error: null,
+};
 
 function detailErrorMessage(error: string, isZh: boolean): string {
   if (error === BACKTEST_EQUITY_LOAD_FAILED) {
@@ -3338,15 +3377,38 @@ function LifecycleDetailPanel({
   );
 }
 
-function PositionLifecycleCard({ run }: { run: BacktestDetailOut }) {
+function PositionLifecycleCard({
+  run,
+  transactions,
+  totalTransactions,
+}: {
+  run: BacktestDetailOut;
+  transactions: BacktestTransactionOut[];
+  totalTransactions: number;
+}) {
   const { locale } = useI18n();
   const isZh = locale === "zh-CN";
-  const [showAllRows, setShowAllRows] = useState(false);
+  const [visibleRowCount, setVisibleRowCount] = useState(LIFECYCLE_ROW_BATCH_SIZE);
+  const [transactionLimit, setTransactionLimit] = useState(INITIAL_LIFECYCLE_TRANSACTION_LIMIT);
   const [expandedRowKey, setExpandedRowKey] = useState<string | null>(null);
   const [pnlFilter, setPnlFilter] = useState<PositionLifecyclePnlFilter>("all");
   const [sortKey, setSortKey] = useState<PositionLifecycleSortKey>("endTime");
   const [sortDirection, setSortDirection] = useState<PositionLifecycleSortDirection>("desc");
-  const rows = useMemo(() => buildPositionLifecycleRows(run), [run]);
+  const scopedTransactions = useMemo(
+    () => transactions.slice(0, transactionLimit),
+    [transactionLimit, transactions],
+  );
+  const scopedRun = useMemo(
+    () => ({ ...run, transactions: scopedTransactions }),
+    [run, scopedTransactions],
+  );
+  const rows = useMemo(() => buildPositionLifecycleRows(scopedRun), [scopedRun]);
+
+  useEffect(() => {
+    setVisibleRowCount(LIFECYCLE_ROW_BATCH_SIZE);
+    setTransactionLimit(INITIAL_LIFECYCLE_TRANSACTION_LIMIT);
+    setExpandedRowKey(null);
+  }, [run.id]);
 
   const closedRows = rows.filter((row) => row.status === "closed");
   const openRows = rows.filter((row) => row.status === "open");
@@ -3377,7 +3439,22 @@ function PositionLifecycleCard({ run }: { run: BacktestDetailOut }) {
     () => [...filteredRows].sort((left, right) => comparePositionLifecycleRows(left, right, sortKey, sortDirection)),
     [filteredRows, sortDirection, sortKey]
   );
-  const visibleRows = showAllRows ? sortedRows : sortedRows.slice(0, 12);
+  const visibleRows = sortedRows.slice(0, visibleRowCount);
+  const canLoadMore =
+    visibleRowCount < sortedRows.length
+    || scopedTransactions.length < totalTransactions;
+
+  const loadMoreRows = () => {
+    const nextRowCount = visibleRowCount + LIFECYCLE_ROW_BATCH_SIZE;
+    setVisibleRowCount(nextRowCount);
+    if (nextRowCount > sortedRows.length && scopedTransactions.length < totalTransactions) {
+      setTransactionLimit((current) => nextVisibleItemCount(
+        current,
+        totalTransactions,
+        LIFECYCLE_TRANSACTION_BATCH_SIZE,
+      ));
+    }
+  };
 
   const lifecycleSortLabels: Record<PositionLifecycleSortKey, string> = {
     symbol: isZh ? "标的" : "symbol",
@@ -3482,19 +3559,13 @@ function PositionLifecycleCard({ run }: { run: BacktestDetailOut }) {
           <Badge tone="info">
             {rows.length} {isZh ? "段生命周期" : rows.length === 1 ? "lifecycle" : "lifecycles"}
           </Badge>
-          {filteredRows.length > 12 ? (
+          {canLoadMore ? (
             <button
               type="button"
-              onClick={() => setShowAllRows((current) => !current)}
+              onClick={loadMoreRows}
               style={tableToggleButtonStyle}
             >
-              {showAllRows
-                ? isZh
-                  ? "收起到前 12 条"
-                  : "Show Top 12"
-                : isZh
-                  ? "展开全部"
-                  : "Show All"}
+              {isZh ? "再显示 12 段" : "Show 12 More"}
             </button>
           ) : null}
         </div>
@@ -3570,10 +3641,10 @@ function PositionLifecycleCard({ run }: { run: BacktestDetailOut }) {
               {isZh
                 ? `当前显示 ${visibleRows.length} / ${filteredRows.length} 段生命周期${
                     pnlFilter === "all" ? "" : `（总计 ${rows.length} 段）`
-                  }，按${lifecycleSortLabels[sortKey]}${sortDirection === "desc" ? "降序" : "升序"}排列，可点击表头切换。`
+                  }；基于最近 ${scopedTransactions.length} / ${totalTransactions} 笔成交，按${lifecycleSortLabels[sortKey]}${sortDirection === "desc" ? "降序" : "升序"}排列，可点击表头切换。`
                 : `Showing ${visibleRows.length} / ${filteredRows.length} lifecycles${
                     pnlFilter === "all" ? "" : ` (${rows.length} total)`
-                  }, sorted by ${lifecycleSortLabels[sortKey]} in ${
+                  }, based on the latest ${scopedTransactions.length} / ${totalTransactions} transactions and sorted by ${lifecycleSortLabels[sortKey]} in ${
                     sortDirection === "desc" ? "descending" : "ascending"
                   } order. Click a sortable header to reorder.`}
             </div>
@@ -3749,11 +3820,39 @@ function PositionLifecycleCard({ run }: { run: BacktestDetailOut }) {
   );
 }
 
-function TransactionsCard({ transactions }: { transactions: BacktestTransactionOut[] }) {
+function TransactionsCard({
+  runId,
+  transactions,
+  totalTransactions,
+}: {
+  runId: string;
+  transactions: BacktestTransactionOut[];
+  totalTransactions: number;
+}) {
   const { locale } = useI18n();
   const isZh = locale === "zh-CN";
-  const [showAllTransactions, setShowAllTransactions] = useState(false);
-  const visibleTransactions = showAllTransactions ? transactions : transactions.slice(0, 10);
+  const [visibleTransactionCount, setVisibleTransactionCount] = useState(TRANSACTION_TABLE_BATCH_SIZE);
+  const visibleTransactions = useMemo(
+    () => transactions.slice(0, visibleTransactionCount),
+    [transactions, visibleTransactionCount]
+  );
+
+  useEffect(() => {
+    setVisibleTransactionCount(TRANSACTION_TABLE_BATCH_SIZE);
+  }, [runId]);
+
+  const transactionRows = useMemo<BacktestTransactionDenseRow[]>(() => visibleTransactions.map((txn) => ({
+    id: txn.id,
+    ts: txn.ts || null,
+    side: txn.side,
+    symbol: txn.symbol,
+    qty: txn.qty,
+    price: txn.price,
+    fee: txn.fee ?? null,
+    netCashFlow: getMetaNumber(txn.meta, "net_cash_flow"),
+    signalTs: getMetaText(txn.meta, "signal_ts"),
+    reason: getMetaText(txn.meta, "reason") || "-",
+  })), [visibleTransactions]);
 
   return (
     <section style={sectionCardStyle}>
@@ -3772,21 +3871,19 @@ function TransactionsCard({ transactions }: { transactions: BacktestTransactionO
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <Badge tone="info">
-            {transactions.length} {isZh ? "笔交易" : transactions.length === 1 ? "trade" : "trades"}
+            {totalTransactions} {isZh ? "笔交易" : totalTransactions === 1 ? "trade" : "trades"}
           </Badge>
-          {transactions.length > 10 ? (
+          {visibleTransactions.length < totalTransactions ? (
             <button
               type="button"
-              onClick={() => setShowAllTransactions((current) => !current)}
+              onClick={() => setVisibleTransactionCount((current) => nextVisibleItemCount(
+                current,
+                totalTransactions,
+                TRANSACTION_TABLE_BATCH_SIZE,
+              ))}
               style={tableToggleButtonStyle}
             >
-              {showAllTransactions
-                ? isZh
-                  ? "收起到前 10 条"
-                  : "Show Top 10"
-                : isZh
-                  ? "展开全部"
-                  : "Show All"}
+              {isZh ? "再显示 10 笔" : "Show 10 More"}
             </button>
           ) : null}
         </div>
@@ -3800,86 +3897,14 @@ function TransactionsCard({ transactions }: { transactions: BacktestTransactionO
         </div>
       ) : (
         <>
-          {transactions.length > 10 ? (
+          {totalTransactions > TRANSACTION_TABLE_BATCH_SIZE ? (
             <div style={{ marginBottom: 10, color: "rgba(148, 163, 184, 0.88)", fontSize: 13 }}>
               {isZh
-                ? `当前显示 ${visibleTransactions.length} / ${transactions.length} 条交易记录。`
-                : `Showing ${visibleTransactions.length} / ${transactions.length} transactions.`}
+                ? `当前显示最新 ${visibleTransactions.length} / ${totalTransactions} 条交易记录。`
+                : `Showing the latest ${visibleTransactions.length} / ${totalTransactions} transactions.`}
             </div>
           ) : null}
-          <div
-            style={{
-              position: "relative",
-              overflowX: "auto",
-              borderRadius: 18,
-              border: "1px solid rgba(71, 85, 105, 0.28)",
-              background: "rgba(15, 23, 42, 0.74)",
-            }}
-          >
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              minWidth: 980,
-              fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-            }}
-          >
-            <thead>
-              <tr
-                style={{
-                  background: "rgba(30, 41, 59, 0.9)",
-                  color: "rgba(148, 163, 184, 0.88)",
-                  textAlign: "left",
-                }}
-              >
-                {(isZh
-                  ? ["时间", "方向", "标的", "成交股数", "成交价", "费用", "现金流", "信号时间", "原因"]
-                  : ["Time", "Side", "Symbol", "Shares Filled", "Price", "Fee", "Cash Flow", "Signal Time", "Reason"]).map(
-                  (label) => (
-                    <th
-                      key={label}
-                      style={{
-                        ...stickyTableHeaderCellStyle,
-                        padding: "12px 14px",
-                        fontSize: 12,
-                        fontWeight: 700,
-                        letterSpacing: "0.03em",
-                        textTransform: "uppercase",
-                      }}
-                    >
-                      {label}
-                    </th>
-                  )
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {visibleTransactions.map((txn) => {
-                const netCashFlow = getMetaNumber(txn.meta, "net_cash_flow");
-                const reason = getMetaText(txn.meta, "reason");
-                const signalTs = getMetaText(txn.meta, "signal_ts");
-                return (
-                  <tr key={txn.id} style={{ borderBottom: "1px solid rgba(241, 245, 249, 1)" }}>
-                    <td style={cellStyle}>{formatDateTime(txn.ts || null, locale)}</td>
-                    <td style={cellStyle}>
-                      <Badge tone={txn.side === "BUY" ? "success" : "warning"}>{txn.side}</Badge>
-                    </td>
-                    <td style={cellStyle}>{txn.symbol}</td>
-                    <td style={cellStyle}>
-                      {txn.qty.toLocaleString(locale, { maximumFractionDigits: 4 })}
-                      {isZh ? " 股" : " shares"}
-                    </td>
-                    <td style={cellStyle}>{formatCurrency(txn.price, locale)}</td>
-                    <td style={cellStyle}>{formatCurrency(txn.fee ?? null, locale)}</td>
-                    <td style={cellStyle}>{formatCurrency(netCashFlow, locale)}</td>
-                    <td style={cellStyle}>{formatDateTime(signalTs, locale)}</td>
-                    <td style={cellStyle}>{reason || "-"}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          </div>
+          <BacktestTransactionsDenseTable rows={transactionRows} />
         </>
       )}
     </section>
@@ -3901,6 +3926,123 @@ export default function BacktestDetailPage() {
   const [signalsError, setSignalsError] = useState<string | null>(null);
   const [transactionsLoading, setTransactionsLoading] = useState(true);
   const [transactionsError, setTransactionsError] = useState<string | null>(null);
+  const [workerStatus, setWorkerStatus] = useState<BacktestWorkerStatus | null>(null);
+  const [workerStatusUnavailable, setWorkerStatusUnavailable] = useState(false);
+  const [transactionCollection, setTransactionCollection] = useState<TransactionCollectionState>(
+    EMPTY_TRANSACTION_COLLECTION,
+  );
+  const transactionLoadGenerationRef = useRef(0);
+
+  const loadTransactionPages = useCallback(async (
+    targetRunId: string,
+    generation: number,
+    resumeCursor: string | null,
+    loadInitialPage: boolean,
+  ) => {
+    let nextCursor = resumeCursor;
+
+    if (loadInitialPage) {
+      setTransactionsLoading(true);
+      setTransactionsError(null);
+      setTransactionCollection((current) => ({
+        ...current,
+        nextCursor: null,
+        loading: true,
+        complete: false,
+        error: null,
+      }));
+      try {
+        const firstPage = await getBacktestTransactions(targetRunId, {
+          limit: INITIAL_TRANSACTION_PAGE_SIZE,
+        });
+        if (transactionLoadGenerationRef.current !== generation) return;
+        nextCursor = firstPage.next_cursor || null;
+        setRun((current) => current ? {
+          ...current,
+          transactions: mergeBacktestTransactions(current.transactions, firstPage.items),
+          transaction_count: firstPage.total,
+        } : current);
+        setTransactionCollection({
+          total: firstPage.total,
+          nextCursor,
+          loading: Boolean(nextCursor),
+          complete: !nextCursor,
+          error: null,
+        });
+        setTransactionsLoading(false);
+      } catch (cause) {
+        if (transactionLoadGenerationRef.current !== generation) return;
+        const message = cause instanceof Error ? cause.message : BACKTEST_TRANSACTIONS_LOAD_FAILED;
+        setTransactionsError(message);
+        setTransactionsLoading(false);
+        setTransactionCollection((current) => ({
+          ...current,
+          nextCursor: null,
+          loading: false,
+          complete: false,
+          error: message,
+        }));
+        return;
+      }
+    } else {
+      setTransactionCollection((current) => ({
+        ...current,
+        loading: true,
+        error: null,
+      }));
+    }
+
+    if (!nextCursor) return;
+
+    try {
+      await streamBacktestTransactionPages({
+        cursor: nextCursor,
+        loadPage: async (cursor) => {
+          if (transactionLoadGenerationRef.current !== generation) {
+            throw new Error("Transaction loading was superseded by another run");
+          }
+          return getBacktestTransactions(targetRunId, {
+            limit: TRANSACTION_TAIL_PAGE_SIZE,
+            cursor,
+          });
+        },
+        onPage: (page) => {
+          if (transactionLoadGenerationRef.current !== generation) return;
+          setRun((current) => current ? {
+            ...current,
+            transactions: mergeBacktestTransactions(current.transactions, page.items),
+            transaction_count: page.total,
+          } : current);
+          setTransactionCollection({
+            total: page.total,
+            nextCursor: page.next_cursor || null,
+            loading: Boolean(page.next_cursor),
+            complete: !page.next_cursor,
+            error: null,
+          });
+        },
+      });
+      if (transactionLoadGenerationRef.current !== generation) return;
+      setTransactionCollection((current) => ({
+        ...current,
+        nextCursor: null,
+        loading: false,
+        complete: true,
+        error: null,
+      }));
+    } catch (cause) {
+      if (transactionLoadGenerationRef.current !== generation) return;
+      const pageError = cause instanceof BacktestTransactionPageError ? cause : null;
+      const message = cause instanceof Error ? cause.message : BACKTEST_TRANSACTIONS_LOAD_FAILED;
+      setTransactionCollection((current) => ({
+        ...current,
+        nextCursor: pageError?.resumeCursor || nextCursor,
+        loading: false,
+        complete: false,
+        error: message,
+      }));
+    }
+  }, []);
 
   useEffect(() => {
     if (!router.isReady || !runId) {
@@ -3908,6 +4050,9 @@ export default function BacktestDetailPage() {
     }
 
     let cancelled = false;
+    let pollTimer: number | null = null;
+    const transactionLoadGeneration = transactionLoadGenerationRef.current + 1;
+    transactionLoadGenerationRef.current = transactionLoadGeneration;
     setLoading(true);
     setError(null);
     setRun(null);
@@ -3917,14 +4062,36 @@ export default function BacktestDetailPage() {
     setSignalsError(null);
     setTransactionsLoading(true);
     setTransactionsError(null);
+    setWorkerStatus(null);
+    setWorkerStatusUnavailable(false);
+    setTransactionCollection(EMPTY_TRANSACTION_COLLECTION);
 
-    const summaryPromise = getBacktestSummary(runId);
-    const equityPromise = getBacktestEquity(runId);
-    const transactionsPromise = getBacktestTransactions(runId, { limit: 100 });
-    const signalsPromise = getBacktestSignals(runId, { limit: 100 });
+    const loadCompletedDetails = async () => {
+      void loadTransactionPages(runId, transactionLoadGeneration, null, true);
+      const [equityResult, signalsResult] = await Promise.allSettled([
+        getBacktestEquity(runId),
+        getBacktestSignals(runId, { limit: 100 }),
+      ]);
+      if (cancelled) return;
 
-    summaryPromise
-      .then((summary) => {
+      if (equityResult.status === "fulfilled") {
+        setRun((current) => current ? { ...current, equity_curve: equityResult.value } : current);
+      } else {
+        setEquityError(equityResult.reason instanceof Error ? equityResult.reason.message : BACKTEST_EQUITY_LOAD_FAILED);
+      }
+      setEquityLoading(false);
+
+      if (signalsResult.status === "fulfilled") {
+        setRun((current) => current ? { ...current, signals: signalsResult.value.items } : current);
+      } else {
+        setSignalsError(signalsResult.reason instanceof Error ? signalsResult.reason.message : BACKTEST_SIGNALS_LOAD_FAILED);
+      }
+      setSignalsLoading(false);
+    };
+
+    const refreshSummary = async () => {
+      try {
+        const summary = await getBacktestSummary(runId);
         if (cancelled) return;
         setRun({
           ...summary,
@@ -3933,55 +4100,58 @@ export default function BacktestDetailPage() {
           signals: [],
           transactions: [],
         });
-      })
-      .catch((err: Error) => {
-        if (!cancelled) {
-          setError(err.message || BACKTEST_DETAIL_LOAD_FAILED);
+        setTransactionCollection((current) => ({
+          ...current,
+          total: summary.transaction_count,
+        }));
+        setLoading(false);
+
+        if (summary.status === "queued" || summary.status === "running") {
+          const statusItem = await getBacktestWorkerStatus().catch(() => null);
+          if (cancelled) return;
+          setWorkerStatus(statusItem);
+          setWorkerStatusUnavailable(statusItem == null);
+          pollTimer = window.setTimeout(refreshSummary, 4000);
+          return;
         }
-      })
-      .finally(() => {
+
+        setWorkerStatusUnavailable(false);
+        if (shouldLoadBacktestDetails(summary.status)) {
+          await loadCompletedDetails();
+        } else {
+          setEquityLoading(false);
+          setSignalsLoading(false);
+          setTransactionsLoading(false);
+        }
+      } catch (err) {
         if (!cancelled) {
+          setError(err instanceof Error ? err.message : BACKTEST_DETAIL_LOAD_FAILED);
           setLoading(false);
         }
-      });
+      }
+    };
 
-    Promise.all([summaryPromise, equityPromise])
-      .then(([, equityCurve]) => {
-        if (!cancelled) setRun((current) => current ? { ...current, equity_curve: equityCurve } : current);
-      })
-      .catch((err: Error) => {
-        if (!cancelled) setEquityError(err.message || BACKTEST_EQUITY_LOAD_FAILED);
-      })
-      .finally(() => {
-        if (!cancelled) setEquityLoading(false);
-      });
-
-    Promise.all([summaryPromise, transactionsPromise])
-      .then(([, page]) => {
-        if (!cancelled) setRun((current) => current ? { ...current, transactions: page.items, transaction_count: page.total } : current);
-      })
-      .catch((err: Error) => {
-        if (!cancelled) setTransactionsError(err.message || BACKTEST_TRANSACTIONS_LOAD_FAILED);
-      })
-      .finally(() => {
-        if (!cancelled) setTransactionsLoading(false);
-      });
-
-    Promise.all([summaryPromise, signalsPromise])
-      .then(([, page]) => {
-        if (!cancelled) setRun((current) => current ? { ...current, signals: page.items } : current);
-      })
-      .catch((err: Error) => {
-        if (!cancelled) setSignalsError(err.message || BACKTEST_SIGNALS_LOAD_FAILED);
-      })
-      .finally(() => {
-        if (!cancelled) setSignalsLoading(false);
-      });
+    void refreshSummary();
 
     return () => {
       cancelled = true;
+      if (transactionLoadGenerationRef.current === transactionLoadGeneration) {
+        transactionLoadGenerationRef.current += 1;
+      }
+      if (pollTimer != null) window.clearTimeout(pollTimer);
     };
-  }, [router.isReady, runId]);
+  }, [loadTransactionPages, router.isReady, runId]);
+
+  const retryTransactionCollection = () => {
+    if (!runId || transactionCollection.loading) return;
+    const restartFromFirstPage = !transactionCollection.nextCursor;
+    void loadTransactionPages(
+      runId,
+      transactionLoadGenerationRef.current,
+      transactionCollection.nextCursor,
+      restartFromFirstPage,
+    );
+  };
 
   const summaryEntries = useMemo(
     () => Object.entries(run?.summary_metrics || {}).sort(([a], [b]) => a.localeCompare(b)),
@@ -3995,6 +4165,8 @@ export default function BacktestDetailPage() {
   const maxDrawdown = metricNumber(run?.summary_metrics || {}, "max_drawdown");
   const signalCount = metricNumber(run?.summary_metrics || {}, "signal_count");
   const tradeCount = metricNumber(run?.summary_metrics || {}, "trade_count");
+  const loadedTransactionCount = run?.transactions.length || 0;
+  const totalTransactionCount = transactionCollection.total || run?.transaction_count || 0;
 
   if (!loading && !error && !run) {
     return (
@@ -4027,9 +4199,19 @@ export default function BacktestDetailPage() {
             run ? `/strategies/${encodeURIComponent(run.strategy_id)}` : "/strategies",
             isZh ? "查看策略" : "View Strategy"
           )}
+          {run ? (
+            <WorkspaceDialog triggerLabel={isZh ? "运行配置" : "Run Configuration"} title={isZh ? "运行摘要" : "Run Summary"}>
+              <ContextStack>
+                <ContextGroup title={run.strategy_name || (isZh ? "回测运行" : "Backtest Run")}><ContextStats><ContextStat label={isZh ? "状态" : "Status"} value={run.status} /><ContextStat label={isZh ? "总收益" : "Total return"} value={formatPercent(totalReturn, 2)} /><ContextStat label={isZh ? "最大回撤" : "Max drawdown"} value={formatPercent(maxDrawdown, 2)} /><ContextStat label={isZh ? "信号" : "Signals"} value={signalCount ?? "—"} /><ContextStat label={isZh ? "交易" : "Trades"} value={tradeCount ?? "—"} /><ContextStat label={isZh ? "已载入交易" : "Loaded transactions"} value={`${loadedTransactionCount} / ${totalTransactionCount}`} /></ContextStats></ContextGroup>
+                <ContextGroup title={isZh ? "数据状态" : "Data Status"}><ContextStats><ContextStat label={isZh ? "持久化级别" : "Persist level"} value={run.persist_level} /><ContextStat label={isZh ? "摘要指标" : "Summary metrics"} value={summaryEntries.length} /><ContextStat label={isZh ? "最新持仓" : "Latest positions"} value={positionEntries.length} /></ContextStats>{run.persist_level !== "full" ? <ContextNote>{isZh ? "未保存的明细不代表零信号或零交易。" : "Unavailable details do not mean zero signals or trades."}</ContextNote> : null}</ContextGroup>
+                <ContextGroup title={isZh ? "快速入口" : "Quick Links"}><ContextLinks><ContextLink href={`/strategies/${encodeURIComponent(run.strategy_id)}`}>{isZh ? "查看策略" : "View strategy"}</ContextLink><ContextLink href="/backtests">{isZh ? "回测列表" : "Backtest list"}</ContextLink></ContextLinks></ContextGroup>
+              </ContextStack>
+            </WorkspaceDialog>
+          ) : null}
         </>
       }
     >
+      {router.query.perfProbe === "1" ? <BacktestPerformanceProbe /> : null}
       {loading ? <p>{isZh ? "加载中..." : "Loading..."}</p> : null}
       {error ? (
         <p style={{ color: "#fda4af" }}>
@@ -4041,6 +4223,33 @@ export default function BacktestDetailPage() {
 
       {!loading && !error && run ? (
         <>
+          {run.progress ? (
+            <div style={{ marginBottom: 18 }}>
+              <BacktestProgressBar progress={run.progress} isZh={isZh} showDetails />
+            </div>
+          ) : null}
+          {(run.status === "queued" || run.status === "running")
+          && (workerStatusUnavailable || workerStatus?.automation_available === false) ? (
+            <div style={{ ...emptyStateStyle, marginBottom: 18, color: "#fde68a" }}>
+              {isZh
+                ? "任务可排队，但自动执行服务不可用。manager 恢复后会继续处理。"
+                : "The job remains queued, but automatic execution is unavailable. Processing will resume when the manager recovers."}
+            </div>
+          ) : null}
+          {run.status === "queued" || run.status === "running" ? (
+            <div style={{ ...emptyStateStyle, marginBottom: 18 }}>
+              {isZh
+                ? "回测正在后台处理。完成前只刷新摘要和 worker 状态，不加载权益、信号或交易明细。"
+                : "The backtest is processing in the background. Until completion, only summary and worker status are refreshed; equity, signals, and transactions are not loaded."}
+            </div>
+          ) : null}
+          {run.status === "failed" || run.status === "cancelled" ? (
+            <div style={{ ...emptyStateStyle, marginBottom: 18, color: run.status === "failed" ? "#fecaca" : "#fbbf24" }}>
+              {run.error_message || (isZh ? `回测已${run.status === "failed" ? "失败" : "取消"}` : `Backtest ${run.status}`)}
+            </div>
+          ) : null}
+          {run.status === "completed" ? (
+            <>
           {run.persist_level !== "full" ? (
             <p style={{ ...sectionCardStyle, color: "#fbbf24" }}>
               {isZh
@@ -4100,6 +4309,49 @@ export default function BacktestDetailPage() {
                 initialCash={run.initial_cash}
               />
             )}
+            {run.available_details.includes("transactions") ? (
+              <div
+                style={{
+                  marginTop: 8,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  flexWrap: "wrap",
+                  color: transactionCollection.error ? "#fbbf24" : "rgba(148, 163, 184, 0.9)",
+                  fontSize: 12,
+                }}
+              >
+                <span>
+                  {transactionsLoading
+                    ? isZh
+                      ? `正在加载全周期成交标记 ${loadedTransactionCount} / ${totalTransactionCount}`
+                      : `Loading full-period fill markers ${loadedTransactionCount} / ${totalTransactionCount}`
+                    : transactionCollection.error
+                      ? isZh
+                        ? `成交标记仅加载 ${loadedTransactionCount} / ${totalTransactionCount}，当前范围不完整。`
+                        : `Only ${loadedTransactionCount} / ${totalTransactionCount} fill markers loaded; the current range is incomplete.`
+                      : transactionCollection.loading
+                        ? isZh
+                          ? `正在加载全周期成交标记 ${loadedTransactionCount} / ${totalTransactionCount}`
+                          : `Loading full-period fill markers ${loadedTransactionCount} / ${totalTransactionCount}`
+                        : transactionCollection.complete
+                          ? isZh
+                            ? `已加载完整周期成交标记 ${loadedTransactionCount} / ${totalTransactionCount}`
+                            : `Full-period fill markers loaded ${loadedTransactionCount} / ${totalTransactionCount}`
+                          : null}
+                </span>
+                {transactionCollection.error ? (
+                  <button
+                    type="button"
+                    onClick={retryTransactionCollection}
+                    style={tableToggleButtonStyle}
+                  >
+                    {isZh ? "继续加载" : "Resume Loading"}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             {signalsError ? <div style={{ marginTop: 8, color: "#fbbf24", fontSize: 12 }}>{detailErrorMessage(signalsError, isZh)}</div> : null}
           </section>
 
@@ -4111,7 +4363,11 @@ export default function BacktestDetailPage() {
                 ) : transactionsError ? (
                   <div style={{ ...emptyStateStyle, color: "#fecaca" }}>{detailErrorMessage(transactionsError, isZh)}</div>
                 ) : (
-                  <PositionLifecycleCard run={run} />
+                  <PositionLifecycleCard
+                    run={run}
+                    transactions={run.transactions}
+                    totalTransactions={totalTransactionCount}
+                  />
                 )}
               </section>
               {transactionsLoading ? (
@@ -4119,7 +4375,11 @@ export default function BacktestDetailPage() {
               ) : transactionsError ? (
                 <div style={{ ...emptyStateStyle, color: "#fecaca" }}>{detailErrorMessage(transactionsError, isZh)}</div>
               ) : (
-                <TransactionsCard transactions={run.transactions} />
+                <TransactionsCard
+                  runId={run.id}
+                  transactions={run.transactions}
+                  totalTransactions={totalTransactionCount}
+                />
               )}
             </>
           ) : null}
@@ -4171,6 +4431,8 @@ export default function BacktestDetailPage() {
               )}
             </section>
           </section>
+            </>
+          ) : null}
         </>
       ) : null}
     </AppShell>

@@ -1,0 +1,28 @@
+.frame { min-width: 0; display: grid; gap: 8px; }
+.wrapper { min-width: 0; overflow: auto; border: 1px solid rgba(71, 85, 105, 0.28); border-radius: 13px; background: rgba(8, 15, 24, 0.72); }
+.toolbar,.pagination,.toolbarActions { display: flex; align-items: center; gap: 8px; }
+.toolbar { justify-content: space-between; color: #94a3b8; font-size: 12px; }
+.toolbarActions { justify-content: flex-end; }
+.toolButton,.pagination select { min-height: 32px; padding: 5px 9px; border: 1px solid rgba(71,85,105,.42); border-radius: 8px; background: rgba(8,15,24,.82); color: #dbeafe; cursor: pointer; }
+.toolButton:disabled { cursor: not-allowed; opacity: .45; }
+.columnMenu { z-index: 130; min-width: 190px; padding: 6px; border: 1px solid rgba(71,85,105,.5); border-radius: 10px; background: #0b1523; box-shadow: 0 18px 50px rgba(2,6,23,.65); color: #e2e8f0; }
+.columnItem { position: relative; min-height: 32px; padding: 6px 9px 6px 30px; border-radius: 7px; outline: none; cursor: pointer; font-size: 12px; }
+.columnItem[data-highlighted] { background: rgba(8,145,178,.22); color: #cffafe; }
+.check { position: absolute; left: 9px; color: #5eead4; }
+.table { width: 100%; border-collapse: separate; border-spacing: 0; color: #e2e8f0; font-size: 13px; }
+.headerCell { position: sticky; top: 0; z-index: 2; height: 38px; padding: 8px 10px; border: 0; border-bottom: 1px solid rgba(71, 85, 105, 0.42); background: #0b1523; color: #94a3b8; text-align: left; white-space: nowrap; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+.resizer { position: absolute; inset: 0 -3px 0 auto; z-index: 4; width: 6px; cursor: col-resize; touch-action: none; user-select: none; }
+.resizer::after { content: ""; position: absolute; inset: 7px 2px; width: 1px; background: rgba(71,85,105,.7); }
+.resizing::after { width: 2px; background: #22d3ee; }
+.headerContent { display: grid; gap: 5px; }
+.sortButton { padding: 0; border: 0; background: transparent; color: inherit; text-align: left; text-transform: inherit; letter-spacing: inherit; cursor: pointer; user-select: none; }
+.filterInput { width: 100%; min-width: 72px; height: 28px; padding: 4px 7px; border: 1px solid rgba(71,85,105,.42); border-radius: 7px; background: rgba(8,15,24,.82); color: #e2e8f0; font-size: 12px; letter-spacing: 0; text-transform: none; }
+.cell { height: 38px; padding: 7px 10px; border-bottom: 1px solid rgba(71, 85, 105, 0.18); white-space: nowrap; vertical-align: middle; }
+.row:hover .cell { background: rgba(15, 23, 42, 0.62); }
+.virtualViewport { position: relative; min-width: max-content; }
+.virtualRow { position: absolute; inset-inline: 0; display: grid; align-items: center; min-height: 38px; border-bottom: 1px solid rgba(71, 85, 105, 0.18); }
+.virtualCell { min-width: 0; padding: 7px 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empty { padding: 28px 14px; color: #94a3b8; text-align: center; }
+.pagination { justify-content: flex-end; flex-wrap: wrap; color: #94a3b8; font-size: 12px; }
+.pagination label { display: inline-flex; align-items: center; gap: 6px; }
+@media (max-width: 767px) { .headerCell, .cell, .virtualRow { height: 44px; min-height: 44px; } .toolButton,.pagination select { min-height: 44px; } .pagination { justify-content: flex-start; } }

@@ -8,7 +8,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from sqlalchemy import create_engine, event, func, select
+from sqlalchemy import create_engine, event, func, insert, select
 from sqlalchemy.orm import sessionmaker
 from fastapi import HTTPException
 
@@ -859,6 +859,197 @@ class SupportResistancePersistenceTests(unittest.TestCase):
                 0,
             )
 
+    @patch(
+        "src.services.support_resistance_persistence_service._instrument_ids",
+        return_value={"TEST": 1},
+    )
+    @patch(
+        "src.services.support_resistance_persistence_service.source_data_fingerprint",
+        return_value="fingerprint-batches",
+    )
+    def test_bulk_persistence_reports_batches_and_exact_rows(self, _fingerprint, _ids) -> None:
+        progress: list[tuple[str, int, int]] = []
+        performance: dict = {}
+        state = self._state()
+        base_event = dict(state.symbols["TEST"].events[0])
+        for index, event_type in enumerate(
+            ["candidate", "selection", "breakout", "retest", "invalidation", "role_transition", "score_outcome"],
+            start=1,
+        ):
+            state.symbols["TEST"].events.append(
+                {
+                    **base_event,
+                    "event_date": f"2025-01-{12 + index:02d}",
+                    "event_type": event_type,
+                    "score": index / 10,
+                    "score_evidence": {"resolved_samples": index},
+                }
+            )
+
+        with self.Session() as db:
+            run = self._new_run(db)
+            materialization = persist_support_resistance_run(
+                db,
+                run=run,
+                runtime=self.runtime,
+                state=state,
+                symbols=["TEST"],
+                coverage_start=date(2025, 1, 1),
+                coverage_end=date(2025, 3, 1),
+                performance=performance,
+                progress_callback=lambda stage, completed, total: progress.append(
+                    (stage, completed, total)
+                ),
+                batch_size=2,
+            )
+            db.commit()
+
+            versions = db.scalars(
+                select(SupportResistanceZoneVersion).where(
+                    SupportResistanceZoneVersion.materialization_id == materialization.id
+                )
+            ).all()
+            events = db.scalars(
+                select(SupportResistanceRunEvent)
+                .where(SupportResistanceRunEvent.run_id == run.id)
+                .order_by(SupportResistanceRunEvent.event_date)
+            ).all()
+
+            self.assertEqual(len(versions), 1)
+            self.assertEqual(len(events), 8)
+            version = versions[0]
+            self.assertEqual(
+                {
+                    "symbol": version.symbol,
+                    "zone_key": version.zone_key,
+                    "version": version.version,
+                    "effective_from": version.effective_from,
+                    "effective_to": version.effective_to,
+                    "role": version.role,
+                    "status": version.status,
+                    "center_price": float(version.center_price),
+                    "lower_price": float(version.lower_price),
+                    "upper_price": float(version.upper_price),
+                    "projection_end": version.projection_end,
+                    "pivot_count": version.pivot_count,
+                    "touch_count": version.touch_count,
+                },
+                {
+                    "symbol": "TEST",
+                    "zone_key": "zone",
+                    "version": 1,
+                    "effective_from": date(2025, 1, 10),
+                    "effective_to": None,
+                    "role": "support",
+                    "status": "active",
+                    "center_price": 100.0,
+                    "lower_price": 99.0,
+                    "upper_price": 101.0,
+                    "projection_end": date(2025, 1, 10),
+                    "pivot_count": 3,
+                    "touch_count": 3,
+                },
+            )
+            self.assertEqual(
+                {item.event_type for item in events},
+                {"touch", "candidate", "selection", "breakout", "retest", "invalidation", "role_transition", "score_outcome"},
+            )
+            source_events = sorted(state.symbols["TEST"].events, key=lambda item: item["event_date"])
+            self.assertEqual(
+                [
+                    {
+                        "event_date": item.event_date.isoformat(),
+                        "event_type": item.event_type,
+                        "zone_key": item.zone_key,
+                        "setup": item.setup,
+                        "selected": item.selected,
+                        "score": float(item.score) if item.score is not None else None,
+                        "posterior_sample_count": item.posterior_sample_count,
+                        "lower_price": float(item.lower_price) if item.lower_price is not None else None,
+                        "upper_price": float(item.upper_price) if item.upper_price is not None else None,
+                        "payload": item.payload,
+                    }
+                    for item in events
+                ],
+                [
+                    {
+                        "event_date": item["event_date"],
+                        "event_type": item["event_type"],
+                        "zone_key": item.get("zone_key"),
+                        "setup": item.get("setup"),
+                        "selected": item["event_type"] == "selection",
+                        "score": item.get("score"),
+                        "posterior_sample_count": (item.get("score_evidence") or {}).get(
+                            "resolved_samples"
+                        ),
+                        "lower_price": float(item["lower"]),
+                        "upper_price": float(item["upper"]),
+                        "payload": item,
+                    }
+                    for item in source_events
+                ],
+            )
+            self.assertEqual(events[-1].posterior_sample_count, 7)
+            self.assertEqual(performance["support_resistance_zone_versions"], 1)
+            self.assertEqual(performance["support_resistance_run_events"], 8)
+            self.assertFalse(performance["support_resistance_cache_reused"])
+            self.assertGreaterEqual(performance["support_resistance_persist_total_ms"], 0.0)
+            self.assertEqual(progress[0], ("zone_versions", 0, 9))
+            self.assertEqual(progress[-1], ("run_events", 9, 9))
+
+    @patch(
+        "src.services.support_resistance_persistence_service._instrument_ids",
+        return_value={"TEST": 1},
+    )
+    @patch(
+        "src.services.support_resistance_persistence_service.source_data_fingerprint",
+        return_value="fingerprint-batch-rollback",
+    )
+    def test_partial_bulk_insert_rolls_back_without_run_events(self, _fingerprint, _ids) -> None:
+        with self.Session() as db:
+            first_run = self._new_run(db)
+            persist_support_resistance_run(
+                db,
+                run=first_run,
+                runtime=self.runtime,
+                state=self._state(),
+                symbols=["TEST"],
+                coverage_start=date(2025, 1, 1),
+                coverage_end=date(2025, 3, 1),
+            )
+            db.commit()
+
+            second_run = self._new_run(db)
+
+            def insert_one_then_fail(session, model, rows, **_kwargs):
+                first = next(iter(rows))
+                session.execute(insert(model), [first])
+                raise RuntimeError("synthetic batch failure")
+
+            with patch(
+                "src.services.support_resistance_persistence_service._insert_in_batches",
+                side_effect=insert_one_then_fail,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "synthetic batch failure"):
+                    persist_support_resistance_run(
+                        db,
+                        run=second_run,
+                        runtime=self.runtime,
+                        state=self._state(),
+                        symbols=["TEST"],
+                        coverage_start=date(2025, 1, 1),
+                        coverage_end=date(2025, 3, 1),
+                    )
+            db.rollback()
+
+            self.assertEqual(
+                db.scalar(
+                    select(func.count())
+                    .select_from(SupportResistanceRunEvent)
+                    .where(SupportResistanceRunEvent.run_id == second_run.id)
+                ),
+                0,
+            )
     @patch(
         "src.services.support_resistance_persistence_service._instrument_ids",
         return_value={"TEST": 1},

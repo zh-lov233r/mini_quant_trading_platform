@@ -21,6 +21,17 @@ import { listStrategies } from "@/api/strategies";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
+import {
+  DialogGroup as ContextGroup,
+  DialogLink as ContextLink,
+  DialogLinks as ContextLinks,
+  DialogNote as ContextNote,
+  DialogStack as ContextStack,
+  DialogStat as ContextStat,
+  DialogStats as ContextStats,
+  WorkspaceDialog,
+} from "@/components/workspace/WorkspaceDialog";
+import { DenseDataTable } from "@/components/workspace/DenseDataTable";
 import { useI18n } from "@/i18n/provider";
 import type {
   BrokerOrderOut,
@@ -893,9 +904,50 @@ export default function PaperTradingPage() {
         "View Alpaca paper account status, attached portfolios, returns, positions, orders, and local trade history from one workspace."
       )}
       actions={
-        <button type="button" onClick={() => void handleRefreshClick()} style={headerButtonStyle}>
-          {txt("刷新", "Refresh")}
-        </button>
+        <>
+          <button type="button" onClick={() => void handleRefreshClick()} style={headerButtonStyle}>
+            {txt("刷新", "Refresh")}
+          </button>
+          {activeWorkbenchPage !== "portfolios" ? <WorkspaceDialog triggerLabel={txt("账户与风险", "Account & Risk")} title={txt("账户与风险", "Account & Risk")}>
+            <ContextStack>
+              <ContextGroup title={currentAccount?.name || txt("账户概览", "Account Overview")}>
+                <ContextStats>
+                  <ContextStat label={txt("账户", "Accounts")} value={accounts.length} />
+                  <ContextStat label="Portfolios" value={currentPortfolios.length} />
+                  <ContextStat label={txt("可运行", "Runnable")} value={runnablePortfolios.length} />
+                  <ContextStat label={txt("可分配策略", "Strategies")} value={activeStrategies.length} />
+                </ContextStats>
+              </ContextGroup>
+              <ContextGroup title={txt("券商状态", "Broker Status")}>
+                <ContextStats>
+                  <ContextStat label={txt("同步", "Sync")} value={displayedWorkspace?.broker_sync.status || "-"} />
+                  <ContextStat label={txt("市场", "Market")} value={displayedWorkspace?.broker_clock?.is_open ? txt("开市", "Open") : txt("休市", "Closed")} />
+                  <ContextStat label={txt("购买力", "Buying Power")} value={formatMoney(brokerAccount?.buying_power, brokerCurrency)} />
+                  <ContextStat label={txt("持仓", "Positions")} value={displayedWorkspace?.positions.length || 0} />
+                </ContextStats>
+              </ContextGroup>
+              {brokerIsolation && brokerIsolation.status !== "clean" ? (
+                <ContextNote tone="warning">
+                  {txt(
+                    `检测到 ${brokerIsolation.warnings.length} 条券商隔离警告；高风险操作仍保留在主工作区。`,
+                    `${brokerIsolation.warnings.length} broker-isolation warnings detected. High-risk actions remain visible in the main workspace.`
+                  )}
+                </ContextNote>
+              ) : (
+                <ContextNote>
+                  {txt(
+                    "这里只汇总账户与风险状态，不会隐藏或代替主区的券商操作和安全警告。",
+                    "This dialog summarizes account and risk state without hiding or replacing broker actions and safety warnings in the main workspace."
+                  )}
+                </ContextNote>
+              )}
+              <ContextLinks>
+                <ContextLink href="/strategies">{txt("策略库", "Strategy Library")}</ContextLink>
+                <ContextLink href="/backtests">{txt("回测工作台", "Backtest Workbench")}</ContextLink>
+              </ContextLinks>
+            </ContextStack>
+          </WorkspaceDialog> : null}
+        </>
       }
     >
       {loading ? <div style={panelStyle}>{txt("加载中...", "Loading...")}</div> : null}
@@ -1261,7 +1313,7 @@ export default function PaperTradingPage() {
               ) : null}
 
               <div style={workspaceGridStyle}>
-                <div style={{ display: "grid", gap: 18 }}>
+                <div style={{ display: "grid", gap: 18, minWidth: 0 }}>
                   <section style={panelStyle}>
                     <div style={sectionTitleRowStyle}>
                       <h3 style={sectionTitleStyle}>{txt("账户明细", "Account Details")}</h3>
@@ -1297,7 +1349,7 @@ export default function PaperTradingPage() {
                         txt("价格", "Price"),
                         txt("净现金流", "Net Cash Flow"),
                       ]}
-                      rows={(displayedWorkspace?.recent_transactions || []).map((item) => [
+                      rows={(displayedWorkspace?.recent_transactions || []).map((item) => ({ id: item.id, cells: [
                         formatDateTime(item.ts, locale),
                         item.portfolio_name || "-",
                         item.strategy_name || item.strategy_id,
@@ -1314,13 +1366,13 @@ export default function PaperTradingPage() {
                         >
                           {formatMoney(item.net_cash_flow, brokerCurrency)}
                         </span>,
-                      ])}
+                      ] }))}
                       emptyText={txt("还没有本地交易记录。", "No local transactions yet.")}
                     />
                   </section>
                 </div>
 
-                <div style={{ display: "grid", gap: 18 }}>
+                <div style={{ display: "grid", gap: 18, minWidth: 0 }}>
                   <section style={panelStyle}>
                     <div style={sectionTitleRowStyle}>
                       <h3 style={sectionTitleStyle}>{txt("Alpaca 持仓", "Alpaca Positions")}</h3>
@@ -1339,7 +1391,7 @@ export default function PaperTradingPage() {
                         txt("未实现盈亏", "Unrealized P/L"),
                         txt("收益率", "Return"),
                       ]}
-                      rows={(displayedWorkspace?.positions || []).map((item: BrokerPositionOut) => [
+                      rows={(displayedWorkspace?.positions || []).map((item: BrokerPositionOut) => ({ id: item.symbol, cells: [
                         item.symbol,
                         brokerPositionOriginLabel(item, txt),
                         item.side || "-",
@@ -1366,7 +1418,7 @@ export default function PaperTradingPage() {
                         >
                           {formatSignedPercent(item.unrealized_plpc ?? null, 2)}
                         </span>,
-                      ])}
+                      ] }))}
                       emptyText={txt("当前没有 Alpaca 持仓。", "There are no Alpaca positions right now.")}
                     />
                   </section>
@@ -1386,7 +1438,7 @@ export default function PaperTradingPage() {
                         txt("数量", "Qty"),
                         txt("成交均价", "Fill Avg"),
                       ]}
-                      rows={(displayedWorkspace?.recent_orders || []).map((item: BrokerOrderOut) => [
+                      rows={(displayedWorkspace?.recent_orders || []).map((item: BrokerOrderOut, index) => ({ id: item.id || item.client_order_id || `${item.symbol || "order"}-${index}`, cells: [
                         formatDateTime(item.submitted_at, locale),
                         item.symbol || "-",
                         brokerOrderOriginLabel(item, txt),
@@ -1394,7 +1446,7 @@ export default function PaperTradingPage() {
                         item.status || "-",
                         formatNumber(item.qty, 4),
                         formatMoney(item.filled_avg_price, brokerCurrency),
-                      ])}
+                      ] }))}
                       emptyText={txt("最近没有 Alpaca 订单。", "There are no recent Alpaca orders.")}
                     />
                   </section>
@@ -1633,8 +1685,14 @@ export default function PaperTradingPage() {
           ) : null}
 
           {activeWorkbenchPage === "portfolios" ? (
-            <div style={portfolioWorkspaceGridStyle}>
-              <section style={panelStyle}>
+            <>
+              <WorkspaceDialog
+                triggerLabel={txt("创建 Portfolio", "Create Portfolio")}
+                title={txt("创建 Portfolio", "Create Portfolio")}
+                description={txt("为当前 Paper Account 创建并初始化策略组合。", "Create and seed a strategy portfolio for the current Paper Account.")}
+                size="form"
+                triggerTone="primary"
+              >
                 <div style={sectionTitleRowStyle}>
                   <div>
                     <h3 style={sectionTitleStyle}>{txt("创建 Portfolio", "Create Portfolio")}</h3>
@@ -1699,7 +1757,7 @@ export default function PaperTradingPage() {
                     </button>
                   </div>
                 </form>
-              </section>
+              </WorkspaceDialog>
 
               <section style={panelStyle}>
                 <div style={sectionTitleRowStyle}>
@@ -1921,7 +1979,7 @@ export default function PaperTradingPage() {
                   </div>
                 )}
               </section>
-            </div>
+            </>
           ) : null}
         </div>
       ) : null}
@@ -1944,39 +2002,23 @@ function DataTable({
   emptyText,
 }: {
   columns: string[];
-  rows: Array<Array<string | JSX.Element>>;
+  rows: Array<{ id: string; cells: Array<string | JSX.Element> }>;
   emptyText: string;
 }) {
-  if (rows.length === 0) {
-    return <div style={emptyBlockStyle}>{emptyText}</div>;
-  }
-
-  return (
-    <div style={tableWrapStyle}>
-      <table style={tableStyle}>
-        <thead>
-          <tr>
-            {columns.map((column) => (
-              <th key={column} style={tableHeadStyle}>
-                {column}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, index) => (
-            <tr key={index}>
-              {row.map((cell, cellIndex) => (
-                <td key={`${index}-${cellIndex}`} style={tableCellStyle}>
-                  {cell}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+  return <DenseDataTable
+    ariaLabel={columns.join(", ")}
+    columns={columns.map((column, index) => ({
+      id: `column-${index}`,
+      header: column,
+      accessor: (row: { id: string; cells: Array<string | JSX.Element> }) => row.cells[index],
+      cell: (value: unknown) => value as string | JSX.Element,
+      sortable: false,
+      width: index === 0 ? 180 : 150,
+    }))}
+    rows={rows}
+    getRowId={(row) => row.id}
+    emptyText={emptyText}
+  />;
 }
 
 function AccountBalanceChart({
@@ -2091,12 +2133,12 @@ function AccountBalanceChart({
               <stop offset="100%" stopColor="rgba(45, 212, 191, 0.02)" />
             </linearGradient>
           </defs>
-          {tickValues.map((tick) => {
+          {tickValues.map((tick, index) => {
             const y =
               paddingTop +
               (1 - (tick - min) / yRange) * drawableHeight;
             return (
-              <g key={tick}>
+              <g key={`${tick}-${index}`}>
                 <line
                   x1={paddingLeft}
                   x2={width - paddingRight}
@@ -2266,6 +2308,7 @@ const heroPanelStyle: CSSProperties = {
 };
 
 const panelStyle: CSSProperties = {
+  minWidth: 0,
   padding: 22,
   borderRadius: 26,
   border: "1px solid rgba(148, 163, 184, 0.14)",
@@ -2280,7 +2323,7 @@ const errorPanelStyle: CSSProperties = {
 
 const emptyHeroStyle: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "minmax(320px, 1.1fr) minmax(320px, 0.9fr)",
+  gridTemplateColumns: "repeat(auto-fit, minmax(min(320px, 100%), 1fr))",
   gap: 20,
   alignItems: "start",
 };
@@ -2576,13 +2619,6 @@ const portfolioGridStyle: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "minmax(0, 1fr)",
   gap: 14,
-};
-
-const portfolioWorkspaceGridStyle: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "minmax(320px, 0.85fr) minmax(0, 1.15fr)",
-  gap: 18,
-  alignItems: "start",
 };
 
 const portfolioCardStyle: CSSProperties = {

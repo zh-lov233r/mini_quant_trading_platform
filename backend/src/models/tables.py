@@ -396,6 +396,34 @@ class BacktestJob(Base):
     experiment_trial = relationship("ExperimentTrial")
 
 
+class BacktestWorkerManager(Base):
+    """Heartbeat and child-worker state for an on-demand manager instance."""
+
+    __tablename__ = "backtest_worker_managers"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('idle', 'starting', 'running', 'backoff', 'standby', 'stopping')",
+            name="ck_backtest_worker_managers_status",
+        ),
+        Index("idx_backtest_worker_managers_heartbeat", "heartbeat_at"),
+    )
+
+    manager_id = Column(Text, primary_key=True)
+    hostname = Column(Text, nullable=False)
+    pid = Column(Integer, nullable=False)
+    status = Column(String(16), nullable=False, default="standby")
+    is_leader = Column(Boolean, nullable=False, default=False)
+    started_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    heartbeat_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    worker_pid = Column(Integer)
+    worker_started_at = Column(DateTime(timezone=True))
+    last_worker_exit_at = Column(DateTime(timezone=True))
+    last_worker_exit_code = Column(Integer)
+    next_worker_start_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
 class SupportResistanceMaterialization(Base):
     __tablename__ = "support_resistance_materializations"
     __table_args__ = (

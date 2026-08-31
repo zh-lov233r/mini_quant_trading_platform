@@ -8,6 +8,7 @@ import type {
   BacktestSignalOut,
   BacktestSummaryOut,
   BacktestTransactionOut,
+  BacktestWorkerStatus,
   SupportResistanceBacktestOut,
 } from "@/types/backtest";
 
@@ -43,6 +44,12 @@ export function getBacktestSupportResistance(
 export function listBacktests(strategyId?: string): Promise<BacktestRunOut[]> {
   const query = strategyId ? `?strategy_id=${encodeURIComponent(strategyId)}` : "";
   return http<BacktestRunOut[]>(`/api/backtests${query}`, {
+    method: "GET",
+  });
+}
+
+export function getBacktestWorkerStatus(): Promise<BacktestWorkerStatus> {
+  return http<BacktestWorkerStatus>("/api/backtests/worker-status", {
     method: "GET",
   });
 }

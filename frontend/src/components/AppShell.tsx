@@ -1,13 +1,33 @@
+import * as Dialog from "radix-ui/dialog";
+import * as Tooltip from "radix-ui/tooltip";
 import Link from "next/link";
+import { useRouter } from "next/router";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
 import { useI18n } from "@/i18n/provider";
+
+import styles from "./AppShell.module.css";
+import CompactPageHeader from "./CompactPageHeader";
+import {
+  isWorkspaceRouteActive,
+  parseStoredSidebarCollapsed,
+  serializeSidebarCollapsed,
+  SIDEBAR_STORAGE_KEY,
+  WORKSPACE_NAV_ITEMS,
+  type WorkspaceNavKey,
+} from "./workspace/workspaceLayout";
 
 interface AppShellProps {
   title: string;
   subtitle?: string;
   actions?: ReactNode;
   children: ReactNode;
+  contentMode?: "workspace" | "wide" | "reading";
+}
+
+function cx(...values: Array<string | false | null | undefined>): string {
+  return values.filter(Boolean).join(" ");
 }
 
 export default function AppShell({
@@ -15,226 +35,141 @@ export default function AppShell({
   subtitle,
   actions,
   children,
+  contentMode = "workspace",
 }: AppShellProps) {
+  const router = useRouter();
   const { locale, setLocale, messages } = useI18n();
-  const navItems = [
-    { href: "/dashboard", label: messages.nav.dashboard },
-    { href: "/strategies", label: messages.nav.strategies },
-    { href: "/stock-baskets", label: messages.nav.stockBaskets },
-    { href: "/strategies/new", label: messages.nav.newStrategy },
-    { href: "/backtests", label: messages.nav.backtests },
-    { href: "/research", label: messages.nav.research },
-    { href: "/paper-trading", label: messages.nav.paperTrading },
-  ];
+  const isZh = locale === "zh-CN";
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  useEffect(() => {
+    const stored = parseStoredSidebarCollapsed(window.localStorage.getItem(SIDEBAR_STORAGE_KEY));
+    if (stored != null) setSidebarCollapsed(stored);
+  }, []);
+
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [router.asPath]);
+
+  useEffect(() => {
+    window.dispatchEvent(new Event("workspace-layout-change"));
+  }, [sidebarCollapsed]);
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      window.localStorage.setItem(SIDEBAR_STORAGE_KEY, serializeSidebarCollapsed(next));
+      return next;
+    });
+  };
+
+  const navLabels: Record<WorkspaceNavKey, string> = {
+    dashboard: messages.nav.dashboard,
+    strategies: messages.nav.strategies,
+    stockBaskets: messages.nav.stockBaskets,
+    backtests: messages.nav.backtests,
+    research: messages.nav.research,
+    paperTrading: messages.nav.paperTrading,
+  };
+
+  const navContent = (mobile = false) => (
+    <nav className={mobile ? styles.mobileNav : styles.primaryNav} aria-label={isZh ? "主导航" : "Primary navigation"}>
+      {WORKSPACE_NAV_ITEMS.map((item) => {
+        const active = isWorkspaceRouteActive(router.pathname, item.href);
+        const label = navLabels[item.key];
+        return (
+          <Tooltip.Root key={item.href} delayDuration={350}>
+            <Tooltip.Trigger asChild>
+              <Link href={item.href} aria-current={active ? "page" : undefined} className={cx(styles.navLink, active && styles.navLinkActive)} onClick={() => mobile && setMobileNavOpen(false)}>
+                <NavIcon navKey={item.key} className={styles.navIcon} />
+                <span className={styles.navLabel}>{label}</span>
+              </Link>
+            </Tooltip.Trigger>
+            {!mobile ? <Tooltip.Portal><Tooltip.Content side="right" sideOffset={9} className="workspace-tooltip">{label}</Tooltip.Content></Tooltip.Portal> : null}
+          </Tooltip.Root>
+        );
+      })}
+      <Link href="/strategies/new" className={styles.quickCreate} onClick={() => mobile && setMobileNavOpen(false)}>
+        <span aria-hidden="true" style={{ fontSize: 20, lineHeight: 1 }}>+</span>
+        <span className={cx(styles.quickCreateLabel, styles.navLabel)}>{messages.nav.newStrategy}</span>
+      </Link>
+    </nav>
+  );
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        padding: "28px 6px 56px",
-        background:
-          "radial-gradient(circle at top left, rgba(45,212,191,0.18), transparent 28%), radial-gradient(circle at top right, rgba(251,191,36,0.12), transparent 22%), radial-gradient(circle at bottom left, rgba(59,130,246,0.14), transparent 30%), linear-gradient(180deg, #030712 0%, #07111c 42%, #0b1523 100%)",
-        color: "#e2e8f0",
-        fontFamily:
-          "\"Iowan Old Style\", \"Palatino Linotype\", \"Book Antiqua\", Georgia, serif",
-      }}
-    >
-      <div style={{ maxWidth: 1720, margin: "0 auto" }}>
-        <header
-          style={{
-            marginBottom: 20,
-            padding: 18,
-            borderRadius: 24,
-            border: "1px solid rgba(71, 85, 105, 0.32)",
-            background: "rgba(5, 10, 18, 0.78)",
-            boxShadow: "0 22px 60px rgba(2, 6, 23, 0.52)",
-            backdropFilter: "blur(8px)",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              gap: 16,
-              flexWrap: "wrap",
-              marginBottom: 14,
-            }}
-          >
-            <Link
-              href="/"
-              style={{
-                textDecoration: "none",
-                color: "#f8fafc",
-                fontSize: 14,
-                fontWeight: 700,
-                letterSpacing: "0.08em",
-                textTransform: "uppercase",
-                fontFamily:
-                  "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-              }}
-            >
-              {messages.common.appName}
-            </Link>
-            <div
-              style={{
-                display: "flex",
-                gap: 10,
-                flexWrap: "wrap",
-                alignItems: "center",
-                justifyContent: "flex-end",
-              }}
-            >
-              <nav style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                {navItems.map((item) => (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    style={{
-                      padding: "9px 14px",
-                      borderRadius: 999,
-                      border: "1px solid rgba(71, 85, 105, 0.34)",
-                      background: "rgba(8, 15, 24, 0.82)",
-                      color: "#cbd5e1",
-                      textDecoration: "none",
-                      fontSize: 14,
-                      fontWeight: 600,
-                      fontFamily:
-                        "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-                    }}
-                  >
-                    {item.label}
-                  </Link>
-                ))}
-              </nav>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: 4,
-                  borderRadius: 999,
-                  border: "1px solid rgba(71, 85, 105, 0.34)",
-                  background: "rgba(8, 15, 24, 0.82)",
-                  fontFamily:
-                    "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-                }}
-              >
-                <div
-                  aria-label={messages.common.language}
-                  title={messages.common.language}
-                  style={{
-                    width: 28,
-                    height: 28,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: "rgba(226, 232, 240, 0.72)",
-                  }}
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    width="16"
-                    height="16"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    aria-hidden="true"
-                  >
-                    <circle cx="12" cy="12" r="8.5" />
-                    <path d="M3.5 12h17" />
-                    <path d="M12 3.5a13 13 0 0 1 0 17" />
-                    <path d="M12 3.5a13 13 0 0 0 0 17" />
-                  </svg>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setLocale("zh-CN")}
-                  style={localeButtonStyle(locale === "zh-CN")}
-                >
-                  {messages.common.chinese}
+    <Tooltip.Provider>
+      <div className={cx(styles.shell, sidebarCollapsed && styles.shellCollapsed)} data-workspace-sidebar-collapsed={sidebarCollapsed}>
+        <aside className={styles.sidebar}>
+          <div className={styles.brandRow}>
+            <Link href="/" className={styles.brand}>{messages.common.appName}</Link>
+            <Tooltip.Root>
+              <Tooltip.Trigger asChild>
+                <button type="button" className={cx(styles.iconButton, styles.collapseDesktop)} onClick={toggleSidebar} aria-label={sidebarCollapsed ? (isZh ? "展开导航" : "Expand navigation") : (isZh ? "收起导航" : "Collapse navigation")}>
+                  <ChevronIcon direction={sidebarCollapsed ? "right" : "left"} />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setLocale("en-US")}
-                  style={localeButtonStyle(locale === "en-US")}
-                >
-                  {messages.common.english}
-                </button>
-              </div>
+              </Tooltip.Trigger>
+              <Tooltip.Portal><Tooltip.Content side="right" sideOffset={9} className="workspace-tooltip">{sidebarCollapsed ? (isZh ? "展开导航" : "Expand navigation") : (isZh ? "收起导航" : "Collapse navigation")}</Tooltip.Content></Tooltip.Portal>
+            </Tooltip.Root>
+          </div>
+          {navContent()}
+          <div className={styles.sidebarSpacer} />
+          <div className={styles.sidebarFooter}>
+            <div className={styles.localeSwitch} aria-label={messages.common.language}>
+              <button type="button" className={cx(styles.localeButton, locale === "zh-CN" && styles.localeButtonActive)} onClick={() => setLocale("zh-CN")}>中<span className={styles.localeLongLabel}>文</span></button>
+              <button type="button" className={cx(styles.localeButton, locale === "en-US" && styles.localeButtonActive)} onClick={() => setLocale("en-US")}>EN</button>
             </div>
           </div>
+        </aside>
 
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "flex-end",
-              gap: 18,
-              flexWrap: "wrap",
-            }}
-          >
-            <div style={{ maxWidth: 760 }}>
-              <h1
-                style={{
-                  margin: "0 0 10px",
-                  fontSize: 46,
-                  lineHeight: 1.05,
-                  fontWeight: 700,
-                  color: "#f8fafc",
-                }}
-              >
-                {title}
-              </h1>
-              {subtitle ? (
-                <p
-                  style={{
-                    margin: 0,
-                    color: "rgba(226, 232, 240, 0.78)",
-                    fontSize: 17,
-                    lineHeight: 1.7,
-                    fontFamily:
-                      "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-                  }}
-                >
-                  {subtitle}
-                </p>
-              ) : null}
-            </div>
-
-            {actions ? (
-              <div
-                style={{
-                  display: "flex",
-                  gap: 12,
-                  flexWrap: "wrap",
-                  alignItems: "center",
-                }}
-              >
-                {actions}
-              </div>
-            ) : null}
+        <main className={styles.main}>
+          <div className={styles.mobileTopbar}>
+            <Dialog.Root open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+              <Dialog.Trigger asChild><button type="button" className={styles.mobileMenuButton} aria-label={isZh ? "打开导航" : "Open navigation"}><MenuIcon /></button></Dialog.Trigger>
+              <Dialog.Portal>
+                <Dialog.Overlay className={styles.dialogOverlay} />
+                <Dialog.Content className={cx(styles.dialogContent, styles.navDialogContent)}>
+                  <div className={styles.dialogHeader}>
+                    <Dialog.Title className={styles.dialogTitle}>{messages.common.appName}</Dialog.Title>
+                    <Dialog.Close asChild><button type="button" className={styles.iconButton} aria-label={isZh ? "关闭导航" : "Close navigation"}>×</button></Dialog.Close>
+                  </div>
+                  {navContent(true)}
+                </Dialog.Content>
+              </Dialog.Portal>
+            </Dialog.Root>
+            <Link href="/" className={styles.mobileBrand}>{messages.common.appName}</Link>
+            <span className={styles.mobileTopbarSpacer} aria-hidden="true" />
           </div>
-        </header>
 
-        {children}
+          <CompactPageHeader
+            title={title}
+            subtitle={subtitle}
+            actions={actions}
+          />
+
+          <div className={styles.contentGrid}>
+            <div className={cx(styles.content, contentMode === "reading" && styles.contentReading)}>{children}</div>
+          </div>
+        </main>
       </div>
-    </main>
+    </Tooltip.Provider>
   );
 }
 
-function localeButtonStyle(active: boolean) {
-  return {
-    padding: "8px 12px",
-    borderRadius: 999,
-    border: "none",
-    background: active ? "rgba(8,145,178,0.92)" : "transparent",
-    color: active ? "#f8fafc" : "#cbd5e1",
-    fontSize: 13,
-    fontWeight: 700,
-    cursor: "pointer",
-    fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-  };
+function NavIcon({ navKey, className }: { navKey: WorkspaceNavKey; className?: string }) {
+  const common = { className, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
+  if (navKey === "dashboard") return <svg {...common}><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>;
+  if (navKey === "strategies") return <svg {...common}><path d="m12 3 9 5-9 5-9-5 9-5Z" /><path d="m3 12 9 5 9-5" /><path d="m3 16 9 5 9-5" /></svg>;
+  if (navKey === "stockBaskets") return <svg {...common}><path d="M4 8h16l-1.5 12h-13L4 8Z" /><path d="m8 8 4-5 4 5" /><path d="M9 12v4M15 12v4" /></svg>;
+  if (navKey === "backtests") return <svg {...common}><path d="M4 19V5" /><path d="M4 19h16" /><path d="m7 15 4-4 3 2 5-7" /></svg>;
+  if (navKey === "research") return <svg {...common}><path d="M9 3h6" /><path d="M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3" /><path d="M8 15h8" /></svg>;
+  return <svg {...common}><path d="M3 7h18v12H3z" /><path d="M16 11h5v4h-5a2 2 0 0 1 0-4Z" /><path d="M5 7V5h13v2" /></svg>;
+}
+
+function ChevronIcon({ direction }: { direction: "left" | "right" }) {
+  return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d={direction === "left" ? "m15 18-6-6 6-6" : "m9 18 6-6-6-6"} /></svg>;
+}
+
+function MenuIcon() {
+  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>;
 }

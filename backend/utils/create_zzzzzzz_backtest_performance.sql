@@ -42,5 +42,27 @@ CREATE INDEX IF NOT EXISTS idx_backtest_jobs_claim
 CREATE INDEX IF NOT EXISTS idx_backtest_jobs_lease
     ON backtest_jobs (status, lease_expires_at);
 
+CREATE TABLE IF NOT EXISTS backtest_worker_managers (
+    manager_id TEXT PRIMARY KEY,
+    hostname TEXT NOT NULL,
+    pid INTEGER NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'standby',
+    is_leader BOOLEAN NOT NULL DEFAULT FALSE,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    worker_pid INTEGER,
+    worker_started_at TIMESTAMPTZ,
+    last_worker_exit_at TIMESTAMPTZ,
+    last_worker_exit_code INTEGER,
+    next_worker_start_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_backtest_worker_managers_status
+        CHECK (status IN ('idle', 'starting', 'running', 'backoff', 'standby', 'stopping'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_backtest_worker_managers_heartbeat
+    ON backtest_worker_managers (heartbeat_at);
+
 -- Deliberately no signals/transactions cursor index is created here. Add one
 -- only after production-scale EXPLAIN ANALYZE proves at least 20% improvement.

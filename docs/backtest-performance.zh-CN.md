@@ -16,22 +16,33 @@
 
 手动请求默认 `full`，研究 trial 固定请求 `summary`。客户端使用 `persist_level` 与 `available_details` 区分“没有持久化”和真实零记录，禁止把缺失明细显示成零信号或零交易。
 
+支撑/压力区的 zone version 与 run 审计事件使用 SQLAlchemy Core 每 5,000 条分批写入，但仍属于同一事务，批次之间不会独立 commit；任一批次失败都会回滚当前 run 的全部明细。缓存命中时跳过共享 zone version 写入，但 `full` 仍逐条保留当前 run 的完整事件集合，不裁剪事件类型或 payload。
+
 候选 promotion 会先创建 OOS/base-cost `full` verification job。job 重新检查数据指纹，并以相对和绝对 `1e-10` 容差比较数值摘要指标。指纹变化或指标不一致会记录 verification 失败并阻止 promotion。verification run ID 同时写入 candidate metrics 和晋升策略 lineage。
 
-## 持久化 Worker
+## 按需持久化 Worker
 
 路由流量前先显式应用附加 schema：
 
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f backend/utils/create_zzzzzzz_backtest_performance.sql
-make backtest-worker BACKTEST_WORKER_ARGS="--concurrency 2"
+make backtest-worker-manager
 ```
 
-API 在同一事务创建 `strategy_runs` 与 `backtest_jobs`，随后返回 HTTP 201。worker 使用 `FOR UPDATE SKIP LOCKED` claim，维护 heartbeat/lease，每个交易日检查取消，重试前只清理当前 run 的未完成明细，并在重试耗尽时同步结束关联 research trial。Web 应用不会启动该 worker。Make target 会明确关闭 paper scheduler 和 paper order 提交。
+API 在同一事务创建 `strategy_runs` 与 `backtest_jobs`，即使自动执行不可用也返回 HTTP 201。轻量 manager 常驻，每 2 秒轮询并恢复过期 lease；它持有 PostgreSQL advisory lock，保证只有一个 leader 能启动默认全局并发 1 的 worker。存在 eligible queued 任务时，leader 启动 `backtest_worker --once --concurrency 1`；worker 连续清空队列后退出。子进程异常退出按 1/2/5/10/30 秒封顶退避。
+
+`backtest_worker_managers` 中的 manager 每 5 秒心跳。leader 心跳超过 15 秒即视为自动执行不可用。空队列时，只要 manager 健康，即使没有 worker 子进程，平台仍为 ready。`make dev`、`make dev-agent-safe`、`make dev-agent-all` 和 Docker Compose 都会监管 manager，并强制关闭两项 paper scheduler 配置。`make dev-backend`、`make dev-frontend` 和直接运行 `uvicorn` 属于部分启动方式，不保证自动消费队列。`make backtest-worker` 仍保留为显式诊断/运维命令。
+
+worker 使用 `FOR UPDATE SKIP LOCKED` claim，维护 heartbeat/lease，每个交易日检查取消，重试前只清理当前 run 的未完成明细，并在重试耗尽时同步结束关联 research trial。
+
+## 进度语义
+
+进度阶段固定为 `queued`（0%）、`preparing`（0%）、`running`（已完成交易日映射到 0–85%）、`finalizing`（85–99%）以及终态 `completed`、`failed`、`cancelled`。finalizing 会进一步报告 `zone_versions`、`run_events`、`backtest_details` 或 `committing`；按条目执行的阶段同时返回 `completed_items` 与 `total_items`。只有最终数据库提交成功后才到 100%。失败或取消保留最后百分比；重试会增加 `attempt` 并把进度归零。running 最多每 5 秒落库一次，同一 finalizing 子阶段最多每秒一次，子阶段变化立即写入。历史 progress 由 API 自动归一化，不需要迁移数据。
 
 ## 增量 API
 
 - `GET /api/backtests/{id}/summary`
+- `GET /api/backtests/worker-status`
 - `GET /api/backtests/{id}/equity?max_points=1500&shape=chart`
 - `GET /api/backtests/{id}/signals?limit=100&cursor=...&symbol=...`
 - `GET /api/backtests/{id}/transactions?limit=100&cursor=...&symbol=...`
@@ -43,7 +54,9 @@ API 在同一事务创建 `strategy_runs` 与 `backtest_jobs`，随后返回 HTT
 
 ## 图表加载与渲染
 
-回测详情页优先显示 summary；权益、信号和交易随后独立加载并分别维护 loading/error 状态，因此单个明细请求变慢不会阻塞整页。信号和交易响应会在到达时增量更新图表 marker 与生命周期列表。
+列表页每 4 秒轮询 active run，并显示复用的无障碍百分比进度条。详情页在 queued/running 时只轮询 summary 和 worker status，不请求权益、信号或交易；只有进入 `completed` 后才独立加载这些 payload，并分别保留 error 状态。failed/cancelled 会停止轮询并保留终态进度。manager 自动执行不可用时，列表和详情都会明确提示“仍可排队，但执行暂停”。
+
+回测完成后，详情页先读取最新 100 笔成交，让下方明细尽快可用；随后沿不透明 transaction cursor 每批最多读取 500 笔，直到总览图与个股盈亏覆盖整个 run。页面显示“已加载/总数”，尾部分页失败时保留已有标记，并可从失败 cursor 继续。权益图中的信号与成交标记继续保留形状、颜色、筛选、计数和悬浮详情，但绘图区不再重复显示 `BUY`/`SELL` 文字。成交表初始渲染最新 10 笔，每次增加 10 笔；生命周期初始只基于最新 100 笔成交并显示 12 段，需要时每次把计算范围扩大 100 笔并再显示 12 段。由于生命周期口径有意保持局部，界面始终显示其当前使用的成交数与 run 总成交数。
 
 权益、生命周期和全局股票图表统一使用固定版本 `lightweight-charts@5.2.1` 的客户端模块。模块仅在图表可见时动态加载，不进入 shared 首屏 chunk。平移、滚轮及触控缩放、十字光标和 resize 使用原生 Canvas 交互。Canvas primitives 保留岛形缺口、双底、支撑/压力区域、连接线及标签避让。面板关闭或切换时会销毁图表实例和附加 primitive。TradingView 内置 attribution logo 保持开启。
 
@@ -51,13 +64,13 @@ API 在同一事务创建 `strategy_runs` 与 `backtest_jobs`，随后返回 HTT
 
 ## 数据库上线与恢复
 
-项目没有 Alembic。apply 前必须确认并记录准确目标数据库，执行数据库原生备份，检查已有约束/索引，并通过 `ON_ERROR_STOP` 执行 SQL。脚本只增加 `backtest_jobs`、可空 `instrument_id` 列、外键及队列 claim/lease 索引；不会预先增加 signals/transactions cursor 索引，也不会重写历史明细，旧 run 默认解释为 `full`。
+项目没有 Alembic。apply 前必须确认并记录准确目标数据库，执行数据库原生备份，检查已有约束/索引，并通过 `ON_ERROR_STOP` 执行 SQL。脚本增加 `backtest_jobs`、`backtest_worker_managers`、可空 `instrument_id` 列、外键以及队列/manager 索引；不会预先增加 signals/transactions cursor 索引，也不会重写历史明细，旧 run 默认解释为 `full`。
 
 如果上线失败，先停止新 job 生产者和 backtest worker，再把新任务路由回 v1。应用回滚期间保留附加对象。若以后确实需要删除 schema，必须先证明所有应用版本都不再引用，并在任何完整性异常时从备份恢复；正常发布不执行破坏性回滚。
 
 ## 指标与验收
 
-`summary_metrics.performance` 记录 SQL 加载、Python 数据集构造、历史状态、信号、成交、明细/摘要持久化、总耗时、输入输出行数和峰值 RSS；结构化日志记录同一映射。手动启用 v2 前需跑完 100/500/3,640 股票以及 1 年/5 年/全历史矩阵。索引或 LAG 查询必须由真实 `EXPLAIN ANALYZE` 证明至少改善 20%，不能凭合成测试部署。
+`summary_metrics.performance` 记录 SQL 加载、Python 数据集构造、历史状态、信号、成交、明细/摘要持久化、总耗时、输入输出行数和峰值 RSS。支撑/压力区持久化额外记录 zone/event 行数与耗时、持久化总耗时和不可变缓存是否复用；结构化日志记录同一映射。全市场验收门槛是规范化 zone/event 内容完全一致、支撑/压力区收尾耗时至少下降 50%，且峰值 RSS 不高于已记录的 16.1 GB 基线；不得仅凭单元测试宣称通过。手动启用 v2 前仍需跑完 100/500/3,640 股票以及 1 年/5 年/全历史矩阵。索引或 LAG 查询必须由真实 `EXPLAIN ANALYZE` 证明至少改善 20%，不能凭合成测试部署。
 
 NumPy PreparedDataset/memmap 已固定依赖版本，但仍受发布门控：冷/热缓存、指纹失效、并发打开、损坏文件和清理验收完成前不启用。当前不依赖 Numba。
 

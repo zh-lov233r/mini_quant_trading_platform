@@ -35,7 +35,12 @@ from src.services.backtest_engine import (
 from src.services.backtest_equity_service import (
     load_downsampled_chart_points,
 )
-from src.services.backtest_job_service import enqueue_backtest_job, request_backtest_cancel
+from src.services.backtest_job_service import (
+    enqueue_backtest_job,
+    normalize_backtest_progress,
+    request_backtest_cancel,
+)
+from src.services.backtest_worker_status_service import load_backtest_worker_status
 from src.services.data_service import get_historical_data
 from src.schemas.research import PointInTimeUniversePolicy
 from src.services.stock_basket_service import DEFAULT_COMMON_STOCK_BASKET_NAME
@@ -62,6 +67,36 @@ class BacktestCreate(BaseModel):
     persist_level: Literal["summary", "trades", "full"] = "full"
 
 
+class BacktestProgressOut(BaseModel):
+    phase: Literal["queued", "preparing", "running", "finalizing", "completed", "failed", "cancelled"]
+    percent: float = Field(ge=0, le=100)
+    completed_days: Optional[int] = None
+    total_days: Optional[int] = None
+    trade_date: Optional[str] = None
+    finalizing_stage: Optional[
+        Literal["zone_versions", "run_events", "backtest_details", "committing"]
+    ] = None
+    completed_items: Optional[int] = Field(default=None, ge=0)
+    total_items: Optional[int] = Field(default=None, ge=0)
+    attempt: int = Field(ge=0)
+    max_attempts: int = Field(ge=1)
+    updated_at: datetime
+
+
+class BacktestWorkerStatusOut(BaseModel):
+    automation_available: bool
+    manager_state: Literal["idle", "starting", "running", "backoff", "standby", "stopping", "unavailable"]
+    live_managers: int
+    worker_active: bool
+    active_jobs: int
+    queued_jobs: int
+    oldest_queued_at: Optional[datetime] = None
+    next_worker_start_at: Optional[datetime] = None
+    last_worker_exit_code: Optional[int] = None
+    heartbeat_stale_after_seconds: int
+    checked_at: datetime
+
+
 class BacktestRunOut(BaseModel):
     id: UUID
     strategy_id: UUID
@@ -83,7 +118,7 @@ class BacktestRunOut(BaseModel):
     summary_metrics: dict[str, Any]
     persist_level: Literal["summary", "trades", "full"] = "full"
     available_details: list[str] = Field(default_factory=list)
-    progress: Optional[dict[str, Any]] = None
+    progress: Optional[BacktestProgressOut] = None
     error_message: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -548,7 +583,17 @@ def _to_backtest_run_out(
         summary_metrics=_compact_summary_metrics(metrics) if compact_metrics else metrics,
         persist_level=persist_level,
         available_details=list(metrics.get("available_details") or _available_details(persist_level)),
-        progress=dict(job.progress or {}) if job is not None else None,
+        progress=(
+            normalize_backtest_progress(
+                dict(job.progress or {}),
+                status=job.status,
+                attempt=job.attempt,
+                max_attempts=job.max_attempts,
+                updated_at=job.updated_at or run.updated_at,
+            )
+            if job is not None
+            else None
+        ),
         error_message=run.error_message,
         created_at=run.created_at,
         updated_at=run.updated_at,
@@ -735,6 +780,11 @@ def list_backtests(
         _to_backtest_run_out(run, strategy_name, compact_metrics=True)
         for run, strategy_name in rows
     ]
+
+
+@router.get("/worker-status", response_model=BacktestWorkerStatusOut)
+def get_backtest_worker_status(db: Session = Depends(get_db)):
+    return BacktestWorkerStatusOut(**load_backtest_worker_status(db))
 
 
 @router.get("/{run_id}", response_model=BacktestDetailOut)

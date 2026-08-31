@@ -31,8 +31,8 @@ export default function BackToTopButton() {
       onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
       style={{
         position: "fixed",
-        right: 24,
-        bottom: 24,
+        right: "var(--workspace-floating-right, 24px)",
+        bottom: "var(--workspace-floating-bottom, 24px)",
         zIndex: 1200,
         display: "inline-flex",
         alignItems: "center",

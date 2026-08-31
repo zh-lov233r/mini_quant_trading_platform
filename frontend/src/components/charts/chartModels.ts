@@ -365,7 +365,7 @@ function groupEquityEvents(
       color: signal ? (buy ? "#2563eb" : "#d97706") : buy ? "#16a34a" : "#dc2626",
       shape: signal ? "circle" : buy ? "arrowUp" : "arrowDown",
       position: buy ? "atPriceBottom" : "atPriceTop",
-      text: `${group.action} ${group.items.length}`,
+      text: "",
       title: `${group.action} ${noun} (${group.items.length})`,
       details: group.items.map((item) => item.reason ? `${item.symbol}: ${item.reason}` : item.symbol),
     };

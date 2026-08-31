@@ -107,12 +107,12 @@ def owned_stack_is_ready(state_path: Path, quant_repo: Path) -> bool:
     if state.get("quantRepo") != str(quant_repo):
         return False
     pids = [state.get("controllerPid"), *(state.get("processPids") or [])]
-    if len(pids) != 4 or not all(process_alive(pid) for pid in pids):
+    if len(pids) != 5 or not all(process_alive(pid) for pid in pids):
         return False
     return all(
         (
             endpoint_ready(f"{AGENTOPS_URL}/healthz"),
-            endpoint_ready(f"{QUANT_BACKEND_URL}/healthz"),
+            endpoint_ready(f"{QUANT_BACKEND_URL}/readyz"),
             endpoint_ready(f"{QUANT_FRONTEND_URL}/research"),
         )
     )
@@ -374,7 +374,14 @@ def main() -> int:
             env=quant_env,
         )
         processes.append(quant_backend)
-        wait_for_endpoint("Quant Backend", f"{QUANT_BACKEND_URL}/healthz", quant_backend[1], 60)
+        backtest_manager = start_process(
+            "Backtest Worker Manager",
+            [str(quant_python), "-m", "src.workers.backtest_worker_manager"],
+            cwd=quant_repo / "backend",
+            env=quant_env,
+        )
+        processes.append(backtest_manager)
+        wait_for_endpoint("Quant Platform", f"{QUANT_BACKEND_URL}/readyz", quant_backend[1], 60)
 
         frontend_env = base_env.copy()
         frontend_env.update(
@@ -405,7 +412,7 @@ def main() -> int:
         print(f"Research workspace: {QUANT_FRONTEND_URL}/research")
         print(f"Quant API docs: {QUANT_BACKEND_URL}/docs")
         print(f"AgentOps API docs: {AGENTOPS_URL}/docs")
-        print("Press Ctrl+C to stop the three application processes.", flush=True)
+        print("Press Ctrl+C to stop the four application processes.", flush=True)
 
         stopping = False
 

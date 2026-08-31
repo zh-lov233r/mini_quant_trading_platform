@@ -614,7 +614,8 @@ paths:
       summary: Queue a backtest for an existing strategy
       description: >
         Creates a StrategyRun and durable database job. Manual requests default to full persistence;
-        execution is performed by the independent backtest worker.
+        the on-demand manager starts a concurrency-one worker when automation is available. Queueing
+        still succeeds when the manager is unavailable.
       operationId: createBacktest
       x-implementation-status: implemented
       requestBody:
@@ -634,6 +635,20 @@ paths:
           $ref: "#/components/responses/NotFound"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
+
+  /api/backtests/worker-status:
+    get:
+      tags: [Backtests]
+      summary: Get on-demand backtest worker automation status
+      operationId: getBacktestWorkerStatus
+      x-implementation-status: implemented
+      responses:
+        "200":
+          description: Manager heartbeat, worker activity, and durable queue counts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BacktestWorkerStatus"
 
   /api/backtests/{run_id}:
     get:
@@ -2066,6 +2081,47 @@ components:
           enum: [summary, trades, full]
           default: full
 
+    BacktestProgress:
+      type: object
+      required: [phase, percent, attempt, max_attempts, updated_at]
+      properties:
+        phase:
+          type: string
+          enum: [queued, preparing, running, finalizing, completed, failed, cancelled]
+        percent: {type: number, minimum: 0, maximum: 100}
+        completed_days: {type: integer, minimum: 0, nullable: true}
+        total_days: {type: integer, minimum: 0, nullable: true}
+        trade_date: {type: string, format: date, nullable: true}
+        finalizing_stage:
+          type: string
+          enum: [zone_versions, run_events, backtest_details, committing]
+          nullable: true
+        completed_items: {type: integer, minimum: 0, nullable: true}
+        total_items: {type: integer, minimum: 0, nullable: true}
+        attempt: {type: integer, minimum: 0}
+        max_attempts: {type: integer, minimum: 1}
+        updated_at: {type: string, format: date-time}
+
+    BacktestWorkerStatus:
+      type: object
+      required:
+        [automation_available, manager_state, live_managers, worker_active, active_jobs,
+         queued_jobs, heartbeat_stale_after_seconds, checked_at]
+      properties:
+        automation_available: {type: boolean}
+        manager_state:
+          type: string
+          enum: [idle, starting, running, backoff, standby, stopping, unavailable]
+        live_managers: {type: integer, minimum: 0}
+        worker_active: {type: boolean}
+        active_jobs: {type: integer, minimum: 0}
+        queued_jobs: {type: integer, minimum: 0}
+        oldest_queued_at: {type: string, format: date-time, nullable: true}
+        next_worker_start_at: {type: string, format: date-time, nullable: true}
+        last_worker_exit_code: {type: integer, nullable: true}
+        heartbeat_stale_after_seconds: {type: integer, minimum: 1}
+        checked_at: {type: string, format: date-time}
+
     BacktestRun:
       allOf:
         - $ref: "#/components/schemas/StrategyRunSummary"
@@ -2082,7 +2138,7 @@ components:
               items: {type: string}
             progress:
               allOf:
-                - $ref: "#/components/schemas/FreeFormObject"
+                - $ref: "#/components/schemas/BacktestProgress"
               nullable: true
 
     BacktestSummary:

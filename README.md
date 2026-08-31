@@ -118,6 +118,8 @@ The frontend currently includes:
 - `/research/[experimentId]`
 - `/agent-runs/[runId]`
 
+The 13 active workbench pages use a wide-screen, compact-density shell. Primary navigation lives in a collapsible left sidebar, while the remaining width always belongs to the main workspace; there is no fixed right context rail. Page-specific configuration, creation, identity, and risk details open through clearly labeled, keyboard-accessible dialogs, which become full-screen below 768px. Important progress, validation, broker warnings, and engine-ready status remain visible in the main page. Dense tables support sorting, filtering, column visibility, resizing, and explicit client/server pagination; they preserve semantic tables for smaller results and virtualize only result sets of 200 rows or more. Development and production builds use separate Next.js output directories so a verification build cannot invalidate the active development server.
+
 ## Backend API Modules
 
 The main route groups currently include:
@@ -135,12 +137,13 @@ The main route groups currently include:
 
 The `/api/agent/*` routes require a Bearer service token and expose only controlled draft-strategy and research-experiment operations. They do not expose broker orders or portfolio activation.
 
-Backtests are not executed by the Web process. After applying the additive schema, start the dedicated worker separately with `make backtest-worker`. This command explicitly disables paper scheduling and order submission. See [Backtest performance and worker operations](docs/backtest-performance.md).
+Backtests are not executed by the Web process. Full-platform commands keep a lightweight manager alive; it starts a concurrency-one worker only while durable queued jobs exist. `GET /api/backtests/worker-status` reports automation health, and the list/detail pages show structured phase, percentage, and finalization item progress. See [Backtest performance and worker operations](docs/backtest-performance.md).
 
 Health endpoints:
 
 - `/`
 - `/healthz`
+- `/readyz` (full-platform readiness; requires a live backtest manager leader)
 
 The repository also includes an API spec file: [apps/openapi.yaml](apps/openapi.yaml)
 
@@ -206,21 +209,19 @@ This script runs all `create_*.sql` files in `backend/utils/` and creates the re
 
 ### 5. Start the development environment
 
-Starting the backend also starts the paper-trading scheduler. For local development, smoke checks, and Agent integration, explicitly disable both scheduling and order submission unless broker-side paper mutations are intended:
-
-```bash
-PAPER_TRADING_SCHEDULER_ENABLED=false \
-PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false \
-make dev
-```
-
-Start backend and frontend together:
+`make dev` starts backend, frontend, and the on-demand backtest manager. The full-platform target forces both paper scheduling and order submission off:
 
 ```bash
 make dev
 ```
 
-Start backend only:
+Start the complete local platform:
+
+```bash
+make dev
+```
+
+Start backend only (partial stack; no automatic queue consumption, and set paper safety variables explicitly if needed):
 
 ```bash
 make dev-backend
@@ -243,6 +244,7 @@ You can also run the full local stack with Docker Compose:
 
 - `frontend`: Next.js, default `http://localhost:3000`
 - `backend`: FastAPI, default `http://localhost:8000`
+- `backtest-worker-manager`: lightweight queue manager; worker child exists only while jobs are eligible
 - `db`: PostgreSQL 16, default `localhost:5432`
 
 ### 1. Prepare Docker environment variables
@@ -300,6 +302,8 @@ make docker-down
 ### 5. Docker runtime notes
 
 - The backend container runs `python utils/create_db.py` before starting the app
+- The frontend waits for a healthy manager leader; an idle manager is healthy without a worker child
+- The backend and manager force paper scheduling and order submission off
 - `./data` is mounted to `/app/data`
 - `./logs` is mounted to `/app/logs`
 - If you change `NEXT_PUBLIC_API_BASE_URL`, rebuild the frontend image
@@ -313,6 +317,7 @@ make dev-agent-all
 make dev-agent-safe
 make dev-backend
 make dev-frontend
+make backtest-worker-manager
 make backfill-daily
 make check-data
 make docker-build

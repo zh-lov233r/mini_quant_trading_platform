@@ -3,16 +3,19 @@
     "version": "1.0.0",
     "private": true,
     "scripts": {
-        "dev": "next dev -p 3000",
+        "dev": "NEXT_DIST_DIR=.next-dev next dev -p 3000",
         "build": "next build",
         "start": "next start -p 3000",
         "lint": "next lint",
         "test": "vitest run"
     },
     "dependencies": {
+        "@tanstack/react-table": "^9.2.4",
+        "@tanstack/react-virtual": "^3.14.10",
         "axios": "^1.6.8",
         "lightweight-charts": "5.2.1",
         "next": "^15.5.0",
+        "radix-ui": "^1.6.7",
         "react": "18.3.1",
         "react-dom": "18.3.1"
     },

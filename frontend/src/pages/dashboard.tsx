@@ -8,6 +8,8 @@ import { getStrategyCatalog, listStrategies } from "@/api/strategies";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
+import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogStack as ContextStack, DialogStat as ContextStat, DialogStats as ContextStats, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
+import { DensePanel, KpiStrip, WorkspaceGrid } from "@/components/workspace/WorkspacePrimitives";
 import { useI18n } from "@/i18n/provider";
 import type { BacktestRunOut } from "@/types/backtest";
 import type { PaperTradingAccountOverviewOut } from "@/types/paper-account";
@@ -260,6 +262,13 @@ export default function DashboardPage() {
           {actionLink("/strategies/new", isZh ? "创建策略" : "Create Strategy", true)}
           {actionLink("/backtests", isZh ? "开始回测" : "Start Backtests")}
           {actionLink("/paper-trading", isZh ? "打开 Paper Trading" : "Open Paper Trading")}
+          <WorkspaceDialog triggerLabel={isZh ? "系统详情" : "System Details"} title={isZh ? "系统概览" : "System Overview"}>
+            <ContextStack>
+              <ContextGroup title={isZh ? "研究与回测" : "Research & Backtests"}><ContextStats><ContextStat label={isZh ? "Active 策略" : "Active strategies"} value={stats.active} /><ContextStat label="Engine ready" value={stats.engineReady} /><ContextStat label={isZh ? "完成回测" : "Completed runs"} value={completedRuns.length} /><ContextStat label={isZh ? "失败回测" : "Failed runs"} value={failedRuns.length} /></ContextStats></ContextGroup>
+              <ContextGroup title="Paper Trading"><ContextStats><ContextStat label={isZh ? "账户" : "Accounts"} value={paperStats.accountCount} /><ContextStat label={isZh ? "活跃组合" : "Active portfolios"} value={paperStats.activePortfolioCount} /><ContextStat label={isZh ? "配置风险" : "Allocation risks"} value={allocationRiskItems.length} /></ContextStats></ContextGroup>
+              <ContextGroup title={isZh ? "快速入口" : "Quick Links"}><ContextLinks><ContextLink href="/strategies/new">{isZh ? "创建策略" : "Create strategy"}</ContextLink><ContextLink href="/backtests">{isZh ? "开始回测" : "Start backtest"}</ContextLink><ContextLink href="/paper-trading">Paper Trading</ContextLink></ContextLinks></ContextGroup>
+            </ContextStack>
+          </WorkspaceDialog>
         </>
       }
     >
@@ -268,14 +277,7 @@ export default function DashboardPage() {
 
       {!loading && !error ? (
         <>
-          <section
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-              gap: 16,
-              marginBottom: 20,
-            }}
-          >
+          <KpiStrip>
             <MetricCard
               label={isZh ? "Active 策略" : "Active Strategies"}
               value={String(stats.active)}
@@ -316,18 +318,10 @@ export default function DashboardPage() {
               }
               accent="#b45309"
             />
-          </section>
+          </KpiStrip>
 
-          <section
-            style={{
-              display: "grid",
-              gridTemplateColumns: "minmax(0, 1.15fr) minmax(320px, 0.85fr)",
-              gap: 18,
-              alignItems: "start",
-              marginBottom: 18,
-            }}
-          >
-            <article style={cardStyle()}>
+          <WorkspaceGrid style={{ marginBottom: 18 }}>
+            <DensePanel style={cardStyle()}>
               {sectionTitle(
                 isZh ? "最近回测" : "Recent Backtests",
                 isZh
@@ -470,7 +464,7 @@ export default function DashboardPage() {
                   })}
                 </div>
               )}
-            </article>
+            </DensePanel>
 
             <div style={{ display: "grid", gap: 18 }}>
               <article style={cardStyle("rgba(15, 118, 110, 0.12)")}>
@@ -646,17 +640,10 @@ export default function DashboardPage() {
                 </div>
               </article>
             </div>
-          </section>
+          </WorkspaceGrid>
 
-          <section
-            style={{
-              display: "grid",
-              gridTemplateColumns: "minmax(0, 1.1fr) minmax(320px, 0.9fr)",
-              gap: 18,
-              alignItems: "start",
-            }}
-          >
-            <article style={cardStyle()}>
+          <WorkspaceGrid>
+            <DensePanel style={cardStyle()}>
               {sectionTitle(
                 isZh ? "最近策略" : "Recent Strategies",
                 isZh
@@ -770,7 +757,7 @@ export default function DashboardPage() {
                   ))}
                 </div>
               )}
-            </article>
+            </DensePanel>
 
             <div style={{ display: "grid", gap: 18 }}>
               <article style={cardStyle()}>
@@ -881,7 +868,7 @@ export default function DashboardPage() {
                 </div>
               </article>
             </div>
-          </section>
+          </WorkspaceGrid>
         </>
       ) : null}
     </AppShell>

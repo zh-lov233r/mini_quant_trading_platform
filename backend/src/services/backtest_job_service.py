@@ -10,7 +10,7 @@ import time
 from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from src.core.db import SessionLocal
@@ -29,14 +29,169 @@ from src.services.backtest_engine import BacktestCancelledError, run_backtest
 log = logging.getLogger(__name__)
 UTC = timezone.utc
 JobSource = Literal["manual", "research", "verification"]
+BacktestProgressPhase = Literal[
+    "queued",
+    "preparing",
+    "running",
+    "finalizing",
+    "completed",
+    "failed",
+    "cancelled",
+]
+BACKTEST_FINALIZING_STAGES = {
+    "zone_versions",
+    "run_events",
+    "backtest_details",
+    "committing",
+}
 
 
 class BacktestVerificationError(RuntimeError):
     pass
 
 
+def _clamp_percent(value: Any) -> float:
+    try:
+        percent = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(percent):
+        return 0.0
+    return round(max(0.0, min(100.0, percent)), 3)
+
+
+def _optional_nonnegative_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def normalize_backtest_progress(
+    progress: dict[str, Any] | None,
+    *,
+    status: str,
+    attempt: int,
+    max_attempts: int,
+    updated_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Return the stable public progress shape, including for legacy JSON."""
+
+    raw = dict(progress or {})
+    raw_phase = str(raw.get("phase") or "")
+    if status in {"completed", "failed", "cancelled"}:
+        phase = status
+    elif status == "queued":
+        phase = "queued"
+    elif raw_phase in {"preparing", "running", "finalizing"}:
+        phase = raw_phase
+    else:
+        phase = "running"
+
+    percent = _clamp_percent(raw.get("percent"))
+    if phase in {"queued", "preparing"}:
+        percent = 0.0
+    elif phase == "running":
+        percent = min(85.0, percent)
+    elif phase == "finalizing":
+        percent = max(85.0, min(99.0, percent))
+    elif phase == "completed":
+        percent = 100.0
+
+    observed_at = raw.get("updated_at") or updated_at or datetime.now(UTC)
+    if isinstance(observed_at, datetime):
+        observed_at = observed_at.isoformat()
+    else:
+        try:
+            datetime.fromisoformat(str(observed_at).replace("Z", "+00:00"))
+        except ValueError:
+            observed_at = (updated_at or datetime.now(UTC)).isoformat()
+    completed_days = raw.get("completed_days")
+    total_days = raw.get("total_days")
+    raw_finalizing_stage = str(raw.get("finalizing_stage") or "")
+    preserve_finalizing_detail = phase in {"finalizing", "failed", "cancelled"}
+    finalizing_stage = (
+        raw_finalizing_stage
+        if preserve_finalizing_detail and raw_finalizing_stage in BACKTEST_FINALIZING_STAGES
+        else None
+    )
+    completed_items = _optional_nonnegative_int(raw.get("completed_items"))
+    total_items = _optional_nonnegative_int(raw.get("total_items"))
+    if not preserve_finalizing_detail:
+        completed_items = None
+        total_items = None
+    elif completed_items is not None and total_items is not None:
+        completed_items = min(completed_items, total_items)
+    return {
+        "phase": phase,
+        "percent": percent,
+        "completed_days": _optional_nonnegative_int(completed_days),
+        "total_days": _optional_nonnegative_int(total_days),
+        "trade_date": str(raw["trade_date"]) if raw.get("trade_date") else None,
+        "finalizing_stage": finalizing_stage,
+        "completed_items": completed_items,
+        "total_items": total_items,
+        "attempt": max(0, int(attempt or 0)),
+        "max_attempts": max(1, int(max_attempts or 1)),
+        "updated_at": str(observed_at),
+    }
+
+
+def _job_progress(
+    job: BacktestJob,
+    phase: BacktestProgressPhase,
+    *,
+    percent: float | None,
+    preserve: bool = False,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    raw = dict(job.progress or {}) if preserve else {}
+    raw.update(
+        {
+            "phase": phase,
+            "attempt": job.attempt,
+            "max_attempts": job.max_attempts,
+            "updated_at": (now or datetime.now(UTC)).isoformat(),
+        }
+    )
+    if percent is not None:
+        raw["percent"] = percent
+    return normalize_backtest_progress(
+        raw,
+        status=phase,
+        attempt=job.attempt,
+        max_attempts=job.max_attempts,
+        updated_at=now,
+    )
+
+
 def default_worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
+
+
+def progress_update_interval_seconds(progress: dict[str, Any]) -> float:
+    phase = str(progress.get("phase") or "running")
+    if phase == "running":
+        return 5.0
+    if phase == "finalizing":
+        return 1.0
+    return 0.0
+
+
+def eligible_queued_job_count(db: Session, *, now: datetime | None = None) -> int:
+    observed_at = now or datetime.now(UTC)
+    return int(
+        db.execute(
+            select(func.count())
+            .select_from(BacktestJob)
+            .where(
+                BacktestJob.status == "queued",
+                BacktestJob.available_at <= observed_at,
+            )
+        ).scalar_one()
+    )
 
 
 def enqueue_backtest_job(
@@ -60,10 +215,11 @@ def enqueue_backtest_job(
         priority=priority,
         max_attempts=max(1, max_attempts),
         payload=payload,
-        progress={"percent": 0.0},
+        progress={},
     )
     db.add(job)
     db.flush()
+    job.progress = _job_progress(job, "queued", percent=0.0)
     return job
 
 
@@ -77,6 +233,7 @@ def request_backtest_cancel(db: Session, run_id: UUID) -> BacktestJob:
     experiment_id = None
     if job.status == "queued":
         job.status = "cancelled"
+        job.progress = _job_progress(job, "cancelled", percent=None, preserve=True)
         run = db.get(StrategyRun, run_id)
         if run is not None:
             run.status = "cancelled"
@@ -106,6 +263,7 @@ def recover_expired_jobs(db: Session, *, now: datetime | None = None) -> int:
         run = db.get(StrategyRun, job.run_id)
         if job.cancel_requested_at is not None:
             job.status = "cancelled"
+            job.progress = _job_progress(job, "cancelled", percent=None, preserve=True, now=observed_at)
             if run is not None:
                 run.status = "cancelled"
                 run.finished_at = observed_at
@@ -113,6 +271,7 @@ def recover_expired_jobs(db: Session, *, now: datetime | None = None) -> int:
         elif job.attempt < job.max_attempts:
             job.status = "queued"
             job.available_at = observed_at
+            job.progress = _job_progress(job, "queued", percent=0.0, now=observed_at)
             if run is not None:
                 run.status = "queued"
                 run.started_at = None
@@ -121,6 +280,7 @@ def recover_expired_jobs(db: Session, *, now: datetime | None = None) -> int:
         else:
             job.status = "failed"
             job.error_message = "backtest worker lease expired and retry budget was exhausted"
+            job.progress = _job_progress(job, "failed", percent=None, preserve=True, now=observed_at)
             if run is not None:
                 run.status = "failed"
                 run.finished_at = observed_at
@@ -162,6 +322,7 @@ def claim_next_backtest_job(
         return None
     if job.cancel_requested_at is not None:
         job.status = "cancelled"
+        job.progress = _job_progress(job, "cancelled", percent=None, preserve=True, now=now)
         run = db.get(StrategyRun, job.run_id)
         if run is not None:
             run.status = "cancelled"
@@ -170,6 +331,7 @@ def claim_next_backtest_job(
         return None
     job.status = "running"
     job.attempt += 1
+    job.progress = _job_progress(job, "preparing", percent=0.0, now=now)
     job.claimed_by = worker_id
     job.claimed_at = now
     job.heartbeat_at = now
@@ -206,7 +368,13 @@ def _update_job_progress(
         if job is None or job.status != "running" or job.claimed_by != worker_id:
             return
         now = datetime.now(UTC)
-        job.progress = dict(progress)
+        job.progress = normalize_backtest_progress(
+            {**progress, "attempt": job.attempt, "max_attempts": job.max_attempts, "updated_at": now},
+            status="running",
+            attempt=job.attempt,
+            max_attempts=job.max_attempts,
+            updated_at=now,
+        )
         job.heartbeat_at = now
         job.lease_expires_at = now + timedelta(seconds=max(30, lease_seconds))
         db.commit()
@@ -367,6 +535,7 @@ def execute_backtest_job(
 ) -> None:
     db = SessionLocal()
     last_progress_write = 0.0
+    last_progress_key: tuple[str, str] | None = None
     heartbeat_stop: Event | None = None
     heartbeat_thread: Thread | None = None
     try:
@@ -396,10 +565,14 @@ def execute_backtest_job(
         db.commit()
 
         def report(progress: dict[str, Any]) -> None:
-            nonlocal last_progress_write
+            nonlocal last_progress_key, last_progress_write
             now = time.monotonic()
-            if now - last_progress_write < 5.0 and float(progress.get("percent") or 0) < 100:
+            phase = str(progress.get("phase") or "running")
+            progress_key = (phase, str(progress.get("finalizing_stage") or ""))
+            interval = progress_update_interval_seconds(progress)
+            if progress_key == last_progress_key and now - last_progress_write < interval:
                 return
+            last_progress_key = progress_key
             last_progress_write = now
             _update_job_progress(
                 job.id,
@@ -431,11 +604,16 @@ def execute_backtest_job(
         job = db.get(BacktestJob, job.id)
         run = db.get(StrategyRun, run.id)
         assert job is not None and run is not None
+        # Progress is written through a separate heartbeat session while the
+        # engine runs. Refresh before the terminal transition so finalizing
+        # day counters are not replaced by this session's stale preparing JSON.
+        db.refresh(job)
         if job.source == "verification":
             _complete_candidate_verification(db, payload=payload, run=run)
         job.status = "completed"
-        job.progress = {"percent": 100.0}
-        job.heartbeat_at = datetime.now(UTC)
+        completed_at = datetime.now(UTC)
+        job.progress = _job_progress(job, "completed", percent=100.0, preserve=True, now=completed_at)
+        job.heartbeat_at = completed_at
         job.lease_expires_at = None
         job.error_message = None
         experiment_id = _finalize_linked_trial(db, job, run)
@@ -451,14 +629,17 @@ def execute_backtest_job(
         if cancelled:
             job.status = "cancelled"
             job.error_message = str(exc)
+            job.progress = _job_progress(job, "cancelled", percent=None, preserve=True)
         elif isinstance(exc, BacktestVerificationError):
             job.status = "failed"
             job.error_message = str(exc)[:2000]
+            job.progress = _job_progress(job, "failed", percent=None, preserve=True)
             _fail_candidate_verification(db, dict(job.payload or {}), job.error_message)
         elif job.attempt < job.max_attempts:
             job.status = "queued"
             job.available_at = datetime.now(UTC) + timedelta(seconds=5)
             job.error_message = str(exc)[:2000]
+            job.progress = _job_progress(job, "queued", percent=0.0)
             if run is not None:
                 run.status = "queued"
                 run.started_at = None
@@ -467,6 +648,7 @@ def execute_backtest_job(
         else:
             job.status = "failed"
             job.error_message = str(exc)[:2000]
+            job.progress = _job_progress(job, "failed", percent=None, preserve=True)
         job.claimed_by = None
         job.claimed_at = None
         job.heartbeat_at = None

@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { cancelAgentWorkflow } from "@/api/agentops";
 import {
@@ -14,6 +14,8 @@ import {
 } from "@/api/research";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
+import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogStack as ContextStack, DialogStat as ContextStat, DialogStats as ContextStats, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
+import { DenseDataTable } from "@/components/workspace/DenseDataTable";
 import { useI18n } from "@/i18n/provider";
 import type {
   ExperimentCandidate,
@@ -86,12 +88,56 @@ export default function ResearchExperimentPage() {
     : [];
   const reportArtifacts = asRecord(asRecord(experiment?.runManifest).reportArtifacts);
   const artifactFiles = asRecord(reportArtifacts.files);
+  const trialColumns = useMemo(() => [
+    { id: "ordinal", header: "#", accessor: (trial: ExperimentTrial) => trial.ordinal, sortable: true, width: 70 },
+    { id: "status", header: "Status", accessor: (trial: ExperimentTrial) => trial.status, sortable: true, width: 130 },
+    { id: "sample", header: "Sample", accessor: (trial: ExperimentTrial) => trial.sampleKind, sortable: true, width: 120 },
+    { id: "cost", header: "Cost", accessor: (trial: ExperimentTrial) => trial.costScenario, sortable: true, width: 120 },
+    { id: "window", header: "Window", accessor: (trial: ExperimentTrial) => `${trial.windowStart} → ${trial.windowEnd}`, width: 230 },
+    { id: "return", header: "Return", accessor: (trial: ExperimentTrial) => trial.metrics.total_return, cell: (value: unknown) => formatMetric(value), sortable: true, width: 110 },
+    { id: "sharpe", header: "Sharpe", accessor: (trial: ExperimentTrial) => trial.metrics.sharpe, cell: (value: unknown) => formatMetric(value), sortable: true, width: 110 },
+    { id: "backtest", header: "Backtest", accessor: (trial: ExperimentTrial) => trial.backtestRunId || "", cell: (value: unknown, trial: ExperimentTrial) => trial.backtestRunId ? <Link href={`/backtests/${trial.backtestRunId}`} style={{ color: "#67e8f9" }}>{trial.backtestRunId.slice(0, 8)}</Link> : "—", width: 120 },
+  ], []);
+  const childColumns = useMemo(() => [
+    { id: "phase", header: isZh ? "阶段" : "Phase", accessor: (child: ResearchExperiment) => String(child.spec.validationPhase || child.studyKind), sortable: true, filterable: true, width: 180 },
+    { id: "status", header: "Status", accessor: (child: ResearchExperiment) => child.status, sortable: true, filterable: true, width: 130 },
+    { id: "progress", header: isZh ? "进度" : "Progress", accessor: (child: ResearchExperiment) => `${Number(child.progress.completed || 0)} / ${Number(child.progress.total || 0)}`, width: 130 },
+    { id: "id", header: "ID", accessor: (child: ResearchExperiment) => child.id, cell: (_: unknown, child: ResearchExperiment) => <Link href={`/research/${child.id}`} style={{ color: "#67e8f9" }}>{child.id.slice(0, 8)}</Link>, width: 120 },
+  ], [isZh]);
+  const candidateColumns = useMemo(() => [
+    { id: "rank", header: "Rank", accessor: (candidate: ExperimentCandidate) => candidate.paretoRank ?? Number.MAX_SAFE_INTEGER, cell: (value: unknown) => Number(value) === Number.MAX_SAFE_INTEGER ? "—" : String(value), sortable: true, width: 90 },
+    { id: "hash", header: "Hash", accessor: (candidate: ExperimentCandidate) => candidate.paramsHash, cell: (value: unknown) => String(value).slice(0, 8), filterable: true, width: 120 },
+    { id: "overrides", header: "Overrides", accessor: (candidate: ExperimentCandidate) => JSON.stringify(candidate.overrides), cell: (value: unknown) => <code>{String(value)}</code>, width: 280 },
+    { id: "return", header: "OOS return", accessor: (candidate: ExperimentCandidate) => candidate.aggregateMetrics.oos_total_return, cell: (value: unknown) => formatMetric(value), sortable: true, width: 130 },
+    { id: "sharpe", header: "Sharpe", accessor: (candidate: ExperimentCandidate) => candidate.aggregateMetrics.oos_sharpe, cell: (value: unknown) => formatMetric(value), sortable: true, width: 110 },
+    { id: "drawdown", header: "Drawdown", accessor: (candidate: ExperimentCandidate) => candidate.aggregateMetrics.oos_max_drawdown, cell: (value: unknown) => formatMetric(value), sortable: true, width: 130 },
+    { id: "draft", header: isZh ? "已保存 draft" : "Saved draft", accessor: (candidate: ExperimentCandidate) => candidate.promotedStrategyId || "", cell: (_: unknown, candidate: ExperimentCandidate) => candidate.promotedStrategyId ? <Link href={`/strategies/${candidate.promotedStrategyId}`} style={{ color: "#67e8f9" }}>{candidate.promotedStrategyId.slice(0, 8)}</Link> : "—", width: 150 },
+  ], [isZh]);
 
   return (
     <AppShell
       title={experiment ? String(experiment.spec.name || "Research experiment") : (isZh ? "研究实验" : "Research experiment")}
       subtitle={experiment ? String(experiment.spec.hypothesis || experiment.id) : id}
-      actions={experiment ? <Link href={`/agent-runs/${experiment.workflowRunId}`} style={linkButton}>{isZh ? "查看 Agent 运行" : "View agent run"}</Link> : undefined}
+      actions={experiment ? (
+        <>
+          <Link href={`/agent-runs/${experiment.workflowRunId}`} style={linkButton}>{isZh ? "查看 Agent 运行" : "View agent run"}</Link>
+          <WorkspaceDialog triggerLabel={isZh ? "实验详情" : "Experiment Details"} title={isZh ? "实验上下文" : "Experiment Context"}>
+            <ContextStack>
+              <ContextGroup title={isZh ? "当前状态" : "Current Status"}>
+                <ContextStats>
+                  <ContextStat label={isZh ? "状态" : "Status"} value={experiment.status} />
+                  <ContextStat label={isZh ? "进度" : "Progress"} value={`${Number(experiment.progress.completed || 0)} / ${Number(experiment.progress.total || trials.length)}`} />
+                  <ContextStat label={isZh ? "轮次" : "Rounds"} value={rounds.length} />
+                  <ContextStat label="Agent tokens" value={formatInteger(tokenUsage.totalTokens)} />
+                </ContextStats>
+              </ContextGroup>
+              <ContextGroup title={isZh ? "快速入口" : "Quick Links"}>
+                <ContextLinks><ContextLink href={`/agent-runs/${experiment.workflowRunId}`}>{isZh ? "查看 Agent 运行" : "View agent run"}</ContextLink><ContextLink href="/research">{isZh ? "返回研究列表" : "Back to research"}</ContextLink></ContextLinks>
+              </ContextGroup>
+            </ContextStack>
+          </WorkspaceDialog>
+        </>
+      ) : undefined}
     >
       {error ? <p style={{ color: "#fda4af" }}>{error}</p> : null}
       {!experiment ? <p>{isZh ? "加载中…" : "Loading…"}</p> : (
@@ -136,17 +182,7 @@ export default function ResearchExperimentPage() {
                 );
               })}
               {children.length ? (
-                <div style={{ overflowX: "auto", marginTop: 18 }}>
-                  <table style={tableStyle}>
-                    <thead><tr><th>{isZh ? "阶段" : "Phase"}</th><th>Status</th><th>{isZh ? "进度" : "Progress"}</th><th>ID</th></tr></thead>
-                    <tbody>{children.map((child) => <tr key={child.id}>
-                      <td>{String(child.spec.validationPhase || child.studyKind)}</td>
-                      <td>{child.status}</td>
-                      <td>{Number(child.progress.completed || 0)} / {Number(child.progress.total || 0)}</td>
-                      <td><Link href={`/research/${child.id}`} style={{ color: "#67e8f9" }}>{child.id.slice(0, 8)}</Link></td>
-                    </tr>)}</tbody>
-                  </table>
-                </div>
+                <div style={{ marginTop: 18 }}><DenseDataTable columns={childColumns} rows={children} getRowId={(child) => child.id} emptyText={isZh ? "尚无子实验。" : "No child experiments."} ariaLabel={isZh ? "子实验" : "Child experiments"} /></div>
               ) : null}
               {Object.keys(artifactFiles).length ? (
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 18 }}>
@@ -189,38 +225,13 @@ export default function ResearchExperimentPage() {
               </div>
             ) : <p style={{ color: "#94a3b8" }}>{isZh ? "这是旧版有限网格实验；历史结果仍保持只读。" : "This is a legacy finite-grid experiment; its history remains read-only."}</p>}
             {candidates.length ? (
-              <div style={{ overflowX: "auto" }}>
-                <table style={tableStyle}>
-                  <thead><tr><th>Rank</th><th>Hash</th><th>Overrides</th><th>OOS return</th><th>Sharpe</th><th>Drawdown</th><th>{isZh ? "已保存 draft" : "Saved draft"}</th></tr></thead>
-                  <tbody>{candidates.map((candidate) => <tr key={candidate.id}>
-                    <td>{candidate.paretoRank ?? "—"}</td>
-                    <td>{candidate.paramsHash.slice(0, 8)}</td>
-                    <td><code>{JSON.stringify(candidate.overrides)}</code></td>
-                    <td>{formatMetric(candidate.aggregateMetrics.oos_total_return)}</td>
-                    <td>{formatMetric(candidate.aggregateMetrics.oos_sharpe)}</td>
-                    <td>{formatMetric(candidate.aggregateMetrics.oos_max_drawdown)}</td>
-                    <td>{candidate.promotedStrategyId ? <Link href={`/strategies/${candidate.promotedStrategyId}`} style={{ color: "#67e8f9" }}>{candidate.promotedStrategyId.slice(0, 8)}</Link> : "—"}</td>
-                  </tr>)}</tbody>
-                </table>
-              </div>
+              <DenseDataTable columns={candidateColumns} rows={candidates} getRowId={(candidate) => candidate.id} emptyText={isZh ? "尚无 Pareto 候选。" : "No Pareto candidates."} ariaLabel={isZh ? "Pareto 候选" : "Pareto candidates"} />
             ) : null}
           </section>
 
           <section style={{ ...panelStyle, marginTop: 18 }}>
             <h2 style={{ marginTop: 0 }}>{isZh ? "Trial 明细" : "Trial details"}</h2>
-            <div style={{ overflowX: "auto" }}>
-              <table style={tableStyle}>
-                <thead><tr><th>#</th><th>Status</th><th>Sample</th><th>Cost</th><th>Window</th><th>Return</th><th>Sharpe</th><th>Backtest</th></tr></thead>
-                <tbody>{trials.map((trial) => (
-                  <tr key={trial.id}>
-                    <td>{trial.ordinal}</td><td>{trial.status}</td><td>{trial.sampleKind}</td><td>{trial.costScenario}</td>
-                    <td>{trial.windowStart} → {trial.windowEnd}</td>
-                    <td>{formatMetric(trial.metrics.total_return)}</td><td>{formatMetric(trial.metrics.sharpe)}</td>
-                    <td>{trial.backtestRunId ? <Link href={`/backtests/${trial.backtestRunId}`} style={{ color: "#67e8f9" }}>{trial.backtestRunId.slice(0, 8)}</Link> : "—"}</td>
-                  </tr>
-                ))}</tbody>
-              </table>
-            </div>
+            <DenseDataTable columns={trialColumns} rows={trials} getRowId={(trial) => trial.id} emptyText={isZh ? "尚无 Trial。" : "No trials yet."} ariaLabel={isZh ? "Trial 明细" : "Trial details"} />
           </section>
 
           <section style={{ ...panelStyle, marginTop: 18 }}>
@@ -284,7 +295,6 @@ function MetricCard({ label, value }: { label: string; value: string }) {
 const panelStyle: CSSProperties = { padding: 22, borderRadius: 20, border: "1px solid rgba(100,116,139,.35)", background: "rgba(8,15,24,.8)" };
 const linkButton: CSSProperties = { padding: "10px 16px", borderRadius: 10, background: "#0891b2", color: "white", textDecoration: "none", fontWeight: 800 };
 const dangerButton: CSSProperties = { padding: "10px 16px", border: "1px solid #be123c", borderRadius: 10, background: "rgba(159,18,57,.2)", color: "#fecdd3", fontWeight: 800, cursor: "pointer" };
-const tableStyle: CSSProperties = { width: "100%", borderCollapse: "collapse", textAlign: "left", lineHeight: 1.7 };
 const preStyle: CSSProperties = { overflow: "auto", padding: 14, borderRadius: 10, background: "#020617", color: "#bae6fd", fontSize: 12, lineHeight: 1.55 };
 const summaryGridStyle: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 };
 const metricCardStyle: CSSProperties = { display: "flex", flexDirection: "column", padding: 14, borderRadius: 12, border: "1px solid rgba(100,116,139,.3)", background: "rgba(15,23,42,.62)" };

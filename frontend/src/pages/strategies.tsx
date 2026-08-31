@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { useRouter } from "next/router";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -12,6 +11,7 @@ import {
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
+import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogStack as ContextStack, DialogStat as ContextStat, DialogStats as ContextStats, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
 import type { StrategyCatalogItem, StrategyOut } from "@/types/strategy";
 import {
@@ -25,7 +25,6 @@ import {
 } from "@/utils/strategy";
 
 export default function StrategiesPage() {
-  const router = useRouter();
   const { locale } = useI18n();
   const isZh = locale === "zh-CN";
   const [items, setItems] = useState<StrategyOut[]>([]);
@@ -38,6 +37,7 @@ export default function StrategiesPage() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [engineFilter, setEngineFilter] = useState("all");
+  const [selectedStrategy, setSelectedStrategy] = useState<StrategyOut | null>(null);
 
   const categoryEntries = useMemo(() => {
     const counts = new Map<string, number>();
@@ -161,20 +161,29 @@ export default function StrategiesPage() {
           : "Manage strategies as long-lived assets. Filter, compare, and confirm which definitions are truly ready to enter the backtest and execution pipeline."
       }
       actions={
-        <Link
-          href="/strategies/new"
-          style={{
-            padding: "11px 16px",
-            borderRadius: 14,
-            background: "#0f766e",
-            color: "#fff",
-            textDecoration: "none",
-            fontWeight: 700,
-            fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-          }}
-        >
-          {isZh ? "新建策略" : "New Strategy"}
-        </Link>
+        <>
+          <Link
+            href="/strategies/new"
+            style={{
+              padding: "11px 16px",
+              borderRadius: 14,
+              background: "#0f766e",
+              color: "#fff",
+              textDecoration: "none",
+              fontWeight: 700,
+              fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+            }}
+          >
+            {isZh ? "新建策略" : "New Strategy"}
+          </Link>
+          <WorkspaceDialog triggerLabel={isZh ? "筛选概览" : "Filter Summary"} title={isZh ? "筛选与概览" : "Filters & Summary"}>
+            <ContextStack>
+              <ContextGroup title={isZh ? "策略库存" : "Strategy Inventory"}><ContextStats><ContextStat label={isZh ? "全部策略" : "All strategies"} value={summarizeStrategies(items).total} /><ContextStat label="Draft" value={summarizeStrategies(items).drafts} /><ContextStat label="Active" value={summarizeStrategies(items).active} /><ContextStat label="Engine ready" value={summarizeStrategies(items).engineReady} /></ContextStats></ContextGroup>
+              <ContextGroup title={isZh ? "当前筛选" : "Current Filters"}><ContextStats><ContextStat label={isZh ? "搜索" : "Search"} value={search || (isZh ? "全部" : "All")} /><ContextStat label={isZh ? "类别" : "Category"} value={typeFilter} /><ContextStat label={isZh ? "状态" : "Status"} value={statusFilter} /><ContextStat label="Engine" value={engineFilter} /></ContextStats></ContextGroup>
+              <ContextGroup title={isZh ? "快速入口" : "Quick Links"}><ContextLinks><ContextLink href="/strategies/new">{isZh ? "新建策略" : "New strategy"}</ContextLink><ContextLink href="/research">{isZh ? "Agent 研究" : "Agent research"}</ContextLink><ContextLink href="/backtests">{isZh ? "回测工作台" : "Backtests"}</ContextLink></ContextLinks></ContextGroup>
+            </ContextStack>
+          </WorkspaceDialog>
+        </>
       }
     >
       {loading && <p>{isZh ? "加载中..." : "Loading..."}</p>}
@@ -598,13 +607,13 @@ export default function StrategiesPage() {
                             position: "relative",
                             overflow: "hidden",
                           }}
-                          role="link"
+                          role="button"
                           tabIndex={0}
-                          onClick={() => router.push(`/strategies/${item.id}`)}
+                          onClick={() => setSelectedStrategy(item)}
                           onKeyDown={(event) => {
                             if (event.key === "Enter" || event.key === " ") {
                               event.preventDefault();
-                              void router.push(`/strategies/${item.id}`);
+                              setSelectedStrategy(item);
                             }
                           }}
                         >
@@ -786,6 +795,13 @@ export default function StrategiesPage() {
                             </span>
                             <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
                               <Link
+                                href={`/strategies/${item.id}`}
+                                onClick={(event) => event.stopPropagation()}
+                                style={{ color: "#bae6fd", textDecoration: "none", fontSize: 14, fontWeight: 700, whiteSpace: "nowrap" }}
+                              >
+                                {isZh ? "查看详情" : "View Details"}
+                              </Link>
+                              <Link
                                 href={`/strategies/${item.id}/edit`}
                                 onClick={(event) => event.stopPropagation()}
                                 style={{
@@ -835,6 +851,31 @@ export default function StrategiesPage() {
                     })}
                   </div>
                 )}
+                <WorkspaceDialog
+                  open={selectedStrategy != null}
+                  onOpenChange={(open) => { if (!open) setSelectedStrategy(null); }}
+                  title={selectedStrategy?.name || (isZh ? "策略预览" : "Strategy Preview")}
+                >
+                  {selectedStrategy ? (
+                    <ContextStack>
+                      <ContextGroup title={isZh ? "策略身份" : "Strategy Identity"}>
+                        <ContextStats>
+                          <ContextStat label={isZh ? "技术类型" : "Technical type"} value={selectedStrategy.strategy_type} />
+                          <ContextStat label={isZh ? "版本" : "Version"} value={`v${selectedStrategy.version}`} />
+                          <ContextStat label={isZh ? "状态" : "Status"} value={selectedStrategy.status} />
+                          <ContextStat label="Engine ready" value={selectedStrategy.engine_ready ? (isZh ? "是" : "Yes") : (isZh ? "否" : "No")} />
+                          <ContextStat label={isZh ? "股票池" : "Universe"} value={getUniverseSummary(selectedStrategy)} />
+                        </ContextStats>
+                      </ContextGroup>
+                      <ContextGroup title={isZh ? "策略说明" : "Description"}>{getStrategyDescription(selectedStrategy)}</ContextGroup>
+                      <ContextLinks>
+                        <ContextLink href={`/strategies/${selectedStrategy.id}`}>{isZh ? "打开策略详情" : "Open strategy detail"}</ContextLink>
+                        <ContextLink href={`/strategies/${selectedStrategy.id}/edit`}>{isZh ? "编辑策略" : "Edit strategy"}</ContextLink>
+                        <ContextLink href={`/backtests?strategyId=${selectedStrategy.id}`}>{isZh ? "使用此策略回测" : "Backtest this strategy"}</ContextLink>
+                      </ContextLinks>
+                    </ContextStack>
+                  ) : null}
+                </WorkspaceDialog>
               </>
             );
           })()}

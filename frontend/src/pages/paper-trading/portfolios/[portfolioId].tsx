@@ -10,6 +10,17 @@ import {
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
+import {
+  DialogGroup as ContextGroup,
+  DialogLink as ContextLink,
+  DialogLinks as ContextLinks,
+  DialogNote as ContextNote,
+  DialogStack as ContextStack,
+  DialogStat as ContextStat,
+  DialogStats as ContextStats,
+  WorkspaceDialog,
+} from "@/components/workspace/WorkspaceDialog";
+import { DenseDataTable } from "@/components/workspace/DenseDataTable";
 import { useI18n } from "@/i18n/provider";
 import type {
   PaperTradingWorkspaceOut,
@@ -199,6 +210,27 @@ export default function PortfolioDetailPage() {
     [portfolio]
   );
 
+  const strategyColumns = useMemo(() => [
+    { id: "strategy", header: txt("策略", "Strategy"), accessor: (item: NonNullable<typeof portfolio>["strategies"][number]) => item.strategy_name, cell: (_: unknown, item: NonNullable<typeof portfolio>["strategies"][number]) => <div style={{ display: "grid", gap: 4 }}><Link href={`/strategies/${item.strategy_id}`} style={strategyLinkStyle}>{item.strategy_name}</Link><span style={smallMutedTextStyle}>{item.strategy_type}</span></div>, sortable: true, filterable: true, width: 220 },
+    { id: "status", header: txt("状态", "Status"), accessor: (item: NonNullable<typeof portfolio>["strategies"][number]) => `${item.strategy_status} ${item.allocation_status}`, cell: (_: unknown, item: NonNullable<typeof portfolio>["strategies"][number]) => <div style={{ display: "flex", gap: 6 }}><Badge tone={item.strategy_status === "active" ? "success" : "warning"}>{item.strategy_status}</Badge><Badge tone={item.allocation_status === "active" ? "success" : "warning"}>{item.allocation_status}</Badge></div>, filterable: true, width: 190 },
+    { id: "auto", header: txt("日调度", "Auto-Run"), accessor: (item: NonNullable<typeof portfolio>["strategies"][number]) => item.auto_run_enabled ? txt("开启", "On") : txt("关闭", "Off"), cell: (value: unknown) => <Badge tone={value === txt("开启", "On") ? "info" : "neutral"}>{String(value)}</Badge>, sortable: true, width: 120 },
+    { id: "allocation", header: txt("配比", "Allocation"), accessor: (item: NonNullable<typeof portfolio>["strategies"][number]) => item.allocation_pct, cell: (value: unknown) => formatPercent(Number(value), 2), sortable: true, width: 120 },
+    { id: "capital", header: txt("固定本金", "Capital Base"), accessor: (item: NonNullable<typeof portfolio>["strategies"][number]) => item.capital_base, cell: (value: unknown) => formatMoney(Number(value), locale, brokerCurrency), sortable: true, width: 150 },
+    { id: "latest", header: txt("最近运行", "Latest Run"), accessor: (item: NonNullable<typeof portfolio>["strategies"][number]) => item.latest_run_status || "-", sortable: true, width: 130 },
+    { id: "requested", header: txt("最近请求", "Requested At"), accessor: (item: NonNullable<typeof portfolio>["strategies"][number]) => item.latest_run_requested_at || "", cell: (value: unknown) => formatDateTime(String(value || ""), locale), sortable: true, width: 190 },
+    { id: "equity", header: txt("最近权益", "Latest Equity"), accessor: (item: NonNullable<typeof portfolio>["strategies"][number]) => item.latest_run_equity, cell: (value: unknown) => formatMoney(typeof value === "number" ? value : null, locale, brokerCurrency), sortable: true, width: 150 },
+  ], [brokerCurrency, locale, txt]);
+
+  const transactionColumns = useMemo(() => [
+    { id: "time", header: txt("时间", "Time"), accessor: (item: (typeof portfolioTransactions)[number]) => item.ts, cell: (value: unknown) => formatDateTime(String(value || ""), locale), sortable: true, width: 190 },
+    { id: "strategy", header: txt("策略", "Strategy"), accessor: (item: (typeof portfolioTransactions)[number]) => item.strategy_name || item.strategy_id, cell: (_: unknown, item: (typeof portfolioTransactions)[number]) => <Link href={`/strategies/${item.strategy_id}`} style={strategyLinkStyle}>{item.strategy_name || item.strategy_id}</Link>, filterable: true, width: 200 },
+    { id: "symbol", header: txt("标的", "Symbol"), accessor: (item: (typeof portfolioTransactions)[number]) => item.symbol, sortable: true, filterable: true, width: 110 },
+    { id: "side", header: txt("方向", "Side"), accessor: (item: (typeof portfolioTransactions)[number]) => item.side, sortable: true, width: 90 },
+    { id: "qty", header: txt("数量", "Qty"), accessor: (item: (typeof portfolioTransactions)[number]) => item.qty, cell: (value: unknown) => formatNumber(Number(value), locale, 4), sortable: true, width: 120 },
+    { id: "price", header: txt("价格", "Price"), accessor: (item: (typeof portfolioTransactions)[number]) => item.price, cell: (value: unknown) => formatMoney(Number(value), locale, brokerCurrency), sortable: true, width: 130 },
+    { id: "cash", header: txt("净现金流", "Net Cash Flow"), accessor: (item: (typeof portfolioTransactions)[number]) => item.net_cash_flow, cell: (value: unknown) => <span style={{ color: Number(value) >= 0 ? "#34d399" : "#fb7185", fontWeight: 700 }}>{formatMoney(Number(value), locale, brokerCurrency)}</span>, sortable: true, width: 150 },
+  ], [brokerCurrency, locale, txt]);
+
   return (
     <AppShell
       title={portfolio?.name || txt("Portfolio 详情", "Portfolio Detail")}
@@ -219,6 +251,25 @@ export default function PortfolioDetailPage() {
           >
             {txt("刷新", "Refresh")}
           </button>
+          <WorkspaceDialog triggerLabel={txt("Portfolio 详情", "Portfolio Details")} title={txt("Portfolio 上下文", "Portfolio Context")}>
+            <ContextStack>
+              <ContextGroup title={portfolio?.name || "Portfolio"}>
+                <ContextStats>
+                  <ContextStat label={txt("状态", "Status")} value={portfolio?.status || "-"} />
+                  <ContextStat label={txt("活跃策略", "Active Strategies")} value={activeStrategyCount} />
+                  <ContextStat label={txt("自动调度", "Auto Run")} value={autoRunEnabledCount} />
+                  <ContextStat label={txt("资金分配", "Allocation")} value={formatPercent(portfolio?.active_allocation_pct_total || 0, 0)} />
+                  <ContextStat label={txt("交易明细", "Transactions")} value={portfolio?.transaction_count || 0} />
+                  <ContextStat label={txt("账户净值", "Account Equity")} value={formatMoney(workspace?.broker_account?.equity, locale, brokerCurrency)} />
+                </ContextStats>
+              </ContextGroup>
+              <ContextNote>{txt("主区保留策略配置、历史运行和交易明细；弹窗用于快速查看身份与状态。", "Strategy configuration, run history, and transaction details stay in the main area; this dialog provides quick identity and status details.")}</ContextNote>
+              <ContextLinks>
+                <ContextLink href="/paper-trading#portfolios">{txt("返回 Paper Trading", "Back to Paper Trading")}</ContextLink>
+                <ContextLink href="/strategies">{txt("策略库", "Strategy Library")}</ContextLink>
+              </ContextLinks>
+            </ContextStack>
+          </WorkspaceDialog>
         </>
       }
     >
@@ -380,73 +431,7 @@ export default function PortfolioDetailPage() {
               "每条策略都展示 allocation、日调度开关，以及它最近一次运行状态。",
               "Each strategy shows its allocation, daily auto-run flag, and latest run status."
             ),
-            <div style={tableWrapStyle}>
-              <table style={tableStyle}>
-                <thead>
-                  <tr>
-                    <th style={headCellStyle}>{txt("策略", "Strategy")}</th>
-                    <th style={headCellStyle}>{txt("状态", "Status")}</th>
-                    <th style={headCellStyle}>{txt("日调度", "Auto-Run")}</th>
-                    <th style={headCellStyle}>{txt("配比", "Allocation")}</th>
-                    <th style={headCellStyle}>{txt("固定本金", "Capital Base")}</th>
-                    <th style={headCellStyle}>{txt("最近运行", "Latest Run")}</th>
-                    <th style={headCellStyle}>{txt("最近请求", "Requested At")}</th>
-                    <th style={headCellStyle}>{txt("最近权益", "Latest Equity")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {portfolio.strategies.map((item) => (
-                    <tr key={item.strategy_id}>
-                      <td style={bodyCellStyle}>
-                        <div style={{ display: "grid", gap: 6 }}>
-                          <Link
-                            href={`/strategies/${item.strategy_id}`}
-                            style={strategyLinkStyle}
-                          >
-                            {item.strategy_name}
-                          </Link>
-                          <div style={smallMutedTextStyle}>{item.strategy_type}</div>
-                        </div>
-                      </td>
-                      <td style={bodyCellStyle}>
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          <Badge
-                            tone={item.strategy_status === "active" ? "success" : "warning"}
-                          >
-                            {item.strategy_status}
-                          </Badge>
-                          <Badge
-                            tone={item.allocation_status === "active" ? "success" : "warning"}
-                          >
-                            {item.allocation_status}
-                          </Badge>
-                        </div>
-                      </td>
-                      <td style={bodyCellStyle}>
-                        <Badge tone={item.auto_run_enabled ? "info" : "neutral"}>
-                          {item.auto_run_enabled
-                            ? txt("开启", "On")
-                            : txt("关闭", "Off")}
-                        </Badge>
-                      </td>
-                      <td style={bodyCellStyle}>
-                        {formatPercent(item.allocation_pct, 2)}
-                      </td>
-                      <td style={bodyCellStyle}>
-                        {formatMoney(item.capital_base, locale, brokerCurrency)}
-                      </td>
-                      <td style={bodyCellStyle}>{item.latest_run_status || "-"}</td>
-                      <td style={bodyCellStyle}>
-                        {formatDateTime(item.latest_run_requested_at, locale)}
-                      </td>
-                      <td style={bodyCellStyle}>
-                        {formatMoney(item.latest_run_equity, locale, brokerCurrency)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <DenseDataTable columns={strategyColumns} rows={portfolio.strategies} getRowId={(item) => item.strategy_id} emptyText={txt("尚无策略配置。", "No strategy configuration yet.")} ariaLabel={txt("Portfolio 策略配置", "Portfolio strategy setup")} />
           )}
 
           {sectionCard(
@@ -472,53 +457,7 @@ export default function PortfolioDetailPage() {
                   {txt("这个 portfolio 还没有本地交易记录。", "There are no local transactions for this portfolio yet.")}
                 </div>
               ) : (
-                <div style={tableWrapStyle}>
-                  <table style={tableStyle}>
-                    <thead>
-                      <tr>
-                        <th style={headCellStyle}>{txt("时间", "Time")}</th>
-                        <th style={headCellStyle}>{txt("策略", "Strategy")}</th>
-                        <th style={headCellStyle}>{txt("标的", "Symbol")}</th>
-                        <th style={headCellStyle}>{txt("方向", "Side")}</th>
-                        <th style={headCellStyle}>{txt("数量", "Qty")}</th>
-                        <th style={headCellStyle}>{txt("价格", "Price")}</th>
-                        <th style={headCellStyle}>{txt("净现金流", "Net Cash Flow")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {portfolioTransactions.map((item) => (
-                        <tr key={item.id}>
-                          <td style={bodyCellStyle}>{formatDateTime(item.ts, locale)}</td>
-                          <td style={bodyCellStyle}>
-                            <Link
-                              href={`/strategies/${item.strategy_id}`}
-                              style={strategyLinkStyle}
-                            >
-                              {item.strategy_name || item.strategy_id}
-                            </Link>
-                          </td>
-                          <td style={bodyCellStyle}>{item.symbol}</td>
-                          <td style={bodyCellStyle}>{item.side}</td>
-                          <td style={bodyCellStyle}>
-                            {formatNumber(item.qty, locale, 4)}
-                          </td>
-                          <td style={bodyCellStyle}>
-                            {formatMoney(item.price, locale, brokerCurrency)}
-                          </td>
-                          <td
-                            style={{
-                              ...bodyCellStyle,
-                              color: item.net_cash_flow >= 0 ? "#34d399" : "#fb7185",
-                              fontWeight: 700,
-                            }}
-                          >
-                            {formatMoney(item.net_cash_flow, locale, brokerCurrency)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                <DenseDataTable columns={transactionColumns} rows={portfolioTransactions} getRowId={(item) => item.id} emptyText={txt("这个 portfolio 还没有本地交易记录。", "There are no local transactions for this portfolio yet.")} ariaLabel={txt("Portfolio 本地交易", "Portfolio local transactions")} />
               )}
             </>
           )}
@@ -604,35 +543,6 @@ const bodyTextStyle: CSSProperties = {
   margin: 0,
   color: "#e2e8f0",
   lineHeight: 1.7,
-  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-};
-
-const tableWrapStyle: CSSProperties = {
-  overflowX: "auto",
-};
-
-const tableStyle: CSSProperties = {
-  width: "100%",
-  borderCollapse: "collapse",
-  minWidth: 880,
-};
-
-const headCellStyle: CSSProperties = {
-  padding: "10px 12px",
-  borderBottom: "1px solid rgba(71, 85, 105, 0.4)",
-  textAlign: "left",
-  color: "#cbd5e1",
-  fontSize: 13,
-  fontWeight: 700,
-  letterSpacing: "0.02em",
-  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-};
-
-const bodyCellStyle: CSSProperties = {
-  padding: "12px",
-  borderBottom: "1px solid rgba(71, 85, 105, 0.22)",
-  color: "#e2e8f0",
-  verticalAlign: "top",
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
 

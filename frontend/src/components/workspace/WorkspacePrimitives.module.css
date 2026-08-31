@@ -1,0 +1,43 @@
+.kpiStrip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.workspaceGrid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, var(--workspace-main-ratio, 1.35fr)) minmax(300px, var(--workspace-side-ratio, 0.65fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.workspaceGridBalanced {
+  --workspace-main-ratio: 1fr;
+  --workspace-side-ratio: 1fr;
+}
+
+.densePanel {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(71, 85, 105, 0.3);
+  border-radius: 15px;
+  background: rgba(8, 15, 24, 0.86);
+  box-shadow: 0 12px 30px rgba(2, 6, 23, 0.22);
+}
+
+.sticky {
+  position: sticky;
+  top: 16px;
+}
+
+@media (max-width: 1279px) {
+  .workspaceGrid { grid-template-columns: minmax(0, 1fr); }
+  .sticky { position: static; }
+}
+
+@media (max-width: 767px) {
+  .kpiStrip { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .densePanel { padding: 14px; }
+}

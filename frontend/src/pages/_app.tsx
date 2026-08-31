@@ -22,6 +22,14 @@ export default function App({ Component, pageProps }: AppProps) {
             background: #06131a;
           }
 
+          :root {
+            --workspace-gap: 14px;
+            --workspace-panel-radius: 15px;
+            --workspace-control-height: 38px;
+            --workspace-floating-right: max(24px, env(safe-area-inset-right));
+            --workspace-floating-bottom: max(24px, env(safe-area-inset-bottom));
+          }
+
           body {
             background: #06131a;
             color: #e2e8f0;
@@ -46,6 +54,27 @@ export default function App({ Component, pageProps }: AppProps) {
 
           * {
             box-sizing: border-box;
+          }
+
+          .workspace-tooltip {
+            z-index: 120;
+            max-width: 280px;
+            padding: 7px 9px;
+            border: 1px solid rgba(71, 85, 105, 0.52);
+            border-radius: 9px;
+            background: #0f172a;
+            color: #e2e8f0;
+            box-shadow: 0 10px 30px rgba(2, 6, 23, 0.42);
+            font-size: 12px;
+            line-height: 1.45;
+          }
+
+          @media (max-width: 767px) {
+            :root {
+              --workspace-control-height: 44px;
+              --workspace-floating-right: max(12px, env(safe-area-inset-right));
+              --workspace-floating-bottom: max(12px, env(safe-area-inset-bottom));
+            }
           }
         `}</style>
         <Component {...pageProps} />

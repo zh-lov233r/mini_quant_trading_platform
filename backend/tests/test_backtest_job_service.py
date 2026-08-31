@@ -10,6 +10,8 @@ from src.models.tables import BacktestJob, Base, Strategy, StrategyRun
 from src.services.backtest_job_service import (
     claim_next_backtest_job,
     enqueue_backtest_job,
+    normalize_backtest_progress,
+    progress_update_interval_seconds,
     recover_expired_jobs,
     request_backtest_cancel,
 )
@@ -59,6 +61,9 @@ class BacktestJobServiceTests(unittest.TestCase):
         self.assertEqual(job.status, "running")
         self.assertEqual(job.attempt, 1)
         self.assertEqual(job.claimed_by, "worker-1")
+        self.assertEqual(job.progress["phase"], "preparing")
+        self.assertEqual(job.progress["percent"], 0.0)
+        self.assertEqual(job.progress["attempt"], 1)
         self.assertIsNone(claim_next_backtest_job(self.db, worker_id="worker-2"))
 
     def test_queued_cancellation_marks_run_terminal(self) -> None:
@@ -70,6 +75,7 @@ class BacktestJobServiceTests(unittest.TestCase):
         self.assertEqual(run.status, "cancelled")
         job = self.db.execute(select(BacktestJob).where(BacktestJob.run_id == run.id)).scalar_one()
         self.assertEqual(job.status, "cancelled")
+        self.assertEqual(job.progress["phase"], "cancelled")
         self.assertIsNotNone(job.cancel_requested_at)
 
     def test_expired_lease_exhaustion_marks_job_and_run_failed(self) -> None:
@@ -91,6 +97,86 @@ class BacktestJobServiceTests(unittest.TestCase):
         self.db.refresh(run)
         self.assertEqual(job.status, "failed")
         self.assertEqual(run.status, "failed")
+        self.assertEqual(job.progress["phase"], "failed")
+
+    def test_expired_lease_retry_resets_progress(self) -> None:
+        run = self._run()
+        job = enqueue_backtest_job(
+            self.db,
+            run=run,
+            payload={"strategy_id": str(self.strategy.id)},
+            max_attempts=2,
+        )
+        job.status = "running"
+        job.attempt = 1
+        job.progress = {"phase": "running", "percent": 73.0, "completed_days": 73}
+        job.claimed_by = "dead-worker"
+        job.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        run.status = "running"
+        self.db.commit()
+
+        self.assertEqual(recover_expired_jobs(self.db), 1)
+        self.db.refresh(job)
+        self.assertEqual(job.status, "queued")
+        self.assertEqual(job.progress["phase"], "queued")
+        self.assertEqual(job.progress["percent"], 0.0)
+        self.assertIsNone(job.progress["completed_days"])
+
+    def test_progress_normalization_caps_phases_and_supports_legacy_rows(self) -> None:
+        legacy = normalize_backtest_progress(
+            {"percent": 42.6},
+            status="running",
+            attempt=1,
+            max_attempts=2,
+        )
+        self.assertEqual(legacy["phase"], "running")
+        self.assertEqual(legacy["percent"], 42.6)
+        self.assertEqual(legacy["attempt"], 1)
+        self.assertEqual(legacy["max_attempts"], 2)
+
+        running = normalize_backtest_progress(
+            {"phase": "running", "percent": 100},
+            status="running",
+            attempt=1,
+            max_attempts=2,
+        )
+        finalizing = normalize_backtest_progress(
+            {
+                "phase": "finalizing",
+                "percent": 92.5,
+                "finalizing_stage": "run_events",
+                "completed_items": 250,
+                "total_items": 1_000,
+            },
+            status="running",
+            attempt=1,
+            max_attempts=2,
+        )
+        completed = normalize_backtest_progress(
+            {"percent": 12},
+            status="completed",
+            attempt=1,
+            max_attempts=2,
+        )
+        failed = normalize_backtest_progress(
+            {"phase": "running", "percent": 61},
+            status="failed",
+            attempt=2,
+            max_attempts=2,
+        )
+        self.assertEqual(running["percent"], 85.0)
+        self.assertEqual(finalizing["percent"], 92.5)
+        self.assertEqual(finalizing["finalizing_stage"], "run_events")
+        self.assertEqual(finalizing["completed_items"], 250)
+        self.assertEqual(finalizing["total_items"], 1_000)
+        self.assertEqual(completed["percent"], 100.0)
+        self.assertIsNone(completed["finalizing_stage"])
+        self.assertEqual(failed["percent"], 61.0)
+
+    def test_progress_intervals_keep_stage_changes_immediate(self) -> None:
+        self.assertEqual(progress_update_interval_seconds({"phase": "running"}), 5.0)
+        self.assertEqual(progress_update_interval_seconds({"phase": "finalizing"}), 1.0)
+        self.assertEqual(progress_update_interval_seconds({"phase": "completed"}), 0.0)
 
 
 if __name__ == "__main__":

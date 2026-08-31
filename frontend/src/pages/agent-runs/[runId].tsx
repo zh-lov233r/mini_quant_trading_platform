@@ -14,6 +14,7 @@ import {
 } from "@/api/agentops";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
+import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogStack as ContextStack, DialogStat as ContextStat, DialogStats as ContextStats, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
 import type { AgentApproval, AgentToolRun, AgentWorkflowRun } from "@/types/agentops";
 
@@ -115,7 +116,19 @@ export default function AgentRunPage() {
     <AppShell
       title={isZh ? "Agent 运行" : "Agent run"}
       subtitle={run ? `${run.workflowName || "Workflow"} · ${run.id}` : runId}
-      actions={experimentId ? <Link href={`/research/${experimentId}`} style={linkButton}>{isZh ? "查看实验" : "View experiment"}</Link> : undefined}
+      actions={(
+        <>
+          {experimentId ? <Link href={`/research/${experimentId}`} style={linkButton}>{isZh ? "查看实验" : "View experiment"}</Link> : null}
+          {run ? (
+            <WorkspaceDialog triggerLabel={isZh ? "运行详情" : "Run Details"} title={isZh ? "运行上下文" : "Run Context"}>
+              <ContextStack>
+                <ContextGroup title={run.workflowName || "Workflow"}><ContextStats><ContextStat label={isZh ? "状态" : "Status"} value={run.status} /><ContextStat label={isZh ? "当前节点" : "Current node"} value={run.currentNodeId || "—"} /><ContextStat label={isZh ? "待审批" : "Pending approval"} value={pending ? (isZh ? "是" : "Yes") : (isZh ? "否" : "No")} /><ContextStat label={isZh ? "工具任务" : "Tool runs"} value={tools.length} /><ContextStat label="Tokens" value={`${totalTokens.toLocaleString()}${tokenBudget ? ` / ${tokenBudget.toLocaleString()}` : ""}`} /></ContextStats></ContextGroup>
+                {experimentId ? <ContextGroup title={isZh ? "关联资源" : "Related Resource"}><ContextLinks><ContextLink href={`/research/${experimentId}`}>{isZh ? "查看研究实验" : "View research experiment"}</ContextLink></ContextLinks></ContextGroup> : null}
+              </ContextStack>
+            </WorkspaceDialog>
+          ) : null}
+        </>
+      )}
     >
       {error ? <p style={{ color: "#fda4af" }}>{error}</p> : null}
       {!run ? <p>{isZh ? "加载中…" : "Loading…"}</p> : (

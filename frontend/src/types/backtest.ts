@@ -14,6 +14,49 @@ export interface BacktestCreate {
 
 export type BacktestPersistLevel = "summary" | "trades" | "full";
 
+export type BacktestProgressPhase =
+  | "queued"
+  | "preparing"
+  | "running"
+  | "finalizing"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type BacktestFinalizingStage =
+  | "zone_versions"
+  | "run_events"
+  | "backtest_details"
+  | "committing";
+
+export interface BacktestProgress {
+  phase: BacktestProgressPhase;
+  percent: number;
+  completed_days?: number | null;
+  total_days?: number | null;
+  trade_date?: string | null;
+  finalizing_stage?: BacktestFinalizingStage | null;
+  completed_items?: number | null;
+  total_items?: number | null;
+  attempt: number;
+  max_attempts: number;
+  updated_at: string;
+}
+
+export interface BacktestWorkerStatus {
+  automation_available: boolean;
+  manager_state: "idle" | "starting" | "running" | "backoff" | "standby" | "stopping" | "unavailable";
+  live_managers: number;
+  worker_active: boolean;
+  active_jobs: number;
+  queued_jobs: number;
+  oldest_queued_at?: string | null;
+  next_worker_start_at?: string | null;
+  last_worker_exit_code?: number | null;
+  heartbeat_stale_after_seconds: number;
+  checked_at: string;
+}
+
 export interface BacktestRunOut {
   id: string;
   strategy_id: string;
@@ -35,7 +78,7 @@ export interface BacktestRunOut {
   summary_metrics: Record<string, unknown>;
   persist_level: BacktestPersistLevel;
   available_details: string[];
-  progress?: Record<string, unknown> | null;
+  progress?: BacktestProgress | null;
   error_message?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
