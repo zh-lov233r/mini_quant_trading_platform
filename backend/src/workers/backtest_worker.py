@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 import logging
-import os
+import multiprocessing
 import time
 from uuid import UUID
 
@@ -14,14 +15,23 @@ from src.services.backtest_job_service import (
     execute_backtest_job,
     recover_expired_jobs,
 )
+from src.services.backtest_worker_config import resolve_backtest_worker_concurrency
 
 log = logging.getLogger(__name__)
 
 
+def create_backtest_executor(concurrency: int) -> ProcessPoolExecutor:
+    return ProcessPoolExecutor(
+        max_workers=resolve_backtest_worker_concurrency(concurrency),
+        mp_context=multiprocessing.get_context("spawn"),
+    )
+
+
 def run_worker(*, concurrency: int, poll_seconds: float, lease_seconds: int, once: bool) -> None:
+    configured_concurrency = resolve_backtest_worker_concurrency(concurrency)
     worker_id = default_worker_id()
     active: dict[Future[None], UUID] = {}
-    with ThreadPoolExecutor(max_workers=max(1, concurrency), thread_name_prefix="backtest") as executor:
+    with create_backtest_executor(configured_concurrency) as executor:
         while True:
             for future in list(active):
                 if not future.done():
@@ -29,10 +39,13 @@ def run_worker(*, concurrency: int, poll_seconds: float, lease_seconds: int, onc
                 job_id = active.pop(future)
                 try:
                     future.result()
+                except BrokenProcessPool:
+                    log.exception("Backtest process pool failed", extra={"job_id": str(job_id)})
+                    raise
                 except Exception:
                     log.exception("Backtest worker task failed", extra={"job_id": str(job_id)})
 
-            while len(active) < max(1, concurrency):
+            while len(active) < configured_concurrency:
                 db = SessionLocal()
                 try:
                     recover_expired_jobs(db)
@@ -63,15 +76,16 @@ def main() -> None:
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=max(1, int(os.getenv("BACKTEST_WORKER_CONCURRENCY", "1"))),
+        default=None,
     )
     parser.add_argument("--poll-seconds", type=float, default=1.0)
     parser.add_argument("--lease-seconds", type=int, default=120)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
+    concurrency = resolve_backtest_worker_concurrency(args.concurrency)
     run_worker(
-        concurrency=args.concurrency,
+        concurrency=concurrency,
         poll_seconds=args.poll_seconds,
         lease_seconds=args.lease_seconds,
         once=args.once,

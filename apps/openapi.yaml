@@ -149,6 +149,38 @@ paths:
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
+  /api/strategies/{strategy_id}/clone:
+    post:
+      tags: [Strategies]
+      summary: Create an independent draft from an existing strategy configuration
+      operationId: cloneStrategyAsIndependentDraft
+      x-implementation-status: implemented
+      parameters:
+        - name: strategy_id
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StrategyCloneCreate"
+      responses:
+        "201":
+          description: Independent v1 draft created or idempotently replayed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrategyOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
   /api/strategies/proposals/validate:
     post:
       tags: [Strategies]
@@ -614,7 +646,7 @@ paths:
       summary: Queue a backtest for an existing strategy
       description: >
         Creates a StrategyRun and durable database job. Manual requests default to full persistence;
-        the on-demand manager starts a concurrency-one worker when automation is available. Queueing
+        the on-demand manager starts a spawn-based process worker with configured concurrency when automation is available. Queueing
         still succeeds when the manager is unavailable.
       operationId: createBacktest
       x-implementation-status: implemented
@@ -644,7 +676,7 @@ paths:
       x-implementation-status: implemented
       responses:
         "200":
-          description: Manager heartbeat, worker activity, and durable queue counts
+          description: Manager heartbeat, process capacity, worker activity, and durable queue counts
           content:
             application/json:
               schema:
@@ -1764,6 +1796,23 @@ components:
         status:
           $ref: "#/components/schemas/StrategyStatus"
 
+    StrategyCloneCreate:
+      type: object
+      additionalProperties: false
+      required: [name, params]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Globally unique name for the independent strategy family
+        description:
+          type: string
+          maxLength: 500
+          nullable: true
+        params:
+          $ref: "#/components/schemas/FreeFormObject"
+
     StrategyOut:
       type: object
       required:
@@ -2175,9 +2224,13 @@ components:
     BacktestWorkerStatus:
       type: object
       required:
-        [automation_available, manager_state, live_managers, worker_active, active_jobs,
-         queued_jobs, heartbeat_stale_after_seconds, checked_at]
+        [execution_model, configured_concurrency, available_slots, automation_available,
+         manager_state, live_managers, worker_active, active_jobs, queued_jobs,
+         heartbeat_stale_after_seconds, checked_at]
       properties:
+        execution_model: {type: string, enum: [process]}
+        configured_concurrency: {type: integer, minimum: 1, maximum: 2}
+        available_slots: {type: integer, minimum: 0}
         automation_available: {type: boolean}
         manager_state:
           type: string

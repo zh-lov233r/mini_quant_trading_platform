@@ -15,6 +15,7 @@
   - 创建、查看、更新、归档策略
   - 从 `/strategies/new` 引导中心开始：可用五步向导手工配置已有引擎策略，也可转入 Agent 的已有大类研究或新算法研究
   - 手工创建在落库前完成校验和标准化，并且始终保存为 `draft`；不会激活 portfolio、创建 allocation、启动调度或提交订单
+  - 可从策略列表或详情页“基于此策略新建”：向导预填并锁定原策略类型，保存为名称唯一、独立 `strategy_key`、从 `v1` 开始的 Draft；不会复制回测、allocation、运行记录或持仓
   - 获取策略 catalog 和 normalized runtime payload
   - 当前策略类型包含 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`、`head_shoulders_bottom`、`rounded_bottom`、`v_reversal`、`support_resistance`、`custom`
   - 五类底部反转策略使用 20% / 50% / 100% 累计目标分批建仓；详见 [底部反转策略](docs/bottom-reversal-strategies.zh-CN.md)
@@ -124,7 +125,7 @@
 
 持仓生命周期按纽约交易日显示事件；未平仓行明确区分“期末估值日/期末标记价（非成交）”与真实卖出成交，并直接按可见 K 线窗口加载支撑/压力审计数据，不依赖首批信号分页。
 
-回测详情把个股盈亏、信号强度排名、生命周期、交易明细和最新持仓收纳进同一个复盘工作台，通过标签页切换。窗口内容区独立滚动，并保留各模块原有的筛选、排序、分页和展开交互。
+回测详情把个股盈亏、信号强度排名、生命周期、交易明细和最新持仓收纳进同一个复盘工作台，通过标签页切换。窗口内容区独立滚动，并保留各模块原有的筛选、排序、分页和展开交互；个股生命周期详情再次单击非表单区域即可收起，拖拽图表分隔线、缩放或平移不会触发折叠。生命周期图把所有颜色的事件圆点和买卖箭头放在价格区上下留白，并用虚线连接对应 K 线，避免遮挡蜡烛和成交量；相邻标记文字会自动换边或错层，避免相互覆盖。
 
 ## 后端 API 模块
 
@@ -143,7 +144,7 @@
 
 `/api/agent/*` 路由要求 Bearer service token，只提供受控的策略草案和研究实验操作，不开放券商订单或组合激活能力。
 
-Web 进程不执行 CPU 回测。完整平台命令会常驻轻量 manager，只在存在 durable queued 任务时启动并发 1 的 worker。`GET /api/backtests/worker-status` 返回自动执行健康状态，列表页和详情页显示结构化阶段、百分比和收尾条目进度。详见[回测性能与 worker 运维](docs/backtest-performance.zh-CN.md)。
+Web 进程不执行 CPU 回测。完整平台命令会常驻轻量 manager，只在存在 durable queued 任务时启动基于 `spawn` 的多进程 worker。`BACKTEST_WORKER_CONCURRENCY` 默认为 `2`，仅支持 `1` 或 `2`，修改后需重启 backend 与 manager。`GET /api/backtests/worker-status` 返回自动执行健康状态与进程容量，列表页和详情页同时显示容量、结构化阶段、百分比和收尾条目进度。详见[回测性能与 worker 运维](docs/backtest-performance.zh-CN.md)。
 
 应用健康检查：
 

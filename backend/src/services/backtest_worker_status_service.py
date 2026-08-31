@@ -8,6 +8,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from src.models.tables import BacktestJob, BacktestWorkerManager
+from src.services.backtest_worker_config import (
+    BACKTEST_EXECUTION_MODEL,
+    resolve_backtest_worker_concurrency,
+)
 
 HEARTBEAT_STALE_AFTER_SECONDS = 15
 
@@ -45,7 +49,11 @@ def load_backtest_worker_status(
         db.rollback()
         live_managers = []
     manager = live_managers[0] if live_managers else None
+    configured_concurrency = resolve_backtest_worker_concurrency()
     return {
+        "execution_model": BACKTEST_EXECUTION_MODEL,
+        "configured_concurrency": configured_concurrency,
+        "available_slots": max(configured_concurrency - active_jobs, 0),
         "automation_available": any(item.is_leader for item in live_managers),
         "manager_state": manager.status if manager is not None else "unavailable",
         "live_managers": len(live_managers),

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildCandleSeriesMarkers,
+  buildLifecycleLeaderMarkers,
   buildEquityEventMarkers,
   candleTone,
   currentZoneOverlays,
@@ -14,7 +15,7 @@ import {
   normalizeZoneOverlays,
   toChartTime,
 } from "./chartModels";
-import { visibleZonePriceRange } from "./overlayPrimitive";
+import { chooseMarkerLabelPlacement, visibleZonePriceRange } from "./overlayPrimitive";
 
 describe("chart models", () => {
   it("normalizes, sorts, deduplicates, and filters equity points", () => {
@@ -258,6 +259,33 @@ describe("chart models", () => {
     const touch = grouped.find((item) => item.key.startsWith("group:"));
     expect(touch).toMatchObject({ showText: false, label: "触碰 ×2" });
     expect(touch?.details).toEqual(["first", "second"]);
+  });
+
+  it("routes every lifecycle marker tone to the non-overlapping leader layer", () => {
+    const markers = [
+      { key: "buy", label: "买入", date: "2025-01-02", price: 10, tone: "buy", description: "buy" },
+      { key: "sell-signal", label: "卖信号", date: "2025-01-03", price: 11, tone: "sell_signal", description: "sell signal" },
+      { key: "neckline", label: "颈线", date: "2025-01-04", price: 11, tone: "neckline", description: "neckline" },
+      { key: "mark", label: "候选", date: "2025-01-05", price: 11, tone: "mark", description: "candidate" },
+      { key: "right", label: "回踩", date: "2025-01-06", price: 11, tone: "right_bottom", description: "retest" },
+      { key: "breakout", label: "突破", date: "2025-01-07", price: 11, tone: "breakout", description: "breakout" },
+      { key: "future", label: "新事件", date: "2025-01-08", price: 11, tone: "future_tone", description: "future" },
+    ];
+    expect(buildLifecycleLeaderMarkers(markers).map((marker) => marker.tone)).toEqual(
+      markers.map((marker) => marker.tone),
+    );
+  });
+
+  it("moves overlapping marker labels to another side or lane", () => {
+    const lanes = [[{ left: 20, right: 70 }]];
+    expect(chooseMarkerLabelPlacement(lanes, [
+      { left: 55, right: 95 },
+      { left: 100, right: 140 },
+    ])).toEqual({ lane: 0, bounds: { left: 100, right: 140 } });
+    expect(chooseMarkerLabelPlacement(lanes, [
+      { left: 50, right: 90 },
+      { left: 10, right: 45 },
+    ])).toEqual({ lane: 1, bounds: { left: 50, right: 90 } });
   });
 
   it("omits invalidation audit markers from the chart and legend", () => {

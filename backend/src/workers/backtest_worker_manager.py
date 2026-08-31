@@ -20,6 +20,7 @@ from sqlalchemy.engine import Connection
 from src.core.db import SessionLocal, engine
 from src.models.tables import BacktestWorkerManager
 from src.services.backtest_job_service import eligible_queued_job_count, recover_expired_jobs
+from src.services.backtest_worker_config import resolve_backtest_worker_concurrency
 
 log = logging.getLogger(__name__)
 UTC = timezone.utc
@@ -95,10 +96,12 @@ class BacktestWorkerManagerRunner:
         poll_seconds: float = 2.0,
         heartbeat_seconds: float = 5.0,
         lease_seconds: int = 120,
+        concurrency: int | None = None,
     ) -> None:
         self.poll_seconds = max(0.1, poll_seconds)
         self.heartbeat_seconds = max(0.5, heartbeat_seconds)
         self.lease_seconds = max(30, lease_seconds)
+        self.concurrency = resolve_backtest_worker_concurrency(concurrency)
         self.hostname = socket.gethostname()
         self.manager_id = f"{self.hostname}:{os.getpid()}:{uuid.uuid4()}"
         self.started_at = datetime.now(UTC)
@@ -155,6 +158,18 @@ class BacktestWorkerManagerRunner:
         finally:
             db.close()
 
+    def _worker_command(self) -> list[str]:
+        return [
+            sys.executable,
+            "-m",
+            "src.workers.backtest_worker",
+            "--once",
+            "--concurrency",
+            str(self.concurrency),
+            "--lease-seconds",
+            str(self.lease_seconds),
+        ]
+
     def _start_worker(self) -> None:
         self._write_state("starting", is_leader=True, force=True)
         backend_dir = Path(__file__).resolve().parents[2]
@@ -162,16 +177,7 @@ class BacktestWorkerManagerRunner:
         child_env["PAPER_TRADING_SCHEDULER_ENABLED"] = "false"
         child_env["PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS"] = "false"
         self.worker = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "src.workers.backtest_worker",
-                "--once",
-                "--concurrency",
-                "1",
-                "--lease-seconds",
-                str(self.lease_seconds),
-            ],
+            self._worker_command(),
             cwd=backend_dir,
             env=child_env,
             start_new_session=True,

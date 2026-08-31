@@ -25,6 +25,7 @@ from src.services.paper_trading_scheduler import PaperTradingDailyScheduler
 from src.services.research_experiment_service import ResearchExperimentWorker
 from src.services.stock_basket_service import ensure_default_common_stock_basket
 from src.services.backtest_worker_status_service import load_backtest_worker_status
+from src.services.backtest_worker_config import resolve_backtest_worker_concurrency
 
 # -----------------------------
 # 基本配置（可用环境变量覆盖）
@@ -72,6 +73,7 @@ app.include_router(agent_research_router)
 # -----------------------------
 @app.on_event("startup")
 async def on_startup():
+    resolve_backtest_worker_concurrency()
     ensure_extensions()
     ensure_strategy_allocation_schema()
     db = SessionLocal()

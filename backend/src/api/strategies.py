@@ -6,7 +6,7 @@ from typing import Any, Dict, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
@@ -41,6 +41,8 @@ from src.services.strategy_registry import (
 )
 from src.services.strategy_service import (
     StrategyCreateConflictError,
+    StrategyNameConflictError,
+    create_independent_strategy,
     create_strategy_version,
     load_feature_support,
     validate_strategy_params,
@@ -72,6 +74,14 @@ class StrategyCreate(BaseModel):
 
 class StrategyRename(BaseModel):
     name: str = Field(..., min_length=1, max_length=128, description="新的策略名称")
+
+
+class StrategyCloneCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=128, description="独立副本名称")
+    description: Optional[str] = Field(default=None, max_length=500, description="策略说明")
+    params: Dict[str, Any] = Field(..., description="基于来源策略修改后的参数")
 
 
 class StrategyConfigUpdate(BaseModel):
@@ -470,6 +480,47 @@ def create_strategy(
             detail="create strategy failed",
         ) from exc
     return _to_strategy_out(obj)
+
+
+@router.post("/{strategy_id}/clone", response_model=StrategyOut, status_code=status.HTTP_201_CREATED)
+def clone_strategy(
+    strategy_id: UUID,
+    payload: StrategyCloneCreate,
+    db: Session = Depends(get_db),
+    idem_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+):
+    source = db.get(Strategy, strategy_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+    try:
+        clone = create_independent_strategy(
+            db,
+            name=payload.name,
+            strategy_type=source.strategy_type,
+            params=payload.params,
+            description=payload.description,
+            idempotency_key=idem_key,
+        )
+    except StrategyNameConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "strategy_name_conflict",
+                "message": str(exc),
+            },
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except StrategyCreateConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "strategy_clone_conflict",
+                "message": str(exc),
+            },
+        ) from exc
+    return _to_strategy_out(clone)
 
 
 @agent_router.post(

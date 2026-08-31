@@ -17,6 +17,7 @@ import { getCandleSeries } from "@/api/quotes";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import BacktestProgressBar from "@/components/BacktestProgressBar";
+import BacktestWorkerCapacity from "@/components/BacktestWorkerCapacity";
 import BacktestPerformanceProbe from "@/components/charts/BacktestPerformanceProbe";
 import MetricCard from "@/components/MetricCard";
 import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogNote as ContextNote, DialogStack as ContextStack, DialogStat as ContextStat, DialogStats as ContextStats, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
@@ -146,44 +147,46 @@ function BacktestReviewWindow({
         </p>
       </div>
 
-      <div
-        role="tablist"
-        aria-label={isZh ? "回测复盘模块" : "Backtest review modules"}
-        style={reviewTabListStyle}
-      >
-        {BACKTEST_REVIEW_TABS.map((tab) => {
-          const active = tab === activeTab;
-          return (
-            <button
-              key={tab}
-              id={`backtest-review-tab-${tab}`}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              aria-controls="backtest-review-panel"
-              tabIndex={active ? 0 : -1}
-              onClick={() => onTabChange(tab)}
-              onKeyDown={(event) => {
-                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-                event.preventDefault();
-                moveFocus(nextBacktestReviewTab(activeTab, event.key as BacktestReviewTabKey));
-              }}
-              style={reviewTabButtonStyle(active)}
-            >
-              {backtestReviewTabLabel(tab, locale)}
-            </button>
-          );
-        })}
-      </div>
+      <div style={reviewWorkspaceFrameStyle}>
+        <div
+          role="tablist"
+          aria-label={isZh ? "回测复盘模块" : "Backtest review modules"}
+          style={reviewTabListStyle}
+        >
+          {BACKTEST_REVIEW_TABS.map((tab) => {
+            const active = tab === activeTab;
+            return (
+              <button
+                key={tab}
+                id={`backtest-review-tab-${tab}`}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                aria-controls="backtest-review-panel"
+                tabIndex={active ? 0 : -1}
+                onClick={() => onTabChange(tab)}
+                onKeyDown={(event) => {
+                  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                  event.preventDefault();
+                  moveFocus(nextBacktestReviewTab(activeTab, event.key as BacktestReviewTabKey));
+                }}
+                style={reviewTabButtonStyle(active)}
+              >
+                {backtestReviewTabLabel(tab, locale)}
+              </button>
+            );
+          })}
+        </div>
 
-      <div
-        id="backtest-review-panel"
-        role="tabpanel"
-        aria-labelledby={`backtest-review-tab-${activeTab}`}
-        tabIndex={0}
-        style={reviewTabPanelStyle}
-      >
-        {children}
+        <div
+          id="backtest-review-panel"
+          role="tabpanel"
+          aria-labelledby={`backtest-review-tab-${activeTab}`}
+          tabIndex={0}
+          style={reviewTabPanelStyle}
+        >
+          {children}
+        </div>
       </div>
     </section>
   );
@@ -2841,13 +2844,16 @@ function LifecycleDetailPanel({
   runId,
   row,
   signals,
+  onCollapse,
 }: {
   runId: string;
   row: PositionLifecycleRow;
   signals: BacktestSignalOut[];
+  onCollapse: () => void;
 }) {
   const { locale } = useI18n();
   const isZh = locale === "zh-CN";
+  const collapsePointerRef = useRef<{ x: number; y: number; dragged: boolean } | null>(null);
   const resolvedEntryTradeDate = row.entryTradeDate || toTradeDateKey(row.entryTs);
   const initialEntrySignal = findLifecycleSignal(signals, row, "BUY");
   const initialDoubleBottomSetup = extractDoubleBottomSetup(initialEntrySignal);
@@ -3113,7 +3119,44 @@ function LifecycleDetailPanel({
   }, [initialLookbackDays, lookbackTradingDays, requiredDoubleBottomLookback]);
 
   return (
-    <div style={lifecycleDetailPanelStyle}>
+    <div
+      style={{ paddingTop: 16 }}
+      title={isZh ? "点击生命周期详情可收起" : "Click the lifecycle detail to collapse"}
+      onPointerDownCapture={(event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest("button, input, label, select, textarea, a, [role='button']")) {
+          collapsePointerRef.current = null;
+          return;
+        }
+        collapsePointerRef.current = {
+          x: event.clientX,
+          y: event.clientY,
+          dragged: false,
+        };
+      }}
+      onPointerMoveCapture={(event) => {
+        const pointer = collapsePointerRef.current;
+        if (!pointer || pointer.dragged) return;
+        if (Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) >= 6) {
+          pointer.dragged = true;
+        }
+      }}
+      onPointerCancelCapture={() => {
+        collapsePointerRef.current = null;
+      }}
+      onClick={(event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest("button, input, label, select, textarea, a, [role='button']")) {
+          return;
+        }
+        const pointer = collapsePointerRef.current;
+        collapsePointerRef.current = null;
+        if (pointer?.dragged) {
+          return;
+        }
+        onCollapse();
+      }}
+    >
       <div
         style={{
           display: "flex",
@@ -3355,7 +3398,7 @@ function LifecycleDetailPanel({
             zones={zoneOverlays as ChartZoneOverlay[]}
             locale={locale}
             showVolume
-            height={384}
+            height={460}
             ariaLabel={isZh ? "生命周期蜡烛图" : "Lifecycle candlestick chart"}
           />
           <div
@@ -3867,7 +3910,12 @@ function PositionLifecycleCard({
                       {expanded ? (
                         <tr>
                           <td colSpan={13} style={lifecycleExpandedCellStyle}>
-                            <LifecycleDetailPanel runId={run.id} row={row} signals={run.signals} />
+                            <LifecycleDetailPanel
+                              runId={run.id}
+                              row={row}
+                              signals={run.signals}
+                              onCollapse={() => setExpandedRowKey(null)}
+                            />
                           </td>
                         </tr>
                       ) : null}
@@ -4325,6 +4373,10 @@ export default function BacktestDetailPage() {
                 : "The job remains queued, but automatic execution is unavailable. Processing will resume when the manager recovers."}
             </div>
           ) : null}
+          {(run.status === "queued" || run.status === "running")
+          && !workerStatusUnavailable && workerStatus?.automation_available ? (
+            <BacktestWorkerCapacity status={workerStatus} isZh={isZh} />
+          ) : null}
           {run.status === "queued" || run.status === "running" ? (
             <div style={{ ...emptyStateStyle, marginBottom: 18 }}>
               {isZh
@@ -4549,11 +4601,16 @@ const reviewTabListStyle = {
   gap: 8,
   overflowX: "auto",
   padding: 6,
-  marginBottom: 12,
-  borderRadius: 16,
-  border: "1px solid rgba(71, 85, 105, 0.28)",
+  borderBottom: "1px solid rgba(71, 85, 105, 0.28)",
   background: "rgba(2, 6, 23, 0.42)",
   scrollbarWidth: "thin",
+} as const;
+
+const reviewWorkspaceFrameStyle = {
+  overflow: "hidden",
+  borderRadius: 18,
+  border: "1px solid rgba(71, 85, 105, 0.28)",
+  background: "rgba(2, 6, 23, 0.34)",
 } as const;
 
 function reviewTabButtonStyle(active: boolean) {
@@ -4577,9 +4634,7 @@ const reviewTabPanelStyle = {
   maxHeight: "min(72vh, 920px)",
   overflow: "auto",
   padding: 16,
-  borderRadius: 18,
-  border: "1px solid rgba(71, 85, 105, 0.28)",
-  background: "rgba(2, 6, 23, 0.34)",
+  background: "transparent",
   outline: "none",
 } as const;
 
@@ -4774,14 +4829,6 @@ function lifecycleSortIndicatorStyle(active: boolean) {
     lineHeight: 1,
   } as const;
 }
-
-const lifecycleDetailPanelStyle = {
-  padding: 18,
-  borderRadius: 18,
-  border: "1px solid rgba(56, 189, 248, 0.16)",
-  background: "linear-gradient(180deg, rgba(8,15,24,0.96), rgba(15,23,42,0.9))",
-  boxShadow: "inset 0 1px 0 rgba(148, 163, 184, 0.08)",
-};
 
 const stickyTableHeaderCellStyle = {
   position: "sticky" as const,

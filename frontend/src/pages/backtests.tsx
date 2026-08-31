@@ -9,6 +9,7 @@ import { listStrategies } from "@/api/strategies";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import BacktestProgressBar from "@/components/BacktestProgressBar";
+import BacktestWorkerCapacity from "@/components/BacktestWorkerCapacity";
 import MetricCard from "@/components/MetricCard";
 import { SearchableSelect } from "@/components/workspace/SearchableSelect";
 import { SelectControl } from "@/components/workspace/SelectControl";
@@ -560,6 +561,10 @@ export default function BacktestsPage() {
             ? "任务可排队，但自动执行服务不可用。完整平台恢复 manager 后会自动处理已有任务。"
             : "Jobs can still be queued, but automatic execution is unavailable. Existing jobs will resume when the full platform manager recovers."}
         </div>
+      ) : null}
+
+      {!loading && !workerStatusUnavailable && workerStatus?.automation_available ? (
+        <BacktestWorkerCapacity status={workerStatus} isZh={isZh} />
       ) : null}
 
       {!loading && !error ? (

@@ -6,14 +6,20 @@ import type {
   ISeriesApi,
   ISeriesPrimitive,
   Logical,
+  PrimitiveHoveredItem,
   SeriesAttachedParameter,
   SeriesType,
   Time,
 } from "lightweight-charts";
 
+import {
+  candleMarkerColor,
+  toChartTime,
+} from "@/components/charts/chartModels";
 import type {
   CandleChartPoint,
   ChartGapOverlay,
+  ChartOverlayMarker,
   ChartZoneOverlay,
 } from "@/components/charts/chartModels";
 
@@ -29,11 +35,13 @@ export class LifecycleOverlayPrimitive implements ISeriesPrimitive<Time> {
     gaps: ChartGapOverlay[],
     zones: ChartZoneOverlay[],
     bars: CandleChartPoint[],
+    leaderMarkers: ChartOverlayMarker[] = [],
   ) {
     this.view = new LifecycleOverlayView(
       gaps,
       zones,
       bars,
+      leaderMarkers,
       () => this.chart,
       () => this.series,
     );
@@ -58,6 +66,10 @@ export class LifecycleOverlayPrimitive implements ISeriesPrimitive<Time> {
 
   paneViews(): readonly IPrimitivePaneView[] {
     return [this.view];
+  }
+
+  hitTest(x: number, y: number): PrimitiveHoveredItem | null {
+    return this.view.hitTest(x, y);
   }
 
   autoscaleInfo(startTimePoint: Logical, endTimePoint: Logical): AutoscaleInfo | null {
@@ -87,14 +99,15 @@ class LifecycleOverlayView implements IPrimitivePaneView {
     gaps: ChartGapOverlay[],
     readonly zones: ChartZoneOverlay[],
     readonly bars: CandleChartPoint[],
+    leaderMarkers: ChartOverlayMarker[],
     chart: () => IChartApiBase<Time> | null,
     series: () => ISeriesApi<SeriesType, Time> | null,
   ) {
-    this.rendererValue = new LifecycleOverlayRenderer(gaps, zones, chart, series);
+    this.rendererValue = new LifecycleOverlayRenderer(gaps, zones, bars, leaderMarkers, chart, series);
   }
 
   zOrder() {
-    return "normal" as const;
+    return "top" as const;
   }
 
   renderer() {
@@ -103,6 +116,10 @@ class LifecycleOverlayView implements IPrimitivePaneView {
 
   invalidate() {
     this.rendererValue.invalidate();
+  }
+
+  hitTest(x: number, y: number): PrimitiveHoveredItem | null {
+    return this.rendererValue.hitTest(x, y);
   }
 }
 
@@ -148,18 +165,74 @@ export function visibleZonePriceRange(
   };
 }
 
+export interface MarkerLabelBounds {
+  left: number;
+  right: number;
+}
+
+export function chooseMarkerLabelPlacement(
+  lanes: MarkerLabelBounds[][],
+  candidates: MarkerLabelBounds[],
+  gap = 4,
+): { lane: number; bounds: MarkerLabelBounds } {
+  for (let lane = 0; ; lane += 1) {
+    const occupied = lanes[lane] || [];
+    const bounds = candidates.find((candidate) =>
+      occupied.every((item) =>
+        candidate.right <= item.left - gap || candidate.left >= item.right + gap));
+    if (bounds) return { lane, bounds };
+  }
+}
+
 class LifecycleOverlayRenderer implements IPrimitivePaneRenderer {
   private cacheKey = "";
+  private readonly barByTime: Map<string, CandleChartPoint>;
+  private markerHits: Array<{
+    key: string;
+    left: number;
+    right: number;
+    top: number;
+    bottom: number;
+    centerX: number;
+    centerY: number;
+  }> = [];
 
   constructor(
     private readonly gaps: ChartGapOverlay[],
     private readonly zones: ChartZoneOverlay[],
+    bars: CandleChartPoint[],
+    private readonly leaderMarkers: ChartOverlayMarker[],
     private readonly chart: () => IChartApiBase<Time> | null,
     private readonly series: () => ISeriesApi<SeriesType, Time> | null,
-  ) {}
+  ) {
+    this.barByTime = new Map(bars.map((bar) => [bar.time, bar]));
+  }
 
   invalidate() {
     this.cacheKey = "";
+    this.markerHits = [];
+  }
+
+  hitTest(x: number, y: number): PrimitiveHoveredItem | null {
+    let closest: (typeof this.markerHits)[number] | null = null;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    for (const hit of this.markerHits) {
+      if (x < hit.left || x > hit.right || y < hit.top || y > hit.bottom) continue;
+      const distance = Math.hypot(x - hit.centerX, y - hit.centerY);
+      if (distance < closestDistance) {
+        closest = hit;
+        closestDistance = distance;
+      }
+    }
+    if (!closest) return null;
+    return {
+      externalId: closest.key,
+      zOrder: "top",
+      cursorStyle: "pointer",
+      itemType: "marker",
+      hitTestPriority: 2,
+      distance: closestDistance,
+    };
   }
 
   drawBackground(target: DrawingTarget) {
@@ -219,6 +292,7 @@ class LifecycleOverlayRenderer implements IPrimitivePaneRenderer {
     const series = this.series();
     if (!chart || !series) return;
     target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+      this.markerHits = [];
       const occupied: Array<{ left: number; right: number }> = [];
       this.gaps.forEach((gap) => {
         const leftX = chart.timeScale().timeToCoordinate(gap.referenceDate);
@@ -254,6 +328,120 @@ class LifecycleOverlayRenderer implements IPrimitivePaneRenderer {
         context.textAlign = "center";
         context.textBaseline = "middle";
         context.fillText(gap.label, left + width / 2, top + 10);
+      });
+
+      const occupiedMarkerLanes = {
+        upper: [] as MarkerLabelBounds[][],
+        lower: [] as MarkerLabelBounds[][],
+      };
+      this.leaderMarkers.forEach((marker) => {
+        const time = toChartTime(marker.date);
+        const bar = time ? this.barByTime.get(time) : null;
+        const x = time ? chart.timeScale().timeToCoordinate(time) : null;
+        if (!bar || x == null) return;
+        const lowerGutter = marker.tone === "buy"
+          || marker.tone === "buy_signal"
+          || marker.tone === "left_bottom";
+        const anchorY = series.priceToCoordinate(lowerGutter ? bar.low : bar.high);
+        if (anchorY == null) return;
+
+        const color = candleMarkerColor(marker.tone);
+        context.save();
+        context.font = '700 10px "Avenir Next", "Segoe UI", sans-serif';
+        const showText = marker.showText !== false;
+        const labelWidth = showText ? context.measureText(marker.label).width : 0;
+        context.restore();
+        const rightBounds = {
+          left: x - 8,
+          right: x + (showText ? labelWidth + 16 : 8),
+        };
+        const leftBounds = {
+          left: x - (showText ? labelWidth + 16 : 8),
+          right: x + 8,
+        };
+        const rightFits = rightBounds.right <= mediaSize.width - 2;
+        const leftFits = leftBounds.left >= 2;
+        const candidates = rightFits
+          ? [rightBounds, ...(leftFits ? [leftBounds] : [])]
+          : leftFits
+            ? [leftBounds, rightBounds]
+            : [rightBounds];
+        const lanes = lowerGutter ? occupiedMarkerLanes.lower : occupiedMarkerLanes.upper;
+        const placement = chooseMarkerLabelPlacement(lanes, candidates);
+        if (!lanes[placement.lane]) lanes[placement.lane] = [];
+        lanes[placement.lane].push(placement.bounds);
+        const markerY = lowerGutter
+          ? mediaSize.height - 18 - placement.lane * 26
+          : 18 + placement.lane * 26;
+
+        context.save();
+        context.strokeStyle = color;
+        context.lineWidth = 1.15;
+        context.globalAlpha = 0.72;
+        context.setLineDash([4, 4]);
+        context.beginPath();
+        context.moveTo(x, markerY + (lowerGutter ? -9 : 9));
+        context.lineTo(x, anchorY + (lowerGutter ? 2 : -2));
+        context.stroke();
+        context.restore();
+
+        const fillArrow = marker.tone === "buy" || marker.tone === "sell";
+        context.save();
+        context.fillStyle = color;
+        context.strokeStyle = "rgba(3, 7, 18, 0.96)";
+        context.lineWidth = 2;
+        if (!fillArrow) {
+          context.beginPath();
+          context.arc(x, markerY, 6, 0, Math.PI * 2);
+          context.fill();
+          context.stroke();
+        } else {
+          context.beginPath();
+          if (marker.tone === "buy") {
+            context.moveTo(x, markerY - 9);
+            context.lineTo(x - 7, markerY - 1);
+            context.lineTo(x - 3, markerY - 1);
+            context.lineTo(x - 3, markerY + 8);
+            context.lineTo(x + 3, markerY + 8);
+            context.lineTo(x + 3, markerY - 1);
+            context.lineTo(x + 7, markerY - 1);
+          } else {
+            context.moveTo(x, markerY + 9);
+            context.lineTo(x - 7, markerY + 1);
+            context.lineTo(x - 3, markerY + 1);
+            context.lineTo(x - 3, markerY - 8);
+            context.lineTo(x + 3, markerY - 8);
+            context.lineTo(x + 3, markerY + 1);
+            context.lineTo(x + 7, markerY + 1);
+          }
+          context.closePath();
+          context.fill();
+          context.stroke();
+        }
+
+        if (showText) {
+          context.font = '700 10px "Avenir Next", "Segoe UI", sans-serif';
+          context.textBaseline = "middle";
+          const placeRight = placement.bounds.right > x + 8;
+          const labelX = placeRight ? x + 10 : x - 10;
+          context.textAlign = placeRight ? "left" : "right";
+          context.lineWidth = 3;
+          context.strokeStyle = "rgba(3, 7, 18, 0.96)";
+          context.strokeText(marker.label, labelX, markerY);
+          context.fillStyle = color;
+          context.fillText(marker.label, labelX, markerY);
+        }
+        context.restore();
+
+        this.markerHits.push({
+          key: marker.key,
+          left: placement.bounds.left,
+          right: placement.bounds.right,
+          top: markerY - 12,
+          bottom: markerY + 12,
+          centerX: x,
+          centerY: markerY,
+        });
       });
     });
   }

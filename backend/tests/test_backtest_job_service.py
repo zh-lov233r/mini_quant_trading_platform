@@ -66,6 +66,45 @@ class BacktestJobServiceTests(unittest.TestCase):
         self.assertEqual(job.progress["attempt"], 1)
         self.assertIsNone(claim_next_backtest_job(self.db, worker_id="worker-2"))
 
+    def test_two_slots_claim_distinct_jobs_without_changing_queue_order(self) -> None:
+        base_time = datetime.now(UTC) - timedelta(minutes=5)
+        low_priority_run = self._run()
+        low_priority = enqueue_backtest_job(
+            self.db,
+            run=low_priority_run,
+            payload={"strategy_id": str(self.strategy.id)},
+            priority=0,
+        )
+        first_high_run = self._run()
+        first_high = enqueue_backtest_job(
+            self.db,
+            run=first_high_run,
+            payload={"strategy_id": str(self.strategy.id)},
+            priority=10,
+        )
+        second_high_run = self._run()
+        second_high = enqueue_backtest_job(
+            self.db,
+            run=second_high_run,
+            payload={"strategy_id": str(self.strategy.id)},
+            priority=10,
+        )
+        low_priority.created_at = base_time
+        first_high.created_at = base_time + timedelta(seconds=1)
+        second_high.created_at = base_time + timedelta(seconds=2)
+        self.db.commit()
+
+        first_claim = claim_next_backtest_job(self.db, worker_id="worker-slot-1", lease_seconds=60)
+        second_claim = claim_next_backtest_job(self.db, worker_id="worker-slot-2", lease_seconds=60)
+
+        assert first_claim is not None and second_claim is not None
+        self.assertEqual(first_claim.id, first_high.id)
+        self.assertEqual(second_claim.id, second_high.id)
+        self.assertNotEqual(first_claim.id, second_claim.id)
+        self.assertEqual(first_claim.claimed_by, "worker-slot-1")
+        self.assertEqual(second_claim.claimed_by, "worker-slot-2")
+        self.assertEqual(low_priority.status, "queued")
+
     def test_queued_cancellation_marks_run_terminal(self) -> None:
         run = self._run()
         enqueue_backtest_job(self.db, run=run, payload={"strategy_id": str(self.strategy.id)})

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.orm import Session
 
 from src.models.tables import Strategy
@@ -16,6 +16,10 @@ from src.services.strategy_registry import (
 
 
 class StrategyCreateConflictError(RuntimeError):
+    pass
+
+
+class StrategyNameConflictError(StrategyCreateConflictError):
     pass
 
 
@@ -72,6 +76,44 @@ def validate_strategy_params(
     return normalized
 
 
+def normalize_creatable_strategy_params(
+    db: Session,
+    *,
+    strategy_type: str,
+    params: dict[str, Any],
+    description: str | None,
+) -> dict[str, Any]:
+    if strategy_type == "custom":
+        return normalize_strategy_params(strategy_type, params, description)
+    return validate_strategy_params(
+        db,
+        strategy_type=strategy_type,
+        params=params,
+        description=description,
+    )
+
+
+def _matches_create_request(
+    strategy: Strategy,
+    *,
+    name: str,
+    strategy_type: str,
+    status: str,
+    normalized_params: dict[str, Any],
+) -> bool:
+    existing_normalized = normalize_strategy_params(
+        strategy.strategy_type,
+        strategy.params,
+        extract_description(strategy.params),
+    )
+    return (
+        strategy.name == name
+        and strategy.strategy_type == strategy_type
+        and strategy.status == status
+        and json_signature(existing_normalized) == json_signature(normalized_params)
+    )
+
+
 def create_strategy_version(
     db: Session,
     *,
@@ -82,7 +124,7 @@ def create_strategy_version(
     status: str,
     idempotency_key: str | None,
 ) -> Strategy:
-    normalized = validate_strategy_params(
+    normalized = normalize_creatable_strategy_params(
         db,
         strategy_type=strategy_type,
         params=params,
@@ -94,16 +136,12 @@ def create_strategy_version(
             select(Strategy).where(Strategy.idempotency_key == idempotency_key)
         ).scalars().first()
         if existing is not None:
-            existing_normalized = normalize_strategy_params(
-                existing.strategy_type,
-                existing.params,
-                extract_description(existing.params),
-            )
-            if (
-                existing.name == clean_name
-                and existing.strategy_type == strategy_type
-                and existing.status == status
-                and json_signature(existing_normalized) == json_signature(normalized)
+            if _matches_create_request(
+                existing,
+                name=clean_name,
+                strategy_type=strategy_type,
+                status=status,
+                normalized_params=normalized,
             ):
                 return existing
             raise StrategyCreateConflictError(
@@ -157,21 +195,109 @@ def create_strategy_version(
                 select(Strategy).where(Strategy.idempotency_key == idempotency_key)
             ).scalars().first()
             if concurrent is not None:
-                concurrent_normalized = normalize_strategy_params(
-                    concurrent.strategy_type,
-                    concurrent.params,
-                    extract_description(concurrent.params),
-                )
-                if (
-                    concurrent.name == clean_name
-                    and concurrent.strategy_type == strategy_type
-                    and concurrent.status == status
-                    and json_signature(concurrent_normalized) == json_signature(normalized)
+                if _matches_create_request(
+                    concurrent,
+                    name=clean_name,
+                    strategy_type=strategy_type,
+                    status=status,
+                    normalized_params=normalized,
                 ):
                     return concurrent
                 raise StrategyCreateConflictError(
                     "idempotency key was concurrently used with a different strategy request"
                 ) from exc
         raise StrategyCreateConflictError("create strategy failed") from exc
+    db.refresh(strategy)
+    return strategy
+
+
+def create_independent_strategy(
+    db: Session,
+    *,
+    name: str,
+    strategy_type: str,
+    params: dict[str, Any],
+    description: str | None,
+    idempotency_key: str | None,
+) -> Strategy:
+    normalized = normalize_creatable_strategy_params(
+        db,
+        strategy_type=strategy_type,
+        params=params,
+        description=description,
+    )
+    clean_name = name.strip()
+
+    if idempotency_key:
+        existing = db.execute(
+            select(Strategy).where(Strategy.idempotency_key == idempotency_key)
+        ).scalars().first()
+        if existing is not None:
+            if (
+                existing.strategy_key == clean_name
+                and existing.version == 1
+                and _matches_create_request(
+                    existing,
+                    name=clean_name,
+                    strategy_type=strategy_type,
+                    status="draft",
+                    normalized_params=normalized,
+                )
+            ):
+                return existing
+            raise StrategyCreateConflictError(
+                "idempotency key was already used with a different strategy request"
+            )
+
+    conflicting = db.execute(
+        select(Strategy)
+        .where(or_(Strategy.name == clean_name, Strategy.strategy_key == clean_name))
+        .limit(1)
+    ).scalars().first()
+    if conflicting is not None:
+        raise StrategyNameConflictError(
+            "strategy name must be unique when creating an independent strategy"
+        )
+
+    strategy = Strategy(
+        strategy_key=clean_name,
+        name=clean_name,
+        strategy_type=strategy_type,
+        params=normalized,
+        status="draft",
+        version=1,
+        idempotency_key=idempotency_key,
+    )
+    db.add(strategy)
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        if idempotency_key:
+            concurrent = db.execute(
+                select(Strategy).where(Strategy.idempotency_key == idempotency_key)
+            ).scalars().first()
+            if concurrent is not None and (
+                concurrent.strategy_key == clean_name
+                and concurrent.version == 1
+                and _matches_create_request(
+                    concurrent,
+                    name=clean_name,
+                    strategy_type=strategy_type,
+                    status="draft",
+                    normalized_params=normalized,
+                )
+            ):
+                return concurrent
+        conflicting = db.execute(
+            select(Strategy)
+            .where(or_(Strategy.name == clean_name, Strategy.strategy_key == clean_name))
+            .limit(1)
+        ).scalars().first()
+        if conflicting is not None:
+            raise StrategyNameConflictError(
+                "strategy name must be unique when creating an independent strategy"
+            ) from exc
+        raise StrategyCreateConflictError("create independent strategy failed") from exc
     db.refresh(strategy)
     return strategy

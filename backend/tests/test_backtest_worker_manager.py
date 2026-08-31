@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from unittest.mock import Mock
 import unittest
 
@@ -9,6 +10,22 @@ from src.workers.backtest_worker_manager import BacktestWorkerManagerRunner, res
 class BacktestWorkerManagerTests(unittest.TestCase):
     def test_restart_backoff_is_capped(self) -> None:
         self.assertEqual([restart_delay_seconds(value) for value in range(1, 7)], [1, 2, 5, 10, 30, 30])
+
+    def test_worker_command_uses_configured_concurrency(self) -> None:
+        runner = BacktestWorkerManagerRunner(concurrency=2, lease_seconds=180)
+        self.assertEqual(
+            runner._worker_command(),
+            [
+                sys.executable,
+                "-m",
+                "src.workers.backtest_worker",
+                "--once",
+                "--concurrency",
+                "2",
+                "--lease-seconds",
+                "180",
+            ],
+        )
 
     def test_empty_queue_does_not_start_worker(self) -> None:
         runner = BacktestWorkerManagerRunner(poll_seconds=0.1)

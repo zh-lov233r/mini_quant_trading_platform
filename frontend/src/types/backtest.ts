@@ -44,6 +44,9 @@ export interface BacktestProgress {
 }
 
 export interface BacktestWorkerStatus {
+  execution_model: "process";
+  configured_concurrency: number;
+  available_slots: number;
   automation_available: boolean;
   manager_state: "idle" | "starting" | "running" | "backoff" | "standby" | "stopping" | "unavailable";
   live_managers: number;

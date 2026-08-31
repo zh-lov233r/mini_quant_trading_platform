@@ -15,6 +15,7 @@ The repository currently has two main parts:
   - Create, inspect, update, and archive strategies
   - Start from a guided `/strategies/new` hub: hand-configure an existing engine strategy in five steps, or hand off to Agent research for an existing category or new algorithm
   - Manual creation validates and normalizes the payload before persistence and always saves a `draft`; it does not activate a portfolio, create an allocation, start scheduling, or submit an order
+  - Create from any strategy card or detail page: the wizard preloads the source and locks its type, then saves a uniquely named Draft with an independent `strategy_key` starting at `v1`; backtests, allocations, run history, and positions are not copied
   - Expose a strategy catalog and normalized runtime payloads
   - Current strategy types include `trend`, `mean_reversion`, `momentum_breakout`, `island_reversal`, `double_bottom`, `head_shoulders_bottom`, `rounded_bottom`, `v_reversal`, `support_resistance`, and `custom`
   - The five bottom-reversal categories use cumulative 20% / 50% / 100% staged entries; see [Bottom-reversal strategies](docs/bottom-reversal-strategies.md)
@@ -124,7 +125,7 @@ The 13 active workbench pages use a wide-screen, compact-density shell. Primary 
 
 Position lifecycles use New York trading dates. Open rows distinguish the period-end valuation date and non-fill mark from actual sell fills, and load support/resistance audit data directly for the visible candle window instead of depending on the initial signal page.
 
-Backtest detail groups per-symbol PnL, signal-strength ranking, lifecycles, transactions, and latest positions into one review workbench with tab navigation. Its content area scrolls independently while preserving each module's existing filters, sorting, pagination, and expansion controls.
+Backtest detail groups per-symbol PnL, signal-strength ranking, lifecycles, transactions, and latest positions into one review workbench with tab navigation. Its content area scrolls independently while preserving each module's existing filters, sorting, pagination, and expansion controls; clicking a non-form area of an expanded symbol lifecycle collapses it again, while dragging chart dividers, zooming, or panning does not. Lifecycle charts place every colored event dot and buy/sell arrow in the price pane gutters, with dashed leaders to the corresponding candles so neither candles nor volume bars are obscured; adjacent labels automatically switch sides or lanes to avoid overlap.
 
 ## Backend API Modules
 
@@ -143,7 +144,7 @@ The main route groups currently include:
 
 The `/api/agent/*` routes require a Bearer service token and expose only controlled draft-strategy and research-experiment operations. They do not expose broker orders or portfolio activation.
 
-Backtests are not executed by the Web process. Full-platform commands keep a lightweight manager alive; it starts a concurrency-one worker only while durable queued jobs exist. `GET /api/backtests/worker-status` reports automation health, and the list/detail pages show structured phase, percentage, and finalization item progress. See [Backtest performance and worker operations](docs/backtest-performance.md).
+Backtests are not executed by the Web process. Full-platform commands keep a lightweight manager alive; it starts a spawn-based process worker only while durable queued jobs exist. `BACKTEST_WORKER_CONCURRENCY` defaults to `2`, supports `1` or `2`, and requires a backend/manager restart after changes. `GET /api/backtests/worker-status` reports automation health and process capacity, while the list/detail pages show capacity plus structured phase, percentage, and finalization item progress. See [Backtest performance and worker operations](docs/backtest-performance.md).
 
 Health endpoints:
 

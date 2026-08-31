@@ -1,6 +1,7 @@
 import http, { API_BASE, readApiError } from "@/api/client";
 import type {
   StrategyCatalogItem,
+  StrategyCloneCreate,
   StrategyConfigUpdate,
   StrategyCreate,
   StrategyDeleteOut,
@@ -31,6 +32,26 @@ export async function createStrategy(
 
   if (!res.ok) {
     throw await readApiError(res, "/api/strategies");
+  }
+  return res.json() as Promise<StrategyOut>;
+}
+
+export async function cloneStrategy(
+  sourceStrategyId: string,
+  payload: StrategyCloneCreate,
+  idempotencyKey?: string,
+): Promise<StrategyOut> {
+  const res = await fetch(`${API_BASE}/api/strategies/${encodeURIComponent(sourceStrategyId)}/clone`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    throw await readApiError(res, `/api/strategies/${sourceStrategyId}/clone`);
   }
   return res.json() as Promise<StrategyOut>;
 }

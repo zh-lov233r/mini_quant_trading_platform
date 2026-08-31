@@ -793,6 +793,13 @@ export default function StrategiesPage() {
                               >
                                 {isZh ? "编辑策略" : "Edit Strategy"}
                               </Link>
+                              <Link
+                                href={`/strategies/new?cloneFrom=${encodeURIComponent(item.id)}`}
+                                onClick={(event) => event.stopPropagation()}
+                                style={{ color: "#a5f3fc", textDecoration: "none", fontSize: 14, fontWeight: 700, whiteSpace: "nowrap" }}
+                              >
+                                {isZh ? "基于此新建" : "Create From"}
+                              </Link>
                               <button
                                 type="button"
                                 onClick={(event) => {
@@ -848,6 +855,7 @@ export default function StrategiesPage() {
                       <ContextLinks>
                         <ContextLink href={`/strategies/${selectedStrategy.id}`}>{isZh ? "打开策略详情" : "Open strategy detail"}</ContextLink>
                         <ContextLink href={`/strategies/${selectedStrategy.id}/edit`}>{isZh ? "编辑策略" : "Edit strategy"}</ContextLink>
+                        <ContextLink href={`/strategies/new?cloneFrom=${encodeURIComponent(selectedStrategy.id)}`}>{isZh ? "基于此策略新建" : "Create from this strategy"}</ContextLink>
                         <ContextLink href={`/backtests?strategyId=${selectedStrategy.id}`}>{isZh ? "使用此策略回测" : "Backtest this strategy"}</ContextLink>
                       </ContextLinks>
                     </ContextStack>

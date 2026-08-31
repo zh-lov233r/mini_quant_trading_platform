@@ -256,11 +256,11 @@ export function latestVisibleZoneOverlaysByRole(
   return Array.from(latest.values()).sort((left, right) => left.role.localeCompare(right.role));
 }
 
+const CANDLE_PRIMARY_MARKER_TONES = new Set(["buy", "sell", "buy_signal", "sell_signal"]);
 export function groupCandleOverlayMarkers(markers: ChartOverlayMarker[]): ChartOverlayMarker[] {
-  const criticalTones = new Set(["buy", "sell", "buy_signal", "sell_signal"]);
   const grouped = new Map<string, ChartOverlayMarker>();
   markers.forEach((marker) => {
-    if (criticalTones.has(marker.tone)) {
+    if (CANDLE_PRIMARY_MARKER_TONES.has(marker.tone)) {
       grouped.set(marker.key, { ...marker, showText: true });
       return;
     }
@@ -286,6 +286,12 @@ export function groupCandleOverlayMarkers(markers: ChartOverlayMarker[]): ChartO
   });
   return Array.from(grouped.values()).sort((left, right) =>
     left.date.localeCompare(right.date) || left.key.localeCompare(right.key));
+}
+
+export function buildLifecycleLeaderMarkers(markers: ChartOverlayMarker[]): ChartOverlayMarker[] {
+  // Every lifecycle event belongs to the custom gutter layer. There is no
+  // tone allowlist, so future event colors cannot fall back over a candle.
+  return groupCandleOverlayMarkers(markers);
 }
 
 export function buildCandleSeriesMarkers(

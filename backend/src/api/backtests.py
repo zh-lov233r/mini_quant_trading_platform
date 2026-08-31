@@ -84,6 +84,9 @@ class BacktestProgressOut(BaseModel):
 
 
 class BacktestWorkerStatusOut(BaseModel):
+    execution_model: Literal["process"]
+    configured_concurrency: int = Field(ge=1, le=2)
+    available_slots: int = Field(ge=0)
     automation_available: bool
     manager_state: Literal["idle", "starting", "running", "backoff", "standby", "stopping", "unavailable"]
     live_managers: int

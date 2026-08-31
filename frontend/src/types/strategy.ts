@@ -278,6 +278,12 @@ export interface StrategyCreate {
   params: Record<string, unknown>;
 }
 
+export interface StrategyCloneCreate {
+  name: string;
+  description?: string | null;
+  params: Record<string, unknown>;
+}
+
 export interface StrategyValidation {
   valid: boolean;
   engine_ready: boolean;

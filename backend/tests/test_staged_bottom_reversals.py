@@ -6,8 +6,15 @@ from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import UUID
 
-from src.services.backtest_engine import BacktestCostConfig, _apply_buy_signals
-from src.services.bottom_reversal_service import _confirmed_pivot_lows, evaluate_bottom_reversal
+from src.services.backtest_engine import (
+    BacktestCostConfig,
+    _apply_buy_signals,
+    _apply_sell_signals,
+    _apply_split_adjustments,
+)
+from src.services.patterns.common import confirmed_pivot_lows
+from src.services.patterns import head_shoulders_bottom, rounded_bottom, v_reversal
+from src.services.patterns.models import PatternContext
 from src.services.paper_trading_service import VirtualSubportfolioState, _apply_virtual_fill, _client_order_id
 from src.services.staged_entry_service import build_pattern_setup, select_highest_stage_signals
 from src.services.strategy_engine import SignalEvent
@@ -33,9 +40,9 @@ class StagedBottomReversalTests(unittest.TestCase):
 
     def test_confirmed_pivot_never_uses_missing_future_bars(self) -> None:
         bars = [{"low": value} for value in (5, 4, 3)]
-        self.assertEqual(_confirmed_pivot_lows(bars, 2, 2), [])
+        self.assertEqual(confirmed_pivot_lows(bars, 2, 2), [])
         bars.extend(({"low": 4}, {"low": 5}))
-        self.assertEqual(_confirmed_pivot_lows(bars, 2, 2), [2])
+        self.assertEqual(confirmed_pivot_lows(bars, 2, 2), [2])
 
     def test_v_reversal_emits_standard_stage_one_setup(self) -> None:
         params = normalize_strategy_params("v_reversal", {})
@@ -45,7 +52,7 @@ class StagedBottomReversalTests(unittest.TestCase):
             close = 130.0 - index * 0.5
             bars.append(self._bar(start + timedelta(days=index), close + 1, close + 2, close - 1, close, 100, 3))
         bars.append(self._bar(start + timedelta(days=60), 91, 96, 90, 95, 220, 3))
-        decision = evaluate_bottom_reversal(
+        decision = self._evaluate_pattern(
             pattern_type="v_reversal",
             symbol="TEST",
             recent_bars=bars,
@@ -74,7 +81,7 @@ class StagedBottomReversalTests(unittest.TestCase):
             self._bar(start + timedelta(days=index), close + 0.5, close + 1, low, close, 50 if index == 6 else 100, 2)
             for index, (low, close) in enumerate(zip(lows, closes, strict=True))
         ]
-        before_confirmation = evaluate_bottom_reversal(
+        before_confirmation = self._evaluate_pattern(
             pattern_type="head_shoulders_bottom",
             symbol="TEST",
             recent_bars=bars[:-1],
@@ -85,7 +92,7 @@ class StagedBottomReversalTests(unittest.TestCase):
             entry_signal_features=None,
         )
         self.assertIsNone(before_confirmation)
-        confirmed = evaluate_bottom_reversal(
+        confirmed = self._evaluate_pattern(
             pattern_type="head_shoulders_bottom",
             symbol="TEST",
             recent_bars=bars,
@@ -123,7 +130,27 @@ class StagedBottomReversalTests(unittest.TestCase):
             if index == 100:
                 close, high, low, volume = 113.0, 114.0, 111.0, 170.0
             bars.append(self._bar(start + timedelta(days=index), close * 0.995, high, low, close, volume, 2))
-        decision = evaluate_bottom_reversal(
+        first_pullback = self._evaluate_pattern(
+            pattern_type="rounded_bottom",
+            symbol="TEST",
+            recent_bars=bars[:88],
+            signal_cfg=params["signal"],
+            risk_cfg=params["risk"],
+            position=0,
+            avg_entry_price=None,
+            entry_signal_features=None,
+        )
+        second_pullback = self._evaluate_pattern(
+            pattern_type="rounded_bottom",
+            symbol="TEST",
+            recent_bars=bars[:95],
+            signal_cfg=params["signal"],
+            risk_cfg=params["risk"],
+            position=0,
+            avg_entry_price=None,
+            entry_signal_features=None,
+        )
+        decision = self._evaluate_pattern(
             pattern_type="rounded_bottom",
             symbol="TEST",
             recent_bars=bars,
@@ -134,12 +161,18 @@ class StagedBottomReversalTests(unittest.TestCase):
             entry_signal_features=None,
         )
         self.assertIsNotNone(decision)
-        assert decision is not None
+        assert first_pullback is not None and second_pullback is not None and decision is not None
+        self.assertEqual(first_pullback.setup["stage_key"], "first_right_pullback")
+        self.assertEqual(second_pullback.setup["stage_key"], "second_right_pullback")
         self.assertEqual(decision.setup["stage_key"], "rim_breakout")
         self.assertEqual(len(decision.setup["anchors"]["pullbacks"]), 2)
+        self.assertEqual(
+            len({first_pullback.setup["setup_id"], second_pullback.setup["setup_id"], decision.setup["setup_id"]}),
+            1,
+        )
         missing_volume = [dict(bar) for bar in bars]
         missing_volume[-1]["volume"] = 100.0
-        self.assertIsNone(evaluate_bottom_reversal(
+        self.assertIsNone(self._evaluate_pattern(
             pattern_type="rounded_bottom",
             symbol="TEST",
             recent_bars=missing_volume,
@@ -244,15 +277,145 @@ class StagedBottomReversalTests(unittest.TestCase):
         _apply_buy_signals(signals=[self._event(3, risk)], trade_day_index=2, **common)
         self.assertAlmostEqual(holdings["TEST"], 50.0)
 
+    def test_existing_setup_can_add_at_max_positions_but_new_symbol_cannot(self) -> None:
+        risk = {"stage_1_target_pct": 0.2, "stage_2_target_pct": 0.5, "stage_3_target_pct": 1.0}
+        first = self._event(1, risk)
+        holdings = {"TEST": 10.0}
+        averages = {"TEST": 10.0}
+        features = {"TEST": first.metadata}
+        cash = {"cash": 1_000.0}
+        trade_day = date(2026, 1, 5)
+        common = dict(
+            db=SimpleNamespace(add=lambda _value: None), strategy=SimpleNamespace(id="strategy"), run=SimpleNamespace(id="run"),
+            holdings=holdings, avg_entry_prices=averages, entry_trade_dates={}, entry_day_indices={}, entry_signal_features=features,
+            execution_prices={"TEST": 10.0, "NEW": 10.0},
+            execution_snapshots={
+                symbol: {"symbol": symbol, "dt_ny": trade_day, "ts": datetime(2026, 1, 5, 14, 30, tzinfo=timezone.utc)}
+                for symbol in ("TEST", "NEW")
+            },
+            cash_ref=cash, equity_before=1_000.0, max_positions=1, position_size_pct=0.5,
+            cost_config=BacktestCostConfig(0, 0, 0), trade_day=trade_day, trade_day_index=2, persist_transactions=False,
+        )
+        _apply_buy_signals(signals=[self._event(2, risk)], **common)
+        self.assertAlmostEqual(holdings["TEST"], 25.0)
+        _apply_buy_signals(signals=[self._event(1, risk, symbol="NEW")], **common)
+        self.assertNotIn("NEW", holdings)
+
+    def test_stage_regression_and_setup_mismatch_do_not_add(self) -> None:
+        risk = {"stage_1_target_pct": 0.2, "stage_2_target_pct": 0.5, "stage_3_target_pct": 1.0}
+        current = self._event(2, risk)
+        holdings = {"TEST": 25.0}
+        features = {"TEST": current.metadata}
+        cash = {"cash": 1_000.0}
+        trade_day = date(2026, 1, 5)
+        common = dict(
+            db=SimpleNamespace(add=lambda _value: None), strategy=SimpleNamespace(id="strategy"), run=SimpleNamespace(id="run"),
+            holdings=holdings, avg_entry_prices={"TEST": 10.0}, entry_trade_dates={}, entry_day_indices={}, entry_signal_features=features,
+            execution_prices={"TEST": 10.0},
+            execution_snapshots={"TEST": {"symbol": "TEST", "dt_ny": trade_day, "ts": datetime(2026, 1, 5, 14, 30, tzinfo=timezone.utc)}},
+            cash_ref=cash, equity_before=1_000.0, max_positions=1, position_size_pct=0.5,
+            cost_config=BacktestCostConfig(0, 0, 0), trade_day=trade_day, persist_transactions=False,
+        )
+        _apply_buy_signals(signals=[self._event(1, risk)], trade_day_index=2, **common)
+        mismatch = self._event(3, risk)
+        mismatch.metadata["setup"] = {**mismatch.metadata["setup"], "setup_id": "v_reversal:TEST:different"}
+        _apply_buy_signals(signals=[mismatch], trade_day_index=3, **common)
+        self.assertEqual(holdings["TEST"], 25.0)
+        self.assertEqual(cash["cash"], 1_000.0)
+
+    def test_stage_add_after_split_uses_adjusted_quantity_and_cost(self) -> None:
+        risk = {"stage_1_target_pct": 0.2, "stage_2_target_pct": 0.5, "stage_3_target_pct": 1.0}
+        first = self._event(1, risk)
+        holdings = {"TEST": 10.0}
+        averages = {"TEST": 20.0}
+        features = {"TEST": first.metadata}
+        split_day = date(2026, 1, 5)
+        _apply_split_adjustments(split_day, {split_day: {"TEST": 2.0}}, holdings, averages)
+        self.assertEqual(holdings["TEST"], 20.0)
+        self.assertEqual(averages["TEST"], 10.0)
+        cash = {"cash": 1_000.0}
+        stats = _apply_buy_signals(
+            db=SimpleNamespace(add=lambda _value: None), strategy=SimpleNamespace(id="strategy"), run=SimpleNamespace(id="run"),
+            signals=[self._event(2, risk)], holdings=holdings, avg_entry_prices=averages,
+            entry_trade_dates={}, entry_day_indices={}, entry_signal_features=features,
+            execution_prices={"TEST": 10.0},
+            execution_snapshots={"TEST": {"symbol": "TEST", "dt_ny": split_day, "ts": datetime(2026, 1, 5, 14, 30, tzinfo=timezone.utc)}},
+            cash_ref=cash, equity_before=1_000.0, max_positions=1, position_size_pct=0.5,
+            cost_config=BacktestCostConfig(commission_bps=0, commission_min=1, slippage_bps=100),
+            trade_day=split_day, trade_day_index=2, persist_transactions=False,
+        )
+        expected_qty = 20.0 + (49.0 / 10.1)
+        self.assertAlmostEqual(holdings["TEST"], expected_qty, places=6)
+        self.assertGreater(averages["TEST"], 10.0)
+        self.assertAlmostEqual(stats.total_fees, 1.0)
+        self.assertGreater(stats.total_slippage, 0.0)
+
+    def test_sell_cash_is_available_to_buy_on_the_same_execution_day(self) -> None:
+        trade_day = date(2026, 1, 5)
+        ts = datetime(2026, 1, 5, 14, 30, tzinfo=timezone.utc)
+        sell = SignalEvent("strategy", ts, "OLD", "SELL", "rotate")
+        buy = SignalEvent("strategy", ts, "NEW", "BUY", "rotate", metadata={"strength": {"score": 100, "passes_threshold": True}})
+        holdings = {"OLD": 10.0}
+        averages = {"OLD": 10.0}
+        cash = {"cash": 0.0}
+        snapshots = {
+            "OLD": {"symbol": "OLD", "dt_ny": trade_day, "ts": ts},
+            "NEW": {"symbol": "NEW", "dt_ny": trade_day, "ts": ts},
+        }
+        common = dict(
+            db=SimpleNamespace(add=lambda _value: None), strategy=SimpleNamespace(id="strategy"), run=SimpleNamespace(id="run"),
+            holdings=holdings, avg_entry_prices=averages, entry_trade_dates={}, entry_day_indices={}, entry_signal_features={},
+            execution_prices={"OLD": 10.0, "NEW": 10.0}, execution_snapshots=snapshots,
+            cash_ref=cash, cost_config=BacktestCostConfig(0, 0, 0), persist_transactions=False,
+        )
+        _apply_sell_signals(signals=[sell, buy], **common)
+        self.assertEqual(cash["cash"], 100.0)
+        _apply_buy_signals(
+            signals=[sell, buy], equity_before=100.0, max_positions=1, position_size_pct=1.0,
+            trade_day=trade_day, trade_day_index=1, **common,
+        )
+        self.assertNotIn("OLD", holdings)
+        self.assertAlmostEqual(holdings["NEW"], 10.0)
+        self.assertAlmostEqual(cash["cash"], 0.0)
+
+    @staticmethod
+    def _evaluate_pattern(
+        *,
+        pattern_type: str,
+        symbol: str,
+        recent_bars: list[dict],
+        signal_cfg: dict,
+        risk_cfg: dict,
+        position: float,
+        avg_entry_price: float | None,
+        entry_signal_features: dict | None,
+    ):
+        evaluators = {
+            "head_shoulders_bottom": head_shoulders_bottom.evaluate,
+            "rounded_bottom": rounded_bottom.evaluate,
+            "v_reversal": v_reversal.evaluate,
+        }
+        return evaluators[pattern_type](
+            PatternContext(
+                symbol=symbol,
+                bars=recent_bars,
+                signal_cfg=signal_cfg,
+                risk_cfg=risk_cfg,
+                position=position,
+                avg_entry_price=avg_entry_price,
+                entry_signal_features=entry_signal_features,
+            )
+        )
+
     @staticmethod
     def _bar(day: date, open_price: float, high: float, low: float, close: float, volume: float, atr: float) -> dict:
         return {"dt_ny": day, "open": open_price, "high": high, "low": low, "close": close, "volume": volume, "volume_sma_20": 100.0, "atr_14": atr}
 
     @staticmethod
-    def _event(stage: int, risk: dict) -> SignalEvent:
+    def _event(stage: int, risk: dict, *, symbol: str = "TEST") -> SignalEvent:
         setup = build_pattern_setup(
             pattern_type="v_reversal",
-            symbol="TEST",
+            symbol=symbol,
             stage_index=stage,
             stage_key=f"stage_{stage}",
             risk_cfg=risk,
@@ -263,7 +426,7 @@ class StagedBottomReversalTests(unittest.TestCase):
         return SignalEvent(
             strategy_id="strategy",
             ts=datetime(2026, 1, 2, tzinfo=timezone.utc),
-            symbol="TEST",
+            symbol=symbol,
             action="BUY",
             reason="stage",
             metadata={"position": 0, "setup": setup, "strength": {"score": 100, "passes_threshold": True}},

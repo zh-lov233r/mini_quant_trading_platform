@@ -8,13 +8,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.services.patterns.double_bottom import (  # noqa: E402
+    find_latest_pattern as _find_latest_double_bottom_pattern,
+    has_downtrend_context as _has_double_bottom_downtrend_context,
+    has_smooth_downtrend as _has_smooth_double_bottom_downtrend,
+    resolve_action as _resolve_double_bottom_action,
+)
+from src.services.patterns import double_bottom  # noqa: E402
+from src.services.patterns.models import PatternContext  # noqa: E402
 from src.services.strategy_engine import (  # noqa: E402
     build_stateful_backtest_signal_state,
-    _has_double_bottom_downtrend_context,
-    _has_smooth_double_bottom_downtrend,
-    _find_latest_double_bottom_pattern,
     generate_stateful_backtest_signals,
-    _resolve_double_bottom_action,
 )
 
 
@@ -88,7 +92,7 @@ class DoubleBottomStateMachineTests(unittest.TestCase):
         self.assertEqual(pattern.breakout_idx, 8)
         self.assertEqual(
             _resolve_double_bottom_action(
-                recent_bars=bars,
+                bars=bars,
                 pattern=pattern,
                 signal_cfg=self.signal_cfg,
                 risk_cfg=self.risk_cfg,
@@ -107,7 +111,7 @@ class DoubleBottomStateMachineTests(unittest.TestCase):
         self.assertEqual(pattern.breakout_idx, 8)
         self.assertEqual(
             _resolve_double_bottom_action(
-                recent_bars=bars,
+                bars=bars,
                 pattern=pattern,
                 signal_cfg=self.signal_cfg,
                 risk_cfg=self.risk_cfg,
@@ -131,7 +135,7 @@ class DoubleBottomStateMachineTests(unittest.TestCase):
         self.assertEqual(pattern.breakout_idx, 8)
         self.assertEqual(
             _resolve_double_bottom_action(
-                recent_bars=bars,
+                bars=bars,
                 pattern=pattern,
                 signal_cfg=self.signal_cfg,
                 risk_cfg=self.risk_cfg,
@@ -221,6 +225,28 @@ class DoubleBottomStateMachineTests(unittest.TestCase):
         )
 
         self.assertEqual(retest_signals, [])
+
+    def test_second_bottom_and_first_pullback_share_one_causal_setup(self) -> None:
+        stage_one_bars = self._primary_pattern_bars()[:-1] + [
+            _build_bar(8, 102, 105, 101, 104, 90)
+        ]
+        stage_two_bars = stage_one_bars + [
+            _build_bar(9, 105, 109, 104, 108, 110),
+            _build_bar(10, 108, 110, 107, 109, 110),
+            _build_bar(11, 109, 110, 105, 107, 70),
+        ]
+        first = double_bottom.evaluate(
+            PatternContext("TEST", stage_one_bars, self.signal_cfg, self.risk_cfg)
+        )
+        second = double_bottom.evaluate(
+            PatternContext("TEST", stage_two_bars, self.signal_cfg, self.risk_cfg)
+        )
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertEqual(first.setup["stage_key"], "second_bottom")
+        self.assertEqual(second.setup["stage_key"], "right_side_pullback")
+        self.assertEqual(first.setup["setup_id"], second.setup["setup_id"])
+        self.assertEqual((first.setup["stage_target_pct"], second.setup["stage_target_pct"]), (0.2, 0.5))
 
     def test_double_bottom_downtrend_only_uses_lookback_drop(self) -> None:
         bars = [

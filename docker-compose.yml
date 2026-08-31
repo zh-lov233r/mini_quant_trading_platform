@@ -41,6 +41,7 @@ services:
       ALPACA_BASE_URL: ${ALPACA_BASE_URL:-https://paper-api.alpaca.markets}
       PAPER_TRADING_SCHEDULER_ENABLED: "false"
       PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS: "false"
+      BACKTEST_WORKER_CONCURRENCY: ${BACKTEST_WORKER_CONCURRENCY:-2}
     command: >
       sh -c "python utils/create_db.py &&
              uvicorn src.main:app --host 0.0.0.0 --port 8000"
@@ -74,6 +75,7 @@ services:
       SQLALCHEMY_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-quantpass}@db:5432/${POSTGRES_DB:-quant}
       PAPER_TRADING_SCHEDULER_ENABLED: "false"
       PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS: "false"
+      BACKTEST_WORKER_CONCURRENCY: ${BACKTEST_WORKER_CONCURRENCY:-2}
     command: python -m src.workers.backtest_worker_manager
     volumes:
       - ./data:/app/data

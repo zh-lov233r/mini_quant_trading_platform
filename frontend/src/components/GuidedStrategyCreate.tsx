@@ -4,6 +4,7 @@ import { useRouter } from "next/router";
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  cloneStrategy,
   createStrategy,
   getStrategyCatalog,
   getStrategyFeatureSupport,
@@ -16,6 +17,7 @@ import type {
   StrategyCatalogItem,
   StrategyCreate,
   StrategyFeatureSupport,
+  StrategyOut,
   StrategyType,
   StrategyValidation,
 } from "@/types/strategy";
@@ -29,6 +31,7 @@ import {
   STRATEGY_GUIDANCE,
   type GuidedFieldDefinition,
 } from "@/utils/strategyCreateGuidance";
+import { buildStrategyCloneDraft } from "@/utils/strategyClone";
 
 type CreationView = "hub" | "manual";
 type FieldErrors = Record<string, string>;
@@ -59,7 +62,11 @@ function formatValue(value: unknown, field?: GuidedFieldDefinition): string {
   return String(value);
 }
 
-export default function GuidedStrategyCreate() {
+interface GuidedStrategyCreateProps {
+  cloneSource?: StrategyOut | null;
+}
+
+export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrategyCreateProps) {
   const router = useRouter();
   const { locale, messages } = useI18n();
   const copy = messages.strategyCreate;
@@ -88,6 +95,7 @@ export default function GuidedStrategyCreate() {
   const [validationError, setValidationError] = useState<string | null>(null);
   const [validating, setValidating] = useState(false);
   const [saving, setSaving] = useState(false);
+  const isCloneMode = cloneSource != null;
 
   const loadCatalog = async () => {
     setCatalogLoading(true);
@@ -97,6 +105,9 @@ export default function GuidedStrategyCreate() {
         getStrategyCatalog(),
         getStrategyFeatureSupport(),
       ]);
+      if (cloneSource && !catalogItems.some((item) => item.strategy_type === cloneSource.strategy_type)) {
+        throw new Error(copy.clone.unsupportedType.replace("{type}", cloneSource.strategy_type));
+      }
       setCatalog(catalogItems);
       setFeatureSupport(support);
     } catch (error) {
@@ -111,6 +122,24 @@ export default function GuidedStrategyCreate() {
     // The loader is intentionally stable for this one-time request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!cloneSource) return;
+    const draft = buildStrategyCloneDraft(cloneSource);
+    setView("manual");
+    setStep(1);
+    setSelectedType(draft.strategyType);
+    setParams(cloneRecord(draft.params));
+    setInitialParams(cloneRecord(draft.params));
+    setRawJson(draft.rawJson);
+    setName(draft.name);
+    setDescription(draft.description);
+    setSymbolsText(draft.symbolsText);
+    setErrors({});
+    setValidation(null);
+    setValidationError(null);
+    setDirty(false);
+  }, [cloneSource]);
 
   const selectedCatalog = useMemo(
     () => catalog.find((item) => item.strategy_type === selectedType) ?? null,
@@ -290,11 +319,20 @@ export default function GuidedStrategyCreate() {
     setSaving(true);
     setValidationError(null);
     try {
-      const created = await createStrategy(
-        buildPayload(),
-        (globalThis.crypto as Crypto | undefined)?.randomUUID?.() ?? String(Date.now()),
-      );
-      await router.push(`/strategies/${encodeURIComponent(created.id)}?created=1`);
+      const payload = buildPayload();
+      const idempotencyKey = (globalThis.crypto as Crypto | undefined)?.randomUUID?.() ?? String(Date.now());
+      const created = cloneSource
+        ? await cloneStrategy(
+            cloneSource.id,
+            {
+              name: payload.name,
+              description: payload.description,
+              params: payload.params,
+            },
+            idempotencyKey,
+          )
+        : await createStrategy(payload, idempotencyKey);
+      await router.push(`/strategies/${encodeURIComponent(created.id)}?created=1${cloneSource ? "&cloned=1" : ""}`);
     } catch (error) {
       setValidationError(error instanceof Error ? error.message : copy.errors.createFailed);
       setSaving(false);
@@ -467,7 +505,8 @@ export default function GuidedStrategyCreate() {
     const error = errors[field.path];
     const options = getOptions(field);
     const range = [field.min !== undefined ? formatValue(field.min, field) : "−∞", field.max !== undefined ? formatValue(field.max, field) : "+∞"].join(" – ");
-    const hints = [copyForField?.hint, interpolate(copy.parameters.defaultValue, { value: formatValue(defaultValue, field) })];
+    const referenceValue = isCloneMode ? copy.clone.sourceValue : copy.parameters.defaultValue;
+    const hints = [copyForField?.hint, interpolate(referenceValue, { value: formatValue(defaultValue, field) })];
     if (field.kind === "number" || field.kind === "percent") hints.push(interpolate(copy.parameters.allowedRange, { range }));
 
     return (
@@ -618,9 +657,29 @@ export default function GuidedStrategyCreate() {
   const renderManual = () => (
     <div>
       <div style={wizardTopStyle}>
-        <button type="button" onClick={() => { setView("hub"); setStep(0); }} style={textButtonStyle}>{copy.wizard.exit}</button>
+        <button
+          type="button"
+          onClick={() => {
+            if (cloneSource) {
+              void router.push(`/strategies/${encodeURIComponent(cloneSource.id)}`);
+              return;
+            }
+            setView("hub");
+            setStep(0);
+          }}
+          style={textButtonStyle}
+        >
+          {isCloneMode ? copy.clone.cancel : copy.wizard.exit}
+        </button>
         <span style={mutedStyle}>{selectedCatalog ? `${typeCopy[selectedCatalog.strategy_type].title} · ${selectedCatalog.strategy_type}` : copy.wizard.stepType}</span>
       </div>
+      {cloneSource ? (
+        <div style={cloneSourceStyle}>
+          <strong>{copy.clone.title}</strong>
+          <span>{interpolate(copy.clone.sourceSummary, { name: cloneSource.name, version: cloneSource.version, type: cloneSource.strategy_type })}</span>
+          <small>{copy.clone.independentDraft}</small>
+        </div>
+      ) : null}
       <ol aria-label={isZh ? "创建策略步骤" : "Strategy creation steps"} style={stepperStyle}>
         {stepLabels.map((label, index) => (
           <li key={label} aria-current={index === step ? "step" : undefined} style={stepStyle(index, step)}>
@@ -630,11 +689,24 @@ export default function GuidedStrategyCreate() {
       </ol>
       {step === 0 ? renderTypeStep() : step === 1 ? renderBasicsStep() : step === 2 ? renderSignalStep() : step === 3 ? renderRiskStep() : renderReviewStep()}
       <div style={footerStyle}>
-        <button type="button" disabled={step === 0 || saving || validating} onClick={() => { setErrors({}); setStep((current) => Math.max(0, current - 1)); }} style={secondaryButtonStyle}>{copy.wizard.back}</button>
+        <button type="button" disabled={step === 0 || (isCloneMode && step === 1) || saving || validating} onClick={() => { setErrors({}); setStep((current) => Math.max(0, current - 1)); }} style={secondaryButtonStyle}>{copy.wizard.back}</button>
         {step < STEP_COUNT - 1 ? <button type="button" disabled={catalogLoading || Boolean(catalogError)} onClick={nextStep} style={primaryButtonStyle}>{copy.wizard.next}</button> : null}
       </div>
     </div>
   );
+
+  if (isCloneMode && catalogError) {
+    return (
+      <section style={panelStyle}>
+        <h2 style={sectionTitleStyle}>{copy.clone.loadFailed}</h2>
+        <p style={{ color: "#fda4af" }}>{catalogError}</p>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button type="button" onClick={() => void loadCatalog()} style={secondaryButtonStyle}>{copy.catalog.retry}</button>
+          {cloneSource ? <Link href={`/strategies/${encodeURIComponent(cloneSource.id)}`} style={{ ...secondaryButtonStyle, textDecoration: "none" }}>{copy.clone.cancel}</Link> : null}
+        </div>
+      </section>
+    );
+  }
 
   return view === "hub" ? renderHub() : renderManual();
 }
@@ -693,6 +765,7 @@ const textButtonStyle: CSSProperties = { padding: 0, border: 0, background: "tra
 const safetyStyle: CSSProperties = { padding: "14px 18px", borderRadius: 16, border: "1px solid rgba(34,197,94,.28)", color: "#bbf7d0", background: "rgba(22,101,52,.12)", lineHeight: 1.55, fontFamily: font };
 const agentLinkStyle: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, padding: 14, borderRadius: 14, border: "1px solid rgba(71,85,105,.32)", color: "#e2e8f0", background: "rgba(15,23,42,.66)", textDecoration: "none", fontFamily: font };
 const wizardTopStyle: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 14, flexWrap: "wrap" };
+const cloneSourceStyle: CSSProperties = { display: "grid", gap: 5, marginBottom: 16, padding: 15, borderRadius: 15, border: "1px solid rgba(45,212,191,.42)", background: "rgba(13,148,136,.12)", color: "#ccfbf1", fontFamily: font };
 const stepperStyle: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(5,minmax(130px,1fr))", gap: 8, padding: 0, margin: "0 0 18px", listStyle: "none", overflowX: "auto" };
 const stepStyle = (index: number, current: number): CSSProperties => ({ display: "flex", alignItems: "center", gap: 8, minWidth: 130, padding: "11px 12px", borderRadius: 13, border: `1px solid ${index === current ? "rgba(34,211,238,.58)" : "rgba(71,85,105,.3)"}`, color: index <= current ? "#e2e8f0" : "#64748b", background: index === current ? "rgba(8,145,178,.15)" : "rgba(2,6,23,.28)", fontSize: 13, fontWeight: 750, fontFamily: font });
 const stepNumberStyle = (index: number, current: number): CSSProperties => ({ display: "grid", placeItems: "center", width: 24, height: 24, flex: "0 0 auto", borderRadius: 999, color: index <= current ? "#ecfeff" : "#64748b", background: index <= current ? "#0e7490" : "#1e293b" });
@@ -712,7 +785,7 @@ const hintStyle: CSSProperties = { color: "#8291a5", fontSize: 12, lineHeight: 1
 const errorStyle: CSSProperties = { color: "#fda4af", fontSize: 12, lineHeight: 1.5, fontFamily: font };
 const counterStyle: CSSProperties = { alignSelf: "flex-end", color: "#64748b", fontSize: 12 };
 const recognizedStyle: CSSProperties = { color: "#a5f3fc", fontSize: 12, lineHeight: 1.5 };
-const readonlyCardStyle: CSSProperties = { display: "grid", gridTemplateColumns: "minmax(140px,.4fr) minmax(240px,1fr)", gap: 18, alignItems: "center", padding: 16, borderRadius: 14, border: "1px solid rgba(245,158,11,.28)", background: "rgba(120,53,15,.1)" };
+const readonlyCardStyle: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 18, alignItems: "center", padding: 16, borderRadius: 14, border: "1px solid rgba(245,158,11,.28)", background: "rgba(120,53,15,.1)" };
 const mutedStyle: CSSProperties = { color: "#94a3b8", fontFamily: font };
 const switchStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 9, minHeight: 44, padding: "0 12px", borderRadius: 12, border: "1px solid rgba(71,85,105,.5)", background: "#07111c", cursor: "pointer", fontFamily: font };
 const unitStyle: CSSProperties = { position: "absolute", top: "50%", right: 13, transform: "translateY(-50%)", color: "#67e8f9", pointerEvents: "none", fontWeight: 800 };

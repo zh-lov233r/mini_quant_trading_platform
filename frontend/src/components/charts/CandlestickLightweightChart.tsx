@@ -3,7 +3,6 @@ import {
   CandlestickSeries,
   ColorType,
   createChart,
-  createSeriesMarkers,
   HistogramSeries,
 } from "lightweight-charts";
 import type {
@@ -11,15 +10,12 @@ import type {
   HistogramData,
   IChartApi,
   ISeriesApi,
-  ISeriesMarkersPluginApi,
   MouseEventParams,
-  SeriesMarker,
   Time,
 } from "lightweight-charts";
 
 import {
-  buildCandleSeriesMarkers,
-  groupCandleOverlayMarkers,
+  buildLifecycleLeaderMarkers,
   normalizeGapOverlays,
   normalizeCandleBars,
   normalizeZoneOverlays,
@@ -62,7 +58,6 @@ export default function CandlestickLightweightChart({
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<CandleApi | null>(null);
   const volumeRef = useRef<VolumeApi | null>(null);
-  const markerPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const primitiveRef = useRef<LifecycleOverlayPrimitive | null>(null);
   const [pinnedMarker, setPinnedMarker] = useState<ChartOverlayMarker | null>(null);
   const normalizedBars = useMemo(() => normalizeCandleBars(bars), [bars]);
@@ -78,14 +73,14 @@ export default function CandlestickLightweightChart({
     () => normalizeZoneOverlays(zones, availableTimes),
     [availableTimes, zones],
   );
-  const groupedMarkers = useMemo(() => groupCandleOverlayMarkers(markers), [markers]);
-  const seriesMarkers = useMemo(
-    () => buildCandleSeriesMarkers(groupedMarkers, normalizedBars),
-    [groupedMarkers, normalizedBars],
-  );
+  // Lifecycle events are rendered only by the gutter primitive. Keeping the
+  // built-in series-marker plugin out of this chart makes it impossible for a
+  // new marker tone to fall back to an inline dot over a candle.
+  const leaderMarkers = useMemo(() => buildLifecycleLeaderMarkers(markers), [markers]);
+  const hasLeaderMarkers = leaderMarkers.length > 0;
   const markerById = useMemo(
-    () => new Map(groupedMarkers.map((marker) => [marker.key, marker])),
-    [groupedMarkers],
+    () => new Map(leaderMarkers.map((marker) => [marker.key, marker])),
+    [leaderMarkers],
   );
   const markerByIdRef = useRef(markerById);
   const localeRef = useRef(locale);
@@ -115,7 +110,9 @@ export default function CandlestickLightweightChart({
       },
       rightPriceScale: {
         borderColor: "rgba(71, 85, 105, 0.36)",
-        scaleMargins: { top: 0.18, bottom: showVolume ? 0.08 : 0.12 },
+        scaleMargins: hasLeaderMarkers
+          ? { top: 0.24, bottom: 0.22 }
+          : { top: 0.18, bottom: showVolume ? 0.08 : 0.12 },
       },
       timeScale: {
         borderColor: "rgba(71, 85, 105, 0.36)",
@@ -151,7 +148,6 @@ export default function CandlestickLightweightChart({
     chartRef.current = chart;
     candleRef.current = candle;
     volumeRef.current = volume;
-    markerPluginRef.current = createSeriesMarkers(candle, []);
 
     const onCrosshairMove = (param: MouseEventParams<Time>) => {
       const tooltip = tooltipRef.current;
@@ -201,10 +197,9 @@ export default function CandlestickLightweightChart({
       chartRef.current = null;
       candleRef.current = null;
       volumeRef.current = null;
-      markerPluginRef.current = null;
       primitiveRef.current = null;
     };
-  }, [height, showVolume]);
+  }, [hasLeaderMarkers, height, showVolume]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -245,15 +240,15 @@ export default function CandlestickLightweightChart({
   }, [locale, normalizedBars]);
 
   useEffect(() => {
-    const mapped: SeriesMarker<Time>[] = seriesMarkers.map((marker) => ({ ...marker, size: 1 }));
-    markerPluginRef.current?.setMarkers(mapped);
-  }, [seriesMarkers]);
-
-  useEffect(() => {
     const candle = candleRef.current;
     if (!candle) return;
     if (primitiveRef.current) candle.detachPrimitive(primitiveRef.current);
-    const primitive = new LifecycleOverlayPrimitive(normalizedGaps, normalizedZones, normalizedBars);
+    const primitive = new LifecycleOverlayPrimitive(
+      normalizedGaps,
+      normalizedZones,
+      normalizedBars,
+      leaderMarkers,
+    );
     primitiveRef.current = primitive;
     candle.attachPrimitive(primitive);
     return () => {
@@ -268,7 +263,7 @@ export default function CandlestickLightweightChart({
       }
       if (primitiveRef.current === primitive) primitiveRef.current = null;
     };
-  }, [normalizedBars, normalizedGaps, normalizedZones]);
+  }, [leaderMarkers, normalizedBars, normalizedGaps, normalizedZones]);
 
   return (
     <div

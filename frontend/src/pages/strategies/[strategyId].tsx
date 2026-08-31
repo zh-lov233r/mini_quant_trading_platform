@@ -167,6 +167,7 @@ export default function StrategyDetailPage() {
   const { locale, messages } = useI18n();
   const isZh = locale === "zh-CN";
   const createdFromWizard = router.query.created === "1";
+  const clonedFromStrategy = router.query.cloned === "1";
   const createCopy = messages.strategyCreate.success;
   const strategyId = Array.isArray(router.query.strategyId)
     ? router.query.strategyId[0]
@@ -410,13 +411,17 @@ export default function StrategyDetailPage() {
             strategy ? `/backtests?strategyId=${encodeURIComponent(strategy.id)}` : "/backtests",
             isZh ? "用它回测" : "Backtest It"
           )}
-          {actionLink("/strategies/new", isZh ? "创建新策略" : "Create New Strategy", true)}
+          {actionLink(
+            strategy ? `/strategies/new?cloneFrom=${encodeURIComponent(strategy.id)}` : "/strategies/new",
+            isZh ? "基于此策略新建" : "Create From This",
+            true
+          )}
           {strategy ? (
             <WorkspaceDialog triggerLabel={isZh ? "策略摘要" : "Strategy Summary"} title={isZh ? "策略上下文" : "Strategy Context"}>
               <ContextStack>
                 <ContextGroup title={strategy.name}><ContextStats><ContextStat label={isZh ? "类型" : "Type"} value={strategy.strategy_type} /><ContextStat label={isZh ? "版本" : "Version"} value={`v${strategy.version}`} /><ContextStat label={isZh ? "状态" : "Status"} value={strategy.status} /><ContextStat label="Engine ready" value={strategy.engine_ready ? (isZh ? "是" : "Yes") : (isZh ? "否" : "No")} /><ContextStat label={isZh ? "近期回测" : "Recent runs"} value={recentRuns.length} /></ContextStats></ContextGroup>
                 <ContextGroup title={isZh ? "运行时" : "Runtime"}><ContextNote>{runtime ? jsonSummary(runtime, locale) : (isZh ? "运行时信息尚不可用。" : "Runtime information is unavailable.")}</ContextNote></ContextGroup>
-                <ContextGroup title={isZh ? "快速入口" : "Quick Links"}><ContextLinks><ContextLink href={`/strategies/${encodeURIComponent(strategy.id)}/edit`}>{isZh ? "编辑参数" : "Edit parameters"}</ContextLink><ContextLink href={`/backtests?strategyId=${encodeURIComponent(strategy.id)}`}>{isZh ? "使用此策略回测" : "Backtest this strategy"}</ContextLink></ContextLinks></ContextGroup>
+                <ContextGroup title={isZh ? "快速入口" : "Quick Links"}><ContextLinks><ContextLink href={`/strategies/${encodeURIComponent(strategy.id)}/edit`}>{isZh ? "编辑参数" : "Edit parameters"}</ContextLink><ContextLink href={`/strategies/new?cloneFrom=${encodeURIComponent(strategy.id)}`}>{isZh ? "基于此策略新建" : "Create from this strategy"}</ContextLink><ContextLink href={`/backtests?strategyId=${encodeURIComponent(strategy.id)}`}>{isZh ? "使用此策略回测" : "Backtest this strategy"}</ContextLink></ContextLinks></ContextGroup>
               </ContextStack>
             </WorkspaceDialog>
           ) : null}
@@ -438,8 +443,8 @@ export default function StrategyDetailPage() {
             color: "#dcfce7",
           }}
         >
-          <h2 style={{ margin: "0 0 8px", fontSize: 20 }}>{createCopy.title}</h2>
-          <p style={{ margin: "0 0 14px", color: "#bbf7d0", lineHeight: 1.6 }}>{createCopy.description}</p>
+          <h2 style={{ margin: "0 0 8px", fontSize: 20 }}>{clonedFromStrategy ? messages.strategyCreate.clone.successTitle : createCopy.title}</h2>
+          <p style={{ margin: "0 0 14px", color: "#bbf7d0", lineHeight: 1.6 }}>{clonedFromStrategy ? messages.strategyCreate.clone.successDescription : createCopy.description}</p>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             {actionLink(`/backtests?strategyId=${encodeURIComponent(strategy.id)}`, createCopy.backtest, true)}
             {actionLink(`/strategies/${encodeURIComponent(strategy.id)}/edit`, createCopy.edit)}

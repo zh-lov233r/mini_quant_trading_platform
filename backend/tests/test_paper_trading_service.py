@@ -23,6 +23,7 @@ from src.services.paper_trading_service import (  # noqa: E402
     _sync_strategy_pending_orders,
 )
 from src.services.signal_strength_service import annotate_and_rank_signals  # noqa: E402
+from src.services.staged_entry_service import build_pattern_setup  # noqa: E402
 from src.services.strategy_engine import SignalEvent  # noqa: E402
 from src.services.strategy_registry import normalize_strategy_params  # noqa: E402
 
@@ -239,6 +240,10 @@ class PaperTradingServiceTests(unittest.TestCase):
         self.assertEqual(float(txn.qty), 3.0)
         self.assertEqual(float(txn.price), 11.0)
         self.assertEqual(_transaction_net_cash_flow(txn), -33.0)
+        self.assertEqual(
+            (txn.meta or {}).get("entry_signal_features", {}).get("setup", {}).get("stage_index"),
+            1,
+        )
 
         sleeve = self._rebuild_state(capital_base=1000.0, current_price=11.0)
         self.assertAlmostEqual(sleeve.cash, 967.0)
@@ -373,6 +378,20 @@ class PaperTradingServiceTests(unittest.TestCase):
         return strategy, run
 
     def _buy_event(self) -> SignalEvent:
+        setup = build_pattern_setup(
+            pattern_type="double_bottom",
+            symbol="AAPL",
+            stage_index=1,
+            stage_key="second_bottom",
+            risk_cfg={
+                "stage_1_target_pct": 0.2,
+                "stage_2_target_pct": 0.5,
+                "stage_3_target_pct": 1.0,
+            },
+            anchors={"left_bottom_trade_date": "2026-04-10", "right_bottom_trade_date": "2026-04-14"},
+            invalidation_price=9.0,
+            setup_id_anchors=("2026-04-10", "2026-04-14"),
+        )
         return SignalEvent(
             strategy_id=str(self.strategy.id),
             ts=datetime(2026, 4, 14, 20, 0, tzinfo=timezone.utc),
@@ -381,7 +400,7 @@ class PaperTradingServiceTests(unittest.TestCase):
             reason="unit-test buy",
             metadata={
                 "position": 0,
-                "setup": "unit",
+                "setup": setup,
                 "strength_inputs": {
                     "bottom_distance_pct": 0.015,
                     "rebound_up_day_ratio": 0.8,
