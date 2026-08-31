@@ -70,9 +70,9 @@ export function WorkspaceDialog({
           </button>
         </Dialog.Trigger>
       ) : null}
-      <Dialog.Portal forceMount>
-        <Dialog.Overlay forceMount className={styles.overlay} />
-        <Dialog.Content forceMount className={`${styles.content} ${size === "form" ? styles.form : styles.summary}`}>
+      <Dialog.Portal>
+        <Dialog.Overlay className={styles.overlay} />
+        <Dialog.Content className={`${styles.content} ${size === "form" ? styles.form : styles.summary}`}>
           <header className={styles.header}>
             <div>
               <Dialog.Title className={styles.dialogTitle}>{title}</Dialog.Title>

@@ -249,11 +249,6 @@ export default function DashboardPage() {
     [items]
   );
 
-  const quietPortfolios = useMemo(
-    () => paperPortfolios.filter((item) => !item.latest_run_requested_at).slice(0, 4),
-    [paperPortfolios]
-  );
-
   return (
     <AppShell
       title="Dashboard"
@@ -563,82 +558,6 @@ export default function DashboardPage() {
                 )}
               </article>
 
-              <article style={cardStyle("rgba(234, 88, 12, 0.14)")}>
-                {sectionTitle(
-                  isZh ? "风险与待办" : "Risks & Next Actions",
-                  isZh
-                    ? "把当前最值得先处理的异常集中到一块，避免每天还要翻各个页面找问题"
-                    : "Concentrate the most important issues into one place so you do not need to hunt through multiple pages every day."
-                )}
-
-                <div style={{ display: "grid", gap: 12 }}>
-                  <div style={riskItemStyle}>
-                    <div style={riskTitleStyle}>
-                      {isZh ? "已激活但未就绪" : "Active But Not Engine-Ready"}
-                    </div>
-                    <div style={riskValueStyle}>
-                      {storedOnlyActive.length} {isZh ? "个" : ""}
-                    </div>
-                    <div style={riskBodyStyle}>
-                      {storedOnlyActive.length > 0
-                        ? storedOnlyActive
-                            .slice(0, 3)
-                            .map((item) => item.name)
-                            .join(", ")
-                        : isZh
-                          ? "当前没有这类策略"
-                          : "There are no strategies in this category right now"}
-                    </div>
-                  </div>
-
-                  <div style={riskItemStyle}>
-                    <div style={riskTitleStyle}>{isZh ? "失败回测" : "Failed Backtests"}</div>
-                    <div style={riskValueStyle}>
-                      {failedRuns.length} {isZh ? "次" : ""}
-                    </div>
-                    <div style={riskBodyStyle}>
-                      {failedRuns.length > 0
-                        ? isZh
-                          ? "建议优先打开最近失败 run 查看 error_message"
-                          : "Open the most recent failed run first and inspect its error_message"
-                        : isZh
-                          ? "最近没有失败回测"
-                          : "There have been no failed backtests recently"}
-                    </div>
-                  </div>
-
-                  <div style={riskItemStyle}>
-                    <div style={riskTitleStyle}>{isZh ? "超配 portfolio" : "Overallocated Portfolios"}</div>
-                    <div style={riskValueStyle}>
-                      {allocationRiskItems.length} {isZh ? "个" : ""}
-                    </div>
-                    <div style={riskBodyStyle}>
-                      {allocationRiskItems.length > 0
-                        ? allocationRiskItems
-                            .slice(0, 2)
-                            .map((item) => `${item.portfolioName} ${(item.total * 100).toFixed(1)}%`)
-                            .join(" / ")
-                        : isZh
-                          ? "所有 active allocation 总和都在 100% 以内"
-                          : "All active allocation totals are within 100%"}
-                    </div>
-                  </div>
-
-                  <div style={riskItemStyle}>
-                    <div style={riskTitleStyle}>{isZh ? "尚未运行的组合" : "Portfolios Not Yet Run"}</div>
-                    <div style={riskValueStyle}>
-                      {quietPortfolios.length} {isZh ? "个" : ""}
-                    </div>
-                    <div style={riskBodyStyle}>
-                      {quietPortfolios.length > 0
-                        ? quietPortfolios.map((item) => item.name).join(", ")
-                        : isZh
-                          ? "最近所有 portfolio 都已经有运行记录"
-                          : "Every portfolio has recent run history"}
-                    </div>
-                  </div>
-                </div>
-              </article>
             </div>
           </WorkspaceGrid>
 
@@ -822,51 +741,6 @@ export default function DashboardPage() {
                 </div>
               </article>
 
-              <article
-                style={{
-                  padding: 22,
-                  borderRadius: 24,
-                  background: "#102a43",
-                  color: "#f8fafc",
-                  boxShadow: "0 22px 48px rgba(15, 23, 42, 0.14)",
-                }}
-              >
-                <div
-                  style={{
-                    marginBottom: 10,
-                    fontSize: 12,
-                    fontWeight: 700,
-                    letterSpacing: "0.08em",
-                    textTransform: "uppercase",
-                    color: "#93c5fd",
-                    fontFamily:
-                      "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-                  }}
-                >
-                  {isZh ? "今天" : "Today"}
-                </div>
-                <h2 style={{ margin: "0 0 10px", fontSize: 24 }}>
-                  {isZh ? "今日待办" : "Today TODO List"}
-                </h2>
-                <p
-                  style={{
-                    margin: "0 0 16px",
-                    color: "rgba(241,245,249,0.82)",
-                    lineHeight: 1.7,
-                    fontFamily:
-                      "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-                  }}
-                >
-                  {isZh
-                    ? "进行回测; 检查 paper trading组合分配是否合理; 调整策略"
-                    : "Run backtests; review paper trading allocations; adjust strategy configurations."}
-                </p>
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <Badge tone="info">{isZh ? "先看最近回测" : "Check recent backtests first"}</Badge>
-                  <Badge tone="info">{isZh ? "再看 Paper Trading" : "Then review paper trading"}</Badge>
-                  <Badge tone="info">{isZh ? "最后回到策略配置" : "Finally return to strategy config"}</Badge>
-                </div>
-              </article>
             </div>
           </WorkspaceGrid>
         </>
@@ -896,38 +770,6 @@ const miniPanelValueStyle = {
   color: "#f8fafc",
   fontSize: 28,
   fontWeight: 700,
-  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-} as const;
-
-const riskItemStyle = {
-  padding: 14,
-  borderRadius: 18,
-  background: "rgba(120, 53, 15, 0.18)",
-  border: "1px solid rgba(251, 146, 60, 0.18)",
-} as const;
-
-const riskTitleStyle = {
-  marginBottom: 4,
-  color: "#fdba74",
-  fontSize: 13,
-  fontWeight: 700,
-  textTransform: "uppercase",
-  letterSpacing: "0.04em",
-  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-} as const;
-
-const riskValueStyle = {
-  marginBottom: 6,
-  color: "#ffedd5",
-  fontSize: 26,
-  fontWeight: 700,
-  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-} as const;
-
-const riskBodyStyle = {
-  color: "#fed7aa",
-  lineHeight: 1.6,
-  fontSize: 14,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 } as const;
 

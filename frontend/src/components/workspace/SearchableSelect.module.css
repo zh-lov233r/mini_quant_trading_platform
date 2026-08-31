@@ -1,0 +1,232 @@
+.trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  min-height: var(--workspace-control-height);
+  padding: 8px 11px 8px 12px;
+  border: 1px solid rgba(71, 85, 105, 0.54);
+  border-radius: 12px;
+  outline: none;
+  background: linear-gradient(180deg, rgba(15, 29, 45, 0.98), rgba(8, 18, 30, 0.98));
+  color: #e2e8f0;
+  box-shadow: inset 0 1px 0 rgba(148, 163, 184, 0.05);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+.trigger:hover:not(:disabled) {
+  border-color: rgba(45, 212, 191, 0.62);
+  background: linear-gradient(180deg, rgba(18, 37, 55, 0.98), rgba(9, 23, 36, 0.98));
+}
+
+.trigger:focus-visible,
+.trigger[data-state="open"] {
+  border-color: #2dd4bf;
+  box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.16), inset 0 1px 0 rgba(148, 163, 184, 0.06);
+}
+
+.trigger[aria-invalid="true"] {
+  border-color: rgba(251, 113, 133, 0.84);
+  box-shadow: 0 0 0 3px rgba(251, 113, 133, 0.12);
+}
+
+.trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.selected {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.selectedCopy,
+.optionCopy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.selectedLabel,
+.selectedDescription,
+.optionLabel,
+.optionDescription {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selectedLabel,
+.optionLabel {
+  color: #e2e8f0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.placeholder,
+.selectedDescription,
+.optionDescription {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.1);
+}
+
+.chevron {
+  flex: 0 0 auto;
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: #94a3b8;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 140ms ease, stroke 140ms ease;
+}
+
+.chevronOpen {
+  transform: rotate(180deg);
+  stroke: #5eead4;
+}
+
+.content {
+  z-index: 140;
+  width: var(--radix-popover-trigger-width);
+  min-width: min(280px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  padding: 8px;
+  border: 1px solid rgba(71, 85, 105, 0.58);
+  border-radius: 13px;
+  outline: none;
+  background: rgba(7, 17, 28, 0.99);
+  box-shadow: 0 22px 65px rgba(2, 6, 23, 0.72);
+  color: #e2e8f0;
+}
+
+.searchRow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-bottom: 7px;
+}
+
+.searchIcon {
+  position: absolute;
+  left: 10px;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: #64748b;
+  stroke-width: 1.6;
+  pointer-events: none;
+}
+
+.searchInput {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 34px 8px 34px;
+  border: 1px solid rgba(71, 85, 105, 0.48);
+  border-radius: 9px;
+  outline: none;
+  background: rgba(15, 23, 42, 0.86);
+  color: #e2e8f0;
+  color-scheme: dark;
+  font-size: 13px;
+}
+
+.searchInput:focus-visible {
+  border-color: #2dd4bf;
+  box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.13);
+}
+
+.clear {
+  position: absolute;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 18px;
+}
+
+.clear:hover {
+  background: rgba(51, 65, 85, 0.5);
+  color: #e2e8f0;
+}
+
+.listbox {
+  display: grid;
+  gap: 3px;
+  max-height: min(320px, 50dvh);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 9px;
+  outline: none;
+  background: transparent;
+  color: #e2e8f0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.option:hover,
+.option[data-active="true"] {
+  background: rgba(8, 145, 178, 0.18);
+}
+
+.option[aria-selected="true"] {
+  background: rgba(45, 212, 191, 0.13);
+}
+
+.option:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.check {
+  color: #5eead4;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.empty {
+  padding: 22px 12px;
+  color: #94a3b8;
+  text-align: center;
+  font-size: 13px;
+}
+
+@media (max-width: 767px) {
+  .trigger,
+  .searchInput,
+  .option {
+    min-height: 44px;
+  }
+}

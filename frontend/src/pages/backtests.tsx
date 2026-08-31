@@ -10,6 +10,8 @@ import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import BacktestProgressBar from "@/components/BacktestProgressBar";
 import MetricCard from "@/components/MetricCard";
+import { SearchableSelect } from "@/components/workspace/SearchableSelect";
+import { SelectControl } from "@/components/workspace/SelectControl";
 import { WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
 import type { BacktestCreate, BacktestRunOut, BacktestWorkerStatus } from "@/types/backtest";
@@ -19,9 +21,12 @@ import {
   formatDateTime,
   formatDurationMs,
   formatPercent,
+  getStrategyCategoryPresentation,
   getStrategyDescription,
   summarizeStrategies,
 } from "@/utils/strategy";
+import { clampPageIndex, pageCount, paginateItems } from "@/utils/pagination";
+import { filterBacktestRuns } from "@/utils/backtestFilters";
 
 function actionLink(href: string, label: string, filled = false) {
   return (
@@ -43,11 +48,34 @@ function actionLink(href: string, label: string, filled = false) {
   );
 }
 
+function actionButton(label: string, onClick: () => void) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        padding: "11px 16px",
+        borderRadius: 14,
+        border: "none",
+        background: "#078cad",
+        color: "#f8fafc",
+        fontWeight: 700,
+        fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+        cursor: "pointer",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
 function toDateInputValue(dt: Date): string {
   return dt.toISOString().slice(0, 10);
 }
 
 const BACKTEST_FORM_DRAFT_STORAGE_KEY = "backtests-page-form-draft-v1";
+const DEFAULT_RUN_PAGE_SIZE = 10;
+const RUN_PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
 
 type BacktestFormDraft = {
   strategyId: string;
@@ -198,6 +226,12 @@ export default function BacktestsPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitSuccessRun, setSubmitSuccessRun] = useState<BacktestRunOut | null>(null);
   const [draftHydrated, setDraftHydrated] = useState(false);
+  const [backtestDialogOpen, setBacktestDialogOpen] = useState(false);
+  const [runSearch, setRunSearch] = useState("");
+  const [runStatusFilter, setRunStatusFilter] = useState("all");
+  const [runTypeFilter, setRunTypeFilter] = useState("all");
+  const [runPageIndex, setRunPageIndex] = useState(0);
+  const [runPageSize, setRunPageSize] = useState(DEFAULT_RUN_PAGE_SIZE);
 
   const [strategyId, setStrategyId] = useState("");
   const [basketId, setBasketId] = useState("");
@@ -392,6 +426,11 @@ export default function BacktestsPage() {
     [strategies]
   );
 
+  const strategyTypesById = useMemo(
+    () => new Map(strategies.map((item) => [item.id, item.strategy_type])),
+    [strategies]
+  );
+
   const selectedStrategy = useMemo(
     () => strategies.find((item) => item.id === strategyId) || null,
     [strategies, strategyId]
@@ -419,6 +458,35 @@ export default function BacktestsPage() {
     };
   }, [runs]);
 
+  const filteredRuns = useMemo(
+    () => filterBacktestRuns(runs, strategyTypesById, {
+      query: runSearch,
+      status: runStatusFilter,
+      strategyType: runTypeFilter,
+    }),
+    [runSearch, runStatusFilter, runTypeFilter, runs, strategyTypesById]
+  );
+  const runStatuses = useMemo(
+    () => Array.from(new Set(runs.map((run) => run.status))).sort(),
+    [runs]
+  );
+  const runStrategyTypes = useMemo(
+    () => Array.from(new Set(
+      runs.map((run) => strategyTypesById.get(run.strategy_id) || "unknown")
+    )).sort(),
+    [runs, strategyTypesById]
+  );
+  const hasRunFilters = Boolean(runSearch.trim()) || runStatusFilter !== "all" || runTypeFilter !== "all";
+  const runPageCount = pageCount(filteredRuns.length, runPageSize);
+  const pagedRuns = useMemo(
+    () => paginateItems(filteredRuns, runPageIndex, runPageSize),
+    [filteredRuns, runPageIndex, runPageSize]
+  );
+
+  useEffect(() => {
+    setRunPageIndex((current) => clampPageIndex(current, filteredRuns.length, runPageSize));
+  }, [filteredRuns.length, runPageSize]);
+
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitError(null);
@@ -445,6 +513,7 @@ export default function BacktestsPage() {
       setSubmitting(true);
       const run = await createBacktest(payload);
       setRuns((prev) => [run, ...prev.filter((item) => item.id !== run.id)]);
+      setRunPageIndex(0);
       setSubmitSuccessRun(run);
     } catch (err: any) {
       setSubmitError(err?.message || (isZh ? "发起回测失败" : "Failed to start the backtest"));
@@ -466,7 +535,8 @@ export default function BacktestsPage() {
           {actionLink("/stock-baskets", isZh ? "管理股票库" : "Manage Baskets")}
           {actionLink("/strategies", isZh ? "查看策略库" : "View Strategies")}
           {actionLink("/strategies/new", isZh ? "创建策略" : "Create Strategy")}
-          {actionLink("/backtests", isZh ? "刷新回测页" : "Refresh Backtests", true)}
+          {actionLink("/backtests", isZh ? "刷新回测页" : "Refresh Backtests")}
+          {actionButton(isZh ? "发起回测" : "Start Backtest", () => setBacktestDialogOpen(true))}
         </>
       }
     >
@@ -544,11 +614,11 @@ export default function BacktestsPage() {
           </section>
 
           <WorkspaceDialog
-            triggerLabel={isZh ? "发起回测" : "Start Backtest"}
             title={isZh ? "发起回测" : "Start Backtest"}
             description={isZh ? "配置策略、时间窗口、资金和交易成本后提交后台任务。" : "Configure the strategy, window, capital, and trading costs before submitting the background job."}
             size="form"
-            triggerTone="primary"
+            open={backtestDialogOpen}
+            onOpenChange={setBacktestDialogOpen}
           >
               <div
                 style={{
@@ -606,18 +676,27 @@ export default function BacktestsPage() {
                       isZh
                         ? "选择本次要回测的策略定义。优先选择 active 且 engine-ready 的策略，因为它们已经能被后端引擎直接消费"
                         : "Choose the strategy definition for this run. Prefer active, engine-ready strategies because the backend engine can consume them directly.",
-                      <select
+                      <SearchableSelect
                         value={strategyId}
-                        onChange={(e) => setStrategyId(e.target.value)}
-                        style={inputStyle}
-                      >
-                        <option value="">{isZh ? "请选择策略" : "Select a strategy"}</option>
-                        {eligibleStrategies.map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {item.name} ({item.strategy_type} v{item.version})
-                          </option>
-                        ))}
-                      </select>
+                        onValueChange={setStrategyId}
+                        ariaLabel={isZh ? "选择回测策略" : "Select backtest strategy"}
+                        placeholder={isZh ? "请选择策略" : "Select a strategy"}
+                        searchPlaceholder={isZh ? "搜索策略名称或类型" : "Search strategy name or type"}
+                        emptyText={isZh ? "没有匹配的策略" : "No matching strategies"}
+                        clearSearchLabel={isZh ? "清空策略搜索" : "Clear strategy search"}
+                        invalid={Boolean(submitError && !strategyId)}
+                        sortOptions={false}
+                        options={eligibleStrategies.map((item) => {
+                          const presentation = getStrategyCategoryPresentation(item.strategy_type, locale);
+                          return {
+                            value: item.id,
+                            label: item.name,
+                            description: `${presentation.label} · ${item.strategy_type} · v${item.version}`,
+                            keywords: [item.strategy_type, presentation.label],
+                            accent: presentation.accent,
+                          };
+                        })}
+                      />
                     )}
 
                     {fieldBlock(
@@ -625,18 +704,30 @@ export default function BacktestsPage() {
                       isZh
                         ? "可选。选择已创建的股票池或使用默认组合"
                         : "Optional. Choose an existing basket or keep the strategy's default universe.",
-                      <select
+                      <SearchableSelect
                         value={basketId}
-                        onChange={(e) => setBasketId(e.target.value)}
-                        style={inputStyle}
-                      >
-                        <option value="">{isZh ? "不覆盖，沿用策略自带股票池" : "Do not override, use the strategy universe"}</option>
-                        {activeBaskets.map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {item.name} ({item.symbol_count} symbols)
-                          </option>
-                        ))}
-                      </select>
+                        onValueChange={setBasketId}
+                        ariaLabel={isZh ? "选择回测股票组合" : "Select backtest basket"}
+                        placeholder={isZh ? "选择股票组合" : "Select a basket"}
+                        searchPlaceholder={isZh ? "搜索股票组合" : "Search baskets"}
+                        emptyText={isZh ? "没有匹配的股票组合" : "No matching baskets"}
+                        clearSearchLabel={isZh ? "清空股票组合搜索" : "Clear basket search"}
+                        sortOptions={false}
+                        options={[
+                          {
+                            value: "",
+                            label: isZh ? "不覆盖，沿用策略自带股票池" : "Use the strategy universe",
+                            description: isZh ? "不覆盖策略中的股票池配置" : "Do not override the strategy universe",
+                          },
+                          ...activeBaskets.map((item) => ({
+                            value: item.id,
+                            label: item.name,
+                            description: isZh ? `${item.symbol_count} 只股票` : `${item.symbol_count} symbols`,
+                            keywords: item.symbols,
+                            accent: "#38bdf8",
+                          })),
+                        ]}
+                      />
                     )}
 
                     <div style={responsiveTwoColGridStyle}>
@@ -924,7 +1015,82 @@ export default function BacktestsPage() {
                       : "Use the run list first to confirm that backtests completed and were persisted, then drill into charts and single-run details."}
                   </p>
                 </div>
+                {runs.length > 0 ? (
+                  <div style={paginationSummaryStyle}>
+                    <strong>
+                      {hasRunFilters
+                        ? (isZh ? `筛选出 ${filteredRuns.length} / ${runs.length} 条` : `${filteredRuns.length} of ${runs.length} runs`)
+                        : (isZh ? `共 ${runs.length} 条` : `${runs.length} runs`)}
+                    </strong>
+                    <span>{isZh ? `第 ${runPageIndex + 1} / ${runPageCount} 页` : `Page ${runPageIndex + 1} of ${runPageCount}`}</span>
+                  </div>
+                ) : null}
               </div>
+
+              {runs.length > 0 ? (
+                <div role="search" aria-label={isZh ? "筛选最近回测" : "Filter recent backtests"} style={runFilterBarStyle}>
+                  <label style={runFilterFieldStyle}>
+                    <span style={runFilterLabelStyle}>{isZh ? "搜索" : "Search"}</span>
+                    <input
+                      type="search"
+                      value={runSearch}
+                      onChange={(event) => {
+                        setRunSearch(event.target.value);
+                        setRunPageIndex(0);
+                      }}
+                      placeholder={isZh ? "策略名或股票组合" : "Strategy or basket"}
+                      style={runFilterControlStyle}
+                    />
+                  </label>
+                  <label style={runFilterFieldStyle}>
+                    <span style={runFilterLabelStyle}>{isZh ? "策略大类" : "Strategy category"}</span>
+                    <SelectControl
+                      value={runTypeFilter}
+                      onChange={(event) => {
+                        setRunTypeFilter(event.target.value);
+                        setRunPageIndex(0);
+                      }}
+                    >
+                      <option value="all">{isZh ? "全部大类" : "All categories"}</option>
+                      {runStrategyTypes.map((strategyType) => (
+                        <option key={strategyType} value={strategyType}>
+                          {getStrategyCategoryPresentation(
+                            strategyType,
+                            locale,
+                            isZh ? "未知策略类型" : "Unknown Strategy Type"
+                          ).label}
+                        </option>
+                      ))}
+                    </SelectControl>
+                  </label>
+                  <label style={runFilterFieldStyle}>
+                    <span style={runFilterLabelStyle}>{isZh ? "运行状态" : "Run status"}</span>
+                    <SelectControl
+                      value={runStatusFilter}
+                      onChange={(event) => {
+                        setRunStatusFilter(event.target.value);
+                        setRunPageIndex(0);
+                      }}
+                    >
+                      <option value="all">{isZh ? "全部状态" : "All statuses"}</option>
+                      {runStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
+                    </SelectControl>
+                  </label>
+                  <button
+                    type="button"
+                    disabled={!hasRunFilters}
+                    onClick={() => {
+                      setRunSearch("");
+                      setRunTypeFilter("all");
+                      setRunStatusFilter("all");
+                      setRunPageIndex(0);
+                    }}
+                    style={{ ...runFilterResetStyle, opacity: hasRunFilters ? 1 : 0.5 }}
+                  >
+                    {isZh ? "重置筛选" : "Reset filters"}
+                  </button>
+                </div>
+              ) : null}
 
               {runs.length === 0 ? (
                 <div
@@ -940,11 +1106,22 @@ export default function BacktestsPage() {
                     ? "还没有回测记录。先从一个 active 且 engine-ready 的策略开始"
                     : "No backtests yet. Start with one active, engine-ready strategy."}
                 </div>
+              ) : filteredRuns.length === 0 ? (
+                <div style={{ ...emptyRunFilterStateStyle }}>
+                  <strong style={{ color: "#f8fafc" }}>{isZh ? "没有匹配的回测" : "No matching backtests"}</strong>
+                  <span>{isZh ? "调整关键词或筛选条件后再试。" : "Try changing the search or filter criteria."}</span>
+                </div>
               ) : (
                 <div style={{ display: "grid", gap: 14 }}>
-                  {runs.map((run) => {
+                  {pagedRuns.map((run) => {
                     const totalReturn = getMetric(run.summary_metrics, "total_return");
                     const maxDrawdown = getMetric(run.summary_metrics, "max_drawdown");
+                    const strategyType = strategyTypesById.get(run.strategy_id) || "unknown";
+                    const categoryPresentation = getStrategyCategoryPresentation(
+                      strategyType,
+                      locale,
+                      isZh ? "未知策略类型" : "Unknown Strategy Type"
+                    );
                     return (
                       <Link
                         key={run.id}
@@ -958,12 +1135,23 @@ export default function BacktestsPage() {
                           style={{
                             padding: 18,
                             borderRadius: 18,
-                            border: "1px solid rgba(71, 85, 105, 0.28)",
+                            border: `1px solid rgba(${categoryPresentation.accentRgb}, 0.42)`,
                             background:
-                              "radial-gradient(circle at top right, rgba(59,130,246,0.08), transparent 24%), rgba(8, 15, 24, 0.88)",
+                              `radial-gradient(circle at top right, rgba(${categoryPresentation.accentRgb}, 0.16), transparent 28%), linear-gradient(140deg, rgba(8,15,24,0.96), rgba(15,23,42,0.9))`,
                             color: "#e2e8f0",
+                            position: "relative",
+                            overflow: "hidden",
                           }}
                         >
+                          <div
+                            aria-hidden="true"
+                            style={{
+                              position: "absolute",
+                              inset: "0 0 auto",
+                              height: 4,
+                              background: categoryPresentation.accent,
+                            }}
+                          />
                           <div
                             style={{
                               display: "flex",
@@ -987,6 +1175,30 @@ export default function BacktestsPage() {
                                     "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                                 }}
                               >
+                              <span
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 7,
+                                  padding: "4px 9px",
+                                  borderRadius: 999,
+                                  background: `rgba(${categoryPresentation.accentRgb}, 0.15)`,
+                                  color: categoryPresentation.accent,
+                                  fontSize: 12,
+                                  fontWeight: 800,
+                                }}
+                              >
+                                <span
+                                  aria-hidden="true"
+                                  style={{
+                                    width: 7,
+                                    height: 7,
+                                    borderRadius: 999,
+                                    background: categoryPresentation.accent,
+                                  }}
+                                />
+                                {categoryPresentation.label}
+                              </span>
                               <Badge tone="info">{run.mode}</Badge>
                               {run.basket_name ? <Badge>{run.basket_name}</Badge> : null}
                               <Badge
@@ -1097,6 +1309,45 @@ export default function BacktestsPage() {
                       </Link>
                     );
                   })}
+                  <nav aria-label={isZh ? "回测结果分页" : "Backtest results pagination"} style={paginationBarStyle}>
+                    <label style={paginationSizeStyle}>
+                      <span>{isZh ? "每页" : "Per page"}</span>
+                      <SelectControl
+                        aria-label={isZh ? "每页回测数量" : "Backtests per page"}
+                        value={runPageSize}
+                        onChange={(event) => {
+                          setRunPageSize(Number(event.target.value));
+                          setRunPageIndex(0);
+                        }}
+                        density="compact"
+                      >
+                        {RUN_PAGE_SIZE_OPTIONS.map((pageSize) => (
+                          <option key={pageSize} value={pageSize}>{pageSize}</option>
+                        ))}
+                      </SelectControl>
+                    </label>
+                    <span style={{ color: "rgba(148, 163, 184, 0.88)" }}>
+                      {isZh ? `第 ${runPageIndex + 1} / ${runPageCount} 页` : `Page ${runPageIndex + 1} of ${runPageCount}`}
+                    </span>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button
+                        type="button"
+                        disabled={runPageIndex === 0}
+                        onClick={() => setRunPageIndex((current) => Math.max(0, current - 1))}
+                        style={paginationButtonStyle}
+                      >
+                        {isZh ? "上一页" : "Previous"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={runPageIndex >= runPageCount - 1}
+                        onClick={() => setRunPageIndex((current) => Math.min(runPageCount - 1, current + 1))}
+                        style={paginationButtonStyle}
+                      >
+                        {isZh ? "下一页" : "Next"}
+                      </button>
+                    </div>
+                  </nav>
                 </div>
               )}
           </section>
@@ -1150,4 +1401,99 @@ const responsiveThreeColGridStyle: CSSProperties = {
   gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
   gap: 12,
   alignItems: "start",
+};
+
+const paginationSummaryStyle: CSSProperties = {
+  display: "grid",
+  gap: 4,
+  justifyItems: "end",
+  color: "#dbeafe",
+  fontSize: 13,
+  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+};
+
+const runFilterBarStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(min(190px, 100%), 1fr))",
+  gap: 12,
+  alignItems: "end",
+  marginBottom: 16,
+  padding: 14,
+  borderRadius: 18,
+  border: "1px solid rgba(71, 85, 105, 0.28)",
+  background: "rgba(15, 23, 42, 0.62)",
+  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+};
+
+const runFilterFieldStyle: CSSProperties = {
+  display: "grid",
+  gap: 6,
+  minWidth: 0,
+};
+
+const runFilterLabelStyle: CSSProperties = {
+  color: "#94a3b8",
+  fontSize: 12,
+  fontWeight: 700,
+};
+
+const runFilterControlStyle: CSSProperties = {
+  width: "100%",
+  minWidth: 0,
+  boxSizing: "border-box",
+  padding: "10px 12px",
+  borderRadius: 12,
+  border: "1px solid rgba(71, 85, 105, 0.48)",
+  background: "#0f172a",
+  color: "#e2e8f0",
+  fontSize: 14,
+};
+
+const runFilterResetStyle: CSSProperties = {
+  minHeight: 41,
+  padding: "10px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(71, 85, 105, 0.48)",
+  background: "rgba(30, 41, 59, 0.88)",
+  color: "#dbeafe",
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const emptyRunFilterStateStyle: CSSProperties = {
+  display: "grid",
+  gap: 6,
+  padding: 20,
+  borderRadius: 18,
+  background: "rgba(15, 23, 42, 0.76)",
+  color: "rgba(148, 163, 184, 0.88)",
+  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+};
+
+const paginationBarStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 12,
+  flexWrap: "wrap",
+  paddingTop: 4,
+  fontSize: 13,
+  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+};
+
+const paginationSizeStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  color: "rgba(148, 163, 184, 0.88)",
+};
+
+const paginationButtonStyle: CSSProperties = {
+  padding: "9px 12px",
+  borderRadius: 10,
+  border: "1px solid rgba(71, 85, 105, 0.48)",
+  background: "rgba(15, 23, 42, 0.92)",
+  color: "#dbeafe",
+  fontWeight: 700,
+  cursor: "pointer",
 };

@@ -17,6 +17,7 @@ import { useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { useI18n } from "@/i18n/provider";
+import { SelectControl } from "@/components/workspace/SelectControl";
 
 import styles from "./DenseDataTable.module.css";
 import { denseTableFeatures } from "./denseTableFeatures";
@@ -178,7 +179,7 @@ export function DenseDataTable<T extends RowData>({
       )}
       </div>
       <div className={styles.pagination}>
-        <label>{isZh ? "每页" : "Rows"} <select value={pagination.pageSize} onChange={(event) => table.setPageSize(Number(event.target.value))}>{[25, 50, 100, 200].map((size) => <option key={size} value={size}>{size}</option>)}</select></label>
+        <label>{isZh ? "每页" : "Rows"} <SelectControl density="compact" aria-label={isZh ? "每页行数" : "Rows per page"} value={pagination.pageSize} onChange={(event) => table.setPageSize(Number(event.target.value))}>{[25, 50, 100, 200].map((size) => <option key={size} value={size}>{size}</option>)}</SelectControl></label>
         <span>{isZh ? "第" : "Page"} {pagination.pageIndex + 1} / {Math.max(1, table.getPageCount())}{isZh ? "页" : ""}</span>
         <button type="button" className={styles.toolButton} onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>{isZh ? "上一页" : "Previous"}</button>
         <button type="button" className={styles.toolButton} onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>{isZh ? "下一页" : "Next"}</button>

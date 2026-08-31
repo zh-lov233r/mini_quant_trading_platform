@@ -8,6 +8,7 @@ import { listResearchExperiments } from "@/api/research";
 import { getStrategyCatalog, getStrategyFeatureSupport } from "@/api/strategies";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
+import { SelectControl } from "@/components/workspace/SelectControl";
 import { WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
 import type { ResearchExperiment } from "@/types/research";
@@ -118,9 +119,9 @@ export default function ResearchHomePage() {
           {mode === "category" ? (
             <>
               <label htmlFor="strategy-category" style={labelStyle}>{isZh ? "策略大类" : "Engine category"}</label>
-              <select id="strategy-category" value={strategyType} onChange={(event) => setStrategyType(event.target.value)} style={inputStyle}>
+              <SelectControl id="strategy-category" value={strategyType} onChange={(event) => setStrategyType(event.target.value)}>
                 {catalog.map((item) => <option key={item.strategy_type} value={item.strategy_type}>{item.label} · {item.strategy_type}</option>)}
-              </select>
+              </SelectControl>
               {selectedCategory ? <div style={categorySummaryStyle}><strong>{selectedCategory.description}</strong><pre style={compactPreStyle}>{JSON.stringify({ signal: selectedCategory.defaults.signal, risk: selectedCategory.defaults.risk }, null, 2)}</pre></div> : null}
               <div style={resourceGridStyle}>
                 <NumberField label={isZh ? "最大轮数（1–5）" : "Max rounds (1–5)"} value={maxRounds} min={1} max={5} onChange={setMaxRounds} />

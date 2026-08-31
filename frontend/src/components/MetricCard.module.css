@@ -1,9 +1,11 @@
-.card { min-width: 0; padding: 13px 14px; border: 1px solid rgba(148,163,184,.14); border-radius: 15px; background: linear-gradient(180deg,rgba(11,23,35,.92),rgba(15,23,42,.88)); box-shadow: 0 12px 28px rgba(2,6,23,.24); }
+.card { min-width: 0; padding: 13px 14px; border: 1px solid rgba(148,163,184,.14); border-radius: 15px; background: linear-gradient(180deg,rgba(11,23,35,.92),rgba(15,23,42,.88)); box-shadow: 0 12px 28px rgba(2,6,23,.24); container-type: inline-size; }
 .compact { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 8px 12px; }
-.labelRow { min-width: 0; display: flex; align-items: center; gap: 7px; }
-.label { display: inline-block; max-width: 100%; padding: 4px 8px; border-radius: 999px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
+.comfortable { display: block; }
+.labelRow { min-width: 0; max-width: 100%; display: flex; align-items: center; gap: 7px; }
+.label { min-width: 0; display: inline-block; max-width: 100%; padding: 4px 8px; border-radius: 999px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
 .helpButton { width: 22px; height: 22px; flex: 0 0 22px; border: 1px solid rgba(148,163,184,.28); border-radius: 999px; background: rgba(15,23,42,.7); color: #94a3b8; cursor: help; font-size: 12px; font-weight: 800; }
-.value { color: #f8fafc; font-family: "Iowan Old Style","Palatino Linotype",Georgia,serif; font-weight: 700; line-height: 1.05; white-space: nowrap; }
+.value { min-width: 0; max-width: 100%; color: #f8fafc; font-family: "Iowan Old Style","Palatino Linotype",Georgia,serif; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.05; white-space: nowrap; }
 .hint { grid-column: 1/-1; margin: 0; color: rgba(203,213,225,.7); line-height: 1.5; }
 .compact .hint { display: none; }
-@media (max-width: 767px) { .compact { grid-template-columns: minmax(0,1fr); align-items: start; padding: 15px; } .compact .value { white-space: normal; } }
+@container (max-width: 320px) { .compact { grid-template-columns: minmax(0,1fr); align-items: start; } .compact .value { overflow-wrap: anywhere; white-space: normal; } }
+@media (max-width: 767px) { .compact { grid-template-columns: minmax(0,1fr); align-items: start; } .compact .value { overflow-wrap: anywhere; white-space: normal; } }

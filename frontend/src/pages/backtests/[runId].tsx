@@ -33,6 +33,7 @@ import type {
 } from "@/types/backtest";
 import type { CandleBarOut, CandleSeriesOut } from "@/types/quote";
 import { formatDateTime, formatDurationMs, formatPercent } from "@/utils/strategy";
+import { compactBacktestPositions } from "@/utils/backtestPositions";
 import { shouldLoadBacktestDetails } from "@/utils/backtestProgress";
 import {
   BacktestTransactionPageError,
@@ -98,7 +99,6 @@ function metricNumber(summary: Record<string, unknown>, key: string): number | n
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-const SUMMARY_SYMBOLS_LIMIT = 20;
 const BACKTEST_DETAIL_LOAD_FAILED = "__BACKTEST_DETAIL_LOAD_FAILED__";
 const BACKTEST_EQUITY_LOAD_FAILED = "__BACKTEST_EQUITY_LOAD_FAILED__";
 const BACKTEST_SIGNALS_LOAD_FAILED = "__BACKTEST_SIGNALS_LOAD_FAILED__";
@@ -131,64 +131,6 @@ function detailErrorMessage(error: string, isZh: boolean): string {
     return isZh ? "加载交易明细失败" : "Failed to load transactions";
   }
   return error;
-}
-
-function renderValue(value: unknown, locale = "en-US"): string {
-  if (typeof value === "number") {
-    return value.toLocaleString(locale, { maximumFractionDigits: 4 });
-  }
-  if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  }
-  if (value == null) {
-    return "-";
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => renderValue(item, locale)).join(", ");
-  }
-  if (typeof value === "object") {
-    return JSON.stringify(value);
-  }
-  return String(value);
-}
-
-function renderSummaryValue(key: string, value: unknown, locale = "en-US"): string {
-  if (key === "comparison_curves") {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return renderValue(value, locale);
-    }
-
-    const curveSummary = Object.entries(value as Record<string, unknown>)
-      .map(([symbol, points]) => {
-        const count = Array.isArray(points) ? points.length : 0;
-        return `${String(symbol).toUpperCase()}(${count})`;
-      })
-      .filter(Boolean)
-      .join(", ");
-
-    return curveSummary || "-";
-  }
-
-  if (key !== "symbols_loaded") {
-    return renderValue(value, locale);
-  }
-
-  const symbols = Array.isArray(value)
-    ? value.map((item) => String(item).trim()).filter(Boolean)
-    : typeof value === "string"
-      ? value.split(",").map((item) => item.trim()).filter(Boolean)
-      : null;
-
-  if (!symbols) {
-    return renderValue(value, locale);
-  }
-
-  const visibleSymbols = symbols.slice(0, SUMMARY_SYMBOLS_LIMIT);
-  const remainingCount = symbols.length - visibleSymbols.length;
-  if (remainingCount <= 0) {
-    return visibleSymbols.join(", ");
-  }
-  return `${visibleSymbols.join(", ")} +${remainingCount}`;
 }
 
 function formatCurrency(value?: number | null, locale = "en-US"): string {
@@ -4153,12 +4095,8 @@ export default function BacktestDetailPage() {
     );
   };
 
-  const summaryEntries = useMemo(
-    () => Object.entries(run?.summary_metrics || {}).sort(([a], [b]) => a.localeCompare(b)),
-    [run]
-  );
-  const positionEntries = useMemo(
-    () => Object.entries(run?.latest_snapshot?.positions || {}).sort(([a], [b]) => a.localeCompare(b)),
+  const latestPositions = useMemo(
+    () => compactBacktestPositions(run?.latest_snapshot?.positions),
     [run]
   );
   const totalReturn = metricNumber(run?.summary_metrics || {}, "total_return");
@@ -4189,8 +4127,8 @@ export default function BacktestDetailPage() {
       title={run?.strategy_name ? (isZh ? `${run.strategy_name} 回测结果` : `${run.strategy_name} Backtest Result`) : isZh ? "回测详情" : "Backtest Detail"}
       subtitle={
         isZh
-          ? "本页把单次回测的状态、权益曲线、摘要指标、交易明细和最新持仓放在一起，方便快速复盘"
-          : "This page brings together run status, the equity curve, summary metrics, transactions, and latest positions for a quick review."
+          ? "集中查看单次回测的状态、权益曲线、交易明细和精简持仓，方便快速复盘"
+          : "Review run status, the equity curve, transactions, and compact positions in one place."
       }
       actions={
         <>
@@ -4203,7 +4141,7 @@ export default function BacktestDetailPage() {
             <WorkspaceDialog triggerLabel={isZh ? "运行配置" : "Run Configuration"} title={isZh ? "运行摘要" : "Run Summary"}>
               <ContextStack>
                 <ContextGroup title={run.strategy_name || (isZh ? "回测运行" : "Backtest Run")}><ContextStats><ContextStat label={isZh ? "状态" : "Status"} value={run.status} /><ContextStat label={isZh ? "总收益" : "Total return"} value={formatPercent(totalReturn, 2)} /><ContextStat label={isZh ? "最大回撤" : "Max drawdown"} value={formatPercent(maxDrawdown, 2)} /><ContextStat label={isZh ? "信号" : "Signals"} value={signalCount ?? "—"} /><ContextStat label={isZh ? "交易" : "Trades"} value={tradeCount ?? "—"} /><ContextStat label={isZh ? "已载入交易" : "Loaded transactions"} value={`${loadedTransactionCount} / ${totalTransactionCount}`} /></ContextStats></ContextGroup>
-                <ContextGroup title={isZh ? "数据状态" : "Data Status"}><ContextStats><ContextStat label={isZh ? "持久化级别" : "Persist level"} value={run.persist_level} /><ContextStat label={isZh ? "摘要指标" : "Summary metrics"} value={summaryEntries.length} /><ContextStat label={isZh ? "最新持仓" : "Latest positions"} value={positionEntries.length} /></ContextStats>{run.persist_level !== "full" ? <ContextNote>{isZh ? "未保存的明细不代表零信号或零交易。" : "Unavailable details do not mean zero signals or trades."}</ContextNote> : null}</ContextGroup>
+                <ContextGroup title={isZh ? "数据状态" : "Data Status"}><ContextStats><ContextStat label={isZh ? "持久化级别" : "Persist level"} value={run.persist_level} /><ContextStat label={isZh ? "最新持仓" : "Latest positions"} value={latestPositions.length} /></ContextStats>{run.persist_level !== "full" ? <ContextNote>{isZh ? "未保存的明细不代表零信号或零交易。" : "Unavailable details do not mean zero signals or trades."}</ContextNote> : null}</ContextGroup>
                 <ContextGroup title={isZh ? "快速入口" : "Quick Links"}><ContextLinks><ContextLink href={`/strategies/${encodeURIComponent(run.strategy_id)}`}>{isZh ? "查看策略" : "View strategy"}</ContextLink><ContextLink href="/backtests">{isZh ? "回测列表" : "Backtest list"}</ContextLink></ContextLinks></ContextGroup>
               </ContextStack>
             </WorkspaceDialog>
@@ -4384,52 +4322,31 @@ export default function BacktestDetailPage() {
             </>
           ) : null}
 
-          <section
-            style={{
-              display: "grid",
-              gridTemplateColumns: "minmax(0, 1.1fr) minmax(320px, 0.9fr)",
-              gap: 18,
-              marginTop: 18,
-              alignItems: "start",
-            }}
-          >
-            <section style={sectionCardStyle}>
-              <div style={{ marginBottom: 16 }}>
-                <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>{isZh ? "摘要指标" : "Summary Metrics"}</h2>
-              </div>
+          <section style={{ ...sectionCardStyle, marginTop: 18 }}>
+            <div style={{ marginBottom: 16 }}>
+              <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>{isZh ? "最新持仓" : "Latest Positions"}</h2>
+              <p style={sectionSubtitleStyle}>
+                {isZh ? "仅展示复盘最常用的数量、成本、收盘价和市值。" : "Shows only quantity, cost, closing price, and market value for a quick review."}
+              </p>
+            </div>
 
-              {summaryEntries.length === 0 ? (
-                <div style={emptyStateStyle}>{isZh ? "这次 run 还没有 summary metrics" : "This run does not have summary metrics yet"}</div>
-              ) : (
-                <div style={{ display: "grid", gap: 10 }}>
-                  {summaryEntries.map(([key, value]) => (
-                    <div key={key} style={infoRowStyle}>
-                      <div style={{ color: "#64748b", fontWeight: 600 }}>{key}</div>
-                      <div style={{ color: "#e2e8f0", wordBreak: "break-word" }}>{renderSummaryValue(key, value, locale)}</div>
+            {latestPositions.length === 0 ? (
+              <div style={emptyStateStyle}>{isZh ? "当前没有持仓，或回测结束时已经全部平仓" : "There are no positions, or all positions were closed by the end of the backtest"}</div>
+            ) : (
+              <div style={positionGridStyle}>
+                {latestPositions.map((position) => (
+                  <article key={position.symbol} style={positionCardStyle}>
+                    <strong style={{ color: "#f8fafc", fontSize: 18 }}>{position.symbol}</strong>
+                    <div style={positionMetricsStyle}>
+                      <div><span style={positionLabelStyle}>{isZh ? "数量" : "Quantity"}</span><strong>{position.quantity?.toLocaleString(locale, { maximumFractionDigits: 4 }) ?? "-"}</strong></div>
+                      <div><span style={positionLabelStyle}>{isZh ? "成本价" : "Avg. cost"}</span><strong>{formatCurrency(position.averageEntryPrice, locale)}</strong></div>
+                      <div><span style={positionLabelStyle}>{isZh ? "收盘价" : "Close"}</span><strong>{formatCurrency(position.closePrice, locale)}</strong></div>
+                      <div><span style={positionLabelStyle}>{isZh ? "市值" : "Market value"}</span><strong>{formatCurrency(position.marketValue, locale)}</strong></div>
                     </div>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            <section style={sectionCardStyle}>
-              <div style={{ marginBottom: 16 }}>
-                <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>{isZh ? "最新持仓" : "Latest Positions"}</h2>
+                  </article>
+                ))}
               </div>
-
-              {positionEntries.length === 0 ? (
-                <div style={emptyStateStyle}>{isZh ? "当前没有持仓，或回测结束时已经全部平仓" : "There are no positions, or all positions were closed by the end of the backtest"}</div>
-              ) : (
-                <div style={{ display: "grid", gap: 10 }}>
-                  {positionEntries.map(([symbol, value]) => (
-                    <div key={symbol} style={infoRowStyle}>
-                      <div style={{ color: "#64748b", fontWeight: 700 }}>{symbol}</div>
-                      <div style={{ color: "#e2e8f0", wordBreak: "break-word" }}>{renderValue(value, locale)}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
+            )}
           </section>
             </>
           ) : null}
@@ -4453,6 +4370,37 @@ const sectionSubtitleStyle = {
   color: "rgba(148, 163, 184, 0.88)",
   lineHeight: 1.6,
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+} as const;
+
+const positionGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(min(260px, 100%), 1fr))",
+  gap: 12,
+} as const;
+
+const positionCardStyle = {
+  display: "grid",
+  gap: 12,
+  padding: 16,
+  borderRadius: 18,
+  border: "1px solid rgba(71, 85, 105, 0.28)",
+  background: "rgba(15, 23, 42, 0.76)",
+  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+} as const;
+
+const positionMetricsStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 12,
+  color: "#e2e8f0",
+} as const;
+
+const positionLabelStyle = {
+  display: "block",
+  marginBottom: 4,
+  color: "#64748b",
+  fontSize: 12,
+  fontWeight: 700,
 } as const;
 
 const emptyStateStyle = {
@@ -4625,13 +4573,4 @@ const stickyTableHeaderCellStyle = {
   backdropFilter: "blur(10px)",
   borderBottom: "1px solid rgba(71, 85, 105, 0.32)",
   boxShadow: "0 10px 24px rgba(2, 6, 23, 0.18)",
-} as const;
-
-const infoRowStyle = {
-  display: "grid",
-  gridTemplateColumns: "180px minmax(0, 1fr)",
-  gap: 12,
-  padding: "10px 0",
-  borderBottom: "1px solid rgba(71, 85, 105, 0.28)",
-  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 } as const;

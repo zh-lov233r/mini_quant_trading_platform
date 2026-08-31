@@ -6,6 +6,7 @@ import { createStockBasket, listStockBaskets } from "@/api/stock-baskets";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
+import { SelectControl } from "@/components/workspace/SelectControl";
 import { WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
 import type { StockBasketCreate, StockBasketOut } from "@/types/stock-basket";
@@ -231,11 +232,11 @@ export default function StockBasketsPage() {
                   rows={6}
                   style={{ ...inputStyle, resize: "vertical" }}
                 />
-                <select value={status} onChange={(e) => setStatus(e.target.value)} style={inputStyle}>
+                <SelectControl aria-label={isZh ? "股票组合状态" : "Basket status"} value={status} onChange={(e) => setStatus(e.target.value)}>
                   <option value="active">active</option>
                   <option value="draft">draft</option>
                   <option value="archived">archived</option>
-                </select>
+                </SelectControl>
 
                 <div
                   style={{

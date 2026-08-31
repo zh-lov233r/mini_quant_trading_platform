@@ -11,6 +11,7 @@ import {
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
+import { SelectControl } from "@/components/workspace/SelectControl";
 import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogStack as ContextStack, DialogStat as ContextStat, DialogStats as ContextStats, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
 import type { StrategyCatalogItem, StrategyOut } from "@/types/strategy";
@@ -414,17 +415,8 @@ export default function StrategiesPage() {
                 }
               />
 
-              <select
-                style={{
-                  padding: 12,
-                  borderRadius: 14,
-                  border: "1px solid rgba(71, 85, 105, 0.34)",
-                  background: "rgba(8, 15, 24, 0.82)",
-                  fontSize: 14,
-                  color: "#e2e8f0",
-                  fontFamily:
-                    "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-                }}
+              <SelectControl
+                aria-label={isZh ? "策略状态" : "Strategy status"}
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
               >
@@ -432,19 +424,10 @@ export default function StrategiesPage() {
                 <option value="draft">draft</option>
                 <option value="active">active</option>
                 <option value="archived">archived</option>
-              </select>
+              </SelectControl>
 
-              <select
-                style={{
-                  padding: 12,
-                  borderRadius: 14,
-                  border: "1px solid rgba(71, 85, 105, 0.34)",
-                  background: "rgba(8, 15, 24, 0.82)",
-                  fontSize: 14,
-                  color: "#e2e8f0",
-                  fontFamily:
-                    "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-                }}
+              <SelectControl
+                aria-label={isZh ? "策略大类" : "Strategy category"}
                 value={typeFilter}
                 onChange={(e) => setTypeFilter(e.target.value)}
               >
@@ -454,26 +437,17 @@ export default function StrategiesPage() {
                     {entry.presentation.label}
                   </option>
                 ))}
-              </select>
+              </SelectControl>
 
-              <select
-                style={{
-                  padding: 12,
-                  borderRadius: 14,
-                  border: "1px solid rgba(71, 85, 105, 0.34)",
-                  background: "rgba(8, 15, 24, 0.82)",
-                  fontSize: 14,
-                  color: "#e2e8f0",
-                  fontFamily:
-                    "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-                }}
+              <SelectControl
+                aria-label={isZh ? "引擎状态" : "Engine status"}
                 value={engineFilter}
                 onChange={(e) => setEngineFilter(e.target.value)}
               >
                 <option value="all">{isZh ? "全部可执行状态" : "All Execution States"}</option>
                 <option value="ready">{isZh ? "仅 engine-ready" : "Engine-ready Only"}</option>
                 <option value="stored">{isZh ? "仅 stored-only" : "Stored-only Only"}</option>
-              </select>
+              </SelectControl>
             </div>
           </section>
 

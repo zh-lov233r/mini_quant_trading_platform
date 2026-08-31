@@ -16,6 +16,7 @@ import {
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
+import responsiveGridStyles from "@/components/workspace/ResponsivePageGrid.module.css";
 import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogNote as ContextNote, DialogStack as ContextStack, DialogStat as ContextStat, DialogStats as ContextStats, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
 import type { BacktestDetailOut, BacktestRunOut } from "@/types/backtest";
@@ -508,14 +509,7 @@ export default function StrategyDetailPage() {
               isZh
                 ? "把策略身份、运行约束和执行检查放在同一块横向总览里，首屏就能把这套策略看完整"
                 : "Put identity, runtime constraints, and execution checks into one overview so the first screen already explains the strategy clearly.",
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(0, 1.15fr) minmax(320px, 0.85fr)",
-                  gap: 24,
-                  alignItems: "start",
-                }}
-              >
+              <div className={responsiveGridStyles.strategyOverview}>
                 <div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
                     <Badge tone={strategy.engine_ready ? "success" : "warning"}>
@@ -855,7 +849,7 @@ export default function StrategyDetailPage() {
                     <div
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+                        gridTemplateColumns: "repeat(auto-fit, minmax(min(150px, 100%), 1fr))",
                         gap: 10,
                       }}
                     >
@@ -952,7 +946,7 @@ export default function StrategyDetailPage() {
                         <div
                           style={{
                             display: "grid",
-                            gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+                            gridTemplateColumns: "repeat(auto-fit, minmax(min(150px, 100%), 1fr))",
                             gap: 8,
                             color: "rgba(148, 163, 184, 0.88)",
                             fontSize: 14,
@@ -1013,13 +1007,7 @@ export default function StrategyDetailPage() {
                     ) : null}
                     {showLatestEvents && !runsLoading && runsError ? <div style={errorBlockStyle}>{runsError}</div> : null}
                     {showLatestEvents && !runsLoading && !runsError && latestRunDetail ? (
-                      <div
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-                          gap: 12,
-                        }}
-                      >
+                      <div className={responsiveGridStyles.strategyEventGrid}>
                         <div style={eventPanelStyle}>
                           <div style={eventPanelTitleStyle}>{isZh ? "最近信号" : "Recent Signals"}</div>
                           {latestSignalPreview.length === 0 ? (
@@ -1069,15 +1057,7 @@ export default function StrategyDetailPage() {
             </div>
           )}
 
-          <section
-            style={{
-              marginTop: 18,
-              display: "grid",
-              gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-              gap: 18,
-              alignItems: "start",
-            }}
-          >
+          <section className={responsiveGridStyles.strategyPayloadGrid}>
             {sectionCard(
               isZh ? "标准化参数" : "Normalized Params",
               isZh

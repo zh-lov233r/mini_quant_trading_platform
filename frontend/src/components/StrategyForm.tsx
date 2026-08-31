@@ -7,6 +7,7 @@ import {
   getStrategyFeatureSupport,
   updateStrategyConfig,
 } from "@/api/strategies";
+import { SelectControl } from "@/components/workspace/SelectControl";
 import { useI18n } from "@/i18n/provider";
 import type {
   StrategyCatalogItem,
@@ -1545,8 +1546,7 @@ export default function StrategyForm({
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div style={boxStyle}>
                 <label>{isZh ? "策略类型" : "Strategy Type"}</label>
-                <select
-                  style={inputStyle}
+                <SelectControl
                   value={strategyType}
                   onChange={(e) => {
                     const nextType = e.target.value as StrategyType;
@@ -1562,20 +1562,19 @@ export default function StrategyForm({
                       {item.label}
                     </option>
                   ))}
-                </select>
+                </SelectControl>
               </div>
 
               <div style={boxStyle}>
                 <label>{isZh ? "状态" : "Status"}</label>
-                <select
-                  style={inputStyle}
+                <SelectControl
                   value={status}
                   onChange={(e) => setStatus(e.target.value as StrategyStatus)}
                 >
                   <option value="draft">draft</option>
                   <option value="active">active</option>
                   <option value="archived">archived</option>
-                </select>
+                </SelectControl>
               </div>
             </div>
           </section>
@@ -1594,19 +1593,17 @@ export default function StrategyForm({
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <div style={boxStyle}>
                   <label>{isZh ? "快线类型" : "Fast Line Type"}</label>
-                  <select
-                    style={inputStyle}
+                  <SelectControl
                     value={fastKind}
                     onChange={(e) => setFastKind(e.target.value as "ema" | "sma")}
                   >
                     <option value="ema">EMA</option>
                     <option value="sma">SMA</option>
-                  </select>
+                  </SelectControl>
                 </div>
                 <div style={boxStyle}>
                   <label>{isZh ? "快线周期" : "Fast Window"}</label>
-                  <select
-                    style={inputStyle}
+                  <SelectControl
                     value={fastWindow}
                     onChange={(e) => setFastWindow(Number(e.target.value))}
                   >
@@ -1619,23 +1616,21 @@ export default function StrategyForm({
                         </option>
                       ))
                     )}
-                  </select>
+                  </SelectControl>
                 </div>
                 <div style={boxStyle}>
                   <label>{isZh ? "慢线类型" : "Slow Line Type"}</label>
-                  <select
-                    style={inputStyle}
+                  <SelectControl
                     value={slowKind}
                     onChange={(e) => setSlowKind(e.target.value as "ema" | "sma")}
                   >
                     <option value="ema">EMA</option>
                     <option value="sma">SMA</option>
-                  </select>
+                  </SelectControl>
                 </div>
                 <div style={boxStyle}>
                   <label>{isZh ? "慢线周期" : "Slow Window"}</label>
-                  <select
-                    style={inputStyle}
+                  <SelectControl
                     value={slowWindow}
                     onChange={(e) => setSlowWindow(Number(e.target.value))}
                   >
@@ -1648,7 +1643,7 @@ export default function StrategyForm({
                         </option>
                       ))
                     )}
-                  </select>
+                  </SelectControl>
                 </div>
                 <div style={boxStyle}>
                   <label>{isZh ? "成交量过滤倍数" : "Volume Multiplier"}</label>
@@ -1741,28 +1736,26 @@ export default function StrategyForm({
                 </div>
                 <div style={boxStyle}>
                   <label>{isZh ? "调仓频率" : "Rebalance Frequency"}</label>
-                  <select
-                    style={inputStyle}
+                  <SelectControl
                     value={rebalance}
                     onChange={(e) => setRebalance(e.target.value)}
                   >
                     <option value="daily">daily</option>
                     <option value="weekly">weekly</option>
                     <option value="monthly">monthly</option>
-                  </select>
+                  </SelectControl>
                 </div>
               </div>
 
               <div style={boxStyle}>
                 <label>{isZh ? "运行时机" : "Run Timing"}</label>
-                <select
-                  style={inputStyle}
+                <SelectControl
                   value={runAt}
                   onChange={(e) => setRunAt(e.target.value)}
                 >
                   <option value="close">close</option>
                   <option value="open">open</option>
-                </select>
+                </SelectControl>
               </div>
             </section>
           ) : strategyType === "mean_reversion" ? (
@@ -1777,8 +1770,7 @@ export default function StrategyForm({
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <div style={boxStyle}>
                   <label>{isZh ? "回看窗口" : "Lookback Window"}</label>
-                  <select
-                    style={inputStyle}
+                  <SelectControl
                     value={meanReversionLookback}
                     onChange={(e) => setMeanReversionLookback(Number(e.target.value))}
                   >
@@ -1787,7 +1779,7 @@ export default function StrategyForm({
                         {window}
                       </option>
                     ))}
-                  </select>
+                  </SelectControl>
                 </div>
                 <div style={boxStyle}>
                   <label>{isZh ? "Z-score 入场阈值" : "Z-score Entry"}</label>
@@ -1895,28 +1887,26 @@ export default function StrategyForm({
                 </div>
                 <div style={boxStyle}>
                   <label>{isZh ? "调仓频率" : "Rebalance Frequency"}</label>
-                  <select
-                    style={inputStyle}
+                  <SelectControl
                     value={rebalance}
                     onChange={(e) => setRebalance(e.target.value)}
                   >
                     <option value="daily">daily</option>
                     <option value="weekly">weekly</option>
                     <option value="monthly">monthly</option>
-                  </select>
+                  </SelectControl>
                 </div>
               </div>
 
               <div style={boxStyle}>
                 <label>{isZh ? "运行时机" : "Run Timing"}</label>
-                <select
-                  style={inputStyle}
+                <SelectControl
                   value={runAt}
                   onChange={(e) => setRunAt(e.target.value)}
                 >
                   <option value="close">close</option>
                   <option value="open">open</option>
-                </select>
+                </SelectControl>
               </div>
             </section>
           ) : strategyType === "island_reversal" ? (
@@ -2134,28 +2124,26 @@ export default function StrategyForm({
                 </div>
                 <div style={boxStyle}>
                   <label>{isZh ? "调仓频率" : "Rebalance Frequency"}</label>
-                  <select
-                    style={inputStyle}
+                  <SelectControl
                     value={rebalance}
                     onChange={(e) => setRebalance(e.target.value)}
                   >
                     <option value="daily">daily</option>
                     <option value="weekly">weekly</option>
                     <option value="monthly">monthly</option>
-                  </select>
+                  </SelectControl>
                 </div>
               </div>
 
               <div style={boxStyle}>
                 <label>{isZh ? "运行时机" : "Run Timing"}</label>
-                <select
-                  style={inputStyle}
+                <SelectControl
                   value={runAt}
                   onChange={(e) => setRunAt(e.target.value)}
                 >
                   <option value="close">close</option>
                   <option value="open">open</option>
-                </select>
+                </SelectControl>
               </div>
             </section>
           ) : strategyType === "double_bottom" ? (
@@ -2473,26 +2461,24 @@ export default function StrategyForm({
                     </div>
                     <div style={groupedBoxStyle}>
                       <label>{isZh ? "调仓频率" : "Rebalance Frequency"}</label>
-                      <select
-                        style={inputStyle}
+                      <SelectControl
                         value={rebalance}
                         onChange={(e) => setRebalance(e.target.value)}
                       >
                         <option value="daily">daily</option>
                         <option value="weekly">weekly</option>
                         <option value="monthly">monthly</option>
-                      </select>
+                      </SelectControl>
                     </div>
                     <div style={groupedBoxStyle}>
                       <label>{isZh ? "运行时机" : "Run Timing"}</label>
-                      <select
-                        style={inputStyle}
+                      <SelectControl
                         value={runAt}
                         onChange={(e) => setRunAt(e.target.value)}
                       >
                         <option value="close">close</option>
                         <option value="open">open</option>
-                      </select>
+                      </SelectControl>
                     </div>
                   </div>
                 </div>
@@ -2582,11 +2568,11 @@ export default function StrategyForm({
                     ))}
                     <div style={groupedBoxStyle}>
                       <label>{isZh ? "调仓频率" : "Rebalance"}</label>
-                      <select style={inputStyle} value={rebalance} onChange={(event) => setRebalance(event.target.value)}><option value="daily">daily</option></select>
+                      <SelectControl value={rebalance} onChange={(event) => setRebalance(event.target.value)}><option value="daily">daily</option></SelectControl>
                     </div>
                     <div style={groupedBoxStyle}>
                       <label>{isZh ? "运行时机" : "Run Timing"}</label>
-                      <select style={inputStyle} value={runAt} onChange={(event) => setRunAt(event.target.value)}><option value="close">close</option></select>
+                      <SelectControl value={runAt} onChange={(event) => setRunAt(event.target.value)}><option value="close">close</option></SelectControl>
                     </div>
                   </div>
                 </div>

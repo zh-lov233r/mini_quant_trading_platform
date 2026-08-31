@@ -21,6 +21,7 @@ import { listStrategies } from "@/api/strategies";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
+import { SearchableSelect } from "@/components/workspace/SearchableSelect";
 import {
   DialogGroup as ContextGroup,
   DialogLink as ContextLink,
@@ -32,6 +33,7 @@ import {
   WorkspaceDialog,
 } from "@/components/workspace/WorkspaceDialog";
 import { DenseDataTable } from "@/components/workspace/DenseDataTable";
+import responsiveGridStyles from "@/components/workspace/ResponsivePageGrid.module.css";
 import { useI18n } from "@/i18n/provider";
 import type {
   BrokerOrderOut,
@@ -52,7 +54,7 @@ import type {
   PaperTradingRunRequest,
 } from "@/types/paper-trading";
 import type { StrategyOut } from "@/types/strategy";
-import { formatDateTime, formatPercent } from "@/utils/strategy";
+import { formatDateTime, formatPercent, getStrategyCategoryPresentation } from "@/utils/strategy";
 
 function toDateInputValue(dt: Date): string {
   return dt.toISOString().slice(0, 10);
@@ -1312,7 +1314,7 @@ export default function PaperTradingPage() {
                 </section>
               ) : null}
 
-              <div style={workspaceGridStyle}>
+              <div className={responsiveGridStyles.paperTradingWorkspace}>
                 <div style={{ display: "grid", gap: 18, minWidth: 0 }}>
                   <section style={panelStyle}>
                     <div style={sectionTitleRowStyle}>
@@ -1457,34 +1459,52 @@ export default function PaperTradingPage() {
                       <Badge tone="warning">{txt("可选 dry run", "Dry Run Ready")}</Badge>
                     </div>
                     <form onSubmit={handleRunSingle} style={formGridStyle}>
-                      <label style={fieldStyle}>
+                      <div style={fieldStyle}>
                         <span style={fieldLabelStyle}>{txt("Portfolio", "Portfolio")}</span>
-                        <select
+                        <SearchableSelect
                           value={selectedPortfolioName}
-                          onChange={(event) => setSelectedPortfolioName(event.target.value)}
-                          style={inputStyle}
-                        >
-                          {runnablePortfolios.map((item) => (
-                            <option key={item.id} value={item.name}>
-                              {item.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label style={fieldStyle}>
+                          onValueChange={setSelectedPortfolioName}
+                          options={runnablePortfolios.map((item) => ({
+                            value: item.name,
+                            label: item.name,
+                            description: item.description?.trim() || txt(
+                              `${item.active_allocation_count} 条活跃分配`,
+                              `${item.active_allocation_count} active allocations`,
+                            ),
+                            keywords: [item.id],
+                            accent: "#2dd4bf",
+                          }))}
+                          ariaLabel={txt("选择 Portfolio", "Select portfolio")}
+                          placeholder={txt("请选择 Portfolio", "Select a portfolio")}
+                          searchPlaceholder={txt("搜索 Portfolio", "Search portfolios")}
+                          emptyText={txt("没有匹配的 Portfolio", "No matching portfolios")}
+                          clearSearchLabel={txt("清空 Portfolio 搜索", "Clear portfolio search")}
+                          disabled={runnablePortfolios.length === 0}
+                        />
+                      </div>
+                      <div style={fieldStyle}>
                         <span style={fieldLabelStyle}>{txt("策略", "Strategy")}</span>
-                        <select
+                        <SearchableSelect
                           value={selectedStrategyId}
-                          onChange={(event) => setSelectedStrategyId(event.target.value)}
-                          style={inputStyle}
-                        >
-                          {activeStrategies.map((item) => (
-                            <option key={item.id} value={item.id}>
-                              {item.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                          onValueChange={setSelectedStrategyId}
+                          options={activeStrategies.map((item) => {
+                            const presentation = getStrategyCategoryPresentation(item.strategy_type, locale);
+                            return {
+                              value: item.id,
+                              label: item.name,
+                              description: `${presentation.label} · ${item.strategy_type} · v${item.version}`,
+                              keywords: [item.strategy_type, presentation.label],
+                              accent: presentation.accent,
+                            };
+                          })}
+                          ariaLabel={txt("选择执行策略", "Select execution strategy")}
+                          placeholder={txt("请选择策略", "Select a strategy")}
+                          searchPlaceholder={txt("搜索策略名称或类型", "Search strategy name or type")}
+                          emptyText={txt("没有匹配的策略", "No matching strategies")}
+                          clearSearchLabel={txt("清空策略搜索", "Clear strategy search")}
+                          disabled={activeStrategies.length === 0}
+                        />
+                      </div>
                       <label style={fieldStyle}>
                         <span style={fieldLabelStyle}>{txt("单策略日期", "Single Run Date")}</span>
                         <input
@@ -2478,13 +2498,6 @@ const metricGridStyle: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
   gap: 16,
-};
-
-const workspaceGridStyle: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "minmax(0, 1.45fr) minmax(360px, 0.95fr)",
-  gap: 18,
-  alignItems: "start",
 };
 
 const sectionTitleRowStyle: CSSProperties = {

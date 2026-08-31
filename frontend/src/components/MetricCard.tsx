@@ -24,18 +24,20 @@ export default function MetricCard({
   density = "compact",
 }: MetricCardProps) {
   return (
-    <article className={`${styles.card} ${density === "compact" ? styles.compact : ""}`}>
-      <div className={styles.labelRow}>
-        <div className={styles.label} style={{ background: `${accent}22`, color: accent, fontSize: labelFontSize }}>{label}</div>
-        {density === "compact" ? (
-          <Tooltip.Root delayDuration={250}>
-            <Tooltip.Trigger asChild><button type="button" className={styles.helpButton} aria-label={`${label}: ${hint}`}>?</button></Tooltip.Trigger>
-            <Tooltip.Portal><Tooltip.Content className="workspace-tooltip" sideOffset={7}>{hint}</Tooltip.Content></Tooltip.Portal>
-          </Tooltip.Root>
-        ) : null}
+    <article className={styles.card}>
+      <div className={density === "compact" ? styles.compact : styles.comfortable}>
+        <div className={styles.labelRow}>
+          <div className={styles.label} style={{ background: `${accent}22`, color: accent, fontSize: labelFontSize }}>{label}</div>
+          {density === "compact" ? (
+            <Tooltip.Root delayDuration={250}>
+              <Tooltip.Trigger asChild><button type="button" className={styles.helpButton} aria-label={`${label}: ${hint}`}>?</button></Tooltip.Trigger>
+              <Tooltip.Portal><Tooltip.Content className="workspace-tooltip" sideOffset={7}>{hint}</Tooltip.Content></Tooltip.Portal>
+            </Tooltip.Root>
+          ) : null}
+        </div>
+        <div className={styles.value} style={{ fontSize: valueFontSize }}>{value}</div>
+        <p className={styles.hint} style={{ fontSize: hintFontSize }}>{hint}</p>
       </div>
-      <div className={styles.value} style={{ fontSize: valueFontSize }}>{value}</div>
-      <p className={styles.hint} style={{ fontSize: hintFontSize }}>{hint}</p>
     </article>
   );
 }

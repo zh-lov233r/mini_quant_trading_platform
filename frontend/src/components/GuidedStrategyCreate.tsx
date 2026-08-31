@@ -10,6 +10,7 @@ import {
   validateStrategy,
 } from "@/api/strategies";
 import Badge from "@/components/Badge";
+import { SelectControl } from "@/components/workspace/SelectControl";
 import { useI18n } from "@/i18n/provider";
 import type {
   StrategyCatalogItem,
@@ -461,17 +462,17 @@ export default function GuidedStrategyCreate() {
             <span>{Boolean(value) ? (isZh ? "已启用" : "Enabled") : (isZh ? "未启用" : "Disabled")}</span>
           </label>
         ) : field.kind === "select" ? (
-          <select
+          <SelectControl
             id={fieldId(field.path)}
             value={String(value ?? "")}
             onChange={(event) => {
               const option = options.find((candidate) => String(candidate.value) === event.target.value);
               updateField(field, option?.value ?? event.target.value);
             }}
-            style={inputStyle(Boolean(error))}
+            invalid={Boolean(error)}
           >
             {options.map((option) => <option key={String(option.value)} value={String(option.value)}>{option.label}</option>)}
-          </select>
+          </SelectControl>
         ) : (
           <div style={{ position: "relative" }}>
             <input
