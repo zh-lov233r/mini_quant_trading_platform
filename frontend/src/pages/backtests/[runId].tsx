@@ -37,6 +37,7 @@ import type {
 import type { CandleBarOut, CandleSeriesOut } from "@/types/quote";
 import { formatDateTime, formatDurationMs, formatPercent } from "@/utils/strategy";
 import { compactBacktestPositions } from "@/utils/backtestPositions";
+import { lifecycleChartDisplayState } from "@/utils/backtestLifecycleView";
 import { comparisonCurveReturn } from "@/utils/comparisonCurves";
 import { shouldLoadBacktestDetails } from "@/utils/backtestProgress";
 import {
@@ -3007,6 +3008,11 @@ function LifecycleDetailPanel({
   );
   const visibleStartDate = bars[0]?.trade_date || fetchStartDate;
   const visibleEndDate = bars[bars.length - 1]?.trade_date || baseEndDate;
+  const chartDisplayState = lifecycleChartDisplayState({
+    loading,
+    error,
+    barCount: bars.length,
+  });
   useEffect(() => {
     if (!visibleStartDate || !visibleEndDate || bars.length === 0) {
       setSupportResistanceDetail(null);
@@ -3381,26 +3387,33 @@ function LifecycleDetailPanel({
         </div>
       </div>
 
-      {loading ? (
-        <div style={emptyStateStyle}>{isZh ? "正在加载这段生命周期的蜡烛图..." : "Loading the candlestick chart for this lifecycle..."}</div>
-      ) : error ? (
-        <div style={{ ...emptyStateStyle, color: "#fecaca", border: "1px solid rgba(248, 113, 113, 0.22)" }}>{error}</div>
-      ) : bars.length === 0 ? (
-        <div style={emptyStateStyle}>
+      {chartDisplayState === "loading" ? (
+        <div style={lifecycleChartPlaceholderStyle}>{isZh ? "正在加载这段生命周期的蜡烛图..." : "Loading the candlestick chart for this lifecycle..."}</div>
+      ) : chartDisplayState === "error" ? (
+        <div style={{ ...lifecycleChartPlaceholderStyle, color: "#fecaca", border: "1px solid rgba(248, 113, 113, 0.22)" }}>{error}</div>
+      ) : chartDisplayState === "empty" ? (
+        <div style={lifecycleChartPlaceholderStyle}>
           {isZh ? "这个生命周期区间内没有可用的日线数据" : "There are no daily bars available inside this lifecycle window"}
         </div>
       ) : (
         <>
-          <CandlestickLightweightChart
-            bars={bars}
-            markers={markers as ChartOverlayMarker[]}
-            gaps={gapOverlays as ChartGapOverlay[]}
-            zones={zoneOverlays as ChartZoneOverlay[]}
-            locale={locale}
-            showVolume
-            height={460}
-            ariaLabel={isZh ? "生命周期蜡烛图" : "Lifecycle candlestick chart"}
-          />
+          <div style={{ position: "relative", minHeight: 460 }}>
+            <CandlestickLightweightChart
+              bars={bars}
+              markers={markers as ChartOverlayMarker[]}
+              gaps={gapOverlays as ChartGapOverlay[]}
+              zones={zoneOverlays as ChartZoneOverlay[]}
+              locale={locale}
+              showVolume
+              height={460}
+              ariaLabel={isZh ? "生命周期蜡烛图" : "Lifecycle candlestick chart"}
+            />
+            {loading ? (
+              <div role="status" aria-live="polite" style={lifecycleChartReloadingStyle}>
+                {isZh ? "正在更新图表..." : "Updating chart..."}
+              </div>
+            ) : null}
+          </div>
           <div
             style={{
               display: "flex",
@@ -4683,6 +4696,31 @@ const emptyStateStyle = {
   border: "1px solid rgba(71, 85, 105, 0.28)",
   color: "rgba(148, 163, 184, 0.88)",
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
+} as const;
+
+const lifecycleChartPlaceholderStyle = {
+  ...emptyStateStyle,
+  minHeight: 460,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  textAlign: "center",
+} as const;
+
+const lifecycleChartReloadingStyle = {
+  position: "absolute",
+  top: 12,
+  right: 12,
+  zIndex: 3,
+  padding: "7px 10px",
+  borderRadius: 999,
+  border: "1px solid rgba(56, 189, 248, 0.28)",
+  background: "rgba(3, 7, 18, 0.88)",
+  color: "#7dd3fc",
+  fontSize: 12,
+  fontWeight: 700,
+  pointerEvents: "none",
+  boxShadow: "0 8px 20px rgba(2, 6, 23, 0.3)",
 } as const;
 
 const infoGridStyle = {
