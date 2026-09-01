@@ -86,7 +86,9 @@ worker 使用 `FOR UPDATE SKIP LOCKED` claim，维护 heartbeat/lease，每个�
 
 `summary_metrics.performance` 使用互不重叠的阶段记录 `sql_execute_ms`、`sql_fetch_ms`、`row_decode_ms`、`day_grouping_ms`、历史状态、信号、成交、明细构造、明细/摘要持久化、响应构造和总耗时。它同时记录 rows/day/signals/trades 每秒、每输入行微秒数、阶段占比、`unaccounted_ms` 与峰值 RSS；worker 终态补充 queue wait、active 和 finalization overhead。支撑/压力区子阶段只作为诊断维度，不重复计入 `unaccounted_ms`。结构化日志记录同一映射。
 
-研究 v2 trial 使用 experiment `run_manifest.preparedDataset` 中的稳定 key/manifest。key 包含 loader revision、源数据指纹、稳定 instrument 集合、完整日期范围、feature set、价格/公司行动、symbol identity 和 universe membership 语义，不包含普通策略参数。首个 trial 在文件锁内原子构建 float64 structured memmap 及日期 offset/公司行动 sidecar；后续 trial 只读打开。文件或 metadata 损坏会在锁内重建；缓存基础设施失败会记录 fallback 原因并回到相同指纹的 DB loader；构建期间行数变化会把 experiment 标为 `data_changed`。手动回测不使用该缓存。cleanup 会统计引用同一 key 的 queued/running job，存在 active lease 时拒绝删除。
+研究 trial 使用 experiment `run_manifest.preparedDataset` 中的稳定 key/manifest。v3 key 包含 loader revision、源数据指纹、稳定 instrument 集合、完整日期范围、feature set、价格/公司行动、symbol identity 和 universe membership 语义，不包含普通策略参数。首个 trial 在文件锁内原子构建相互独立且按 Fortran 顺序存储的 `int64` identity/date memmap 与 `float64` feature memmap，并写入 symbol/asset/exchange、日期 offset 和公司行动 sidecar；数值缺失统一使用 NaN。后续 trial 只读打开两个 buffer。v2 key 不会匹配 v3，旧文件也不会被自动删除。文件或 metadata 损坏会在锁内重建；缓存基础设施失败会记录 fallback 原因并回到相同指纹的 DB loader；构建期间行数变化会把 experiment 标为 `data_changed`。手动回测不使用该缓存。cleanup 会统计引用同一 key 的 queued/running job，存在 active lease 时拒绝删除。
+
+原生包使用 C++20、`pybind11==3.1.0`、`-O3` 和 `-DNDEBUG` 构建，并明确禁用 fast-math。本地开发执行 `.venv/bin/pip install -e backend/native`；Docker 在 Linux builder stage 生成 wheel，runtime stage 只安装该 wheel。
 
 只读基准预检：
 

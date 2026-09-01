@@ -32,7 +32,7 @@ The repository currently has two main parts:
   - Queue manual and research runs in PostgreSQL and execute them with an independent worker
   - Choose `summary`, `trades`, or `full` persistence; manual runs default to `full`
   - Plan the read-only correctness/screening funnel with `make benchmark-backtests BENCHMARK_ARGS="plan"`; write benchmarks require explicit `--apply` and the safety gates in the performance guide
-  - Reuse a fingerprinted, read-only PreparedDataset memmap across v2 research trials; manual backtests keep the database loader
+  - Reuse a fingerprinted, read-only v3 columnar PreparedDataset across research trials; manual backtests keep the database loader
   - Load summary, downsampled equity, signals, and transactions through incremental APIs
   - Keep v1 as the default engine while v2 instrument-identity and batch-persistence rollout is validated
   - Rank same-strategy BUY signals by a frozen day-T strength score before day-(T+1) fills; see [Signal strength](docs/signal-strength.md)
@@ -178,7 +178,10 @@ The `Makefile` assumes a root-level `.venv/bin/python`, so local development is 
 ```bash
 python -m venv .venv
 .venv/bin/pip install -r backend/requirements.txt
+.venv/bin/pip install -e backend/native
 ```
+
+The second command builds the local C++20/pybind11 strategy-kernel wheel. Docker builds the same wheel in a compiler-only builder stage; the runtime image contains no compiler toolchain.
 
 ### 2. Install frontend dependencies
 
