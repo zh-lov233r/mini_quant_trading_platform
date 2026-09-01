@@ -27,7 +27,6 @@ from src.services.backtest_universe_service import (
 from src.services.backtest_repository import BacktestRepository
 from src.services.market_data_loader import MarketDataLoader
 from src.services.prepared_dataset_service import (
-    PREPARED_DATASET_DTYPE,
     PreparedDatasetCache,
     PreparedDatasetDataChangedError,
     PreparedDatasetDayLoader,
@@ -744,7 +743,7 @@ def run_backtest(
                     raise ValueError("prepared dataset row count is invalid")
                 cache = PreparedDatasetCache()
                 try:
-                    prepared_array = cache.open(manifest, expected_dtype=PREPARED_DATASET_DTYPE)
+                    prepared_array = cache.open(manifest)
                     cache_status = "warm"
                     if prepared_array is None:
                         cache_status = "cold"
@@ -830,8 +829,7 @@ def run_backtest(
 
                         prepared_array = cache.build(
                             manifest,
-                            shape=(int(manifest["row_count"]),),
-                            dtype=PREPARED_DATASET_DTYPE,
+                            row_count=int(manifest["row_count"]),
                             writer=write_prepared,
                         )
                         if built_here:

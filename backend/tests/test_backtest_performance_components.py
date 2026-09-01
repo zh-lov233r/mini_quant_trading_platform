@@ -22,7 +22,6 @@ from src.services.backtest_equity_service import (
 )
 from src.services.backtest_repository import BacktestRepository
 from src.services.prepared_dataset_service import (
-    PREPARED_DATASET_DTYPE,
     PREPARED_DATASET_SCHEMA_VERSION,
     PreparedDatasetCache,
     PreparedDatasetDataChangedError,
@@ -226,21 +225,28 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
             "price_semantics": "forward_adjusted_when_available",
             "data_fingerprint": "a" * 64,
         }
-        dtype = np.dtype([("instrument_id", "<i8"), ("close", "<f8")])
         with tempfile.TemporaryDirectory() as directory:
             cache = PreparedDatasetCache(Path(directory))
 
-            def writer(array: np.memmap) -> None:
-                array[:] = [(1, 10.0), (1, 11.0), (1, 12.0)]
+            def writer(array: object) -> None:
+                for index in range(3):
+                    encode_prepared_snapshot(
+                        array,
+                        index,
+                        {
+                            "instrument_id": 1,
+                            "symbol": "AAA",
+                            "dt_ny": date(2025, 1, index + 1),
+                            "close": 10.0 + index,
+                        },
+                    )
 
-            built = cache.build(manifest, shape=(3,), dtype=dtype, writer=writer)
-            self.assertFalse(built.flags.writeable)
-            self.assertEqual(built[2]["close"], 12.0)
-            reopened = cache.open(
-                {**manifest, "loader_schema_version": PREPARED_DATASET_SCHEMA_VERSION}
-            )
+            built = cache.build(manifest, row_count=3, writer=writer)
+            self.assertFalse(built.writeable)
+            self.assertEqual(built.floats[2, 3], 12.0)
+            reopened = cache.open({**manifest, "loader_schema_version": PREPARED_DATASET_SCHEMA_VERSION})
             self.assertIsNotNone(reopened)
-            self.assertFalse(reopened.flags.writeable)
+            self.assertFalse(reopened.writeable)
             self.assertFalse(cache.cleanup(manifest, active_lease_count=1))
             self.assertTrue(cache.cleanup(manifest, active_lease_count=0))
 
@@ -252,33 +258,42 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
             "feature_set": ["daily_features"],
             "data_fingerprint": "b" * 64,
         }
-        dtype = np.dtype([("instrument_id", "<i8"), ("close", "<f8")])
         with tempfile.TemporaryDirectory() as directory:
             cache = PreparedDatasetCache(Path(directory))
             writes = 0
 
-            def writer(array: np.memmap) -> dict[str, object]:
+            def writer(array: object) -> dict[str, object]:
                 nonlocal writes
                 writes += 1
-                array[:] = [(1, 10.0), (1, 11.0)]
+                for index in range(2):
+                    encode_prepared_snapshot(
+                        array,
+                        index,
+                        {
+                            "instrument_id": 1,
+                            "symbol": "AAA",
+                            "dt_ny": date(2025, 1, index + 1),
+                            "close": 10.0 + index,
+                        },
+                    )
                 return {"date_offsets": [["2025-01-01", 0, 1], ["2025-01-02", 1, 1]]}
 
             with ThreadPoolExecutor(max_workers=2) as executor:
                 arrays = list(
                     executor.map(
-                        lambda _: cache.build(manifest, shape=(2,), dtype=dtype, writer=writer),
+                        lambda _: cache.build(manifest, row_count=2, writer=writer),
                         range(2),
                     )
                 )
             self.assertEqual(writes, 1)
-            self.assertTrue(all(not array.flags.writeable for array in arrays))
+            self.assertTrue(all(not array.writeable for array in arrays))
             self.assertEqual(cache.metadata(manifest)["sidecar"]["date_offsets"][1][1], 1)
 
-            data_path = next(Path(directory).glob("*.npy"))
+            data_path = next(Path(directory).glob("*.v3/integers.npy"))
             data_path.write_bytes(b"corrupt")
-            rebuilt = cache.build(manifest, shape=(2,), dtype=dtype, writer=writer)
+            rebuilt = cache.build(manifest, row_count=2, writer=writer)
             self.assertEqual(writes, 2)
-            self.assertEqual(float(rebuilt[1]["close"]), 11.0)
+            self.assertEqual(float(rebuilt.floats[1, 3]), 11.0)
 
     def test_prepared_dataset_round_trip_and_active_lease_cleanup(self) -> None:
         manifest = {
@@ -309,10 +324,13 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
 
             array = cache.build(
                 manifest,
-                shape=(2,),
-                dtype=PREPARED_DATASET_DTYPE,
+                row_count=2,
                 writer=writer,
             )
+            self.assertTrue(np.isfortran(array.integers))
+            self.assertTrue(np.isfortran(array.floats))
+            self.assertEqual(array.sidecar["symbols"], ["AAA"])
+            self.assertTrue(np.isnan(array.floats[0]).sum() > 0)
             performance = {"row_decode_ms": 0.0, "day_grouping_ms": 0.0}
             days = list(
                 PreparedDatasetDayLoader(
@@ -343,13 +361,12 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             cache = PreparedDatasetCache(Path(directory))
 
-            def writer(_array: np.memmap) -> None:
+            def writer(_array: object) -> None:
                 raise PreparedDatasetDataChangedError("fingerprint changed")
 
             with self.assertRaises(PreparedDatasetDataChangedError):
-                cache.build(manifest, shape=(1,), dtype=PREPARED_DATASET_DTYPE, writer=writer)
-            self.assertEqual(list(Path(directory).glob("*.npy")), [])
-            self.assertEqual(list(Path(directory).glob("*.json")), [])
+                cache.build(manifest, row_count=1, writer=writer)
+            self.assertEqual(list(Path(directory).glob("*.v3")), [])
 
 
 if __name__ == "__main__":

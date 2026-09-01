@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 import hashlib
 import json
@@ -14,9 +15,11 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 
-PREPARED_DATASET_SCHEMA_VERSION = "v2"
-PREPARED_STRING_FIELDS = {"symbol": 64, "asset_type": 24, "exchange": 24}
-PREPARED_DATE_FIELDS = ("dt_ny", "listed_at", "delisted_at")
+PREPARED_DATASET_SCHEMA_VERSION = "v3"
+PREPARED_INTEGER_FIELDS = (
+    "session_index", "instrument_id", "ts_us", "dt_ordinal", "symbol_id",
+    "asset_type_id", "exchange_id", "listed_ordinal", "delisted_ordinal",
+)
 PREPARED_FLOAT_FIELDS = (
     "open", "high", "low", "close", "close_unadjusted", "volume", "atr_14",
     "volume_sma_20", "dollar_volume_20", "ret_20d", "ret_60d", "sma_10",
@@ -25,19 +28,115 @@ PREPARED_FLOAT_FIELDS = (
     "prev_sma_10", "prev_sma_20", "prev_sma_50", "prev_sma_100", "prev_sma_200",
     "prev_ema_12", "prev_ema_15", "prev_ema_20", "prev_ema_50",
 )
-PREPARED_DATASET_DTYPE = np.dtype(
-    [
-        ("instrument_id", "<i8"),
-        ("ts_us", "<i8"),
-        *((field, f"<U{width}") for field, width in PREPARED_STRING_FIELDS.items()),
-        *((field, "<U10") for field in PREPARED_DATE_FIELDS),
-        *((field, "<f8") for field in PREPARED_FLOAT_FIELDS),
-    ]
-)
+PREPARED_INTEGER_INDEX = {name: index for index, name in enumerate(PREPARED_INTEGER_FIELDS)}
+PREPARED_FLOAT_INDEX = {name: index for index, name in enumerate(PREPARED_FLOAT_FIELDS)}
+PREPARED_DATE_SENTINEL = np.iinfo(np.int64).min
 
 
 class PreparedDatasetDataChangedError(RuntimeError):
     pass
+
+
+@dataclass(slots=True)
+class PreparedDataset:
+    """Two Fortran-order memmaps and dictionary sidecars for the v3 dataset."""
+
+    integers: np.memmap
+    floats: np.memmap
+    sidecar: dict[str, Any]
+    _symbols: list[str] = field(default_factory=list)
+    _asset_types: list[str] = field(default_factory=list)
+    _exchanges: list[str] = field(default_factory=list)
+    _symbol_ids: dict[str, int] = field(default_factory=dict)
+    _asset_type_ids: dict[str, int] = field(default_factory=dict)
+    _exchange_ids: dict[str, int] = field(default_factory=dict)
+    _session_by_ordinal: dict[int, int] = field(default_factory=dict)
+
+    def __len__(self) -> int:
+        return int(self.integers.shape[0])
+
+    @property
+    def writeable(self) -> bool:
+        return bool(self.integers.flags.writeable or self.floats.flags.writeable)
+
+    def mapping_sidecar(self) -> dict[str, list[str]]:
+        return {
+            "symbols": list(self._symbols),
+            "asset_types": list(self._asset_types),
+            "exchanges": list(self._exchanges),
+        }
+
+    @classmethod
+    def opened(
+        cls,
+        integers: np.memmap,
+        floats: np.memmap,
+        sidecar: dict[str, Any],
+    ) -> PreparedDataset:
+        symbols = [str(value) for value in sidecar.get("symbols") or []]
+        asset_types = [str(value) for value in sidecar.get("asset_types") or []]
+        exchanges = [str(value) for value in sidecar.get("exchanges") or []]
+        return cls(
+            integers,
+            floats,
+            sidecar,
+            symbols,
+            asset_types,
+            exchanges,
+            {value: index for index, value in enumerate(symbols)},
+            {value: index for index, value in enumerate(asset_types)},
+            {value: index for index, value in enumerate(exchanges)},
+        )
+
+    @staticmethod
+    def _dictionary_id(value: Any, values: list[str], mapping: dict[str, int]) -> int:
+        normalized = str(value or "")
+        existing = mapping.get(normalized)
+        if existing is not None:
+            return existing
+        index = len(values)
+        values.append(normalized)
+        mapping[normalized] = index
+        return index
+
+    def encode(self, index: int, snapshot: dict[str, Any]) -> None:
+        trade_date = snapshot.get("dt_ny")
+        if not isinstance(trade_date, date):
+            raise ValueError("prepared snapshot requires dt_ny")
+        trade_ordinal = trade_date.toordinal()
+        session_index = self._session_by_ordinal.setdefault(
+            trade_ordinal,
+            len(self._session_by_ordinal),
+        )
+        row = self.integers[index]
+        row[PREPARED_INTEGER_INDEX["session_index"]] = session_index
+        row[PREPARED_INTEGER_INDEX["instrument_id"]] = int(snapshot["instrument_id"])
+        timestamp = snapshot.get("ts")
+        if isinstance(timestamp, datetime):
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            timestamp_us = int(timestamp.timestamp() * 1_000_000)
+        else:
+            timestamp_us = 0
+        row[PREPARED_INTEGER_INDEX["ts_us"]] = timestamp_us
+        row[PREPARED_INTEGER_INDEX["dt_ordinal"]] = trade_ordinal
+        row[PREPARED_INTEGER_INDEX["symbol_id"]] = self._dictionary_id(
+            str(snapshot.get("symbol") or "").upper(), self._symbols, self._symbol_ids
+        )
+        row[PREPARED_INTEGER_INDEX["asset_type_id"]] = self._dictionary_id(
+            snapshot.get("asset_type"), self._asset_types, self._asset_type_ids
+        )
+        row[PREPARED_INTEGER_INDEX["exchange_id"]] = self._dictionary_id(
+            snapshot.get("exchange"), self._exchanges, self._exchange_ids
+        )
+        for name in ("listed", "delisted"):
+            value = snapshot.get(f"{name}_at")
+            row[PREPARED_INTEGER_INDEX[f"{name}_ordinal"]] = (
+                value.toordinal() if isinstance(value, date) else PREPARED_DATE_SENTINEL
+            )
+        for name, column in PREPARED_FLOAT_INDEX.items():
+            value = snapshot.get(name)
+            self.floats[index, column] = float(value) if value is not None else np.nan
 
 
 def prepared_dataset_key(manifest: dict[str, Any]) -> str:
@@ -52,7 +151,6 @@ def build_prepared_dataset_manifest(
     universe: dict[str, Any],
     requested_date_range: tuple[date, date],
 ) -> dict[str, Any]:
-    """Build the stable, parameter-independent identity for a research dataset."""
     return {
         "loader_schema_version": PREPARED_DATASET_SCHEMA_VERSION,
         "data_fingerprint": data_fingerprint["sha256"],
@@ -60,8 +158,7 @@ def build_prepared_dataset_manifest(
         "instrument_ids": sorted(int(value) for value in data_fingerprint["instrumentIds"]),
         "date_range": [data_fingerprint["startDate"], data_fingerprint["endDate"]],
         "fingerprint_request_range": [
-            requested_date_range[0].isoformat(),
-            requested_date_range[1].isoformat(),
+            requested_date_range[0].isoformat(), requested_date_range[1].isoformat()
         ],
         "feature_set": ["daily_features", "adjusted_ohlcv", strategy_type],
         "price_semantics": "forward_adjusted_when_available",
@@ -83,19 +180,15 @@ def default_cache_root() -> Path:
 
 
 class PreparedDatasetCache:
-    """Atomic, fingerprint-addressed NumPy memmap cache for one experiment dataset."""
+    """Atomic fingerprint-addressed columnar cache; v2 files remain untouched."""
 
     def __init__(self, root: Path | None = None) -> None:
         self.root = (root or default_cache_root()).resolve()
 
-    def _paths(self, key: str) -> tuple[Path, Path, Path]:
+    def _paths(self, key: str) -> tuple[Path, Path]:
         if len(key) != 64 or any(character not in "0123456789abcdef" for character in key):
             raise ValueError("prepared dataset key must be a lowercase sha256")
-        return (
-            self.root / f"{key}.npy",
-            self.root / f"{key}.json",
-            self.root / f"{key}.lock",
-        )
+        return self.root / f"{key}.v3", self.root / f"{key}.lock"
 
     @contextmanager
     def _lock(self, lock_path: Path) -> Iterator[None]:
@@ -109,91 +202,117 @@ class PreparedDatasetCache:
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
-    def open(
-        self,
-        manifest: dict[str, Any],
-        *,
-        expected_dtype: np.dtype[Any] | None = None,
-    ) -> np.memmap | None:
-        key = prepared_dataset_key(manifest)
-        data_path, metadata_path, _ = self._paths(key)
-        if not data_path.exists() or not metadata_path.exists():
-            return None
-        try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            if metadata.get("key") != key or metadata.get("manifest") != manifest:
-                return None
-            array = np.load(data_path, mmap_mode="r", allow_pickle=False)
-            if expected_dtype is not None and array.dtype != np.dtype(expected_dtype):
-                return None
-            if list(array.shape) != metadata.get("shape") or array.dtype.descr != [
-                tuple(item) for item in metadata.get("dtype", [])
-            ]:
-                return None
-            array.flags.writeable = False
-            return array
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            return None
+    @staticmethod
+    def _remove_directory(directory: Path) -> None:
+        if not directory.exists():
+            return
+        for name in ("integers.npy", "floats.npy", "metadata.json"):
+            (directory / name).unlink(missing_ok=True)
+        directory.rmdir()
 
-    def metadata(self, manifest: dict[str, Any]) -> dict[str, Any] | None:
-        key = prepared_dataset_key(manifest)
-        _, metadata_path, _ = self._paths(key)
-        try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            return None
-        return metadata if metadata.get("key") == key and metadata.get("manifest") == manifest else None
-
-    def build(
-        self,
-        manifest: dict[str, Any],
-        *,
-        shape: tuple[int, ...],
-        dtype: np.dtype[Any],
-        writer: Callable[[np.memmap], dict[str, Any] | None],
-    ) -> np.memmap:
-        normalized_manifest = {
+    @staticmethod
+    def _normalize_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+        return {
             **manifest,
             "loader_schema_version": manifest.get(
                 "loader_schema_version", PREPARED_DATASET_SCHEMA_VERSION
             ),
         }
-        key = prepared_dataset_key(normalized_manifest)
-        data_path, metadata_path, lock_path = self._paths(key)
+
+    def open(self, manifest: dict[str, Any]) -> PreparedDataset | None:
+        normalized = self._normalize_manifest(manifest)
+        key = prepared_dataset_key(normalized)
+        directory, _ = self._paths(key)
+        try:
+            metadata = json.loads((directory / "metadata.json").read_text(encoding="utf-8"))
+            if metadata.get("key") != key or metadata.get("manifest") != normalized:
+                return None
+            integers = np.load(directory / "integers.npy", mmap_mode="r", allow_pickle=False)
+            floats = np.load(directory / "floats.npy", mmap_mode="r", allow_pickle=False)
+            rows = int(metadata["row_count"])
+            if (
+                integers.dtype != np.dtype("<i8")
+                or floats.dtype != np.dtype("<f8")
+                or tuple(integers.shape) != (rows, len(PREPARED_INTEGER_FIELDS))
+                or tuple(floats.shape) != (rows, len(PREPARED_FLOAT_FIELDS))
+                or not np.isfortran(integers)
+                or not np.isfortran(floats)
+                or metadata.get("integer_fields") != list(PREPARED_INTEGER_FIELDS)
+                or metadata.get("float_fields") != list(PREPARED_FLOAT_FIELDS)
+            ):
+                return None
+            integers.flags.writeable = False
+            floats.flags.writeable = False
+            return PreparedDataset.opened(integers, floats, metadata.get("sidecar") or {})
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            return None
+
+    def metadata(self, manifest: dict[str, Any]) -> dict[str, Any] | None:
+        normalized = self._normalize_manifest(manifest)
+        key = prepared_dataset_key(normalized)
+        directory, _ = self._paths(key)
+        try:
+            metadata = json.loads((directory / "metadata.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return None
+        return metadata if metadata.get("key") == key and metadata.get("manifest") == normalized else None
+
+    def build(
+        self,
+        manifest: dict[str, Any],
+        *,
+        row_count: int,
+        writer: Callable[[PreparedDataset], dict[str, Any] | None],
+    ) -> PreparedDataset:
+        normalized = self._normalize_manifest(manifest)
+        key = prepared_dataset_key(normalized)
+        directory, lock_path = self._paths(key)
         with self._lock(lock_path):
-            existing = self.open(normalized_manifest, expected_dtype=dtype)
+            existing = self.open(normalized)
             if existing is not None:
                 return existing
-            token = uuid4().hex
-            temp_data = self.root / f".{key}.{token}.npy"
-            temp_metadata = self.root / f".{key}.{token}.json"
+            temporary = self.root / f".{key}.{uuid4().hex}.v3"
+            temporary.mkdir()
             try:
-                array = np.lib.format.open_memmap(
-                    temp_data,
-                    mode="w+",
-                    dtype=dtype,
-                    shape=shape,
+                integers = np.lib.format.open_memmap(
+                    temporary / "integers.npy", mode="w+", dtype="<i8",
+                    shape=(row_count, len(PREPARED_INTEGER_FIELDS)), fortran_order=True,
                 )
-                sidecar = writer(array) or {}
-                array.flush()
-                del array
-                metadata = {
-                    "key": key,
-                    "manifest": normalized_manifest,
-                    "shape": list(shape),
-                    "dtype": [list(item) for item in np.dtype(dtype).descr],
-                    "sidecar": sidecar,
-                }
-                temp_metadata.write_text(
-                    json.dumps(metadata, sort_keys=True, separators=(",", ":")),
+                floats = np.lib.format.open_memmap(
+                    temporary / "floats.npy", mode="w+", dtype="<f8",
+                    shape=(row_count, len(PREPARED_FLOAT_FIELDS)), fortran_order=True,
+                )
+                integers[:] = PREPARED_DATE_SENTINEL
+                floats[:] = np.nan
+                dataset = PreparedDataset(integers, floats, {})
+                supplied_sidecar = writer(dataset) or {}
+                sidecar = {**dataset.mapping_sidecar(), **supplied_sidecar}
+                integers.flush()
+                floats.flush()
+                (temporary / "metadata.json").write_text(
+                    json.dumps(
+                        {
+                            "key": key,
+                            "manifest": normalized,
+                            "row_count": row_count,
+                            "integer_fields": list(PREPARED_INTEGER_FIELDS),
+                            "float_fields": list(PREPARED_FLOAT_FIELDS),
+                            "storage_order": "column_major_fortran",
+                            "sidecar": sidecar,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
                     encoding="utf-8",
                 )
-                os.replace(temp_data, data_path)
-                os.replace(temp_metadata, metadata_path)
+                del dataset, integers, floats
+                if directory.exists():
+                    self._remove_directory(directory)
+                os.replace(temporary, directory)
             finally:
-                temp_data.unlink(missing_ok=True)
-                temp_metadata.unlink(missing_ok=True)
-            opened = self.open(normalized_manifest, expected_dtype=dtype)
+                if temporary.exists():
+                    self._remove_directory(temporary)
+            opened = self.open(normalized)
             if opened is None:
                 raise RuntimeError("prepared dataset cache failed validation after atomic publish")
             return opened
@@ -201,35 +320,21 @@ class PreparedDatasetCache:
     def cleanup(self, manifest: dict[str, Any], *, active_lease_count: int) -> bool:
         if active_lease_count > 0:
             return False
-        normalized_manifest = {
-            **manifest,
-            "loader_schema_version": manifest.get(
-                "loader_schema_version", PREPARED_DATASET_SCHEMA_VERSION
-            ),
-        }
-        key = prepared_dataset_key(normalized_manifest)
-        data_path, metadata_path, lock_path = self._paths(key)
+        normalized = self._normalize_manifest(manifest)
+        directory, lock_path = self._paths(prepared_dataset_key(normalized))
         with self._lock(lock_path):
-            data_path.unlink(missing_ok=True)
-            metadata_path.unlink(missing_ok=True)
+            self._remove_directory(directory)
         lock_path.unlink(missing_ok=True)
         return True
 
     def cleanup_if_unused(self, db: Session, manifest: dict[str, Any]) -> bool:
-        key = prepared_dataset_key(
-            {
-                **manifest,
-                "loader_schema_version": manifest.get(
-                    "loader_schema_version", PREPARED_DATASET_SCHEMA_VERSION
-                ),
-            }
-        )
+        normalized = self._normalize_manifest(manifest)
+        key = prepared_dataset_key(normalized)
         active_lease_count = int(
             db.execute(
                 text(
                     """
-                    SELECT COUNT(*)
-                    FROM backtest_jobs
+                    SELECT COUNT(*) FROM backtest_jobs
                     WHERE status IN ('queued', 'running')
                       AND payload -> 'prepared_dataset' ->> 'key' = :key
                     """
@@ -237,37 +342,33 @@ class PreparedDatasetCache:
                 {"key": key},
             ).scalar_one()
         )
-        return self.cleanup(manifest, active_lease_count=active_lease_count)
+        return self.cleanup(normalized, active_lease_count=active_lease_count)
 
 
-def encode_prepared_snapshot(array: np.memmap, index: int, snapshot: dict[str, Any]) -> None:
-    array[index]["instrument_id"] = int(snapshot["instrument_id"])
-    timestamp = snapshot.get("ts")
-    if isinstance(timestamp, datetime):
-        if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=timezone.utc)
-        array[index]["ts_us"] = int(timestamp.timestamp() * 1_000_000)
-    else:
-        array[index]["ts_us"] = 0
-    for field in PREPARED_STRING_FIELDS:
-        array[index][field] = str(snapshot.get(field) or "")
-    for field in PREPARED_DATE_FIELDS:
-        value = snapshot.get(field)
-        array[index][field] = value.isoformat() if isinstance(value, date) else ""
-    for field in PREPARED_FLOAT_FIELDS:
-        value = snapshot.get(field)
-        array[index][field] = float(value) if value is not None else np.nan
+def encode_prepared_snapshot(dataset: PreparedDataset, index: int, snapshot: dict[str, Any]) -> None:
+    dataset.encode(index, snapshot)
 
 
-def decode_prepared_snapshot(row: np.void) -> tuple[date, str, dict[str, Any]]:
-    trade_date = date.fromisoformat(str(row["dt_ny"]))
-    symbol = str(row["symbol"]).upper()
-    ts_us = int(row["ts_us"])
+def decode_prepared_snapshot(
+    dataset: PreparedDataset,
+    index: int,
+) -> tuple[date, str, dict[str, Any]]:
+    integer_row = dataset.integers[index]
+    float_row = dataset.floats[index]
+    trade_date = date.fromordinal(int(integer_row[PREPARED_INTEGER_INDEX["dt_ordinal"]]))
+    symbol = dataset._symbols[int(integer_row[PREPARED_INTEGER_INDEX["symbol_id"]])]
+    timestamp_us = int(integer_row[PREPARED_INTEGER_INDEX["ts_us"]])
     snapshot: dict[str, Any] = {
-        "instrument_id": int(row["instrument_id"]),
+        "instrument_id": int(integer_row[PREPARED_INTEGER_INDEX["instrument_id"]]),
         "symbol": symbol,
         "dt_ny": trade_date,
-        "ts": datetime.fromtimestamp(ts_us / 1_000_000, tz=timezone.utc),
+        "ts": datetime.fromtimestamp(timestamp_us / 1_000_000, tz=timezone.utc),
+        "asset_type": dataset._asset_types[
+            int(integer_row[PREPARED_INTEGER_INDEX["asset_type_id"]])
+        ] or None,
+        "exchange": dataset._exchanges[
+            int(integer_row[PREPARED_INTEGER_INDEX["exchange_id"]])
+        ] or None,
         "position": 0.0,
         "avg_entry_price": None,
         "entry_trade_date": None,
@@ -275,29 +376,25 @@ def decode_prepared_snapshot(row: np.void) -> tuple[date, str, dict[str, Any]]:
         "position_holding_days": None,
         "recent_bars": [],
     }
-    for field in ("asset_type", "exchange"):
-        snapshot[field] = str(row[field]) or None
-    for field in ("listed_at", "delisted_at"):
-        value = str(row[field])
-        snapshot[field] = date.fromisoformat(value) if value else None
-    for field in PREPARED_FLOAT_FIELDS:
-        value = float(row[field])
-        snapshot[field] = value if np.isfinite(value) else None
+    for name in ("listed", "delisted"):
+        ordinal = int(integer_row[PREPARED_INTEGER_INDEX[f"{name}_ordinal"]])
+        snapshot[f"{name}_at"] = date.fromordinal(ordinal) if ordinal != PREPARED_DATE_SENTINEL else None
+    for name, column in PREPARED_FLOAT_INDEX.items():
+        value = float(float_row[column])
+        snapshot[name] = value if np.isfinite(value) else None
     return trade_date, symbol, snapshot
 
 
 class PreparedDatasetDayLoader:
-    """Read-only day iterator over a prepared structured NumPy array."""
-
     def __init__(
         self,
-        array: np.memmap,
+        dataset: PreparedDataset,
         *,
         start_date: date,
         end_date: date,
         performance: dict[str, Any],
     ) -> None:
-        self.array = array
+        self.dataset = dataset
         self.start_date = start_date
         self.end_date = end_date
         self.performance = performance
@@ -312,15 +409,15 @@ class PreparedDatasetDayLoader:
         current: dict[str, dict[str, Any]] = {}
         decode_ms = 0.0
         grouping_ms = 0.0
-        for row in self.array:
-            raw_date = str(row["dt_ny"])
-            if not raw_date:
+        for index in range(len(self.dataset)):
+            ordinal = int(self.dataset.integers[index, PREPARED_INTEGER_INDEX["dt_ordinal"]])
+            if ordinal == PREPARED_DATE_SENTINEL:
                 continue
-            trade_date = date.fromisoformat(raw_date)
+            trade_date = date.fromordinal(ordinal)
             if trade_date < self.start_date or trade_date > self.end_date:
                 continue
             started = perf_counter()
-            decoded_date, symbol, snapshot = decode_prepared_snapshot(row)
+            decoded_date, symbol, snapshot = decode_prepared_snapshot(self.dataset, index)
             instrument_id = int(snapshot["instrument_id"])
             history_sessions = self._history_sessions_by_instrument.get(instrument_id, 0) + 1
             self._history_sessions_by_instrument[instrument_id] = history_sessions
@@ -329,8 +426,7 @@ class PreparedDatasetDayLoader:
             if current_date is not None and decoded_date != current_date:
                 self.performance["row_decode_ms"] += round(decode_ms, 3)
                 self.performance["day_grouping_ms"] += round(grouping_ms, 3)
-                decode_ms = 0.0
-                grouping_ms = 0.0
+                decode_ms = grouping_ms = 0.0
                 yield current_date, current
                 current = {}
             started = perf_counter()
