@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+#include "pattern_kernel.hpp"
+
 namespace py = pybind11;
 
 namespace {
@@ -446,6 +448,10 @@ py::list evaluate_day(const py::dict& runtime, const py::dict& market) {
     if (type == "trend") return evaluate_trend(runtime, market);
     if (type == "mean_reversion") return evaluate_mean_reversion(runtime, market);
     if (type == "momentum_breakout") return evaluate_momentum(runtime, market);
+    if (type == "island_reversal" || type == "double_bottom" || type == "head_shoulders_bottom"
+        || type == "rounded_bottom" || type == "v_reversal") {
+        return quant_kernel::evaluate_pattern_day(runtime, market);
+    }
     throw std::invalid_argument("native strategy is not implemented: " + type);
 }
 
@@ -455,6 +461,11 @@ py::list catalog() {
         {"trend", 1, 0, {"close", "volume", "volume_sma_20", "atr_14", "ema_15", "sma_200"}},
         {"mean_reversion", 1, 0, {"close", "atr_14", "zscore_5", "zscore_10", "zscore_20"}},
         {"momentum_breakout", 1, 0, {"close", "sma_20", "ret_20d", "volume", "volume_sma_20"}},
+        {"island_reversal", 1, 100, {"open", "high", "low", "close", "volume", "volume_sma_20", "sma_50"}},
+        {"double_bottom", 1, 220, {"open", "high", "low", "close", "volume", "volume_sma_20"}},
+        {"head_shoulders_bottom", 1, 160, {"open", "high", "low", "close", "volume", "volume_sma_20"}},
+        {"rounded_bottom", 1, 200, {"open", "high", "low", "close", "volume", "volume_sma_20"}},
+        {"v_reversal", 1, 180, {"open", "high", "low", "close", "volume", "volume_sma_20", "atr_14"}},
     };
     for (const auto& [type, revision, history_length, features] : descriptors) {
         py::dict item;
@@ -469,7 +480,10 @@ py::list catalog() {
 }
 
 py::dict normalize_strategy(const std::string& type, const py::dict& params) {
-    static const std::set<std::string> implemented = {"trend", "mean_reversion", "momentum_breakout"};
+    static const std::set<std::string> implemented = {
+        "trend", "mean_reversion", "momentum_breakout", "island_reversal", "double_bottom",
+        "head_shoulders_bottom", "rounded_bottom", "v_reversal"
+    };
     if (!implemented.contains(type)) {
         throw std::invalid_argument("native strategy is not implemented: " + type);
     }

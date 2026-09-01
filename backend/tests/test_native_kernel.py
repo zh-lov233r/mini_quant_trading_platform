@@ -4,6 +4,7 @@ from dataclasses import asdict
 from datetime import date, datetime, timezone
 import copy
 import math
+from datetime import timedelta
 import unittest
 
 import quant_kernel
@@ -66,7 +67,16 @@ class NativeKernelParityTests(unittest.TestCase):
         self.assertTrue(quant_kernel.BUILD_ID)
         self.assertEqual(
             [entry["strategy_type"] for entry in quant_kernel.catalog()],
-            ["trend", "mean_reversion", "momentum_breakout"],
+            [
+                "trend",
+                "mean_reversion",
+                "momentum_breakout",
+                "island_reversal",
+                "double_bottom",
+                "head_shoulders_bottom",
+                "rounded_bottom",
+                "v_reversal",
+            ],
         )
 
     def test_trend_entry_exit_missing_and_stable_universe_order(self) -> None:
@@ -176,6 +186,186 @@ class NativeKernelParityTests(unittest.TestCase):
                 },
             },
         )
+
+    def test_island_reversal_three_stages_match_python(self) -> None:
+        params = {"signal": {"downtrend_lookback": 3}}
+        bars = [
+            self._bar(0, 121, 122, 119, 120, 100),
+            self._bar(1, 116, 117, 113, 114, 100),
+            self._bar(2, 109, 110, 99, 100, 100),
+            self._bar(3, 95, 96, 92, 93, 70),
+            self._bar(4, 99, 104, 98, 102, 160),
+            self._bar(5, 101, 102, 98, 99, 100),
+        ]
+        for end in (4, 5, 6):
+            with self.subTest(stage=end):
+                snapshot = self._pattern_snapshot(bars[:end])
+                self._assert_day_parity("island_reversal", {"TEST": snapshot}, params=params)
+
+    def test_head_shoulders_three_stages_match_python(self) -> None:
+        params = {
+            "signal": {
+                "pivot_left_bars": 1,
+                "pivot_right_bars": 1,
+                "downtrend_lookback": 2,
+                "min_segment_bars": 2,
+                "max_segment_bars": 10,
+            }
+        }
+        bars = [
+            self._bar(0, 15, 16, 14, 15, 100),
+            self._bar(1, 13, 14, 12, 13, 100),
+            self._bar(2, 10.5, 11, 10, 10, 80),
+            self._bar(3, 11, 13, 11, 12, 100),
+            self._bar(4, 9, 10, 8, 8.5, 50),
+            self._bar(5, 11.5, 13.5, 11, 12, 100),
+            self._bar(6, 10.5, 11, 10.2, 10.4, 70),
+            self._bar(7, 11, 12, 10.5, 11.5, 100),
+            self._bar(8, 14.5, 16, 14, 15.5, 160),
+        ]
+        for end in (6, 8, 9):
+            with self.subTest(stage=end):
+                self._assert_day_parity(
+                    "head_shoulders_bottom",
+                    {"TEST": self._pattern_snapshot(bars[:end])},
+                    params=params,
+                )
+
+    def test_double_bottom_three_stages_match_python(self) -> None:
+        signal = {
+            "downtrend_lookback": 3,
+            "downtrend_min_drop_pct": 0.15,
+            "downtrend_max_up_day_ratio": 0.35,
+            "downtrend_min_r_squared": 0.65,
+            "min_bottom_spacing": 2,
+            "max_bottom_spacing": 6,
+            "left_bottom_before_bars": 1,
+            "left_bottom_after_bars": 1,
+            "bottom_tolerance_pct": 0.03,
+            "neckline_min_rebound_pct": 0.05,
+            "rebound_up_day_ratio_min": 0.5,
+            "second_bottom_volume_ratio_max": 1.0,
+            "breakout_volume_ratio_min": 1.2,
+            "max_breakout_bars_after_right_bottom": 4,
+            "breakout_buffer_pct": 0.005,
+            "retest_window": 3,
+            "retest_volume_ratio_max": 0.8,
+            "support_tolerance_pct": 0.02,
+        }
+        base = [
+            self._bar(0, 120, 121, 119, 120, 100),
+            self._bar(1, 116, 117, 114, 115, 100),
+            self._bar(2, 111, 112, 108, 110, 100),
+            self._bar(3, 101, 102, 98, 100, 80),
+            self._bar(4, 101, 108, 100, 106, 90),
+            self._bar(5, 107, 112, 105, 109, 95),
+            self._bar(6, 108, 109, 104, 106, 90),
+            self._bar(7, 101, 102, 99, 100, 70),
+        ]
+        cases = [
+            base + [self._bar(8, 102, 105, 101, 104, 90)],
+            base
+            + [
+                self._bar(8, 102, 105, 101, 104, 90),
+                self._bar(9, 105, 109, 104, 108, 110),
+                self._bar(10, 108, 110, 107, 109, 110),
+                self._bar(11, 109, 110, 105, 107, 70),
+            ],
+            base + [self._bar(8, 103, 115, 103, 114, 160)],
+        ]
+        for index, bars in enumerate(cases, start=1):
+            with self.subTest(stage=index):
+                self._assert_day_parity(
+                    "double_bottom",
+                    {"TEST": self._pattern_snapshot(bars)},
+                    params={"signal": signal},
+                )
+
+    def test_v_reversal_three_stages_match_python(self) -> None:
+        bars = []
+        for index in range(60):
+            close = 130.0 - index * 0.5
+            bars.append(self._bar(index, close + 1, close + 2, close - 1, close, 100, atr=3))
+        bars.extend(
+            [
+                self._bar(60, 91, 96, 90, 95, 220, atr=3),
+                self._bar(61, 95, 97, 94, 96, 120, atr=3),
+                self._bar(62, 96, 98, 95, 97, 120, atr=3),
+                self._bar(63, 97.5, 98, 96, 97, 100, atr=3),
+                self._bar(64, 97, 98.5, 96.5, 97.5, 100, atr=3),
+                self._bar(65, 97.5, 98, 96, 97, 100, atr=3),
+                self._bar(66, 99, 101, 98.5, 100, 160, atr=3),
+                self._bar(67, 100, 101, 99, 99.5, 100, atr=3),
+            ]
+        )
+        for end in (61, 63, 68):
+            with self.subTest(stage=end):
+                self._assert_day_parity(
+                    "v_reversal",
+                    {"TEST": self._pattern_snapshot(bars[:end])},
+                )
+
+    def test_rounded_bottom_three_stages_match_python(self) -> None:
+        params = {
+            "signal": {"min_lookback": 80, "max_lookback": 120, "min_r_squared": 0.70}
+        }
+        log_bottom = math.log(80)
+        curvature = (math.log(110) - log_bottom) / 0.25
+        bars = []
+        for index in range(101):
+            x = index / 100
+            close = math.exp(log_bottom + curvature * (x - 0.5) ** 2)
+            low = close * 0.99
+            high = close * 1.01
+            volume = 100.0
+            if index in (85, 92):
+                low = close * 0.94
+                volume = 70.0
+            if index in (83, 90):
+                volume = 140.0
+            if index == 100:
+                close, high, low, volume = 113.0, 114.0, 111.0, 170.0
+            bars.append(self._bar(index, close * 0.995, high, low, close, volume))
+        for end in (88, 95, 101):
+            with self.subTest(stage=end):
+                self._assert_day_parity(
+                    "rounded_bottom",
+                    {"TEST": self._pattern_snapshot(bars[:end])},
+                    params=params,
+                )
+
+    @staticmethod
+    def _bar(
+        offset: int,
+        open_price: float,
+        high: float,
+        low: float,
+        close: float,
+        volume: float,
+        *,
+        atr: float = 2.0,
+    ) -> dict[str, object]:
+        return {
+            "dt_ny": date(2025, 1, 1) + timedelta(days=offset),
+            "open": open_price,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+            "volume_sma_20": 100.0,
+            "atr_14": atr,
+        }
+
+    @staticmethod
+    def _pattern_snapshot(bars: list[dict[str, object]]) -> dict[str, object]:
+        return {
+            **bars[-1],
+            "ts": datetime(2025, 8, 1, 20, tzinfo=timezone.utc),
+            "position": 0.0,
+            "avg_entry_price": None,
+            "entry_signal_features": None,
+            "recent_bars": bars,
+        }
 
 
 if __name__ == "__main__":

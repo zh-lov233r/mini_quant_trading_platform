@@ -11,7 +11,11 @@ setup(
     ext_modules=[
         Pybind11Extension(
             "quant_kernel._native",
-            ["src/quant_kernel.cpp"],
+            [
+                "src/quant_kernel.cpp",
+                "src/pattern_kernel.cpp",
+                "src/double_bottom_kernel.cpp",
+            ],
             cxx_std=20,
             define_macros=[
                 (
