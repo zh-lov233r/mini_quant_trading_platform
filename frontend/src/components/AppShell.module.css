@@ -6,6 +6,7 @@
 .brandRow,.sidebarFooter,.navLink,.quickCreate,.mobileTopbar,.pageHeaderRow,.pageActions,.headerControls,.localeSwitch { display: flex; align-items: center; }
 .brandRow { min-height: 42px; justify-content: space-between; gap: 8px; }
 .brand { min-width: 0; color: #f8fafc; text-decoration: none; font-size: 13px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; overflow: hidden; }
+.brand:lang(en) { font-size: 9px; letter-spacing: .02em; }
 .iconButton,.mobileMenuButton { min-width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid rgba(71,85,105,.48); border-radius: 10px; background: rgba(15,23,42,.78); color: #cbd5e1; cursor: pointer; }
 .iconButton:hover,.mobileMenuButton:hover { border-color: rgba(45,212,191,.48); color: #99f6e4; }
 .primaryNav { display: grid; gap: 5px; }
@@ -55,6 +56,8 @@
   .mobileBrand { color: #f8fafc; text-decoration: none; font-size: 13px; font-weight: 800; letter-spacing: .06em; }
   .mobileLocaleSwitch { display: flex; width: 72px; }
   .mobileLocaleSwitch .localeButton { padding: 6px 4px; }
+  .mobileNav .navLabel,.mobileNav .quickCreateLabel { display: inline; }
+  .mobileNav .navLink,.mobileNav .quickCreate { min-height: 44px; justify-content: flex-start; }
   .pageHeader { padding: 13px 14px; }
   .pageHeaderRow { align-items: flex-start; flex-direction: column; }
   .title { font-size: 28px; }

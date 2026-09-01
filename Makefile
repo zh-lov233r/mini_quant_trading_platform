@@ -4,6 +4,7 @@ ROOT_DIR := $(CURDIR)
 BACKEND_DIR := $(ROOT_DIR)/backend
 FRONTEND_DIR := $(ROOT_DIR)/frontend
 PYTHON := $(ROOT_DIR)/.venv/bin/python
+SUPERVISE_BACKTEST_MANAGER = while true; do (cd "$(BACKEND_DIR)" && PAPER_TRADING_SCHEDULER_ENABLED=false PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false "$(PYTHON)" -m src.workers.backtest_worker_manager $(BACKTEST_WORKER_MANAGER_ARGS)); exit_code=$$?; echo "Backtest worker manager exited (code $$exit_code); restarting in 2 seconds." >&2; sleep 2; done
 
 .PHONY: help dev dev-agent-all dev-agent-safe dev-backend dev-frontend backtest-worker backtest-worker-manager backfill-daily check-data docker-build docker-up docker-down docker-logs
 
@@ -15,7 +16,7 @@ help:
 	@echo "  make dev-backend  Start FastAPI backend only (partial stack; no automatic backtest worker)"
 	@echo "  make dev-frontend Start Next.js frontend only (partial stack)"
 	@echo "  make backtest-worker Run the independent durable backtest worker"
-	@echo "  make backtest-worker-manager Run the on-demand manager (inherits BACKTEST_WORKER_CONCURRENCY)"
+	@echo "  make backtest-worker-manager Run and supervise the on-demand manager (inherits BACKTEST_WORKER_CONCURRENCY)"
 	@echo "  make backfill-daily Run the daily market-data catch-up flow"
 	@echo "  make check-data     Run read-only market-data integrity checks"
 	@echo "  make docker-build Build all Docker images"
@@ -25,7 +26,7 @@ help:
 
 dev:
 	@trap 'kill 0' INT TERM EXIT; \
-		cd "$(BACKEND_DIR)" && PAPER_TRADING_SCHEDULER_ENABLED=false PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false "$(PYTHON)" -m src.workers.backtest_worker_manager & \
+		$(SUPERVISE_BACKTEST_MANAGER) & \
 		cd "$(BACKEND_DIR)" && PAPER_TRADING_SCHEDULER_ENABLED=false PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false "$(PYTHON)" -m uvicorn src.main:app --reload --port 8000 & \
 		cd "$(FRONTEND_DIR)" && npm run dev & \
 		wait
@@ -37,7 +38,7 @@ dev-agent-safe:
 	@test -n "$(QUANT_AGENT_SERVICE_TOKEN)" || { echo "QUANT_AGENT_SERVICE_TOKEN is required"; exit 1; }
 	@test -n "$(AGENTOPS_PROJECT_ID)" || { echo "AGENTOPS_PROJECT_ID is required"; exit 1; }
 	@trap 'kill 0' INT TERM EXIT; \
-		cd "$(BACKEND_DIR)" && PAPER_TRADING_SCHEDULER_ENABLED=false PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false "$(PYTHON)" -m src.workers.backtest_worker_manager & \
+		$(SUPERVISE_BACKTEST_MANAGER) & \
 		cd "$(BACKEND_DIR)" && QUANT_AGENT_INTEGRATION_ENABLED=true QUANT_AGENT_SERVICE_TOKEN="$(QUANT_AGENT_SERVICE_TOKEN)" RESEARCH_WORKER_ENABLED=true PAPER_TRADING_SCHEDULER_ENABLED=false PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false "$(PYTHON)" -m uvicorn src.main:app --reload --port 8000 & \
 		cd "$(FRONTEND_DIR)" && NEXT_PUBLIC_AGENTOPS_API_BASE_URL=http://localhost:8100 NEXT_PUBLIC_AGENTOPS_PROJECT_ID="$(AGENTOPS_PROJECT_ID)" npm run dev & \
 		wait
@@ -52,7 +53,7 @@ backtest-worker:
 	@cd "$(BACKEND_DIR)" && PAPER_TRADING_SCHEDULER_ENABLED=false PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false "$(PYTHON)" -m src.workers.backtest_worker $(BACKTEST_WORKER_ARGS)
 
 backtest-worker-manager:
-	@cd "$(BACKEND_DIR)" && PAPER_TRADING_SCHEDULER_ENABLED=false PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false "$(PYTHON)" -m src.workers.backtest_worker_manager $(BACKTEST_WORKER_MANAGER_ARGS)
+	@$(SUPERVISE_BACKTEST_MANAGER)
 
 backfill-daily:
 	@cd "$(ROOT_DIR)" && "$(PYTHON)" backend/utils/run_daily_market_backfill.py $(BACKFILL_ARGS)

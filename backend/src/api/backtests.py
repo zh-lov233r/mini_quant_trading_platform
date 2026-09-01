@@ -45,6 +45,7 @@ from src.services.backtest_job_service import (
     request_backtest_cancel,
 )
 from src.services.backtest_worker_status_service import load_backtest_worker_status
+from src.services.backtest_task_service import TaskSource, TaskStage, list_backtest_tasks
 from src.services.data_service import get_historical_data
 from src.schemas.research import PointInTimeUniversePolicy
 from src.services.stock_basket_service import DEFAULT_COMMON_STOCK_BASKET_NAME
@@ -102,6 +103,42 @@ class BacktestWorkerStatusOut(BaseModel):
     last_worker_exit_code: Optional[int] = None
     heartbeat_stale_after_seconds: int
     checked_at: datetime
+
+
+class BacktestTaskOut(BaseModel):
+    task_key: str
+    source: TaskSource
+    stage: TaskStage
+    job_id: Optional[UUID] = None
+    run_id: Optional[UUID] = None
+    trial_id: Optional[UUID] = None
+    experiment_id: Optional[UUID] = None
+    candidate_id: Optional[UUID] = None
+    strategy_id: Optional[UUID] = None
+    strategy_name: Optional[str] = None
+    experiment_name: Optional[str] = None
+    trial_ordinal: Optional[int] = None
+    sample_kind: Optional[str] = None
+    cost_scenario: Optional[str] = None
+    window_start: Optional[date] = None
+    window_end: Optional[date] = None
+    progress: Optional[BacktestProgressOut] = None
+    attempt: int = 0
+    max_attempts: Optional[int] = None
+    requested_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    cancel_requested_at: Optional[datetime] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    cancellable: bool = False
+
+
+class BacktestTaskPageOut(BaseModel):
+    items: list[BacktestTaskOut]
+    total: int
+    counts: dict[str, int]
 
 
 class BacktestRunOut(BaseModel):
@@ -873,6 +910,19 @@ def list_backtests(
 @router.get("/worker-status", response_model=BacktestWorkerStatusOut)
 def get_backtest_worker_status(db: Session = Depends(get_db)):
     return BacktestWorkerStatusOut(**load_backtest_worker_status(db))
+
+
+@router.get("/tasks", response_model=BacktestTaskPageOut)
+def get_backtest_tasks(
+    db: Session = Depends(get_db),
+    source: Optional[TaskSource] = Query(default=None),
+    stage: Optional[TaskStage | Literal["active"]] = Query(default=None),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    return BacktestTaskPageOut(
+        **list_backtest_tasks(db, source=source, stage=stage, limit=limit, offset=offset)
+    )
 
 
 @router.delete("/{run_id}", response_model=BacktestDeleteOut)

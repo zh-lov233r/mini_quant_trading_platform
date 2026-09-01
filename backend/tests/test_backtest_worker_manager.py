@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+import subprocess
 import sys
 from unittest.mock import Mock
 import unittest
@@ -8,6 +10,28 @@ from src.workers.backtest_worker_manager import BacktestWorkerManagerRunner, res
 
 
 class BacktestWorkerManagerTests(unittest.TestCase):
+    def test_make_targets_supervise_manager_without_recursive_make(self) -> None:
+        repository = Path(__file__).resolve().parents[2]
+        manager = subprocess.run(
+            ["make", "-n", "backtest-worker-manager"],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        development = subprocess.run(
+            ["make", "-n", "dev"],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+
+        self.assertIn("while true", manager)
+        self.assertIn("restarting in 2 seconds", manager)
+        self.assertIn("while true", development)
+        self.assertNotIn("$(MAKE)", development)
+
     def test_restart_backoff_is_capped(self) -> None:
         self.assertEqual([restart_delay_seconds(value) for value in range(1, 7)], [1, 2, 5, 10, 30, 30])
 

@@ -107,6 +107,8 @@ Quant rejects usage updates from a different workflow run, stores the latest tot
 
 User cancellation first enters `cancel_requested`, prevents new trial claims, and lets already-running synchronous work finish safely before reaching `cancelled`. AgentOps cancellation propagates to a created or awaited Quant experiment.
 
+One trial can be cancelled independently with `POST /api/research/experiments/{experimentId}/trials/{trialId}/cancel`. A queued trial becomes `cancelled` immediately. A claimed trial records `cancelRequestedAt` and checks it again before creating a durable job; a trial already in the backtest queue reuses cooperative run cancellation. The operation is idempotent, never schedules a replacement or retry, and retains the trial as audit evidence. Cancelled or otherwise incomplete evidence is excluded from Pareto ranking. Cancelling verification through the task center also makes the owning candidate verification status terminal `cancelled`.
+
 On worker restart, orphaned trials are recovered without duplicating backtest evidence. Policy-stopped or cancelled experiments do not resume queued work. AgentOps persists external tool runs and resumes `waiting_external` polling after a Control Plane restart.
 
 Use these endpoints for inspection and terminal-run cleanup:
@@ -114,6 +116,8 @@ Use these endpoints for inspection and terminal-run cleanup:
 - `GET /api/research/experiments`
 - `GET /api/research/experiments/{experimentId}`
 - `GET /api/research/experiments/{experimentId}/trials`
+- `POST /api/research/experiments/{experimentId}/trials/{trialId}/cancel`
+- `GET /api/research/worker-status`
 - `GET /api/research/experiments/{experimentId}/rounds`
 - `GET /api/research/experiments/{experimentId}/candidates`
 - `GET /api/research/experiments/{experimentId}/report`

@@ -69,6 +69,7 @@ export default function AppShell({
     strategies: messages.nav.strategies,
     stockBaskets: messages.nav.stockBaskets,
     backtests: messages.nav.backtests,
+    backtestTasks: messages.nav.backtestTasks,
     research: messages.nav.research,
     paperTrading: messages.nav.paperTrading,
   };
@@ -165,6 +166,7 @@ function NavIcon({ navKey, className }: { navKey: WorkspaceNavKey; className?: s
   if (navKey === "strategies") return <svg {...common}><path d="m12 3 9 5-9 5-9-5 9-5Z" /><path d="m3 12 9 5 9-5" /><path d="m3 16 9 5 9-5" /></svg>;
   if (navKey === "stockBaskets") return <svg {...common}><path d="M4 8h16l-1.5 12h-13L4 8Z" /><path d="m8 8 4-5 4 5" /><path d="M9 12v4M15 12v4" /></svg>;
   if (navKey === "backtests") return <svg {...common}><path d="M4 19V5" /><path d="M4 19h16" /><path d="m7 15 4-4 3 2 5-7" /></svg>;
+  if (navKey === "backtestTasks") return <svg {...common}><path d="M5 5h14v14H5z" /><path d="M8 9h8M8 13h5M8 17h7" /></svg>;
   if (navKey === "research") return <svg {...common}><path d="M9 3h6" /><path d="M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3" /><path d="M8 15h8" /></svg>;
   return <svg {...common}><path d="M3 7h18v12H3z" /><path d="M16 11h5v4h-5a2 2 0 0 1 0-4Z" /><path d="M5 7V5h13v2" /></svg>;
 }

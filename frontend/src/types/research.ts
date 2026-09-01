@@ -173,4 +173,15 @@ export interface ExperimentTrial {
   attempt: number;
   errorCode: string | null;
   errorMessage: string | null;
+  cancelRequestedAt: string | null;
+}
+
+export interface ResearchWorkerStatus {
+  enabled: boolean;
+  state: "disabled" | "idle" | "running" | "stopping" | "failed";
+  configured_concurrency: number;
+  active_trials: number;
+  available_slots: number;
+  queued_trials: number;
+  checked_at: string;
 }

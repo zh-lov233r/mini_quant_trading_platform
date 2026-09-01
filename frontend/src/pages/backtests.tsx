@@ -2,6 +2,7 @@ import type { CSSProperties, FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { createBacktest, deleteBacktest, getBacktestWorkerStatus, listBacktests } from "@/api/backtests";
 import { listStockBaskets } from "@/api/stock-baskets";
@@ -79,6 +80,11 @@ const BACKTEST_FORM_DRAFT_STORAGE_KEY = "backtests-page-form-draft-v1";
 const DEFAULT_RUN_PAGE_SIZE = 10;
 const RUN_PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
 const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled"]);
+
+type DeleteNotice = {
+  tone: "success" | "error";
+  message: string;
+};
 
 type BacktestFormDraft = {
   strategyId: string;
@@ -237,7 +243,7 @@ export default function BacktestsPage() {
   const [runPageSize, setRunPageSize] = useState(DEFAULT_RUN_PAGE_SIZE);
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
   const [pendingDeleteRun, setPendingDeleteRun] = useState<BacktestRunOut | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteNotice, setDeleteNotice] = useState<DeleteNotice | null>(null);
 
   const [strategyId, setStrategyId] = useState("");
   const [basketId, setBasketId] = useState("");
@@ -248,6 +254,12 @@ export default function BacktestsPage() {
   const [commissionBps, setCommissionBps] = useState(1);
   const [commissionMin, setCommissionMin] = useState(1);
   const [slippageBps, setSlippageBps] = useState(5);
+
+  useEffect(() => {
+    if (!deleteNotice) return;
+    const timer = window.setTimeout(() => setDeleteNotice(null), 3200);
+    return () => window.clearTimeout(timer);
+  }, [deleteNotice]);
 
   useEffect(() => {
     if (router.isReady && preselectedStrategyId && !loading) setBacktestDialogOpen(true);
@@ -536,22 +548,31 @@ export default function BacktestsPage() {
     }
   };
 
-  const handleDeleteRun = async () => {
+  const handleDeleteRun = () => {
     const run = pendingDeleteRun;
     if (!run) return;
     if (!TERMINAL_RUN_STATUSES.has(run.status)) return;
+    const runLabel = run.strategy_name || run.id;
+    setPendingDeleteRun(null);
     setDeletingRunId(run.id);
-    setDeleteError(null);
-    try {
-      await deleteBacktest(run.id);
-      setRuns((current) => current.filter((item) => item.id !== run.id));
-      setSubmitSuccessRun((current) => current?.id === run.id ? null : current);
-      setPendingDeleteRun(null);
-    } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setDeletingRunId(null);
-    }
+    setDeleteNotice(null);
+    void deleteBacktest(run.id)
+      .then(() => {
+        setRuns((current) => current.filter((item) => item.id !== run.id));
+        setSubmitSuccessRun((current) => current?.id === run.id ? null : current);
+        setDeleteNotice({
+          tone: "success",
+          message: isZh ? `已删除回测记录“${runLabel}”。` : `Deleted backtest “${runLabel}”.`,
+        });
+      })
+      .catch((err) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        setDeleteNotice({
+          tone: "error",
+          message: isZh ? `删除“${runLabel}”失败：${detail}` : `Failed to delete “${runLabel}”: ${detail}`,
+        });
+      })
+      .finally(() => setDeletingRunId(null));
   };
 
   return (
@@ -584,12 +605,42 @@ export default function BacktestsPage() {
         cancelLabel={isZh ? "取消" : "Cancel"}
         confirmLabel={deletingRunId ? (isZh ? "删除中…" : "Deleting…") : (isZh ? "确认删除" : "Delete backtest")}
         confirming={deletingRunId !== null}
-        onConfirm={() => void handleDeleteRun()}
+        onConfirm={handleDeleteRun}
       >
         {isZh
           ? "将永久删除这条回测及其交易、信号和净值快照。策略、行情数据与共享支撑/压力数据会保留。"
           : "This permanently deletes the run and its trades, signals, and equity snapshots. The strategy, market data, and shared support/resistance data are retained."}
       </WorkspaceConfirmDialog>
+
+      {deleteNotice && typeof document !== "undefined" ? createPortal((
+        <div
+          className={styles.deleteNotice}
+          role={deleteNotice.tone === "error" ? "alert" : "status"}
+          aria-live={deleteNotice.tone === "error" ? "assertive" : "polite"}
+          style={{
+            position: "fixed",
+            top: "50%",
+            left: "50%",
+            zIndex: 130,
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 12,
+            width: "min(420px, calc(100vw - 32px))",
+            padding: "16px 18px",
+            transform: "translate(-50%, -50%)",
+            border: `1px solid ${deleteNotice.tone === "error" ? "rgba(251,113,133,.72)" : "rgba(52,211,153,.68)"}`,
+            borderRadius: 13,
+            background: deleteNotice.tone === "error" ? "rgba(127,29,29,.97)" : "rgba(6,78,59,.97)",
+            color: deleteNotice.tone === "error" ? "#fee2e2" : "#d1fae5",
+            boxShadow: "0 18px 54px rgba(2,6,23,.58)",
+          }}
+        >
+          <span aria-hidden="true" style={{ fontSize: 18, fontWeight: 900 }}>
+            {deleteNotice.tone === "error" ? "!" : "✓"}
+          </span>
+          <span style={{ flex: 1, lineHeight: 1.5 }}>{deleteNotice.message}</span>
+        </div>
+      ), document.body) : null}
 
       {!loading && (workerStatusUnavailable || workerStatus?.automation_available === false) ? (
         <div
@@ -1144,7 +1195,6 @@ export default function BacktestsPage() {
                 </div>
               ) : null}
 
-              {deleteError ? <p role="alert" style={{ color: "#fda4af" }}>{deleteError}</p> : null}
               {runs.length === 0 ? (
                 <div
                   style={{
@@ -1364,9 +1414,9 @@ export default function BacktestsPage() {
                         <button
                           type="button"
                           aria-label={isZh ? `删除 ${run.strategy_name || "回测"}` : `Delete ${run.strategy_name || "backtest"}`}
-                          disabled={deletingRunId === run.id}
+                          disabled={deletingRunId !== null}
                           onClick={() => {
-                            setDeleteError(null);
+                            setDeleteNotice(null);
                             setPendingDeleteRun(run);
                           }}
                           style={{
@@ -1380,8 +1430,8 @@ export default function BacktestsPage() {
                             background: "rgba(159,18,57,.22)",
                             color: "#fecdd3",
                             fontWeight: 800,
-                            cursor: deletingRunId === run.id ? "wait" : "pointer",
-                            opacity: deletingRunId === run.id ? 0.65 : 1,
+                            cursor: deletingRunId !== null ? "wait" : "pointer",
+                            opacity: deletingRunId !== null ? 0.65 : 1,
                           }}
                         >
                           {deletingRunId === run.id

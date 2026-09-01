@@ -1,3 +1,17 @@
+.deleteNotice {
+  pointer-events: none;
+  animation: deleteNoticeFade 3200ms ease forwards;
+}
+
+@keyframes deleteNoticeFade {
+  0%, 72% { opacity: 1; transform: translate(-50%, -50%); }
+  100% { opacity: 0; transform: translate(-50%, calc(-50% - 8px)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deleteNotice { animation: none; }
+}
+
 .paginationBar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);

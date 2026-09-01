@@ -376,8 +376,8 @@ def main() -> int:
         processes.append(quant_backend)
         backtest_manager = start_process(
             "Backtest Worker Manager",
-            [str(quant_python), "-m", "src.workers.backtest_worker_manager"],
-            cwd=quant_repo / "backend",
+            ["make", "--no-print-directory", "backtest-worker-manager"],
+            cwd=quant_repo,
             env=quant_env,
         )
         processes.append(backtest_manager)

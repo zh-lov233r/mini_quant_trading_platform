@@ -14,6 +14,7 @@ export const zhCNMessages = {
     stockBaskets: "股票池",
     newStrategy: "创建策略",
     backtests: "回测",
+    backtestTasks: "回测任务",
     research: "Agent 研究",
     paperTrading: "Paper Trading",
   },

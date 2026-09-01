@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { deleteBacktest, getBacktestSupportResistance } from "./backtests";
-import { deleteResearchBacktest } from "./research";
+import { deleteBacktest, getBacktestSupportResistance, listBacktestTasks } from "./backtests";
+import { cancelResearchTrial, deleteResearchBacktest } from "./research";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -35,6 +35,41 @@ describe("backtest deletion clients", () => {
       "/api/research/experiments/experiment%2Fid/backtests/run%2Fid",
     );
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "DELETE" });
+  });
+});
+
+describe("unified task center clients", () => {
+  it("uses server-side source, stage, and pagination filters", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ items: [], total: 0, counts: {} }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listBacktestTasks({ source: "research", stage: "active", limit: 50, offset: 100 });
+
+    const url = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      source: "research",
+      stage: "active",
+      limit: "50",
+      offset: "100",
+    });
+  });
+
+  it("cancels a trial only through its owning experiment", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ id: "trial/id", status: "cancelled" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await cancelResearchTrial("experiment/id", "trial/id");
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      "/api/research/experiments/experiment%2Fid/trials/trial%2Fid/cancel",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST" });
   });
 });
 

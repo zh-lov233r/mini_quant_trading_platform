@@ -35,9 +35,15 @@ API 在同一事务创建 `strategy_runs` 与 `backtest_jobs`，即使自动执�
 
 每个回测统一占用一个执行槽。单个 run 内部仍按交易日和标的串行，因此该设置提升多个独立回测的吞吐量，不会缩短单个回测耗时。两个全市场或长周期任务可能接近单任务两倍的内存压力；已记录的单任务验收基线峰值是 16.1 GB。应观测 peak RSS，出现内存压力时把并发降到 `1`。全局只应由 advisory-lock leader manager 启动这一组 worker；自动 manager 运行时不要额外执行 `make backtest-worker` 或其他诊断 worker，否则会突破配置的全局槽位数。
 
-`backtest_worker_managers` 中的 manager 每 5 秒心跳。leader 心跳超过 15 秒即视为自动执行不可用。空队列时，只要 manager 健康，即使没有 worker 子进程，平台仍为 ready。`make dev`、`make dev-agent-safe`、`make dev-agent-all` 和 Docker Compose 都会监管 manager，并强制关闭两项 paper scheduler 配置。`make dev-backend`、`make dev-frontend` 和直接运行 `uvicorn` 属于部分启动方式，不保证自动消费队列。`make backtest-worker` 仍保留为显式诊断/运维命令。
+`backtest_worker_managers` 中的 manager 每 5 秒心跳。leader 心跳超过 15 秒即视为自动执行不可用。空队列时，只要 manager 健康，即使没有 worker 子进程，平台仍为 ready。`make dev`、`make dev-agent-safe` 和 `make backtest-worker-manager` 会监管 manager，并在意外退出 2 秒后自动重启；`make dev-agent-all` 与 Docker Compose 使用各自的进程监管。所有完整启动路径都会强制关闭两项 paper scheduler 配置。`make dev-backend`、`make dev-frontend` 和直接运行 `uvicorn` 属于部分启动方式，不保证自动消费队列。`make backtest-worker` 仍保留为显式诊断/运维命令。
 
 worker 使用 `FOR UPDATE SKIP LOCKED` claim，维护 heartbeat/lease，每个交易日检查取消，重试前只清理当前 run 的未完成明细，并在重试耗尽时同步结束关联 research trial。
+
+## 统一任务中心
+
+`/backtest-tasks` 是现有研究调度、`strategy_runs`、`backtest_jobs` 和 verification candidate 的只读投影。`GET /api/backtests/tasks` 合并手动回测、每个研究 trial（包括尚未进入回测队列的 trial）和候选验证任务；已经关联 run/job 的 trial 仍只出现一行。活动任务排在终态历史之前，来源/阶段筛选和 25/50/100 条分页均由服务端执行。
+
+页面有意并列展示两层健康状态。`GET /api/research/worker-status` 解释 trial 是否仍在等待研究调度；`GET /api/backtests/worker-status` 解释已经入队的 run 是否具备执行容量。仅当当前结果页含有非终态任务时，任务列表才每 4 秒轮询。取消继续使用现有协作式回测安全边界；任务中心不会创建第二套队列，也不改变信号、成交、成本或持久化语义。
 
 ## 进度语义
 
@@ -46,6 +52,7 @@ worker 使用 `FOR UPDATE SKIP LOCKED` claim，维护 heartbeat/lease，每个�
 ## 增量 API
 
 - `GET /api/backtests/{id}/summary`
+- `GET /api/backtests/tasks`
 - `GET /api/backtests/worker-status`
 - `GET /api/backtests/{id}/equity?max_points=1500&shape=chart`
 - `GET /api/backtests/{id}/comparison-curves?max_points=1500`
@@ -69,7 +76,7 @@ worker 使用 `FOR UPDATE SKIP LOCKED` claim，维护 heartbeat/lease，每个�
 
 ## 数据库上线与恢复
 
-项目没有 Alembic。apply 前必须确认并记录准确目标数据库，执行数据库原生备份，检查已有约束/索引，并通过 `ON_ERROR_STOP` 执行 SQL。脚本增加 `backtest_jobs`、`backtest_worker_managers`、可空 `instrument_id` 列、外键以及队列/manager 索引；不会预先增加 signals/transactions cursor 索引，也不会重写历史明细，旧 run 默认解释为 `full`。
+项目没有 Alembic。apply 前必须确认并记录准确目标数据库，执行数据库原生备份，检查已有约束/索引，并通过 `ON_ERROR_STOP` 执行 SQL。脚本增加 `backtest_jobs`、`backtest_worker_managers`、可空 `instrument_id` 列和可空 `experiment_trials.cancel_requested_at`，以及所需外键和队列/manager 索引；取消标记无需历史回填。脚本不会预先增加 signals/transactions cursor 索引，也不会重写历史明细，旧 run 默认解释为 `full`。
 
 如果上线失败，先停止新 job 生产者和 backtest worker，再把新任务路由回 v1。应用回滚期间保留附加对象。若以后确实需要删除 schema，必须先证明所有应用版本都不再引用，并在任何完整性异常时从备份恢复；正常发布不执行破坏性回滚。
 

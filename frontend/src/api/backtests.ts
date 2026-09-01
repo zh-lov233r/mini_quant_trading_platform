@@ -11,6 +11,9 @@ import type {
   BacktestSummaryOut,
   BacktestTransactionOut,
   BacktestWorkerStatus,
+  BacktestTaskPage,
+  BacktestTaskSource,
+  BacktestTaskStage,
   SupportResistanceBacktestOut,
 } from "@/types/backtest";
 
@@ -73,6 +76,20 @@ export function getBacktestWorkerStatus(): Promise<BacktestWorkerStatus> {
   return http<BacktestWorkerStatus>("/api/backtests/worker-status", {
     method: "GET",
   });
+}
+
+export function listBacktestTasks(filters: {
+  source?: BacktestTaskSource;
+  stage?: BacktestTaskStage | "active";
+  limit?: number;
+  offset?: number;
+} = {}): Promise<BacktestTaskPage> {
+  const query = new URLSearchParams();
+  if (filters.source) query.set("source", filters.source);
+  if (filters.stage) query.set("stage", filters.stage);
+  query.set("limit", String(filters.limit ?? 25));
+  query.set("offset", String(filters.offset ?? 0));
+  return http<BacktestTaskPage>(`/api/backtests/tasks?${query.toString()}`, { method: "GET" });
 }
 
 export function getBacktest(runId: string): Promise<BacktestDetailOut> {

@@ -286,6 +286,8 @@ def request_backtest_cancel(db: Session, run_id: UUID) -> BacktestJob:
             run.error_message = "backtest cancelled before execution"
         if run is not None:
             experiment_id = _finalize_linked_trial(db, job, run)
+        if job.source == "verification":
+            _cancel_candidate_verification(db, dict(job.payload or {}))
     db.commit()
     _finalize_research_experiment(db, experiment_id)
     db.refresh(job)
@@ -572,6 +574,22 @@ def _fail_candidate_verification(db: Session, payload: dict[str, Any], message: 
     candidate.aggregate_metrics = aggregate
 
 
+def _cancel_candidate_verification(db: Session, payload: dict[str, Any]) -> None:
+    candidate_id = payload.get("candidate_id")
+    if not candidate_id:
+        return
+    candidate = db.get(ExperimentCandidate, UUID(str(candidate_id)))
+    if candidate is None:
+        return
+    aggregate = dict(candidate.aggregate_metrics or {})
+    verification = dict(aggregate.get("verification") or {})
+    verification.update(
+        {"status": "cancelled", "cancelledAt": datetime.now(UTC).isoformat()}
+    )
+    aggregate["verification"] = verification
+    candidate.aggregate_metrics = aggregate
+
+
 def execute_backtest_job(
     job_id: UUID,
     *,
@@ -675,6 +693,8 @@ def execute_backtest_job(
             job.status = "cancelled"
             job.error_message = str(exc)
             job.progress = _job_progress(job, "cancelled", percent=None, preserve=True)
+            if job.source == "verification":
+                _cancel_candidate_verification(db, dict(job.payload or {}))
         elif isinstance(exc, BacktestVerificationError):
             job.status = "failed"
             job.error_message = str(exc)[:2000]

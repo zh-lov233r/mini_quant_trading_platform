@@ -61,6 +61,54 @@ export interface BacktestWorkerStatus {
   checked_at: string;
 }
 
+export type BacktestTaskSource = "manual" | "research" | "verification";
+export type BacktestTaskStage =
+  | "waiting_research"
+  | "queued"
+  | "preparing"
+  | "running"
+  | "finalizing"
+  | "cancel_requested"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface BacktestTask {
+  task_key: string;
+  source: BacktestTaskSource;
+  stage: BacktestTaskStage;
+  job_id?: string | null;
+  run_id?: string | null;
+  trial_id?: string | null;
+  experiment_id?: string | null;
+  candidate_id?: string | null;
+  strategy_id?: string | null;
+  strategy_name?: string | null;
+  experiment_name?: string | null;
+  trial_ordinal?: number | null;
+  sample_kind?: string | null;
+  cost_scenario?: string | null;
+  window_start?: string | null;
+  window_end?: string | null;
+  progress?: BacktestProgress | null;
+  attempt: number;
+  max_attempts?: number | null;
+  requested_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  updated_at?: string | null;
+  cancel_requested_at?: string | null;
+  error_code?: string | null;
+  error_message?: string | null;
+  cancellable: boolean;
+}
+
+export interface BacktestTaskPage {
+  items: BacktestTask[];
+  total: number;
+  counts: Record<string, number>;
+}
+
 export interface BacktestRunOut {
   id: string;
   strategy_id: string;

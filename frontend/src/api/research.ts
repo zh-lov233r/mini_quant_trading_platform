@@ -4,11 +4,23 @@ import type {
   ExperimentRound,
   ExperimentTrial,
   ResearchExperiment,
+  ResearchWorkerStatus,
 } from "@/types/research";
 import type { BacktestDeleteResult } from "@/types/backtest";
 
 export function listResearchExperiments(): Promise<ResearchExperiment[]> {
   return http<ResearchExperiment[]>("/api/research/experiments", { method: "GET" });
+}
+
+export function getResearchWorkerStatus(): Promise<ResearchWorkerStatus> {
+  return http<ResearchWorkerStatus>("/api/research/worker-status", { method: "GET" });
+}
+
+export function cancelResearchTrial(experimentId: string, trialId: string): Promise<ExperimentTrial> {
+  return http<ExperimentTrial>(
+    `/api/research/experiments/${encodeURIComponent(experimentId)}/trials/${encodeURIComponent(trialId)}/cancel`,
+    { method: "POST" },
+  );
 }
 
 export function getResearchExperiment(id: string): Promise<ResearchExperiment> {

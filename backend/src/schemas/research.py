@@ -501,6 +501,7 @@ class TrialOut(BaseModel):
     attempt: int
     error_code: str | None = Field(default=None, alias="errorCode")
     error_message: str | None = Field(default=None, alias="errorMessage")
+    cancel_requested_at: datetime | None = Field(default=None, alias="cancelRequestedAt")
 
 
 class ExperimentOut(BaseModel):

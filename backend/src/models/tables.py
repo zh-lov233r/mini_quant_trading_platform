@@ -876,6 +876,7 @@ class ExperimentTrial(Base):
     attempt = Column(Integer, nullable=False, default=0)
     error_code = Column(String(64))
     error_message = Column(Text)
+    cancel_requested_at = Column(DateTime(timezone=True))
     started_at = Column(DateTime(timezone=True))
     finished_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

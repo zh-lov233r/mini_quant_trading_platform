@@ -107,6 +107,8 @@ Quant 会拒绝来自其他 workflow run 的用量更新，把最新累计值保
 
 用户取消会先进入 `cancel_requested`，阻止领取新 trial，并允许运行中的同步工作安全结束后进入 `cancelled`。AgentOps 取消会传播到已经创建或正在等待的 Quant 实验。
 
+单个 trial 可通过 `POST /api/research/experiments/{experimentId}/trials/{trialId}/cancel` 独立取消。queued trial 立即进入 `cancelled`；已领取但尚未建立 durable job 的 trial 会记录 `cancelRequestedAt`，并在入队前再次检查；已经进入回测队列的 trial 复用协作式 run 取消。操作幂等，不补跑、不重试，并保留 trial 审计证据；已取消或其他证据不完整的候选不会进入 Pareto 排名。从任务中心取消 verification 时，也会把所属候选的 verification 状态收尾为 `cancelled`。
+
 worker 重启后会恢复遗留 trial，不重复创建回测证据。已经因策略停止或取消的实验不会恢复排队工作。AgentOps 持久化 external tool run，并在 Control Plane 重启后恢复 `waiting_external` 轮询。
 
 使用以下接口检查结果并清理终态运行记录：
@@ -114,6 +116,8 @@ worker 重启后会恢复遗留 trial，不重复创建回测证据。已经因�
 - `GET /api/research/experiments`
 - `GET /api/research/experiments/{experimentId}`
 - `GET /api/research/experiments/{experimentId}/trials`
+- `POST /api/research/experiments/{experimentId}/trials/{trialId}/cancel`
+- `GET /api/research/worker-status`
 - `GET /api/research/experiments/{experimentId}/rounds`
 - `GET /api/research/experiments/{experimentId}/candidates`
 - `GET /api/research/experiments/{experimentId}/report`

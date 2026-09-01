@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS experiment_trials (
     attempt INTEGER NOT NULL DEFAULT 0,
     error_code VARCHAR(64),
     error_message TEXT,
+    cancel_requested_at TIMESTAMPTZ,
     started_at TIMESTAMPTZ,
     finished_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -132,6 +133,9 @@ CREATE TABLE IF NOT EXISTS experiment_trials (
 
 ALTER TABLE experiment_trials
     ADD COLUMN IF NOT EXISTS candidate_id UUID REFERENCES experiment_candidates(id) ON DELETE CASCADE;
+
+ALTER TABLE experiment_trials
+    ADD COLUMN IF NOT EXISTS cancel_requested_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_experiment_trials_candidate
     ON experiment_trials (candidate_id, sample_kind, cost_scenario);

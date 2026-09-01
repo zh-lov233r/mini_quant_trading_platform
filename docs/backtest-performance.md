@@ -35,9 +35,15 @@ The API atomically creates a `strategy_runs` row and `backtest_jobs` row, then r
 
 Every backtest consumes one equal execution slot. A single run still processes trading days and symbols serially, so this setting improves throughput for independent runs rather than the latency of one run. Two full-universe or long-window jobs may therefore approach roughly twice the memory pressure of one job; the recorded single-run acceptance baseline is 16.1 GB. Observe peak RSS and switch concurrency to `1` if the host is under memory pressure. Only the advisory-lock leader manager should run the worker group. Do not run `make backtest-worker` or another diagnostic worker alongside automatic manager execution, because it creates additional slots beyond the configured global count.
 
-Manager rows in `backtest_worker_managers` heartbeat every five seconds. A leader heartbeat older than 15 seconds makes automation unavailable. An idle platform is ready with a healthy manager and no child worker. `make dev`, `make dev-agent-safe`, `make dev-agent-all`, and Docker Compose supervise the manager and force both paper scheduler settings off. `make dev-backend`, `make dev-frontend`, and direct `uvicorn` are partial-stack entry points and do not guarantee automatic queue consumption. `make backtest-worker` remains an explicit diagnostic/operator command.
+Manager rows in `backtest_worker_managers` heartbeat every five seconds. A leader heartbeat older than 15 seconds makes automation unavailable. An idle platform is ready with a healthy manager and no child worker. `make dev`, `make dev-agent-safe`, and `make backtest-worker-manager` supervise the manager and restart it two seconds after an unexpected exit; `make dev-agent-all` and Docker Compose provide their own process supervision. All full-stack paths force both paper scheduler settings off. `make dev-backend`, `make dev-frontend`, and direct `uvicorn` are partial-stack entry points and do not guarantee automatic queue consumption. `make backtest-worker` remains an explicit diagnostic/operator command.
 
 Workers claim with `FOR UPDATE SKIP LOCKED`, heartbeat their lease, check cancellation each trade day, clear only the current run's incomplete details before retry, and mark linked research trials terminal when retries are exhausted.
+
+## Unified task center
+
+`/backtest-tasks` is a read-only projection over the existing research scheduler, `strategy_runs`, `backtest_jobs`, and verification candidates. `GET /api/backtests/tasks` returns manual runs, every research trial (including trials not yet submitted to the backtest queue), and candidate verification work without duplicating a trial that already owns a run/job. Active work sorts before terminal history; source/stage filters and 25/50/100-row pagination are applied by the server.
+
+The page intentionally shows two health layers. `GET /api/research/worker-status` explains whether a trial is still waiting for research scheduling; `GET /api/backtests/worker-status` explains whether an already-queued run has execution capacity. The task list polls every four seconds only while its current result page contains a non-terminal task. Cancellation continues to use the existing cooperative backtest boundary, and the task center does not introduce a second queue or change signal, fill, cost, or persistence semantics.
 
 ## Progress semantics
 
@@ -46,6 +52,7 @@ Progress phases are `queued` (0%), `preparing` (0%), `running` (completed tradin
 ## Incremental API
 
 - `GET /api/backtests/{id}/summary`
+- `GET /api/backtests/tasks`
 - `GET /api/backtests/worker-status`
 - `GET /api/backtests/{id}/equity?max_points=1500&shape=chart`
 - `GET /api/backtests/{id}/comparison-curves?max_points=1500`
@@ -69,7 +76,7 @@ Rendering changes do not alter backtest calculations, T+1 execution, costs, corp
 
 ## Database rollout and recovery
 
-The project has no Alembic workflow. Before apply, resolve and record the exact target database, take a database-native backup, review current constraints/indexes, and run the SQL with `ON_ERROR_STOP`. The script adds `backtest_jobs`, `backtest_worker_managers`, nullable `instrument_id` columns, foreign keys, and the queue/manager indexes. It deliberately does not add speculative signal/transaction cursor indexes. It does not rewrite historical detail; legacy runs are interpreted as `full`.
+The project has no Alembic workflow. Before apply, resolve and record the exact target database, take a database-native backup, review current constraints/indexes, and run the SQL with `ON_ERROR_STOP`. The scripts add `backtest_jobs`, `backtest_worker_managers`, nullable `instrument_id` columns, and nullable `experiment_trials.cancel_requested_at`, plus the required foreign keys and queue/manager indexes. The trial cancellation marker requires no historical backfill. The scripts deliberately do not add speculative signal/transaction cursor indexes or rewrite historical detail; legacy runs are interpreted as `full`.
 
 If rollout fails, stop new job producers and the backtest worker, then route new work to v1. Retain additive objects during application rollback. If schema removal is required later, first prove no application version references the objects and restore from backup on any data-integrity issue; do not use a destructive rollback during the normal release.
 

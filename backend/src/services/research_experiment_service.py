@@ -31,7 +31,7 @@ from src.models.tables import (
     Transaction,
 )
 from src.schemas.research import ExperimentSpec, ExperimentTokenUsageUpdate
-from src.services.backtest_job_service import enqueue_backtest_job
+from src.services.backtest_job_service import enqueue_backtest_job, request_backtest_cancel
 from src.services.backtest_universe_service import (
     resolve_backtest_universe,
     resolve_point_in_time_universe,
@@ -1070,6 +1070,55 @@ def _commit_trial_and_finalize_experiment(db: Session, experiment: ResearchExper
         advance_effectiveness_study(db, current_id)
 
 
+def cancel_trial(
+    db: Session,
+    experiment_id: UUID | str,
+    trial_id: UUID | str,
+) -> ExperimentTrial:
+    trial = db.execute(
+        select(ExperimentTrial)
+        .where(
+            ExperimentTrial.id == UUID(str(trial_id)),
+            ExperimentTrial.experiment_id == UUID(str(experiment_id)),
+        )
+        .with_for_update()
+    ).scalar_one_or_none()
+    if trial is None:
+        raise ExperimentNotFoundError(str(trial_id))
+    if trial.status in {"completed", "failed", "cancelled"}:
+        return trial
+
+    now = datetime.now(UTC)
+    trial.cancel_requested_at = trial.cancel_requested_at or now
+    job = db.execute(
+        select(BacktestJob).where(BacktestJob.experiment_trial_id == trial.id)
+    ).scalar_one_or_none()
+    if job is not None:
+        db.flush()
+        request_backtest_cancel(db, job.run_id)
+        db.refresh(trial)
+        return trial
+
+    if trial.status == "queued":
+        trial.status = "cancelled"
+        trial.error_code = "cancelled"
+        trial.error_message = "research trial cancelled before backtest queueing"
+        trial.finished_at = now
+        if trial.backtest_run_id is not None:
+            run = db.get(StrategyRun, trial.backtest_run_id)
+            if run is not None:
+                run.status = "cancelled"
+                run.finished_at = now
+                run.error_message = trial.error_message
+        experiment = db.get(ResearchExperiment, trial.experiment_id)
+        assert experiment is not None
+        _commit_trial_and_finalize_experiment(db, experiment)
+    else:
+        db.commit()
+    db.refresh(trial)
+    return trial
+
+
 def _recovery_stop_code(experiment: ResearchExperiment | None) -> str | None:
     if experiment is None:
         return None
@@ -1237,6 +1286,28 @@ def _prepare_backtest_run(db: Session, trial: ExperimentTrial, experiment: Resea
     return run
 
 
+def _finish_cancelled_claim(
+    db: Session,
+    trial: ExperimentTrial,
+    experiment: ResearchExperiment,
+) -> bool:
+    if trial.cancel_requested_at is None:
+        return False
+    now = datetime.now(UTC)
+    trial.status = "cancelled"
+    trial.error_code = "cancelled"
+    trial.error_message = "research trial cancelled before backtest queueing"
+    trial.finished_at = now
+    if trial.backtest_run_id is not None:
+        run = db.get(StrategyRun, trial.backtest_run_id)
+        if run is not None:
+            run.status = "cancelled"
+            run.finished_at = now
+            run.error_message = trial.error_message
+    _commit_trial_and_finalize_experiment(db, experiment)
+    return True
+
+
 def process_next_trial() -> bool:
     db = SessionLocal()
     try:
@@ -1246,6 +1317,9 @@ def process_next_trial() -> bool:
         experiment = db.get(ResearchExperiment, trial.experiment_id)
         assert experiment is not None
         try:
+            db.refresh(trial)
+            if _finish_cancelled_claim(db, trial, experiment):
+                return True
             manifest = experiment.run_manifest or {}
             universe = manifest.get("universe") or {}
             symbols = list(universe.get("symbols") or [])
@@ -1296,6 +1370,13 @@ def process_next_trial() -> bool:
                 raise ExperimentDataChangedError(experiment.error_message)
 
             run = _prepare_backtest_run(db, trial, experiment)
+            trial = db.execute(
+                select(ExperimentTrial)
+                .where(ExperimentTrial.id == trial.id)
+                .with_for_update()
+            ).scalar_one()
+            if _finish_cancelled_claim(db, trial, experiment):
+                return True
             log.info(
                 "Research backtest queued workflow_run_id=%s experiment_id=%s trial_id=%s backtest_id=%s",
                 experiment.workflow_run_id,
@@ -1372,6 +1453,24 @@ class ResearchExperimentWorker:
         self._active: set[asyncio.Task[bool]] = set()
         self._stopping = False
         self._concurrency = max(1, int(os.getenv("RESEARCH_WORKER_CONCURRENCY", "2")))
+
+    def status_snapshot(self, *, enabled: bool) -> dict[str, Any]:
+        active = sum(not task.done() for task in self._active)
+        if not enabled:
+            state = "disabled"
+        elif self._stopping:
+            state = "stopping"
+        elif self._loop_task is None or self._loop_task.done():
+            state = "failed"
+        else:
+            state = "running" if active else "idle"
+        return {
+            "enabled": enabled,
+            "state": state,
+            "configured_concurrency": self._concurrency,
+            "active_trials": active,
+            "available_slots": max(self._concurrency - active, 0) if state in {"idle", "running"} else 0,
+        }
 
     async def start(self) -> None:
         if self._loop_task is not None:

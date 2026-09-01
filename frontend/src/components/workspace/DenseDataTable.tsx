@@ -56,6 +56,7 @@ export interface DenseDataTableProps<T extends RowData> {
   paginationMode?: "client" | "server";
   manualSorting?: boolean;
   manualFiltering?: boolean;
+  pageSizeOptions?: readonly number[];
 }
 
 export function DenseDataTable<T extends RowData>({
@@ -80,6 +81,7 @@ export function DenseDataTable<T extends RowData>({
   paginationMode = "client",
   manualSorting = false,
   manualFiltering = false,
+  pageSizeOptions = [25, 50, 100, 200],
 }: DenseDataTableProps<T>) {
   const { locale } = useI18n();
   const isZh = locale === "zh-CN";
@@ -179,7 +181,7 @@ export function DenseDataTable<T extends RowData>({
       )}
       </div>
       <div className={styles.pagination}>
-        <label>{isZh ? "每页" : "Rows"} <SelectControl density="compact" aria-label={isZh ? "每页行数" : "Rows per page"} value={pagination.pageSize} onValueChange={(value) => table.setPageSize(Number(value))} options={[25, 50, 100, 200].map((size) => ({ value: size, label: size }))} /></label>
+        <label>{isZh ? "每页" : "Rows"} <SelectControl density="compact" aria-label={isZh ? "每页行数" : "Rows per page"} value={pagination.pageSize} onValueChange={(value) => table.setPageSize(Number(value))} options={pageSizeOptions.map((size) => ({ value: size, label: size }))} /></label>
         <span>{isZh ? "第" : "Page"} {pagination.pageIndex + 1} / {Math.max(1, table.getPageCount())}{isZh ? "页" : ""}</span>
         <button type="button" className={styles.toolButton} onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>{isZh ? "上一页" : "Previous"}</button>
         <button type="button" className={styles.toolButton} onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>{isZh ? "下一页" : "Next"}</button>

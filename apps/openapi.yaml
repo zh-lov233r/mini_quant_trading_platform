@@ -454,6 +454,20 @@ paths:
                 items:
                   $ref: "#/components/schemas/ResearchExperiment"
 
+  /api/research/worker-status:
+    get:
+      tags: [Research]
+      summary: Get research trial scheduler status
+      operationId: getResearchWorkerStatus
+      x-implementation-status: implemented
+      responses:
+        "200":
+          description: Research scheduler state, capacity, active trials, and queued trials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResearchWorkerStatus"
+
   /api/research/experiments/{experiment_id}:
     get:
       tags: [Research]
@@ -489,6 +503,29 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/ExperimentTrial"
+
+  /api/research/experiments/{experiment_id}/trials/{trial_id}/cancel:
+    post:
+      tags: [Research]
+      summary: Idempotently cancel one research trial
+      description: >
+        Queued trials are cancelled immediately. Trials already submitted to the backtest queue
+        use cooperative backtest cancellation. A trial between claim and queue submission records
+        a cancellation request that is checked again before enqueueing.
+      operationId: cancelResearchExperimentTrial
+      x-implementation-status: implemented
+      parameters:
+        - $ref: "#/components/parameters/ExperimentIdPath"
+        - {in: path, name: trial_id, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "202":
+          description: Trial cancellation accepted, or the trial was already terminal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExperimentTrial"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /api/research/experiments/{experiment_id}/backtests/{run_id}:
     delete:
@@ -708,6 +745,37 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
+
+  /api/backtests/tasks:
+    get:
+      tags: [Backtests]
+      summary: List unified manual, research trial, and verification backtest tasks
+      description: >
+        Read-only task projection over existing strategy runs, durable backtest jobs, research trials,
+        and verification candidates. Active tasks sort before terminal history; this endpoint does not
+        create or replace an execution queue.
+      operationId: listBacktestTasks
+      x-implementation-status: implemented
+      parameters:
+        - in: query
+          name: source
+          required: false
+          schema: {type: string, enum: [manual, research, verification]}
+        - in: query
+          name: stage
+          required: false
+          schema:
+            type: string
+            enum: [active, waiting_research, queued, preparing, running, finalizing, cancel_requested, completed, failed, cancelled]
+        - {in: query, name: limit, required: false, schema: {type: integer, minimum: 1, maximum: 100, default: 25}}
+        - {in: query, name: offset, required: false, schema: {type: integer, minimum: 0, default: 0}}
+      responses:
+        "200":
+          description: Unified backtest task page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BacktestTaskPage"
 
   /api/backtests/worker-status:
     get:
@@ -2299,6 +2367,7 @@ components:
         dataFingerprint: {type: [string, "null"]}
         backtestRunId: {type: [string, "null"], format: uuid}
         backtestDeletedAt: {type: [string, "null"], format: date-time}
+        cancelRequestedAt: {type: [string, "null"], format: date-time}
         candidateId: {type: [string, "null"], format: uuid}
         metrics: {$ref: "#/components/schemas/FreeFormObject"}
         attempt: {type: integer}
@@ -2416,6 +2485,66 @@ components:
         last_worker_exit_code: {type: integer, nullable: true}
         heartbeat_stale_after_seconds: {type: integer, minimum: 1}
         checked_at: {type: string, format: date-time}
+
+    ResearchWorkerStatus:
+      type: object
+      required: [enabled, state, configured_concurrency, active_trials, available_slots, queued_trials, checked_at]
+      properties:
+        enabled: {type: boolean}
+        state: {type: string, enum: [disabled, idle, running, stopping, failed]}
+        configured_concurrency: {type: integer, minimum: 1}
+        active_trials: {type: integer, minimum: 0}
+        available_slots: {type: integer, minimum: 0}
+        queued_trials: {type: integer, minimum: 0}
+        checked_at: {type: string, format: date-time}
+
+    BacktestTask:
+      type: object
+      required: [task_key, source, stage, attempt, cancellable]
+      properties:
+        task_key: {type: string}
+        source: {type: string, enum: [manual, research, verification]}
+        stage:
+          type: string
+          enum: [waiting_research, queued, preparing, running, finalizing, cancel_requested, completed, failed, cancelled]
+        strategy_id: {type: [string, "null"], format: uuid}
+        strategy_name: {type: [string, "null"]}
+        run_id: {type: [string, "null"], format: uuid}
+        job_id: {type: [string, "null"], format: uuid}
+        trial_id: {type: [string, "null"], format: uuid}
+        experiment_id: {type: [string, "null"], format: uuid}
+        candidate_id: {type: [string, "null"], format: uuid}
+        experiment_name: {type: [string, "null"]}
+        trial_ordinal: {type: [integer, "null"]}
+        sample_kind: {type: [string, "null"]}
+        cost_scenario: {type: [string, "null"]}
+        window_start: {type: [string, "null"], format: date}
+        window_end: {type: [string, "null"], format: date}
+        progress:
+          oneOf:
+            - $ref: "#/components/schemas/BacktestProgress"
+            - {type: "null"}
+        attempt: {type: integer, minimum: 0}
+        requested_at: {type: [string, "null"], format: date-time}
+        started_at: {type: [string, "null"], format: date-time}
+        finished_at: {type: [string, "null"], format: date-time}
+        updated_at: {type: [string, "null"], format: date-time}
+        cancel_requested_at: {type: [string, "null"], format: date-time}
+        error_code: {type: [string, "null"]}
+        error_message: {type: [string, "null"]}
+        cancellable: {type: boolean}
+
+    BacktestTaskPage:
+      type: object
+      required: [items, total, counts]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/BacktestTask"}
+        total: {type: integer, minimum: 0}
+        counts:
+          type: object
+          additionalProperties: {type: integer, minimum: 0}
 
     BacktestRun:
       allOf:

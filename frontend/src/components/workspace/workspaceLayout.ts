@@ -6,6 +6,7 @@ export type WorkspaceNavKey =
   | "strategies"
   | "stockBaskets"
   | "backtests"
+  | "backtestTasks"
   | "research"
   | "paperTrading";
 
@@ -19,6 +20,7 @@ export const WORKSPACE_NAV_ITEMS: WorkspaceNavItem[] = [
   { href: "/strategies", key: "strategies" },
   { href: "/stock-baskets", key: "stockBaskets" },
   { href: "/backtests", key: "backtests" },
+  { href: "/backtest-tasks", key: "backtestTasks" },
   { href: "/research", key: "research" },
   { href: "/paper-trading", key: "paperTrading" },
 ];

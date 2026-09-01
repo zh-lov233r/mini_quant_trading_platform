@@ -7,9 +7,10 @@ from uuid import UUID
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from pydantic import BaseModel, Field
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.core.agent_auth import require_agent_service
@@ -45,6 +46,7 @@ from src.services.research_experiment_service import (
     ExperimentDataIncompleteError,
     ExperimentNotFoundError,
     cancel_experiment,
+    cancel_trial,
     get_experiment,
     list_experiments,
     list_trials,
@@ -60,6 +62,16 @@ agent_router = APIRouter(
     tags=["agent-integration"],
     dependencies=[Depends(require_agent_service)],
 )
+
+
+class ResearchWorkerStatusOut(BaseModel):
+    enabled: bool
+    state: Literal["disabled", "idle", "running", "stopping", "failed"]
+    configured_concurrency: int = Field(ge=1)
+    active_trials: int = Field(ge=0)
+    available_slots: int = Field(ge=0)
+    queued_trials: int = Field(ge=0)
+    checked_at: datetime
 
 
 def _experiment_out(experiment: ResearchExperiment) -> ExperimentOut:
@@ -104,6 +116,7 @@ def _trial_out(trial: ExperimentTrial) -> TrialOut:
         attempt=trial.attempt,
         errorCode=trial.error_code,
         errorMessage=trial.error_message,
+        cancelRequestedAt=trial.cancel_requested_at,
     )
 
 
@@ -319,6 +332,26 @@ def get_research_experiments(
     return [_experiment_out(item) for item in list_experiments(db, limit=limit)]
 
 
+@router.get("/worker-status", response_model=ResearchWorkerStatusOut)
+def get_research_worker_status(request: Request, db: Session = Depends(get_db)):
+    enabled = os.getenv("RESEARCH_WORKER_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+    worker = getattr(request.app.state, "research_experiment_worker", None)
+    snapshot = worker.status_snapshot(enabled=enabled) if worker is not None else {
+        "enabled": enabled,
+        "state": "failed" if enabled else "disabled",
+        "configured_concurrency": max(1, int(os.getenv("RESEARCH_WORKER_CONCURRENCY", "2"))),
+        "active_trials": 0,
+        "available_slots": 0,
+    }
+    snapshot["queued_trials"] = int(
+        db.execute(
+            select(func.count()).select_from(ExperimentTrial).where(ExperimentTrial.status == "queued")
+        ).scalar_one()
+    )
+    snapshot["checked_at"] = datetime.now(timezone.utc)
+    return ResearchWorkerStatusOut(**snapshot)
+
+
 @router.get("/experiments/{experiment_id}", response_model=ExperimentOut)
 def get_research_experiment(experiment_id: UUID, db: Session = Depends(get_db)):
     try:
@@ -333,6 +366,18 @@ def get_research_trials(experiment_id: UUID, db: Session = Depends(get_db)):
         return [_trial_out(item) for item in list_trials(db, experiment_id)]
     except ExperimentNotFoundError as exc:
         raise HTTPException(status_code=404, detail="experiment not found") from exc
+
+
+@router.post(
+    "/experiments/{experiment_id}/trials/{trial_id}/cancel",
+    response_model=TrialOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def cancel_research_trial(experiment_id: UUID, trial_id: UUID, db: Session = Depends(get_db)):
+    try:
+        return _trial_out(cancel_trial(db, experiment_id, trial_id))
+    except ExperimentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="research trial not found") from exc
 
 
 @router.get("/experiments/{experiment_id}/children", response_model=list[ExperimentOut])

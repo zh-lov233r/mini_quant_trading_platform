@@ -1,0 +1,40 @@
+.refreshButton,.actions a,.actions button,.mobilePager button { min-height:44px; padding:0 14px; border:1px solid rgba(56,189,248,.32); border-radius:11px; background:rgba(8,47,73,.62); color:#cffafe; font-weight:800; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; }
+.healthGrid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin-bottom:18px; }
+.healthCard { padding:16px 18px; border:1px solid rgba(148,163,184,.2); border-radius:17px; background:rgba(15,23,42,.78); }
+.healthCard>div { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.healthCard p { margin:9px 0 0; color:#94a3b8; }
+.healthy { border-color:rgba(52,211,153,.35); }
+.unhealthy { border-color:rgba(251,191,36,.4); }
+.panel { padding:18px; border:1px solid rgba(71,85,105,.34); border-radius:19px; background:rgba(2,6,23,.58); }
+.panelHeader { display:flex; align-items:flex-end; justify-content:space-between; gap:18px; margin-bottom:16px; }
+.panelHeader h2 { margin:0 0 5px; }
+.panelHeader p { margin:0; color:#94a3b8; }
+.filters { display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; }
+.filters label { display:grid; gap:6px; min-width:180px; }
+.filters label>span { color:#94a3b8; font-size:12px; font-weight:800; }
+.identity,.window,.stageOnly,.cancelProgress { display:grid; gap:5px; }
+.identity span,.window small { color:#94a3b8; line-height:1.35; }
+.stageOnly strong { color:#67e8f9; }
+.cancelProgress>strong { color:#fbbf24; }
+.zeroTrack { height:9px; overflow:hidden; border-radius:999px; background:rgba(71,85,105,.52); }
+.zeroTrack span { display:block; width:0; height:100%; }
+.actions { display:flex; gap:7px; flex-wrap:wrap; }
+.actions a,.actions button { min-height:36px; padding:0 10px; }
+.actions button { border-color:rgba(251,113,133,.48); background:rgba(136,19,55,.3); color:#fecdd3; }
+.error { padding:12px 14px; border:1px solid rgba(251,113,133,.4); border-radius:12px; background:rgba(127,29,29,.3); color:#fecdd3; }
+.empty { padding:22px; color:#94a3b8; text-align:center; }
+.mobileCards { display:none; }
+.taskCard { display:grid; gap:14px; padding:16px; border:1px solid rgba(71,85,105,.38); border-radius:16px; background:rgba(15,23,42,.78); }
+.cardTop,.cardFooter,.mobilePager { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.cardFooter>span { color:#94a3b8; font-size:13px; }
+.mobilePager { justify-content:center; }
+.mobilePager button:disabled { opacity:.45; cursor:not-allowed; }
+@media (max-width: 767px) {
+  .healthGrid { grid-template-columns:1fr; }
+  .panel { padding:14px; }
+  .panelHeader { align-items:stretch; flex-direction:column; }
+  .filters,.filters label { width:100%; }
+  .desktopTable { display:none; }
+  .mobileCards { display:grid; gap:12px; }
+  .actions a,.actions button { min-height:44px; }
+}
