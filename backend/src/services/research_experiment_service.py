@@ -37,6 +37,10 @@ from src.services.backtest_universe_service import (
     resolve_point_in_time_universe,
 )
 from src.services.strategy_registry import extract_description, is_engine_ready, normalize_strategy_params
+from src.services.prepared_dataset_service import (
+    build_prepared_dataset_manifest,
+    prepared_dataset_key,
+)
 from src.services.strategy_service import validate_strategy_params
 
 
@@ -415,6 +419,12 @@ def create_experiment(
     )
     strategy = db.get(Strategy, spec.strategy_id)
     assert strategy is not None
+    prepared_manifest = build_prepared_dataset_manifest(
+        data_fingerprint=fingerprint,
+        strategy_type=strategy.strategy_type,
+        universe=universe,
+        requested_date_range=(overall_start, overall_end),
+    )
     policy_started_at = datetime.now(UTC)
     experiment = ResearchExperiment(
         workflow_run_id=workflow_run_id,
@@ -429,6 +439,10 @@ def create_experiment(
             "strategyType": strategy.strategy_type,
             "universe": universe,
             "dataFingerprint": fingerprint,
+            "preparedDataset": {
+                "key": prepared_dataset_key(prepared_manifest),
+                "manifest": prepared_manifest,
+            },
             "quantBuildVersion": os.getenv("APP_VERSION", "development"),
             "createdAt": policy_started_at.isoformat(),
             "policyStartedAt": policy_started_at.isoformat(),
@@ -1408,6 +1422,7 @@ def process_next_trial() -> bool:
                     "persist_level": persist_level,
                     "engine_version": "v2",
                     "data_fingerprint": current_fingerprint,
+                    "prepared_dataset": manifest.get("preparedDataset"),
                     "parameter_hash": canonical_hash(trial.params),
                 },
             )

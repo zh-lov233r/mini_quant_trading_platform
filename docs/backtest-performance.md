@@ -16,6 +16,8 @@ Backtest v2 changes data loading, stable instrument resolution, detail persisten
 
 Manual requests default to `full`; research trials always request `summary`. `persist_level` and `available_details` tell clients whether a detail was not persisted. Missing detail must never be presented as a real zero count.
 
+The manual form always submits the selected value explicitly and offers bilingual Full audit (`full`), Trade analysis (`trades`), and Fast summary (`summary`) options. Persistence changes stored detail only; signal, fill, equity, and summary calculations are unchanged.
+
 Support/Resistance zone versions and run audit events use transaction-scoped SQLAlchemy Core inserts in batches of 5,000. Batches never commit independently: a failure rolls back the run's full detail set. Cache hits skip shared zone-version writes but still persist the exact run-scoped event set requested by `full`; event types and payloads are not pruned.
 
 Candidate promotion first creates an OOS/base-cost `full` verification job. The job rechecks the data fingerprint and compares numeric summary metrics at relative and absolute tolerance `1e-10`. A mismatch or fingerprint change records failed verification and blocks promotion. The verification run ID is written to candidate metrics and promoted strategy lineage.
@@ -82,8 +84,23 @@ If rollout fails, stop new job producers and the backtest worker, then route new
 
 ## Telemetry and acceptance
 
-`summary_metrics.performance` records SQL loading, Python dataset construction, history maintenance, signals, execution, detail/summary persistence, total time, row counts, output counts, and peak RSS. Support/Resistance persistence additionally records zone/event rows and milliseconds, total persistence milliseconds, and whether the immutable cache was reused. Logs contain the same structured mapping. The full-universe acceptance gate requires identical normalized zone/event content, at least 50% lower Support/Resistance finalization time, and peak RSS no higher than the recorded 16.1 GB baseline. Do not claim this gate from unit tests alone. Run the 100/500/3,640-symbol and 1-year/5-year/full-history matrix before enabling v2 for manual traffic. Index or LAG query changes require real `EXPLAIN ANALYZE` evidence and at least 20% improvement; neither is assumed from synthetic tests.
+`summary_metrics.performance` uses non-overlapping phases for SQL execute/fetch, row decode, day grouping, history state, signals, execution, detail construction, detail/summary persistence, response construction, and engine total. It also records rows/days/signals/trades per second, microseconds per input row, phase shares, `unaccounted_ms`, and peak RSS. Worker terminalization adds queue wait, active, and finalization overhead. Support/Resistance subphases are diagnostic dimensions and are not double-counted in `unaccounted_ms`. Logs contain the same structured mapping.
 
-The NumPy prepared-dataset/memmap layer is dependency-pinned but remains rollout-gated until cold/hot cache, fingerprint invalidation, concurrent open, corruption, and cleanup acceptance is complete. Numba is not a dependency.
+Research v2 trials use the stable key and manifest in `run_manifest.preparedDataset`. The key includes loader revision, source fingerprint, stable instrument set, full date range, feature set, price/corporate-action, symbol-identity, and universe-membership semantics; ordinary strategy parameters are excluded. The first trial atomically builds a float64 structured memmap plus date-offset/corporate-action sidecar under a file lock. Later trials open it read-only. Corrupt data or metadata rebuilds under the lock; cache-infrastructure failures record a reason and fall back to the DB loader for the same fingerprint; a row-count change during construction marks the experiment `data_changed`. Manual backtests do not use this cache. Cleanup counts queued/running jobs referencing the key and refuses deletion while an active lease exists.
+
+Read-only benchmark preflight:
+
+```bash
+make benchmark-backtests BENCHMARK_ARGS="plan"
+make benchmark-backtests BENCHMARK_ARGS="screening"
+```
+
+`plan`, and correctness/screening/confirmation without `--apply`, report the target database, code/dependency versions, cases, data fingerprints, and estimated run count without creating a `StrategyRun`. Write mode requires an explicit `--apply`, a clean worktree, no queued/running jobs, `RESEARCH_WORKER_ENABLED=false`, both paper-scheduler settings set to `false`, and `BACKTEST_WORKER_CONCURRENCY=1`. Each case performs one warm-up and five measured runs, reports the median and maximum, and retains every run ID. Do not run write mode until `hzy/public`, the fingerprints, and expected run count have been reported and explicitly authorized.
+
+The three stateless candidate kernels are implemented independently and still delegate final event construction to the shared strategy handlers. They are disabled on the default execution path. Screening generates baseline/kernel A/B cases for every strategy and persistence level; a later change may enable one strategy only after its full-universe confirmation improves median engine time by at least 20% with an identical differential result.
+
+The full-universe acceptance gate requires identical normalized zone/event content, at least 50% lower Support/Resistance finalization time, and peak RSS no higher than the recorded 16.1 GB baseline. Do not claim this gate from unit tests alone. Run the 100/500/3,640-symbol and 1-year/5-year/full-history matrix before enabling v2 for manual traffic. Index or LAG query changes require real `EXPLAIN ANALYZE` evidence and at least 20% improvement; neither is assumed from synthetic tests.
+
+Numba is not a dependency. Concurrency remains `1|2`; concurrency 4, SQL/index changes, ring buffers, and further pattern optimization require observed thresholds and a separate change.
 
 For chart releases, record the production-build shared and backtest-detail first-load sizes and verify that the Lightweight Charts chunk is separate. Use fixed fixtures for 1,500/5,000 equity points, 200 events, and 500 candles/100 markers; in one production Chromium, measure five runs and require median data-ready-to-chart-ready time at or below 100 ms, average pan/zoom at or above 55 FPS, and no chart main-thread task longer than 50 ms.

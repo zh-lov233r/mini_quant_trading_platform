@@ -117,8 +117,17 @@ export default function AppShell({
           <div className={styles.sidebarSpacer} />
           <div className={styles.sidebarFooter}>
             <div className={styles.localeSwitch} aria-label={messages.common.language}>
-              <button type="button" className={cx(styles.localeButton, locale === "zh-CN" && styles.localeButtonActive)} onClick={() => setLocale("zh-CN")}>中<span className={styles.localeLongLabel}>文</span></button>
-              <button type="button" className={cx(styles.localeButton, locale === "en-US" && styles.localeButtonActive)} onClick={() => setLocale("en-US")}>EN</button>
+              <button type="button" className={cx(styles.localeButton, styles.localeChoiceButton, locale === "zh-CN" && styles.localeButtonActive)} onClick={() => setLocale("zh-CN")}>中<span className={styles.localeLongLabel}>文</span></button>
+              <button type="button" className={cx(styles.localeButton, styles.localeChoiceButton, locale === "en-US" && styles.localeButtonActive)} onClick={() => setLocale("en-US")}>EN</button>
+              <button
+                type="button"
+                className={cx(styles.localeButton, styles.localeButtonActive, styles.localeToggleButton)}
+                onClick={() => setLocale(isZh ? "en-US" : "zh-CN")}
+                aria-label={isZh ? "切换到 English" : "Switch to Chinese"}
+                title={isZh ? "切换到 English" : "Switch to Chinese"}
+              >
+                {isZh ? "中" : "EN"}
+              </button>
             </div>
           </div>
         </aside>

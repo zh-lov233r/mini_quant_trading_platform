@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from src.models.tables import BacktestJob, Base, Strategy, StrategyRun
 from src.services.backtest_job_service import (
+    _with_worker_performance,
     claim_next_backtest_job,
     enqueue_backtest_job,
     normalize_backtest_progress,
@@ -216,6 +217,23 @@ class BacktestJobServiceTests(unittest.TestCase):
         self.assertEqual(progress_update_interval_seconds({"phase": "running"}), 5.0)
         self.assertEqual(progress_update_interval_seconds({"phase": "finalizing"}), 1.0)
         self.assertEqual(progress_update_interval_seconds({"phase": "completed"}), 0.0)
+
+    def test_worker_performance_adds_queue_and_finalization_without_losing_engine_metrics(self) -> None:
+        run = self._run()
+        job = enqueue_backtest_job(self.db, run=run, payload={"strategy_id": str(self.strategy.id)})
+        job.created_at = datetime.now(UTC) - timedelta(seconds=3)
+        job.claimed_at = job.created_at + timedelta(seconds=2)
+        metrics = _with_worker_performance(
+            {"performance": {"engine_total_ms": 750.0, "rows_loaded": 10}},
+            job=job,
+            worker_active_ms=1_000.0,
+        )
+
+        performance = metrics["performance"]
+        self.assertEqual(performance["queue_wait_ms"], 2_000.0)
+        self.assertEqual(performance["worker_active_ms"], 1_000.0)
+        self.assertEqual(performance["finalization_overhead_ms"], 250.0)
+        self.assertEqual(performance["rows_loaded"], 10)
 
 
 if __name__ == "__main__":

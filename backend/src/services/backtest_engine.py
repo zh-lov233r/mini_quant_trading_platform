@@ -26,6 +26,14 @@ from src.services.backtest_universe_service import (
 )
 from src.services.backtest_repository import BacktestRepository
 from src.services.market_data_loader import MarketDataLoader
+from src.services.prepared_dataset_service import (
+    PREPARED_DATASET_DTYPE,
+    PreparedDatasetCache,
+    PreparedDatasetDataChangedError,
+    PreparedDatasetDayLoader,
+    encode_prepared_snapshot,
+    prepared_dataset_key,
+)
 from src.services.signal_strength_service import (
     annotate_and_rank_signals,
     ordered_entry_buy_signals,
@@ -37,7 +45,7 @@ from src.services.staged_entry_service import (
     pattern_setup_from_metadata,
     select_highest_stage_signals,
 )
-from src.services.stateless_signal_kernel import vectorized_stateless_prefilter
+from src.services.stateless_signal_kernel import vectorized_stateless_candidates
 from src.services.stock_basket_service import (
     DEFAULT_COMMON_STOCK_BASKET_NAME,
     load_default_common_stock_symbols,
@@ -269,6 +277,90 @@ def _elapsed_ms(started: float) -> float:
     return round((perf_counter() - started) * 1000.0, 3)
 
 
+def _finalize_engine_performance(
+    performance: dict[str, Any],
+    *,
+    engine_total_ms: float,
+    setup_wall_ms: float,
+    loop_wall_ms: float,
+    finalization_wall_ms: float,
+    streaming_data: bool,
+) -> None:
+    data_ms = sum(
+        float(performance.get(key) or 0.0)
+        for key in ("sql_execute_ms", "sql_fetch_ms", "row_decode_ms", "day_grouping_ms")
+    )
+    loop_subphases_ms = sum(
+        float(performance.get(key) or 0.0)
+        for key in (
+            "history_state_ms",
+            "signal_generation_ms",
+            "execution_simulation_ms",
+            "detail_build_ms",
+        )
+    )
+    finalization_subphases_ms = sum(
+        float(performance.get(key) or 0.0)
+        for key in (
+            "persist_details_ms",
+            "persist_summary_ms",
+            "response_serialization_ms",
+        )
+    )
+    performance["setup_ms"] = round(
+        max(setup_wall_ms - (0.0 if streaming_data else data_ms), 0.0),
+        3,
+    )
+    performance["portfolio_loop_ms"] = round(
+        max(loop_wall_ms - (data_ms if streaming_data else 0.0) - loop_subphases_ms, 0.0),
+        3,
+    )
+    performance["finalization_ms"] = round(
+        max(finalization_wall_ms - finalization_subphases_ms, 0.0),
+        3,
+    )
+    performance["engine_total_ms"] = round(engine_total_ms, 3)
+    performance["total_ms"] = round(engine_total_ms, 3)
+    performance["data_prepare_ms"] = round(data_ms, 3)
+    rows_loaded = int(performance.get("rows_loaded") or 0)
+    trading_days = int(performance.get("trading_days") or 0)
+    signals = int(performance.get("signals_generated") or 0)
+    trades = int(performance.get("trades_generated") or 0)
+    seconds = engine_total_ms / 1000.0
+    performance["rows_per_second"] = round(rows_loaded / seconds, 3) if seconds > 0 else 0.0
+    performance["trading_days_per_second"] = round(trading_days / seconds, 3) if seconds > 0 else 0.0
+    performance["signals_per_second"] = round(signals / seconds, 3) if seconds > 0 else 0.0
+    performance["trades_per_second"] = round(trades / seconds, 3) if seconds > 0 else 0.0
+    performance["microseconds_per_input_row"] = (
+        round(engine_total_ms * 1000.0 / rows_loaded, 3) if rows_loaded else None
+    )
+
+    exclusive_phase_keys = (
+        "setup_ms",
+        "sql_execute_ms",
+        "sql_fetch_ms",
+        "row_decode_ms",
+        "day_grouping_ms",
+        "history_state_ms",
+        "signal_generation_ms",
+        "execution_simulation_ms",
+        "detail_build_ms",
+        "portfolio_loop_ms",
+        "persist_details_ms",
+        "persist_summary_ms",
+        "response_serialization_ms",
+        "finalization_ms",
+    )
+    accounted_ms = sum(float(performance.get(key) or 0.0) for key in exclusive_phase_keys)
+    performance["unaccounted_ms"] = round(engine_total_ms - accounted_ms, 3)
+    performance["phase_percent"] = {
+        key: round(float(performance.get(key) or 0.0) / engine_total_ms * 100.0, 3)
+        if engine_total_ms > 0
+        else 0.0
+        for key in exclusive_phase_keys
+    }
+
+
 def _merge_execution_stats(
     notional_by_symbol: dict[str, float],
     net_cash_flow_by_symbol: dict[str, float],
@@ -442,6 +534,8 @@ def run_backtest(
     cancel_check: Callable[[], bool] | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     engine_version: str | None = None,
+    prepared_dataset: dict[str, Any] | None = None,
+    stateless_candidate_kernel_types: frozenset[str] | None = None,
 ) -> BacktestResult:
     """Run a long-only daily backtest and persist signals, fills, and equity snapshots.
 
@@ -459,11 +553,16 @@ def run_backtest(
     """
     total_started = perf_counter()
     performance: dict[str, Any] = {
+        "sql_execute_ms": 0.0,
+        "sql_fetch_ms": 0.0,
+        "row_decode_ms": 0.0,
+        "day_grouping_ms": 0.0,
         "load_market_data_ms": 0.0,
         "build_dataset_ms": 0.0,
         "history_state_ms": 0.0,
         "signal_generation_ms": 0.0,
         "execution_simulation_ms": 0.0,
+        "detail_build_ms": 0.0,
         "persist_details_ms": 0.0,
         "persist_summary_ms": 0.0,
         "support_resistance_zone_versions_ms": 0.0,
@@ -612,7 +711,7 @@ def run_backtest(
     db.commit()
     db.refresh(run)
 
-    streaming_loader: MarketDataLoader | None = None
+    streaming_loader: MarketDataLoader | PreparedDatasetDayLoader | None = None
     try:
         repository = BacktestRepository(db) if resolved_engine_version == "v2" else None
         recent_bar_count = required_recent_bar_count_for_runtime(runtime)
@@ -623,7 +722,8 @@ def run_backtest(
             if runtime["strategy_type"] == "support_resistance"
             else None
         )
-        load_started = perf_counter()
+        prepared_split_adjustments: dict[date, dict[Any, float]] | None = None
+        prepared_trading_dates: list[date] | None = None
         if resolved_universe is not None:
             feature_stmt = text(FEATURE_RANGE_V2_SQL).bindparams(
                 bindparam("instrument_ids", expanding=True)
@@ -633,13 +733,164 @@ def run_backtest(
                 "start_date": history_start_date,
                 "end_date": end_date,
             }
-            streaming_loader = MarketDataLoader(
-                db,
-                statement=feature_stmt,
-                params=feature_params,
-                row_factory=_feature_snapshot_from_row,
-                performance=performance,
-            )
+            if prepared_dataset is not None:
+                manifest = dict(prepared_dataset.get("manifest") or {})
+                expected_key = str(prepared_dataset.get("key") or "")
+                if prepared_dataset_key(manifest) != expected_key:
+                    raise ValueError("prepared dataset key does not match its manifest")
+                if sorted(manifest.get("instrument_ids") or []) != sorted(resolved_universe.instrument_ids):
+                    raise ValueError("prepared dataset instrument set changed")
+                if int(manifest.get("row_count") or 0) <= 0:
+                    raise ValueError("prepared dataset row count is invalid")
+                cache = PreparedDatasetCache()
+                try:
+                    prepared_array = cache.open(manifest, expected_dtype=PREPARED_DATASET_DTYPE)
+                    cache_status = "warm"
+                    if prepared_array is None:
+                        cache_status = "cold"
+                        built_here = False
+                        build_params = {
+                            "instrument_ids": resolved_universe.instrument_ids,
+                            "start_date": date.fromisoformat(manifest["date_range"][0]),
+                            "end_date": date.fromisoformat(manifest["date_range"][1]),
+                        }
+
+                        def write_prepared(array: Any) -> dict[str, Any]:
+                            nonlocal built_here
+                            built_here = True
+                            from src.services.research_experiment_service import calculate_data_fingerprint
+
+                            fingerprint_range = manifest.get("fingerprint_request_range") or []
+                            if len(fingerprint_range) != 2:
+                                raise ValueError("prepared dataset fingerprint request range is missing")
+                            observed_fingerprint = calculate_data_fingerprint(
+                                db,
+                                symbols=symbols,
+                                start_date=date.fromisoformat(fingerprint_range[0]),
+                                end_date=date.fromisoformat(fingerprint_range[1]),
+                                universe_policy=manifest.get("universe_policy"),
+                            )
+                            if observed_fingerprint["sha256"] != manifest["data_fingerprint"]:
+                                raise PreparedDatasetDataChangedError(
+                                    "daily feature data changed before prepared dataset construction"
+                                )
+                            build_loader = MarketDataLoader(
+                                db,
+                                statement=feature_stmt,
+                                params=build_params,
+                                row_factory=_feature_snapshot_from_row,
+                                performance=performance,
+                            )
+                            index = 0
+                            date_offsets: list[list[Any]] = []
+                            identity_intervals: dict[tuple[int, str], list[str]] = {}
+                            for prepared_day, prepared_snapshots in build_loader.iter_days():
+                                date_offsets.append([prepared_day.isoformat(), index, len(prepared_snapshots)])
+                                for snapshot in prepared_snapshots.values():
+                                    if index >= len(array):
+                                        raise PreparedDatasetDataChangedError(
+                                            "prepared dataset contains more rows than its fingerprint"
+                                        )
+                                    encode_prepared_snapshot(array, index, snapshot)
+                                    identity_key = (
+                                        int(snapshot["instrument_id"]),
+                                        str(snapshot["symbol"]),
+                                    )
+                                    interval = identity_intervals.setdefault(
+                                        identity_key,
+                                        [prepared_day.isoformat(), prepared_day.isoformat()],
+                                    )
+                                    interval[1] = prepared_day.isoformat()
+                                    index += 1
+                            if index != len(array):
+                                raise PreparedDatasetDataChangedError(
+                                    "prepared dataset row count differs from its fingerprint"
+                                )
+                            adjustments = _load_split_adjustments_by_date(
+                                db,
+                                symbols,
+                                build_params["start_date"],
+                                build_params["end_date"],
+                                instrument_ids=resolved_universe.instrument_ids,
+                            )
+                            return {
+                                "date_offsets": date_offsets,
+                                "instrument_symbol_intervals": [
+                                    [instrument_id, symbol, interval[0], interval[1]]
+                                    for (instrument_id, symbol), interval in sorted(
+                                        identity_intervals.items()
+                                    )
+                                ],
+                                "corporate_actions": [
+                                    [action_date.isoformat(), int(position_key), factor]
+                                    for action_date, values in sorted(adjustments.items())
+                                    for position_key, factor in sorted(values.items())
+                                ],
+                            }
+
+                        prepared_array = cache.build(
+                            manifest,
+                            shape=(int(manifest["row_count"]),),
+                            dtype=PREPARED_DATASET_DTYPE,
+                            writer=write_prepared,
+                        )
+                        if built_here:
+                            performance["prepared_dataset_build_ms"] = round(
+                                sum(
+                                    float(performance.get(key) or 0.0)
+                                    for key in (
+                                        "sql_execute_ms",
+                                        "sql_fetch_ms",
+                                        "row_decode_ms",
+                                        "day_grouping_ms",
+                                    )
+                                ),
+                                3,
+                            )
+                            for key in (
+                                "sql_execute_ms",
+                                "sql_fetch_ms",
+                                "row_decode_ms",
+                                "day_grouping_ms",
+                                "load_market_data_ms",
+                                "build_dataset_ms",
+                            ):
+                                performance[key] = 0.0
+                        else:
+                            cache_status = "warm_after_wait"
+                    metadata = cache.metadata(manifest) or {}
+                    sidecar = metadata.get("sidecar") or {}
+                    prepared_trading_dates = [
+                        date.fromisoformat(str(item[0]))
+                        for item in sidecar.get("date_offsets") or []
+                    ]
+                    prepared_split_adjustments = {}
+                    for raw_date, raw_key, raw_factor in sidecar.get("corporate_actions") or []:
+                        prepared_split_adjustments.setdefault(date.fromisoformat(raw_date), {})[
+                            int(raw_key)
+                        ] = float(raw_factor)
+                    streaming_loader = PreparedDatasetDayLoader(
+                        prepared_array,
+                        start_date=history_start_date,
+                        end_date=end_date,
+                        performance=performance,
+                    )
+                    performance["prepared_dataset_status"] = cache_status
+                    performance["prepared_dataset_key"] = expected_key
+                except (OSError, RuntimeError, TypeError) as exc:
+                    if isinstance(exc, PreparedDatasetDataChangedError):
+                        raise
+                    log.warning("Prepared dataset unavailable; using fingerprint-equivalent DB loader: %s", exc)
+                    performance["prepared_dataset_status"] = "fallback"
+                    performance["prepared_dataset_fallback_reason"] = str(exc)[:500]
+            if streaming_loader is None:
+                streaming_loader = MarketDataLoader(
+                    db,
+                    statement=feature_stmt,
+                    params=feature_params,
+                    row_factory=_feature_snapshot_from_row,
+                    performance=performance,
+                )
             snapshots_by_date: dict[date, dict[str, dict[str, Any]]] = {}
         else:
             snapshots_by_date = _load_feature_snapshots_by_date(
@@ -649,14 +900,15 @@ def run_backtest(
                 end_date,
                 performance=performance,
             )
-        performance["data_prepare_ms"] = _elapsed_ms(load_started)
-        split_adjustments_by_date = _load_split_adjustments_by_date(
-            db,
-            symbols,
-            start_date,
-            end_date,
-            instrument_ids=(resolved_universe.instrument_ids if resolved_universe else None),
-        )
+        split_adjustments_by_date = prepared_split_adjustments
+        if split_adjustments_by_date is None:
+            split_adjustments_by_date = _load_split_adjustments_by_date(
+                db,
+                symbols,
+                start_date,
+                end_date,
+                instrument_ids=(resolved_universe.instrument_ids if resolved_universe else None),
+            )
         if streaming_loader is None and not snapshots_by_date:
             raise ValueError("no feature snapshots found for the requested universe and window")
         benchmark_symbol_normalized = _normalize_symbols([benchmark_symbol])[0] if benchmark_symbol else None
@@ -736,11 +988,15 @@ def run_backtest(
                 )
         if streaming_loader is not None:
             day_items = streaming_loader.iter_days()
-            trading_day_count = _count_v2_trading_days(
-                db,
-                instrument_ids=resolved_universe.instrument_ids,
-                start_date=start_date,
-                end_date=end_date,
+            trading_day_count = (
+                sum(start_date <= value <= end_date for value in prepared_trading_dates)
+                if prepared_trading_dates is not None
+                else _count_v2_trading_days(
+                    db,
+                    instrument_ids=resolved_universe.instrument_ids,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
             )
         else:
             ordered_trade_days = sorted(snapshots_by_date)
@@ -750,6 +1006,8 @@ def run_backtest(
             raise ValueError("no feature snapshots found inside the requested backtest window")
 
         trading_days_seen = 0
+        setup_wall_ms = _elapsed_ms(total_started)
+        loop_started = perf_counter()
         for trade_day, day_snapshots in day_items:
             if normalized_universe_policy is not None:
                 eligible_count = 0
@@ -815,22 +1073,27 @@ def run_backtest(
                 avg_entry_prices,
             )
             snapshot_ts = _snapshot_ts(day_snapshots)
-            execution_prices = _snapshot_price_map(
-                day_snapshots,
-                "open",
-                stable_instrument_identity=stable_instrument_identity,
-            )
-            close_prices = _snapshot_price_map(
-                day_snapshots,
-                "close",
-                stable_instrument_identity=stable_instrument_identity,
-            )
             execution_snapshots = _snapshot_identity_map(
                 day_snapshots,
                 stable_instrument_identity=stable_instrument_identity,
             )
-            execution_marks = dict(last_prices)
-            execution_marks.update(execution_prices)
+            execution_prices: dict[Any, float] = {}
+            for event in pending_signals:
+                position_key = _event_position_key(
+                    event,
+                    stable_instrument_identity=stable_instrument_identity,
+                )
+                execution_snapshot = execution_snapshots.get(position_key)
+                open_price = execution_snapshot.get("open") if execution_snapshot is not None else None
+                if open_price is not None:
+                    execution_prices[position_key] = float(open_price)
+            execution_marks = {
+                position_key: float(
+                    (execution_snapshots.get(position_key) or {}).get("open")
+                    or last_prices.get(position_key, 0.0)
+                )
+                for position_key in holdings
+            }
 
             if normalized_universe_policy is not None:
                 for position_key in list(holdings):
@@ -849,7 +1112,7 @@ def run_backtest(
                     entry_trade_dates.pop(position_key, None)
                     entry_day_indices.pop(position_key, None)
                     entry_signal_features.pop(position_key, None)
-                    last_prices[position_key] = 0.0
+                    last_prices.pop(position_key, None)
 
             cash_state = {"cash": cash}
             execution_started = perf_counter()
@@ -916,7 +1179,7 @@ def run_backtest(
             performance["execution_simulation_ms"] += _elapsed_ms(execution_started)
 
             _inject_backtest_positions(
-                day_snapshots,
+                execution_snapshots,
                 holdings,
                 avg_entry_prices,
                 entry_trade_dates,
@@ -924,7 +1187,6 @@ def run_backtest(
                 entry_signal_features,
                 trade_day,
                 trade_day_index,
-                stable_instrument_identity=stable_instrument_identity,
             )
             if recent_bar_count > 0:
                 history_started = perf_counter()
@@ -945,8 +1207,8 @@ def run_backtest(
                 )
             else:
                 handler_snapshots = (
-                    vectorized_stateless_prefilter(runtime, day_snapshots)
-                    if resolved_engine_version == "v2"
+                    vectorized_stateless_candidates(runtime, day_snapshots)
+                    if runtime["strategy_type"] in (stateless_candidate_kernel_types or frozenset())
                     else day_snapshots
                 )
                 signals = handler(runtime, handler_snapshots)
@@ -966,6 +1228,7 @@ def run_backtest(
             pending_signals = signals
             signal_count += len(signals)
             if resolved_persist_level == "full":
+                detail_started = perf_counter()
                 for event in signals:
                     signal_values = {
                         "run_id": run.id,
@@ -982,6 +1245,7 @@ def run_backtest(
                         repository.add_signal(signal_values)
                     else:
                         db.add(Signal(**signal_values))
+                performance["detail_build_ms"] += _elapsed_ms(detail_started)
 
             signal_by_position_key = {
                 _event_position_key(
@@ -990,7 +1254,12 @@ def run_backtest(
                 ): event
                 for event in signals
             }
-            last_prices.update(close_prices)
+            _update_last_marks(
+                holdings,
+                last_prices,
+                execution_snapshots,
+                execution_prices,
+            )
             equity = _portfolio_equity(cash, holdings, last_prices)
             peak_equity = max(peak_equity, equity)
             drawdown = 0.0 if peak_equity <= 0 else (peak_equity - equity) / peak_equity
@@ -1046,6 +1315,7 @@ def run_backtest(
                         )
 
             gross_exposure = _gross_exposure(holdings, last_prices)
+            detail_started = perf_counter()
             snapshot_metrics = {
                 "holdings_count": len(holdings),
                 "signal_count_cumulative": signal_count,
@@ -1095,6 +1365,7 @@ def run_backtest(
                         "metrics": {**snapshot_metrics, "downsampled": True},
                     }
                 )
+            performance["detail_build_ms"] += _elapsed_ms(detail_started)
             if progress_callback is not None:
                 progress_callback(
                     {
@@ -1109,6 +1380,8 @@ def run_backtest(
                     }
                 )
 
+        loop_wall_ms = _elapsed_ms(loop_started)
+        finalization_started = perf_counter()
         if progress_callback is not None:
             progress_callback(
                 {
@@ -1151,6 +1424,7 @@ def run_backtest(
         }
         support_resistance_materialization = None
         persist_started = perf_counter()
+        repository_flush_before_finalization = repository.flush_ms if repository is not None else 0.0
         if isinstance(stateful_signal_state, SupportResistanceState):
             def report_support_resistance_persistence(
                 stage: str,
@@ -1191,7 +1465,14 @@ def run_backtest(
         flush = getattr(db, "flush", None)
         if callable(flush):
             flush()
-        performance["persist_details_ms"] = _elapsed_ms(persist_started)
+        performance["persist_details_ms"] = round(
+            _elapsed_ms(persist_started) + repository_flush_before_finalization,
+            3,
+        )
+        performance["detail_build_ms"] = round(
+            max(float(performance["detail_build_ms"]) - repository_flush_before_finalization, 0.0),
+            3,
+        )
         if progress_callback is not None:
             progress_callback(
                 {
@@ -1318,7 +1599,16 @@ def run_backtest(
             total_slippage=float(total_slippage),
         )
         performance["response_serialization_ms"] = _elapsed_ms(response_started)
-        performance["total_ms"] = _elapsed_ms(total_started)
+        engine_total_ms = _elapsed_ms(total_started)
+        finalization_wall_ms = _elapsed_ms(finalization_started)
+        _finalize_engine_performance(
+            performance,
+            engine_total_ms=engine_total_ms,
+            setup_wall_ms=setup_wall_ms,
+            loop_wall_ms=loop_wall_ms,
+            finalization_wall_ms=finalization_wall_ms,
+            streaming_data=streaming_loader is not None,
+        )
         # JSON mutation tracking is not enabled, so assign a fresh mapping before the final commit.
         run.summary_metrics = {**dict(run.summary_metrics or {}), "performance": dict(performance)}
         db.commit()
@@ -1462,21 +1752,34 @@ def _load_feature_snapshots_by_date(
     else:
         stmt = text(FEATURE_RANGE_SQL).bindparams(bindparam("symbols", expanding=True))
         filter_params = {"symbols": [symbol.upper() for symbol in symbols]}
-    sql_started = perf_counter()
-    rows = db.execute(
+    execute_started = perf_counter()
+    result = db.execute(
         stmt,
         {**filter_params, "start_date": start_date, "end_date": end_date},
-    ).mappings().all()
+    )
+    sql_execute_ms = _elapsed_ms(execute_started)
+    fetch_started = perf_counter()
+    rows = result.mappings().all()
+    sql_fetch_ms = _elapsed_ms(fetch_started)
     if performance is not None:
-        performance["load_market_data_ms"] = _elapsed_ms(sql_started)
+        performance["sql_execute_ms"] = sql_execute_ms
+        performance["sql_fetch_ms"] = sql_fetch_ms
+        performance["load_market_data_ms"] = round(sql_execute_ms + sql_fetch_ms, 3)
 
-    build_started = perf_counter()
+    row_decode_ms = 0.0
+    day_grouping_ms = 0.0
     snapshots_by_date: dict[date, dict[str, dict[str, Any]]] = {}
     for row in rows:
+        decode_started = perf_counter()
         trade_date, symbol, snapshot = _feature_snapshot_from_row(dict(row))
+        row_decode_ms += (perf_counter() - decode_started) * 1000.0
+        grouping_started = perf_counter()
         snapshots_by_date.setdefault(trade_date, {})[symbol] = snapshot
+        day_grouping_ms += (perf_counter() - grouping_started) * 1000.0
     if performance is not None:
-        performance["build_dataset_ms"] = _elapsed_ms(build_started)
+        performance["row_decode_ms"] = round(row_decode_ms, 3)
+        performance["day_grouping_ms"] = round(day_grouping_ms, 3)
+        performance["build_dataset_ms"] = round(row_decode_ms + day_grouping_ms, 3)
     return snapshots_by_date
 
 
@@ -1530,6 +1833,10 @@ def _feature_snapshot_from_row(
         "prev_ema_20": row["prev_ema_20"],
         "prev_ema_50": row["prev_ema_50"],
         "position": 0.0,
+        "avg_entry_price": None,
+        "entry_trade_date": None,
+        "entry_signal_features": None,
+        "position_holding_days": None,
         "recent_bars": [],
     }
     return trade_date, symbol, snapshot
@@ -1604,7 +1911,7 @@ def _apply_split_adjustments(
 
 
 def _inject_backtest_positions(
-    day_snapshots: dict[str, dict[str, Any]],
+    snapshots_by_position_key: dict[Any, dict[str, Any]],
     holdings: dict[Any, float],
     avg_entry_prices: dict[Any, float],
     entry_trade_dates: dict[Any, date],
@@ -1612,17 +1919,13 @@ def _inject_backtest_positions(
     entry_signal_features: dict[Any, dict[str, Any]],
     trade_day: date,
     trade_day_index: int,
-    *,
-    stable_instrument_identity: bool = False,
 ) -> None:
     """Expose current position size to handlers that need state-aware exits."""
-    for symbol, snapshot in day_snapshots.items():
-        position_key = _snapshot_position_key(
-            symbol,
-            snapshot,
-            stable_instrument_identity=stable_instrument_identity,
-        )
-        snapshot["position"] = float(holdings.get(position_key, 0.0))
+    for position_key, quantity in holdings.items():
+        snapshot = snapshots_by_position_key.get(position_key)
+        if snapshot is None:
+            continue
+        snapshot["position"] = float(quantity)
         snapshot["avg_entry_price"] = avg_entry_prices.get(position_key)
         snapshot["entry_trade_date"] = entry_trade_dates.get(position_key)
         snapshot["entry_signal_features"] = entry_signal_features.get(position_key)
@@ -2067,24 +2370,23 @@ def _gross_exposure(holdings: dict[Any, float], last_prices: dict[Any, float]) -
     return sum(float(qty) * float(last_prices.get(symbol, 0.0)) for symbol, qty in holdings.items())
 
 
-def _snapshot_price_map(
-    day_snapshots: dict[str, dict[str, Any]],
-    field: Literal["open", "close"],
-    *,
-    stable_instrument_identity: bool = False,
-) -> dict[Any, float]:
-    prices: dict[Any, float] = {}
-    for symbol, snapshot in day_snapshots.items():
-        price = snapshot.get(field)
-        if price is None:
-            continue
-        position_key = _snapshot_position_key(
-            symbol,
-            snapshot,
-            stable_instrument_identity=stable_instrument_identity,
-        )
-        prices[position_key] = float(price)
-    return prices
+def _update_last_marks(
+    holdings: dict[Any, float],
+    last_marks: dict[Any, float],
+    snapshots_by_position_key: dict[Any, dict[str, Any]],
+    execution_prices: dict[Any, float],
+) -> None:
+    """Keep one current or last-known mark for each open position."""
+    for position_key in holdings:
+        snapshot = snapshots_by_position_key.get(position_key)
+        close_price = snapshot.get("close") if snapshot is not None else None
+        if close_price is not None:
+            last_marks[position_key] = float(close_price)
+        elif position_key not in last_marks and position_key in execution_prices:
+            last_marks[position_key] = execution_prices[position_key]
+    for position_key in list(last_marks):
+        if position_key not in holdings:
+            last_marks.pop(position_key, None)
 
 
 def _snapshot_identity_map(

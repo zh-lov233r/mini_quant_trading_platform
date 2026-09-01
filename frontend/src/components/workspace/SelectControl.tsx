@@ -12,6 +12,7 @@ export type { SelectControlValue } from "./selectControlUtils";
 export interface SelectControlOption {
   value: SelectControlValue;
   label: ReactNode;
+  description?: ReactNode;
   disabled?: boolean;
   accent?: string;
 }
@@ -101,7 +102,14 @@ export function SelectControl({
                 ) : (
                   <span className={styles.dotPlaceholder} aria-hidden="true" />
                 )}
-                <Select.ItemText>{option.label}</Select.ItemText>
+                <Select.ItemText>
+                  <span className={styles.optionText}>
+                    <span>{option.label}</span>
+                    {option.description ? (
+                      <span className={styles.optionDescription}>{option.description}</span>
+                    ) : null}
+                  </span>
+                </Select.ItemText>
                 <Select.ItemIndicator className={styles.check}>✓</Select.ItemIndicator>
               </Select.Item>
             ))}

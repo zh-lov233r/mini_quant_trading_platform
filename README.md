@@ -31,6 +31,8 @@ The repository currently has two main parts:
   - Generate signals from strategy parameters plus `daily_features`
   - Queue manual and research runs in PostgreSQL and execute them with an independent worker
   - Choose `summary`, `trades`, or `full` persistence; manual runs default to `full`
+  - Plan the read-only correctness/screening funnel with `make benchmark-backtests BENCHMARK_ARGS="plan"`; write benchmarks require explicit `--apply` and the safety gates in the performance guide
+  - Reuse a fingerprinted, read-only PreparedDataset memmap across v2 research trials; manual backtests keep the database loader
   - Load summary, downsampled equity, signals, and transactions through incremental APIs
   - Keep v1 as the default engine while v2 instrument-identity and batch-persistence rollout is validated
   - Rank same-strategy BUY signals by a frozen day-T strength score before day-(T+1) fills; see [Signal strength](docs/signal-strength.md)

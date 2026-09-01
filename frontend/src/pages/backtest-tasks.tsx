@@ -204,7 +204,7 @@ function TaskWindow({ task }: { task: BacktestTask }) {
 }
 
 function TaskActions({ task, isZh, onCancel }: { task: BacktestTask; isZh: boolean; onCancel: (task: BacktestTask) => void }) {
-  return <div className={styles.actions}>{task.run_id ? <Link href={`/backtests/${encodeURIComponent(task.run_id)}`}>{isZh ? "回测" : "Run"}</Link> : null}{task.experiment_id ? <Link href={`/research/${encodeURIComponent(task.experiment_id)}`}>{isZh ? "实验" : "Experiment"}</Link> : null}{task.cancellable ? <button type="button" onClick={() => onCancel(task)}>{isZh ? "取消" : "Cancel"}</button> : null}</div>;
+  return <div className={styles.actions}>{task.run_id ? <Link href={`/backtests/${encodeURIComponent(task.run_id)}`}>{isZh ? "查看" : "View"}</Link> : null}{task.experiment_id ? <Link href={`/research/${encodeURIComponent(task.experiment_id)}`}>{isZh ? "实验" : "Experiment"}</Link> : null}{task.cancellable ? <button type="button" onClick={() => onCancel(task)}>{isZh ? "取消" : "Cancel"}</button> : null}</div>;
 }
 
 function TaskCard({ task, isZh, locale, onCancel }: { task: BacktestTask; isZh: boolean; locale: string; onCancel: (task: BacktestTask) => void }) {

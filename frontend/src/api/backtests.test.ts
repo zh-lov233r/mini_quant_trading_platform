@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { deleteBacktest, getBacktestSupportResistance, listBacktestTasks } from "./backtests";
+import { createBacktest, deleteBacktest, getBacktestSupportResistance, listBacktestTasks } from "./backtests";
 import { cancelResearchTrial, deleteResearchBacktest } from "./research";
 
 afterEach(() => {
@@ -35,6 +35,27 @@ describe("backtest deletion clients", () => {
       "/api/research/experiments/experiment%2Fid/backtests/run%2Fid",
     );
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "DELETE" });
+  });
+});
+
+describe("backtest persistence selection", () => {
+  it.each(["summary", "trades", "full"] as const)("submits the explicit %s level", async (persistLevel) => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ id: "run-id", persist_level: persistLevel }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createBacktest({
+      strategy_id: "strategy-id",
+      start_date: "2025-01-01",
+      end_date: "2025-01-31",
+      persist_level: persistLevel,
+    });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+      persist_level: persistLevel,
+    });
   });
 });
 

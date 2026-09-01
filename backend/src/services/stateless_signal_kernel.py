@@ -20,16 +20,15 @@ def _numeric_column(
     )
 
 
-def vectorized_stateless_prefilter(
+def vectorized_stateless_candidates(
     runtime: dict[str, Any],
     market_data_by_symbol: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
-    """Remove rows that cannot enter any stateless signal branch.
+    """Keep only rows that can emit a stateless signal or manage an open position.
 
-    The original strategy handler still evaluates every trading rule and emits
-    events. This NumPy kernel only performs a conservative availability mask,
-    and always retains open positions, so event values and ordering stay owned
-    by the shared backtest/paper strategy implementation.
+    The shared strategy handler remains the sole owner of final events, reasons,
+    metadata, exits, and ordering. This kernel only avoids invoking it for rows
+    that provably cannot emit an event.
     """
     strategy_type = str(runtime.get("strategy_type") or "")
     if strategy_type not in {"trend", "mean_reversion", "momentum_breakout"}:
@@ -40,7 +39,7 @@ def vectorized_stateless_prefilter(
     symbols = [item[0] for item in items]
     snapshots = [item[1] for item in items]
     positions = _numeric_column(snapshots, "position")
-    keep = np.isfinite(positions) & (positions > 0)
+    keep = np.isfinite(positions) & (positions != 0)
 
     if strategy_type == "trend":
         signal = runtime["params"]["signal"]
@@ -48,25 +47,54 @@ def vectorized_stateless_prefilter(
         slow = signal["slow_indicator"]
         fast_key = f"{fast['kind']}_{fast['window']}"
         slow_key = f"{slow['kind']}_{slow['window']}"
-        required = (
-            "close",
-            "volume",
-            "volume_sma_20",
-            fast_key,
-            slow_key,
-            f"prev_{fast_key}",
-            f"prev_{slow_key}",
+        volume = _numeric_column(snapshots, "volume")
+        average_volume = _numeric_column(snapshots, "volume_sma_20")
+        fast_now = _numeric_column(snapshots, fast_key)
+        slow_now = _numeric_column(snapshots, slow_key)
+        previous_fast = _numeric_column(snapshots, f"prev_{fast_key}")
+        previous_slow = _numeric_column(snapshots, f"prev_{slow_key}")
+        valid = (
+            np.isfinite(volume)
+            & np.isfinite(average_volume)
+            & (average_volume > 0)
+            & np.isfinite(fast_now)
+            & np.isfinite(slow_now)
+            & np.isfinite(previous_fast)
+            & np.isfinite(previous_slow)
         )
+        volume_ok = volume >= float(signal["volume_multiplier"]) * average_volume
+        crossed = ((previous_fast <= previous_slow) & (fast_now > slow_now)) | (
+            (previous_fast >= previous_slow) & (fast_now < slow_now)
+        )
+        keep |= valid & volume_ok & crossed
     elif strategy_type == "mean_reversion":
-        lookback = int(runtime["params"]["signal"]["lookback_window"])
-        required = ("close", f"zscore_{lookback}")
+        signal = runtime["params"]["signal"]
+        lookback = int(signal["lookback_window"])
+        zscore = _numeric_column(snapshots, f"zscore_{lookback}")
+        keep |= np.isfinite(zscore) & (np.abs(zscore) >= float(signal["zscore_entry"]))
     else:
-        required = ("close", "volume", "volume_sma_20", "ret_20d")
-
-    available = np.ones(len(snapshots), dtype=np.bool_)
-    for field in required:
-        available &= np.isfinite(_numeric_column(snapshots, field))
-    keep |= available
+        signal = runtime["params"]["signal"]
+        close = _numeric_column(snapshots, "close")
+        sma_20 = _numeric_column(snapshots, "sma_20")
+        return_20d = _numeric_column(snapshots, "ret_20d")
+        volume = _numeric_column(snapshots, "volume")
+        average_volume = _numeric_column(snapshots, "volume_sma_20")
+        valid = (
+            np.isfinite(close)
+            & np.isfinite(sma_20)
+            & (sma_20 > 0)
+            & np.isfinite(return_20d)
+            & np.isfinite(volume)
+            & np.isfinite(average_volume)
+            & (average_volume > 0)
+        )
+        keep |= (
+            valid
+            & (positions <= 0)
+            & (close >= sma_20 * (1.0 + float(signal["breakout_buffer_pct"])))
+            & (return_20d >= float(signal["minimum_return_20d"]))
+            & (volume >= float(signal["volume_multiplier"]) * average_volume)
+        )
     return {
         symbol: snapshot
         for symbol, snapshot, selected in zip(symbols, snapshots, keep, strict=True)

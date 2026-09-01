@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+import time
 import unittest
 
 from src.services.market_data_loader import MarketDataLoader
@@ -14,9 +15,11 @@ class _Result:
         self.calls.append("mappings")
         return self
 
-    def yield_per(self, size: int):
-        self.calls.append(f"yield_per:{size}")
-        return [{"trade_date": date(2025, 1, 2), "symbol": "TEST"}]
+    def fetchmany(self, size: int):
+        self.calls.append(f"fetchmany:{size}")
+        if self.calls.count(f"fetchmany:{size}") == 1:
+            return [{"trade_date": date(2025, 1, 2), "symbol": "TEST"}]
+        return []
 
 
 class _Connection:
@@ -73,6 +76,36 @@ class MarketDataLoaderTests(unittest.TestCase):
         )
         self.assertEqual(calls[-1], "close")
         self.assertIn("load_market_data_ms", performance)
+        self.assertIn("sql_execute_ms", performance)
+        self.assertIn("sql_fetch_ms", performance)
+        self.assertIn("row_decode_ms", performance)
+        self.assertIn("day_grouping_ms", performance)
+
+    def test_consumer_delay_is_not_counted_as_market_data_loading(self) -> None:
+        calls: list[str] = []
+        connection = _Connection(calls)
+        engine = type("Engine", (), {"connect": lambda _self: connection})()
+        session = type("Session", (), {"get_bind": lambda _self: engine})()
+        performance: dict[str, float] = {}
+        loader = MarketDataLoader(
+            session,
+            statement=object(),
+            params={},
+            row_factory=lambda row: (
+                row["trade_date"],
+                row["symbol"],
+                {"instrument_id": 1},
+            ),
+            performance=performance,
+        )
+
+        iterator = loader.iter_days()
+        self.assertEqual(next(iterator)[0], date(2025, 1, 2))
+        time.sleep(0.05)
+        with self.assertRaises(StopIteration):
+            next(iterator)
+
+        self.assertLess(performance["load_market_data_ms"], 25.0)
 
 
 if __name__ == "__main__":

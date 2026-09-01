@@ -2,6 +2,11 @@
 .shellCollapsed { --workspace-sidebar-width: 72px; }
 .shellCollapsed .brand { display: none; }
 .shellCollapsed .brandRow { justify-content: center; }
+.shellCollapsed .sidebarFooter { align-items: center; }
+.shellCollapsed .sidebarFooter .localeSwitch { width: 44px; }
+.shellCollapsed .sidebarFooter .localeChoiceButton { display: none; }
+.shellCollapsed .sidebarFooter .localeToggleButton { display: inline-flex; }
+.shellCollapsed .localeLongLabel { display: none; }
 .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 40; width: var(--workspace-sidebar-width); display: flex; flex-direction: column; gap: 14px; padding: 14px 10px; border-right: 1px solid rgba(71,85,105,.34); background: rgba(3,7,18,.94); box-shadow: 14px 0 36px rgba(2,6,23,.24); backdrop-filter: blur(14px); transition: width 180ms ease; }
 .brandRow,.sidebarFooter,.navLink,.quickCreate,.mobileTopbar,.pageHeaderRow,.pageActions,.headerControls,.localeSwitch { display: flex; align-items: center; }
 .brandRow { min-height: 42px; justify-content: space-between; gap: 8px; }
@@ -22,6 +27,7 @@
 .localeSwitch { justify-content: center; gap: 4px; padding: 3px; border: 1px solid rgba(71,85,105,.36); border-radius: 10px; background: rgba(8,15,24,.82); }
 .localeButton { flex: 1; min-width: 0; padding: 6px 7px; border: 0; border-radius: 7px; background: transparent; color: #94a3b8; cursor: pointer; font-size: 11px; font-weight: 800; }
 .localeButtonActive { background: rgba(8,145,178,.9); color: #f8fafc; }
+.localeToggleButton { display: none; width: 36px; height: 36px; flex: none; align-items: center; justify-content: center; padding: 0; }
 .main { min-width: 0; min-height: 100vh; margin-left: var(--workspace-sidebar-width); padding: 16px clamp(16px,1.6vw,24px) 52px; transition: margin-left 180ms ease; }
 .mobileTopbar { display: none; }
 .mobileLocaleSwitch { display: none; }
@@ -46,7 +52,10 @@
   .shell { --workspace-sidebar-width: 72px; }
   .brand,.navLabel,.quickCreateLabel,.collapseDesktop,.localeLongLabel { display: none; }
   .brandRow,.navLink,.quickCreate { justify-content: center; }
-  .sidebarFooter { padding-bottom: 36px; }
+  .sidebarFooter { align-items: center; padding-bottom: 36px; }
+  .sidebarFooter .localeSwitch { width: 44px; }
+  .sidebarFooter .localeChoiceButton { display: none; }
+  .sidebarFooter .localeToggleButton { display: inline-flex; }
 }
 
 @media (max-width: 767px) {

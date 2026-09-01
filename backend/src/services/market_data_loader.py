@@ -37,8 +37,10 @@ class MarketDataLoader:
         self._history_sessions_by_instrument: dict[int, int] = {}
 
     def iter_days(self) -> Iterator[tuple[date, dict[str, dict[str, Any]]]]:
-        load_started = perf_counter()
-        build_ms = 0.0
+        sql_execute_ms = 0.0
+        sql_fetch_ms = 0.0
+        row_decode_ms = 0.0
+        day_grouping_ms = 0.0
         # A pooled connection may retain a previous execution option until the
         # SQLAlchemy proxy is reset. Force client-side execution for the
         # transaction command, then enable server-side streaming only for the
@@ -52,39 +54,53 @@ class MarketDataLoader:
                     execution_options={"stream_results": False},
                 )
             streaming_connection = connection.execution_options(stream_results=True)
-            rows = streaming_connection.execute(self._statement, self._params).mappings().yield_per(
-                self._fetch_size
-            )
+            execute_started = perf_counter()
+            rows = streaming_connection.execute(self._statement, self._params).mappings()
+            sql_execute_ms += (perf_counter() - execute_started) * 1000.0
             current_date: date | None = None
             current_snapshots: dict[str, dict[str, Any]] = {}
-            for raw_row in rows:
-                build_started = perf_counter()
-                trade_date, symbol, snapshot = self._row_factory(dict(raw_row))
-                instrument_id = int(snapshot.get("instrument_id") or 0)
-                history_sessions = self._history_sessions_by_instrument.get(instrument_id, 0) + 1
-                self._history_sessions_by_instrument[instrument_id] = history_sessions
-                snapshot["history_sessions"] = history_sessions
-                build_ms += (perf_counter() - build_started) * 1000.0
-                self.rows_loaded += 1
-                self.loaded_symbols.add(symbol)
-                if current_date is not None and trade_date != current_date:
-                    yield current_date, current_snapshots
-                    current_snapshots = {}
-                current_date = trade_date
-                existing = current_snapshots.get(symbol)
-                if existing is not None and existing.get("instrument_id") != snapshot.get("instrument_id"):
-                    raise ValueError(
-                        f"symbol {symbol} resolves to multiple instruments on {trade_date}"
-                    )
-                current_snapshots[symbol] = snapshot
+            while True:
+                fetch_started = perf_counter()
+                batch = rows.fetchmany(self._fetch_size)
+                sql_fetch_ms += (perf_counter() - fetch_started) * 1000.0
+                if not batch:
+                    break
+                for raw_row in batch:
+                    decode_started = perf_counter()
+                    trade_date, symbol, snapshot = self._row_factory(dict(raw_row))
+                    row_decode_ms += (perf_counter() - decode_started) * 1000.0
+
+                    grouping_started = perf_counter()
+                    instrument_id = int(snapshot.get("instrument_id") or 0)
+                    history_sessions = self._history_sessions_by_instrument.get(instrument_id, 0) + 1
+                    self._history_sessions_by_instrument[instrument_id] = history_sessions
+                    snapshot["history_sessions"] = history_sessions
+                    self.rows_loaded += 1
+                    self.loaded_symbols.add(symbol)
+                    completed_day = None
+                    if current_date is not None and trade_date != current_date:
+                        completed_day = (current_date, current_snapshots)
+                        current_snapshots = {}
+                    current_date = trade_date
+                    existing = current_snapshots.get(symbol)
+                    if existing is not None and existing.get("instrument_id") != snapshot.get("instrument_id"):
+                        raise ValueError(
+                            f"symbol {symbol} resolves to multiple instruments on {trade_date}"
+                        )
+                    current_snapshots[symbol] = snapshot
+                    day_grouping_ms += (perf_counter() - grouping_started) * 1000.0
+                    if completed_day is not None:
+                        yield completed_day
             if current_date is not None:
                 yield current_date, current_snapshots
         finally:
-            self._performance["load_market_data_ms"] = round(
-                (perf_counter() - load_started) * 1000.0,
-                3,
-            )
-            self._performance["build_dataset_ms"] = round(build_ms, 3)
+            self._performance["sql_execute_ms"] = round(sql_execute_ms, 3)
+            self._performance["sql_fetch_ms"] = round(sql_fetch_ms, 3)
+            self._performance["row_decode_ms"] = round(row_decode_ms, 3)
+            self._performance["day_grouping_ms"] = round(day_grouping_ms, 3)
+            # Legacy aggregate names remain derived values rather than overlapping timers.
+            self._performance["load_market_data_ms"] = round(sql_execute_ms + sql_fetch_ms, 3)
+            self._performance["build_dataset_ms"] = round(row_decode_ms + day_grouping_ms, 3)
             self.close()
 
     def close(self) -> None:

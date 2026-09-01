@@ -25,6 +25,7 @@ from src.models.tables import (
     Transaction,
 )
 from src.services.backtest_engine import BacktestCancelledError, run_backtest
+from src.services.prepared_dataset_service import PreparedDatasetDataChangedError
 
 log = logging.getLogger(__name__)
 UTC = timezone.utc
@@ -223,6 +224,29 @@ def progress_update_interval_seconds(progress: dict[str, Any]) -> float:
     if phase == "finalizing":
         return 1.0
     return 0.0
+
+
+def _with_worker_performance(
+    summary_metrics: dict[str, Any] | None,
+    *,
+    job: BacktestJob,
+    worker_active_ms: float,
+) -> dict[str, Any]:
+    metrics = dict(summary_metrics or {})
+    performance = dict(metrics.get("performance") or {})
+    queue_wait_ms = 0.0
+    if job.created_at is not None and job.claimed_at is not None:
+        queue_wait_ms = max((job.claimed_at - job.created_at).total_seconds() * 1000.0, 0.0)
+    engine_total_ms = float(performance.get("engine_total_ms") or performance.get("total_ms") or 0.0)
+    performance.update(
+        {
+            "queue_wait_ms": round(queue_wait_ms, 3),
+            "worker_active_ms": round(max(worker_active_ms, 0.0), 3),
+            "finalization_overhead_ms": round(max(worker_active_ms - engine_total_ms, 0.0), 3),
+        }
+    )
+    metrics["performance"] = performance
+    return metrics
 
 
 def eligible_queued_job_count(db: Session, *, now: datetime | None = None) -> int:
@@ -596,6 +620,7 @@ def execute_backtest_job(
     worker_id: str,
     lease_seconds: int = 120,
 ) -> None:
+    worker_started = time.perf_counter()
     db = SessionLocal()
     last_progress_write = 0.0
     last_progress_key: tuple[str, str] | None = None
@@ -663,6 +688,7 @@ def execute_backtest_job(
             cancel_check=lambda: _job_cancel_requested(job.id),
             progress_callback=report,
             engine_version=payload.get("engine_version"),
+            prepared_dataset=payload.get("prepared_dataset") if job.source == "research" else None,
         )
         job = db.get(BacktestJob, job.id)
         run = db.get(StrategyRun, run.id)
@@ -680,6 +706,11 @@ def execute_backtest_job(
         job.lease_expires_at = None
         job.error_message = None
         experiment_id = _finalize_linked_trial(db, job, run)
+        run.summary_metrics = _with_worker_performance(
+            run.summary_metrics,
+            job=job,
+            worker_active_ms=(time.perf_counter() - worker_started) * 1000.0,
+        )
         db.commit()
         _finalize_research_experiment(db, experiment_id)
     except Exception as exc:
@@ -700,6 +731,10 @@ def execute_backtest_job(
             job.error_message = str(exc)[:2000]
             job.progress = _job_progress(job, "failed", percent=None, preserve=True)
             _fail_candidate_verification(db, dict(job.payload or {}), job.error_message)
+        elif isinstance(exc, PreparedDatasetDataChangedError):
+            job.status = "failed"
+            job.error_message = str(exc)[:2000]
+            job.progress = _job_progress(job, "failed", percent=None, preserve=True)
         elif job.attempt < job.max_attempts:
             job.status = "queued"
             job.available_at = datetime.now(UTC) + timedelta(seconds=5)
@@ -723,6 +758,26 @@ def execute_backtest_job(
             run.finished_at = datetime.now(UTC)
             run.error_message = job.error_message
             experiment_id = _finalize_linked_trial(db, job, run)
+            if isinstance(exc, PreparedDatasetDataChangedError) and experiment_id is not None:
+                experiment = db.get(ResearchExperiment, experiment_id)
+                if experiment is not None:
+                    experiment.status = "data_changed"
+                    experiment.error_code = "data_changed"
+                    experiment.error_message = str(exc)[:2000]
+                    experiment.finished_at = datetime.now(UTC)
+                    db.execute(
+                        ExperimentTrial.__table__.update()
+                        .where(
+                            ExperimentTrial.experiment_id == experiment_id,
+                            ExperimentTrial.status == "queued",
+                        )
+                        .values(
+                            status="cancelled",
+                            error_code="data_changed",
+                            error_message=experiment.error_message,
+                            finished_at=datetime.now(UTC),
+                        )
+                    )
         else:
             experiment_id = None
         db.commit()

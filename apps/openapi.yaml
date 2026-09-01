@@ -2440,6 +2440,7 @@ components:
           type: string
           enum: [summary, trades, full]
           default: full
+          description: Controls stored detail only. summary keeps exact metrics and compact equity, trades also keeps transactions, and full keeps the complete audit detail.
 
     BacktestProgress:
       type: object

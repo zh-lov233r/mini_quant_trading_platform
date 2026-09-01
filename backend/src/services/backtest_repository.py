@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from time import perf_counter
 from typing import Any
 
 from sqlalchemy import insert
@@ -17,6 +18,7 @@ class BacktestRepository:
         self.batch_size = max(1, int(batch_size))
         self._buffers: dict[type[Any], list[dict[str, Any]]] = defaultdict(list)
         self.rows_inserted = 0
+        self.flush_ms = 0.0
 
     def add_signal(self, values: dict[str, Any]) -> None:
         self._append(Signal, values)
@@ -37,7 +39,9 @@ class BacktestRepository:
         rows = self._buffers[model]
         if not rows:
             return
+        started = perf_counter()
         self.db.execute(insert(model), rows)
+        self.flush_ms += (perf_counter() - started) * 1000.0
         self.rows_inserted += len(rows)
         rows.clear()
 

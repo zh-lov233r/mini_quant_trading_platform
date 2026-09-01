@@ -31,6 +31,8 @@
   - 基于策略参数和 `daily_features` 生成信号
   - 在 PostgreSQL 中排队手动与研究回测，并由独立 worker 执行
   - 支持 `summary`、`trades`、`full` 三种持久化级别；手动回测默认 `full`
+  - 使用 `make benchmark-backtests BENCHMARK_ARGS="plan"` 只读规划 correctness/screening 漏斗；写入基准必须显式增加 `--apply` 并满足性能指南的安全门禁
+  - v2 research trial 复用按数据指纹寻址的只读 PreparedDataset memmap；手动回测继续使用数据库 loader
   - 通过增量接口加载摘要、下采样权益、signals 和 transactions
   - v1 继续作为默认引擎，v2 的 instrument 身份与批量持久化在验收后受控切换
   - 按 T 日冻结的信号强度对同策略 BUY 排名，再于 T+1 尝试成交；详见[信号强度](docs/signal-strength.zh-CN.md)

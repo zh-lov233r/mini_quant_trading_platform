@@ -16,6 +16,8 @@
 
 手动请求默认 `full`，研究 trial 固定请求 `summary`。客户端使用 `persist_level` 与 `available_details` 区分“没有持久化”和真实零记录，禁止把缺失明细显示成零信号或零交易。
 
+手动回测表单始终显式提交选择值，并提供“完整审计 full”“成交分析 trades”“快速摘要 summary”三个中英文选项。改变持久化级别只改变保存的明细，不改变信号、成交、权益或摘要指标的计算。
+
 支撑/压力区的 zone version 与 run 审计事件使用 SQLAlchemy Core 每 5,000 条分批写入，但仍属于同一事务，批次之间不会独立 commit；任一批次失败都会回滚当前 run 的全部明细。缓存命中时跳过共享 zone version 写入，但 `full` 仍逐条保留当前 run 的完整事件集合，不裁剪事件类型或 payload。
 
 候选 promotion 会先创建 OOS/base-cost `full` verification job。job 重新检查数据指纹，并以相对和绝对 `1e-10` 容差比较数值摘要指标。指纹变化或指标不一致会记录 verification 失败并阻止 promotion。verification run ID 同时写入 candidate metrics 和晋升策略 lineage。
@@ -82,8 +84,23 @@ worker 使用 `FOR UPDATE SKIP LOCKED` claim，维护 heartbeat/lease，每个�
 
 ## 指标与验收
 
-`summary_metrics.performance` 记录 SQL 加载、Python 数据集构造、历史状态、信号、成交、明细/摘要持久化、总耗时、输入输出行数和峰值 RSS。支撑/压力区持久化额外记录 zone/event 行数与耗时、持久化总耗时和不可变缓存是否复用；结构化日志记录同一映射。全市场验收门槛是规范化 zone/event 内容完全一致、支撑/压力区收尾耗时至少下降 50%，且峰值 RSS 不高于已记录的 16.1 GB 基线；不得仅凭单元测试宣称通过。手动启用 v2 前仍需跑完 100/500/3,640 股票以及 1 年/5 年/全历史矩阵。索引或 LAG 查询必须由真实 `EXPLAIN ANALYZE` 证明至少改善 20%，不能凭合成测试部署。
+`summary_metrics.performance` 使用互不重叠的阶段记录 `sql_execute_ms`、`sql_fetch_ms`、`row_decode_ms`、`day_grouping_ms`、历史状态、信号、成交、明细构造、明细/摘要持久化、响应构造和总耗时。它同时记录 rows/day/signals/trades 每秒、每输入行微秒数、阶段占比、`unaccounted_ms` 与峰值 RSS；worker 终态补充 queue wait、active 和 finalization overhead。支撑/压力区子阶段只作为诊断维度，不重复计入 `unaccounted_ms`。结构化日志记录同一映射。
 
-NumPy PreparedDataset/memmap 已固定依赖版本，但仍受发布门控：冷/热缓存、指纹失效、并发打开、损坏文件和清理验收完成前不启用。当前不依赖 Numba。
+研究 v2 trial 使用 experiment `run_manifest.preparedDataset` 中的稳定 key/manifest。key 包含 loader revision、源数据指纹、稳定 instrument 集合、完整日期范围、feature set、价格/公司行动、symbol identity 和 universe membership 语义，不包含普通策略参数。首个 trial 在文件锁内原子构建 float64 structured memmap 及日期 offset/公司行动 sidecar；后续 trial 只读打开。文件或 metadata 损坏会在锁内重建；缓存基础设施失败会记录 fallback 原因并回到相同指纹的 DB loader；构建期间行数变化会把 experiment 标为 `data_changed`。手动回测不使用该缓存。cleanup 会统计引用同一 key 的 queued/running job，存在 active lease 时拒绝删除。
+
+只读基准预检：
+
+```bash
+make benchmark-backtests BENCHMARK_ARGS="plan"
+make benchmark-backtests BENCHMARK_ARGS="screening"
+```
+
+`plan` 与没有 `--apply` 的 correctness/screening/confirmation 只输出目标数据库、代码/依赖版本、case、数据指纹和预计 run 数。写入模式必须由操作者显式增加 `--apply`，并要求干净 worktree、零 queued/running job、`RESEARCH_WORKER_ENABLED=false`、两项 paper scheduler 配置为 `false` 且 `BACKTEST_WORKER_CONCURRENCY=1`。每个 case 预热一次并正式运行五次，以 median 为主并保留最大值和全部 run ID。不要在未报告 `hzy/public`、指纹与预计 run 数并取得明确授权时运行写入模式。
+
+三个无状态候选 kernel 已分别实现并复用共享 strategy handler 生成最终事件。默认执行路径暂不启用；screening 会为每个策略和持久化级别生成 baseline/kernel A/B case，只有全市场 confirmation 达到 20% 门槛且差分结果完全一致后，才在后续改动中切换对应策略。
+
+全市场验收门槛是规范化 zone/event 内容完全一致、支撑/压力区收尾耗时至少下降 50%，且峰值 RSS 不高于已记录的 16.1 GB 基线；不得仅凭单元测试宣称通过。手动启用 v2 前仍需跑完 100/500/3,640 股票以及 1 年/5 年/全历史矩阵。索引或 LAG 查询必须由真实 `EXPLAIN ANALYZE` 证明至少改善 20%，不能凭合成测试部署。
+
+当前不依赖 Numba。并发保持 `1|2`；concurrency=4、SQL/索引、ring buffer 和更多 pattern 优化都必须先满足本文的真实观测门槛并另立改动。
 
 图表发布需记录生产构建的 shared 与回测详情 First Load JS，并确认 Lightweight Charts 使用独立 chunk。固定 fixture 使用 1,500/5,000 个权益点、200 个事件以及 500 根 K 线/100 个 marker；在同一生产 Chromium 连续测量 5 次，要求数据就绪到 chart-ready 中位数不超过 100 ms、平移缩放平均不低于 55 FPS，且图表主线程任务不超过 50 ms。

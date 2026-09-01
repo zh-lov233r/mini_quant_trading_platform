@@ -16,7 +16,7 @@ import { SearchableSelect } from "@/components/workspace/SearchableSelect";
 import { SelectControl } from "@/components/workspace/SelectControl";
 import { WorkspaceConfirmDialog, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
-import type { BacktestCreate, BacktestRunOut, BacktestWorkerStatus } from "@/types/backtest";
+import type { BacktestCreate, BacktestPersistLevel, BacktestRunOut, BacktestWorkerStatus } from "@/types/backtest";
 import type { StockBasketOut } from "@/types/stock-basket";
 import type { StrategyOut, StrategyType } from "@/types/strategy";
 import {
@@ -96,6 +96,7 @@ type BacktestFormDraft = {
   commissionBps: number;
   commissionMin: number;
   slippageBps: number;
+  persistLevel: BacktestPersistLevel;
 };
 
 function readBacktestFormDraft(): Partial<BacktestFormDraft> | null {
@@ -138,6 +139,9 @@ function readBacktestFormDraft(): Partial<BacktestFormDraft> | null {
     }
     if (typeof parsed.slippageBps === "number" && Number.isFinite(parsed.slippageBps)) {
       draft.slippageBps = parsed.slippageBps;
+    }
+    if (parsed.persistLevel === "summary" || parsed.persistLevel === "trades" || parsed.persistLevel === "full") {
+      draft.persistLevel = parsed.persistLevel;
     }
     return draft;
   } catch {
@@ -254,6 +258,7 @@ export default function BacktestsPage() {
   const [commissionBps, setCommissionBps] = useState(1);
   const [commissionMin, setCommissionMin] = useState(1);
   const [slippageBps, setSlippageBps] = useState(5);
+  const [persistLevel, setPersistLevel] = useState<BacktestPersistLevel>("full");
 
   useEffect(() => {
     if (!deleteNotice) return;
@@ -295,6 +300,9 @@ export default function BacktestsPage() {
       }
       if (typeof draft.slippageBps === "number") {
         setSlippageBps(draft.slippageBps);
+      }
+      if (draft.persistLevel) {
+        setPersistLevel(draft.persistLevel);
       }
     }
     setDraftHydrated(true);
@@ -379,6 +387,7 @@ export default function BacktestsPage() {
       commissionBps,
       commissionMin,
       slippageBps,
+      persistLevel,
     };
     window.localStorage.setItem(BACKTEST_FORM_DRAFT_STORAGE_KEY, JSON.stringify(draft));
   }, [
@@ -389,6 +398,7 @@ export default function BacktestsPage() {
     draftHydrated,
     endDate,
     initialCash,
+    persistLevel,
     slippageBps,
     startDate,
     strategyId,
@@ -533,6 +543,7 @@ export default function BacktestsPage() {
       commission_bps: Number(commissionBps),
       commission_min: Number(commissionMin),
       slippage_bps: Number(slippageBps),
+      persist_level: persistLevel,
     };
 
     try {
@@ -967,6 +978,35 @@ export default function BacktestsPage() {
                   </div>
                 </section>
 
+                <section style={formGroupStyle}>
+                  <div>
+                    <div style={formGroupTitleStyle}>{isZh ? "结果明细" : "Result Detail"}</div>
+                    <div style={formGroupTextStyle}>
+                      {isZh
+                        ? "完整审计仍是默认值；初筛时可以只保存摘要，之后再对候选策略运行完整审计。"
+                        : "Full audit remains the default. Use summary for screening, then rerun selected candidates with full detail."}
+                    </div>
+                  </div>
+                  {fieldBlock(
+                    isZh ? "持久化级别" : "Persistence Level",
+                    persistLevel === "full"
+                      ? (isZh ? "保存信号、成交、每日持仓和支撑/压力审计事件。" : "Save signals, fills, daily positions, and support/resistance audit events.")
+                      : persistLevel === "trades"
+                        ? (isZh ? "保存摘要和成交，不保存信号及每日完整持仓。" : "Save summary and fills without signals or full daily positions.")
+                        : (isZh ? "只保存精确摘要和降采样权益曲线。" : "Save exact summary metrics and a downsampled equity curve only."),
+                    <SelectControl
+                      value={persistLevel}
+                      onValueChange={(value) => setPersistLevel(value as BacktestPersistLevel)}
+                      options={[
+                        { value: "full", label: isZh ? "完整审计" : "Full audit", description: isZh ? "信号、成交、持仓与审计事件" : "Signals, fills, positions, and audit events" },
+                        { value: "trades", label: isZh ? "成交分析" : "Trade analysis", description: isZh ? "摘要与成交明细" : "Summary and fill details" },
+                        { value: "summary", label: isZh ? "快速摘要" : "Quick summary", description: isZh ? "精确指标与降采样权益" : "Exact metrics and downsampled equity" },
+                      ]}
+                    />,
+                    isZh ? "默认完整审计" : "Full audit by default"
+                  )}
+                </section>
+
                 <div
                   style={{
                     padding: 14,
@@ -980,8 +1020,8 @@ export default function BacktestsPage() {
                   }}
                 >
                   {isZh
-                    ? "当前回测引擎按“当日收盘生成信号，下一交易日收盘成交”的规则执行，所以这组参数更适合先验证策略方向和结果落库，而不是做超精细撮合"
-                    : "The current backtest engine generates signals at today's close and fills at the next trading day's close, so these settings are better for validating strategy direction and persistence than ultra-fine execution modeling."}
+                    ? "当前回测引擎按“当日收盘生成信号，下一有效交易日开盘成交”的规则执行，所以这组参数更适合先验证策略方向和结果落库，而不是做超精细撮合"
+                    : "The current backtest engine generates signals at today's close and fills at the next available trading session's open, so these settings are better for validating strategy direction and persistence than ultra-fine execution modeling."}
                 </div>
 
                 {selectedStrategy ? (
