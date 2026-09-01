@@ -37,7 +37,7 @@ fall(value, gate, ideal) = 100 × clamp((gate - value) / (gate - ideal), 0, 1)
 | 压力突破 | ATR 确认幅度 45%、量比 35%、盈亏比 20%，均从配置门槛到两倍门槛归一化。 |
 | 突破回踩 | ATR 站稳幅度 35%（0 到 `bounce_confirmation_atr`）、回踩缩量 35%（`retest_volume_ratio_max` 到 0）、盈亏比 30%（配置下限到其两倍）。 |
 
-支撑/压力策略现有 Beta 后验继续保存在原始 `score` 和 `score_evidence` 中作为审计证据，不参与 v1 候选选择或强度排名。
+支撑/压力策略现有 Beta 后验继续保存在原始 `score` 和 `score_evidence` 中作为审计证据，不参与 v3 候选选择或强度排名；状态准入先于 signal strength 排名。
 
 所有公式输入在 T 日收盘前可得。必需输入缺失或不是有限数时，运行明确失败，不会静默退回股票代码顺序。
 

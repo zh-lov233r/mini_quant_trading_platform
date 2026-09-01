@@ -492,7 +492,7 @@ def cancel_experiment(db: Session, experiment_id: UUID | str) -> ResearchExperim
     experiment = get_experiment(db, experiment_id)
     if experiment.status in TERMINAL_STATUSES:
         return experiment
-    if experiment.study_kind == "support_resistance_effectiveness_v2":
+    if experiment.study_kind == "support_resistance_effectiveness_v3":
         child_ids = list(
             db.execute(
                 select(ResearchExperiment.id).where(
@@ -859,6 +859,10 @@ def build_experiment_report(db: Session, experiment: ResearchExperiment) -> dict
 
 
 def _finalize_if_ready(db: Session, experiment: ResearchExperiment) -> None:
+    # Effectiveness parents are orchestration containers with no direct trials.
+    # Their child-state machine owns completion and report generation.
+    if experiment.study_kind == "support_resistance_effectiveness_v3":
+        return
     _refresh_progress(db, experiment)
     progress = experiment.progress
     if progress["queued"] or progress["running"]:

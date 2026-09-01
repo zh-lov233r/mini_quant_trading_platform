@@ -25,6 +25,7 @@ export type BacktestProgressPhase =
 
 export type BacktestFinalizingStage =
   | "zone_versions"
+  | "regime_versions"
   | "run_events"
   | "backtest_details"
   | "committing";
@@ -251,9 +252,30 @@ export interface SupportResistanceRunEventOut {
   payload: Record<string, unknown>;
 }
 
+export type SupportResistanceRegime = "uptrend" | "downtrend" | "range" | "transition";
+
+export interface SupportResistanceRegimeIntervalOut {
+  version_id: string;
+  symbol: string;
+  regime: SupportResistanceRegime;
+  start_date: string;
+  end_date: string;
+  session_count: number;
+  lower_zone_key?: string | null;
+  upper_zone_key?: string | null;
+  reason_code: string;
+  evidence: Record<string, unknown>;
+}
+
 export interface SupportResistanceBacktestOut {
   run_id: string;
   materialization?: SupportResistanceMaterializationOut | null;
   zone_versions: SupportResistanceZoneVersionOut[];
+  regime_intervals: SupportResistanceRegimeIntervalOut[];
   events: SupportResistanceRunEventOut[];
+}
+
+export interface BacktestDeleteResult {
+  run_id: string;
+  deleted: boolean;
 }

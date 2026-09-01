@@ -109,7 +109,7 @@ Quant 会拒绝来自其他 workflow run 的用量更新，把最新累计值保
 
 worker 重启后会恢复遗留 trial，不重复创建回测证据。已经因策略停止或取消的实验不会恢复排队工作。AgentOps 持久化 external tool run，并在 Control Plane 重启后恢复 `waiting_external` 轮询。
 
-使用以下只读接口检查结果：
+使用以下接口检查结果并清理终态运行记录：
 
 - `GET /api/research/experiments`
 - `GET /api/research/experiments/{experimentId}`
@@ -117,7 +117,10 @@ worker 重启后会恢复遗留 trial，不重复创建回测证据。已经因�
 - `GET /api/research/experiments/{experimentId}/rounds`
 - `GET /api/research/experiments/{experimentId}/candidates`
 - `GET /api/research/experiments/{experimentId}/report`
+- `DELETE /api/research/experiments/{experimentId}/backtests/{runId}`：逐条删除属于该实验的终态回测
+
+删除研究回测只会移除运行期执行产物，并且仅在实验和回测都进入终态后允许；确认步骤使用平台工作区弹窗，不再调用浏览器原生提示框。Trial 参数、指标、数据指纹、候选证据和已经生成的报告产物继续保留；实时 Trial 或候选记录会保存删除时间，不再保留运行链接。
 
 报告包含进度、成功与失败 trial 证据、稳健性对比、终止详情，以及可用时的 token 用量。它只描述研究执行，不能被表述为实盘安全或预期盈利能力。
 
-预注册的 `support_resistance_effectiveness_v2` 用于独立验证 `pivot-slope-atr-v2`，是父子实验特化流程，使用历史动态流动性股票池、封存最终留出、最多 200 次回测、同成本缓存重放，以及中英文 JSON/Markdown/PDF 产物。子实验和产物接口对 UI 保持只读。完整协议与数据库上线边界见[支撑/压力区策略有效性研究](support-resistance-effectiveness.zh-CN.md)。
+预注册的 `support_resistance_effectiveness_v3` 用于独立验证 `pivot-slope-regime-v3`，是父子实验特化流程，使用历史动态流动性股票池、封存最终留出、最多 200 次回测、区域与四状态同成本缓存重放，以及中英文 JSON/Markdown/PDF 产物。已经生成的产物保持不可变；终态子实验的运行产物只能从所属子实验删除，同时保留带删除标记的研究证据。完整协议与数据库上线边界见[支撑/压力区策略有效性研究](support-resistance-effectiveness.zh-CN.md)。

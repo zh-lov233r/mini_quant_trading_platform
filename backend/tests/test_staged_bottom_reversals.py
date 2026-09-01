@@ -16,12 +16,79 @@ from src.services.patterns.common import confirmed_pivot_lows
 from src.services.patterns import head_shoulders_bottom, rounded_bottom, v_reversal
 from src.services.patterns.models import PatternContext
 from src.services.paper_trading_service import VirtualSubportfolioState, _apply_virtual_fill, _client_order_id
-from src.services.staged_entry_service import build_pattern_setup, select_highest_stage_signals
+from src.services.staged_entry_service import (
+    build_pattern_setup,
+    can_apply_staged_entry,
+    select_highest_stage_signals,
+)
 from src.services.strategy_engine import SignalEvent
 from src.services.strategy_registry import build_strategy_catalog, normalize_strategy_params
+from src.services.support_resistance_service import (
+    SupportResistanceState,
+    SupportResistanceSymbolState,
+)
 
 
 class StagedBottomReversalTests(unittest.TestCase):
+    def test_support_resistance_buy_requires_projected_execution_inside_channel(self) -> None:
+        trade_day = date(2026, 1, 6)
+        event = SignalEvent(
+            "strategy",
+            datetime(2026, 1, 5, 21, tzinfo=timezone.utc),
+            "TEST",
+            "BUY",
+            "channel entry",
+            metadata={
+                "strength": {"score": 100, "passes_threshold": True},
+                "support_resistance": {
+                    "selected_setup": "support_bounce",
+                    "entry_channel": {
+                        "valid": True,
+                        "lower": 101.0,
+                        "upper": 109.0,
+                        "lower_slope_per_session": 0.25,
+                        "upper_slope_per_session": 0.5,
+                        "support_zone_key": "support",
+                        "resistance_zone_key": "resistance",
+                    },
+                },
+            },
+        )
+        state = SupportResistanceState(
+            symbols={"TEST": SupportResistanceSymbolState()}
+        )
+        holdings: dict[str, float] = {}
+        common = dict(
+            db=SimpleNamespace(add=lambda _value: None),
+            strategy=SimpleNamespace(id="strategy"),
+            run=SimpleNamespace(id="run"),
+            signals=[event],
+            holdings=holdings,
+            avg_entry_prices={},
+            entry_trade_dates={},
+            entry_day_indices={},
+            entry_signal_features={},
+            execution_snapshots={"TEST": {"symbol": "TEST", "dt_ny": trade_day}},
+            cash_ref={"cash": 1_000.0},
+            equity_before=1_000.0,
+            max_positions=1,
+            position_size_pct=0.5,
+            cost_config=BacktestCostConfig(0, 0, 0),
+            trade_day=trade_day,
+            trade_day_index=1,
+            persist_transactions=False,
+            support_resistance_state=state,
+        )
+
+        rejected = _apply_buy_signals(execution_prices={"TEST": 109.5001}, **common)
+        self.assertEqual(rejected.trade_count, 0)
+        self.assertEqual(holdings, {})
+        self.assertEqual(state.symbols["TEST"].events[-1]["event_type"], "execution_rejection")
+
+        accepted = _apply_buy_signals(execution_prices={"TEST": 109.5}, **common)
+        self.assertEqual(accepted.trade_count, 1)
+        self.assertGreater(holdings["TEST"], 0)
+
     def test_defaults_are_isolated_and_stage_targets_are_validated(self) -> None:
         trend = normalize_strategy_params("trend", {})
         trend["signal"]["min_strength_score"] = 99
@@ -189,6 +256,13 @@ class StagedBottomReversalTests(unittest.TestCase):
         selected = select_highest_stage_signals(events)
         self.assertEqual(len(selected), 1)
         self.assertEqual(selected[0].metadata["setup"]["stage_index"], 3)
+
+    def test_malformed_internal_setup_fails_instead_of_becoming_single_entry(self) -> None:
+        with self.assertRaises(KeyError):
+            can_apply_staged_entry(
+                {"setup": {"pattern_type": "v_reversal"}},
+                {"setup": {"setup_id": "v_reversal:TEST:existing", "stage_index": 1}},
+            )
 
     def test_paper_stage_ids_are_distinct_and_virtual_fills_use_weighted_cost(self) -> None:
         risk = {"stage_1_target_pct": 0.2, "stage_2_target_pct": 0.5, "stage_3_target_pct": 1.0}

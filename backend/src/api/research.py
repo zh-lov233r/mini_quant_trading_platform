@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import os
 from uuid import UUID
 
@@ -8,6 +9,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import FileResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.agent_auth import require_agent_service
@@ -25,6 +27,7 @@ from src.schemas.research import (
     ExperimentRoundOut,
     ExperimentRoundSubmit,
     ExperimentTokenUsageUpdate,
+    TERMINAL_EXPERIMENT_STATUSES,
     TrialOut,
     SupportResistanceEffectivenessSpec,
 )
@@ -47,6 +50,8 @@ from src.services.research_experiment_service import (
     list_trials,
     update_experiment_token_usage,
 )
+from src.services.backtest_job_service import delete_terminal_backtest_run
+from src.api.backtests import BacktestDeleteOut
 
 
 router = APIRouter(prefix="/api/research", tags=["research"])
@@ -78,6 +83,7 @@ def _experiment_out(experiment: ResearchExperiment) -> ExperimentOut:
 
 
 def _trial_out(trial: ExperimentTrial) -> TrialOut:
+    deleted_at = (trial.metrics or {}).get("backtest_deleted_at")
     return TrialOut(
         id=trial.id,
         trialKey=trial.trial_key,
@@ -92,6 +98,7 @@ def _trial_out(trial: ExperimentTrial) -> TrialOut:
         costConfig=trial.cost_config or {},
         dataFingerprint=trial.data_fingerprint,
         backtestRunId=trial.backtest_run_id,
+        backtestDeletedAt=deleted_at,
         candidateId=trial.candidate_id,
         metrics=trial.metrics or {},
         attempt=trial.attempt,
@@ -293,7 +300,7 @@ def retry_effectiveness_report(experiment_id: UUID, db: Session = Depends(get_db
     experiment = db.get(ResearchExperiment, experiment_id)
     if experiment is None:
         raise HTTPException(status_code=404, detail="experiment not found")
-    if experiment.study_kind != "support_resistance_effectiveness_v2":
+    if experiment.study_kind != "support_resistance_effectiveness_v3":
         raise HTTPException(status_code=422, detail="experiment is not an effectiveness study")
     from src.services.support_resistance_validation_report_service import (
         finalize_validation_report,
@@ -352,6 +359,87 @@ def get_research_candidates(experiment_id: UUID, db: Session = Depends(get_db)):
         return [_candidate_out(item) for item in list_candidates(db, experiment_id)]
     except ExperimentNotFoundError as exc:
         raise HTTPException(status_code=404, detail="experiment not found") from exc
+
+
+@router.delete(
+    "/experiments/{experiment_id}/backtests/{run_id}",
+    response_model=BacktestDeleteOut,
+)
+def delete_research_backtest(
+    experiment_id: UUID,
+    run_id: UUID,
+    db: Session = Depends(get_db),
+):
+    experiment = db.execute(
+        select(ResearchExperiment)
+        .where(ResearchExperiment.id == experiment_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="experiment not found")
+    if experiment.status not in TERMINAL_EXPERIMENT_STATUSES:
+        raise HTTPException(status_code=409, detail="active experiments cannot delete backtests")
+
+    trial = db.execute(
+        select(ExperimentTrial)
+        .where(
+            ExperimentTrial.experiment_id == experiment_id,
+            ExperimentTrial.backtest_run_id == run_id,
+        )
+        .with_for_update()
+    ).scalar_one_or_none()
+    candidate = None
+    expected_source: Literal["research", "verification"]
+    if trial is not None:
+        expected_source = "research"
+    else:
+        candidates = db.execute(
+            select(ExperimentCandidate)
+            .where(ExperimentCandidate.experiment_id == experiment_id)
+            .with_for_update()
+        ).scalars()
+        candidate = next(
+            (
+                item
+                for item in candidates
+                if str(((item.aggregate_metrics or {}).get("verification") or {}).get("runId"))
+                == str(run_id)
+            ),
+            None,
+        )
+        if candidate is None:
+            raise HTTPException(status_code=404, detail="backtest does not belong to experiment")
+        expected_source = "verification"
+
+    try:
+        delete_terminal_backtest_run(db, run_id, expected_source=expected_source)
+        deleted_at = datetime.now(timezone.utc).isoformat()
+        if trial is not None:
+            trial.backtest_run_id = None
+            trial.metrics = {**dict(trial.metrics or {}), "backtest_deleted_at": deleted_at}
+        else:
+            aggregate = dict(candidate.aggregate_metrics or {})
+            verification = dict(aggregate.get("verification") or {})
+            verification.update({"runId": None, "deletedAt": deleted_at})
+            aggregate["verification"] = verification
+            candidate.aggregate_metrics = aggregate
+        db.flush()
+        if (experiment.spec or {}).get("researchMode") == "adaptive_category":
+            from src.services.adaptive_research_service import build_adaptive_report
+
+            experiment.report = build_adaptive_report(db, experiment)
+        else:
+            from src.services.research_experiment_service import build_experiment_report
+
+            experiment.report = build_experiment_report(db, experiment)
+        db.commit()
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return BacktestDeleteOut(run_id=run_id)
 
 
 @router.get("/experiments/{experiment_id}/report", response_model=dict)

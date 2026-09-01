@@ -18,6 +18,7 @@ if load_dotenv is not None:
 
 
 DEFAULT_BASE_URL = "https://paper-api.alpaca.markets"
+DEFAULT_DATA_BASE_URL = "https://data.alpaca.markets"
 DEFAULT_TIMEOUT_SECONDS = 20.0
 
 OrderSide = Literal["buy", "sell"]
@@ -61,6 +62,8 @@ class AlpacaClient:
     api_key: str | None = None
     secret_key: str | None = None
     base_url: str | None = None
+    data_base_url: str | None = None
+    data_feed: str | None = None
     timeout_seconds: float | None = None
     session: requests.Session = field(default_factory=requests.Session)
 
@@ -71,6 +74,14 @@ class AlpacaClient:
             "ALPACA_SECRET",
         )
         self.base_url = (self.base_url or _first_env_value("ALPACA_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
+        self.data_base_url = (
+            self.data_base_url
+            or _first_env_value("ALPACA_DATA_BASE_URL")
+            or DEFAULT_DATA_BASE_URL
+        ).rstrip("/")
+        self.data_feed = (self.data_feed or _first_env_value("ALPACA_DATA_FEED") or "iex").lower()
+        if self.data_feed not in {"iex", "sip"}:
+            raise ValueError("ALPACA_DATA_FEED must be iex or sip for strict entry validation")
 
         raw_timeout = (
             self.timeout_seconds
@@ -98,6 +109,21 @@ class AlpacaClient:
 
     def get_clock(self) -> dict[str, Any]:
         return self._request("GET", "/v2/clock")
+
+    def get_stock_snapshots(self, symbols: list[str]) -> dict[str, Any]:
+        normalized = sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
+        if not normalized:
+            return {}
+        response = self._request(
+            "GET",
+            "/v2/stocks/snapshots",
+            params={"symbols": ",".join(normalized), "feed": self.data_feed},
+            base_url=self.data_base_url,
+        )
+        if not isinstance(response, dict):
+            return {}
+        snapshots = response.get("snapshots")
+        return snapshots if isinstance(snapshots, dict) else response
 
     def get_portfolio_history(
         self,
@@ -279,8 +305,9 @@ class AlpacaClient:
         *,
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
+        base_url: str | None = None,
     ) -> Any:
-        url = f"{self.base_url}{path}"
+        url = f"{base_url or self.base_url}{path}"
         try:
             response = self.session.request(
                 method=method,
@@ -320,6 +347,8 @@ def get_alpaca_client(
     api_key: str | None = None,
     secret_key: str | None = None,
     base_url: str | None = None,
+    data_base_url: str | None = None,
+    data_feed: str | None = None,
     timeout_seconds: float | None = None,
     session: requests.Session | None = None,
 ) -> AlpacaClient:
@@ -327,6 +356,8 @@ def get_alpaca_client(
         api_key=api_key,
         secret_key=secret_key,
         base_url=base_url,
+        data_base_url=data_base_url,
+        data_feed=data_feed,
         timeout_seconds=timeout_seconds,
         session=session or requests.Session(),
     )

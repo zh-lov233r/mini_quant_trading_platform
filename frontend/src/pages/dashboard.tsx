@@ -692,12 +692,7 @@ export default function DashboardPage() {
                     const count = items.filter(
                       (strategy) => strategy.strategy_type === item.strategy_type
                     ).length;
-                    const templateCopy = getStrategyTemplateCopy(
-                      item.strategy_type,
-                      locale,
-                      item.label,
-                      item.description
-                    );
+                    const templateCopy = getStrategyTemplateCopy(item.strategy_type, locale);
 
                     return (
                       <div

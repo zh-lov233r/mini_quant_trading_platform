@@ -34,7 +34,7 @@ from src.services.strategy_registry import (
 from src.services.strategy_service import validate_strategy_params
 
 
-STUDY_KIND = "support_resistance_effectiveness_v2"
+STUDY_KIND = "support_resistance_effectiveness_v3"
 DISCOVERY_IN = (date(2017, 3, 20), date(2019, 12, 31))
 DISCOVERY_OUT = (date(2020, 1, 2), date(2020, 12, 31))
 ANNUAL_FOLDS = (
@@ -474,7 +474,7 @@ def _default_proposal() -> AdaptiveCandidateProposal:
             "signal.resistance_breakout_enabled": True,
             "signal.breakout_retest_enabled": True,
         },
-        rationale="pre-registered all-mode pivot-slope-atr-v2 default; validity must be re-established",
+        rationale="pre-registered all-mode pivot-slope-regime-v3 default; validity must be established independently",
     )
 
 

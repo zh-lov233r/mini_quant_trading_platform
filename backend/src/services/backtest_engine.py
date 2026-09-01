@@ -59,7 +59,11 @@ from src.services.support_resistance_persistence_service import (
     record_failed_materialization_after_rollback,
     source_data_fingerprint,
 )
-from src.services.support_resistance_service import SupportResistanceState
+from src.services.support_resistance_service import (
+    SupportResistanceState,
+    entry_price_is_inside_channel,
+    project_entry_channel,
+)
 from src.services.strategy_registry import (
     build_runtime_payload,
     extract_description,
@@ -463,9 +467,11 @@ def run_backtest(
         "persist_details_ms": 0.0,
         "persist_summary_ms": 0.0,
         "support_resistance_zone_versions_ms": 0.0,
+        "support_resistance_regime_versions_ms": 0.0,
         "support_resistance_run_events_ms": 0.0,
         "support_resistance_persist_total_ms": 0.0,
         "support_resistance_zone_versions": 0,
+        "support_resistance_regime_versions": 0,
         "support_resistance_run_events": 0,
         "support_resistance_cache_reused": None,
     }
@@ -527,9 +533,7 @@ def run_backtest(
         slippage_bps=slippage_bps,
     )
 
-    handler = STRATEGY_HANDLERS.get(runtime["strategy_type"])
-    if handler is None:
-        raise ValueError(f"unsupported strategy_type for backtest: {runtime['strategy_type']}")
+    handler = STRATEGY_HANDLERS[runtime["strategy_type"]]
 
     symbols = runtime["params"]["universe"]["symbols"]
     if not symbols and normalized_universe_policy is None:
@@ -898,6 +902,11 @@ def run_backtest(
                 persist_transactions=resolved_persist_level in {"trades", "full"},
                 repository=repository,
                 stable_instrument_identity=stable_instrument_identity,
+                support_resistance_state=(
+                    stateful_signal_state
+                    if isinstance(stateful_signal_state, SupportResistanceState)
+                    else None
+                ),
             )
             trade_count += buy_stats.trade_count
             total_fees += buy_stats.total_fees
@@ -1883,6 +1892,7 @@ def _apply_buy_signals(
     persist_transactions: bool = True,
     repository: BacktestRepository | None = None,
     stable_instrument_identity: bool = False,
+    support_resistance_state: SupportResistanceState | None = None,
 ) -> ExecutionStats:
     """Open new long positions for queued BUY signals on the next session open."""
     stats = ExecutionStats()
@@ -1924,6 +1934,38 @@ def _apply_buy_signals(
         )
         if qty <= 0:
             continue
+
+        support_resistance = event.metadata.get("support_resistance")
+        if isinstance(support_resistance, dict):
+            projected_channel = project_entry_channel(
+                support_resistance.get("entry_channel"),
+                sessions=1,
+            )
+            inside_channel, channel_reason = entry_price_is_inside_channel(
+                projected_channel,
+                execution_price,
+            )
+            if not inside_channel:
+                if support_resistance_state is not None:
+                    symbol_state = support_resistance_state.symbols.get(event.symbol.upper())
+                    if symbol_state is not None:
+                        symbol_state.events.append(
+                            {
+                                "event_date": trade_day.isoformat(),
+                                "event_type": "execution_rejection",
+                                "zone_key": projected_channel.get("support_zone_key"),
+                                "setup": support_resistance.get("selected_setup"),
+                                "reason_code": channel_reason,
+                                "signal_date": event.ts.date().isoformat(),
+                                "execution_date": trade_day.isoformat(),
+                                "reference_open": float(price),
+                                "simulated_execution_price": execution_price,
+                                "lower": projected_channel.get("lower"),
+                                "upper": projected_channel.get("upper"),
+                                "entry_channel": projected_channel,
+                            }
+                        )
+                continue
 
         total_cash_out = gross_notional + fee
         if total_cash_out <= 0 or total_cash_out > cash_ref["cash"]:

@@ -200,8 +200,7 @@ export interface DoubleBottomStrategyParams {
   };
 }
 
-export interface StagedBottomStrategyParams {
-  signal: Record<string, number>;
+interface StagedBottomStrategyParamsBase {
   universe: { symbols: string[]; selection_mode: string };
   risk: {
     max_positions: number;
@@ -215,6 +214,67 @@ export interface StagedBottomStrategyParams {
   };
   execution: { timeframe: "1d"; rebalance: "daily"; run_at: "close" };
   metadata: { description: string; schema_version: number; algorithm_version?: string };
+}
+
+export interface HeadShouldersBottomStrategyParams extends StagedBottomStrategyParamsBase {
+  signal: {
+    min_strength_score: number;
+    downtrend_lookback: number;
+    downtrend_min_drop_pct: number;
+    pivot_left_bars: number;
+    pivot_right_bars: number;
+    min_segment_bars: number;
+    max_segment_bars: number;
+    shoulder_tolerance_pct: number;
+    head_depth_min_pct: number;
+    head_volume_ratio_max: number;
+    right_shoulder_volume_ratio_max: number;
+    breakout_volume_ratio_min: number;
+    breakout_buffer_pct: number;
+  };
+  metadata: StagedBottomStrategyParamsBase["metadata"] & { algorithm_version: "confirmed-pivots-v1" };
+}
+
+export interface RoundedBottomStrategyParams extends StagedBottomStrategyParamsBase {
+  signal: {
+    min_strength_score: number;
+    min_lookback: number;
+    max_lookback: number;
+    min_depth_pct: number;
+    min_r_squared: number;
+    vertex_position_min: number;
+    vertex_position_max: number;
+    pivot_left_bars: number;
+    pivot_right_bars: number;
+    min_pullback_spacing: number;
+    right_volume_ratio_min: number;
+    pullback_volume_ratio_max: number;
+    breakout_volume_ratio_min: number;
+    breakout_buffer_pct: number;
+  };
+  metadata: StagedBottomStrategyParamsBase["metadata"] & { algorithm_version: "log-quadratic-v1" };
+}
+
+export interface VReversalStrategyParams extends StagedBottomStrategyParamsBase {
+  signal: {
+    min_strength_score: number;
+    downtrend_lookback: number;
+    downtrend_min_drop_pct: number;
+    pivot_max_bars: number;
+    reversal_min_return_pct: number;
+    reversal_min_atr: number;
+    pivot_volume_ratio_min: number;
+    continuation_window: number;
+    continuation_volume_ratio_min: number;
+    consolidation_min_bars: number;
+    consolidation_max_bars: number;
+    breakout_volume_ratio_min: number;
+    retest_window: number;
+    retest_volume_ratio_max: number;
+    support_tolerance_pct: number;
+    bearish_reversal_volume_ratio_min: number;
+  };
+  metadata: StagedBottomStrategyParamsBase["metadata"] & { algorithm_version: "volume-v-reversal-v1" };
 }
 
 export interface SupportResistanceStrategyParams {
@@ -255,20 +315,27 @@ export interface SupportResistanceStrategyParams {
   metadata: {
     description: string;
     schema_version: number;
-    algorithm_version: "pivot-slope-atr-v2";
+    algorithm_version: "pivot-slope-regime-v3" | "pivot-slope-atr-v2";
     price_semantics: "forward_adjusted_preferred_unadjusted_fallback";
   };
 }
 
-export type StrategyParams =
-  | TrendStrategyParams
-  | MeanReversionStrategyParams
-  | MomentumBreakoutStrategyParams
-  | IslandReversalStrategyParams
-  | DoubleBottomStrategyParams
-  | StagedBottomStrategyParams
-  | SupportResistanceStrategyParams
-  | Record<string, unknown>;
+export type CustomStrategyParams = Record<string, unknown>;
+
+export interface StrategyParamsByType {
+  trend: TrendStrategyParams;
+  mean_reversion: MeanReversionStrategyParams;
+  momentum_breakout: MomentumBreakoutStrategyParams;
+  island_reversal: IslandReversalStrategyParams;
+  double_bottom: DoubleBottomStrategyParams;
+  head_shoulders_bottom: HeadShouldersBottomStrategyParams;
+  rounded_bottom: RoundedBottomStrategyParams;
+  v_reversal: VReversalStrategyParams;
+  support_resistance: SupportResistanceStrategyParams;
+  custom: CustomStrategyParams;
+}
+
+export type StrategyParams = StrategyParamsByType[StrategyType];
 
 export interface StrategyCreate {
   name: string;
@@ -288,7 +355,7 @@ export interface StrategyValidation {
   valid: boolean;
   engine_ready: boolean;
   strategy_type: StrategyType;
-  normalized_params: Record<string, unknown>;
+  normalized_params: StrategyParams;
 }
 
 export interface StrategyRename {
@@ -307,7 +374,7 @@ export interface StrategyOut {
   display_name?: string | null;
   name: string;
   description?: string | null;
-  strategy_type: StrategyType | string;
+  strategy_type: StrategyType;
   status: string;
   version: number;
   params: StrategyParams;
@@ -323,9 +390,9 @@ export interface StrategyRuntimeOut {
   name: string;
   version: number;
   status: string;
-  strategy_type: StrategyType | string;
+  strategy_type: StrategyType;
   engine_ready: boolean;
-  params: Record<string, unknown>;
+  params: StrategyParams;
 }
 
 export interface StrategyDeleteOut {

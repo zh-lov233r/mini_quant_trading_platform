@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from src.services.patterns.common import compute_recent_atr, number
+from src.services.patterns.common import compute_recent_atr
 from src.services.patterns.models import HistoryBar, PatternContext, PatternDecision
 from src.services.staged_entry_service import build_pattern_setup, pattern_setup_from_metadata
 
@@ -110,9 +110,9 @@ def evaluate(context: PatternContext) -> PatternDecision | None:
         )
 
     current = bars[-1]
-    current_close = number(current.get("close"))
-    current_volume = number(current.get("volume"))
-    current_atr = number(current.get("atr_14"))
+    current_close = current.get("close")
+    current_volume = current.get("volume")
+    current_atr = current.get("atr_14")
     return PatternDecision(
         action=action,
         reason=reason,
@@ -150,13 +150,13 @@ def find_current_exhaustion_gap(
     idx = len(bars) - 1
     bar = bars[idx]
     previous = bars[idx - 1]
-    high = number(bar.get("high"))
-    low = number(bar.get("low"))
-    open_price = number(bar.get("open"))
-    close = number(bar.get("close"))
-    volume = number(bar.get("volume"))
-    average_volume = number(bar.get("volume_sma_20"))
-    previous_low = number(previous.get("low"))
+    high = bar.get("high")
+    low = bar.get("low")
+    open_price = bar.get("open")
+    close = bar.get("close")
+    volume = bar.get("volume")
+    average_volume = bar.get("volume_sma_20")
+    previous_low = previous.get("low")
     if any(value is None for value in (high, low, open_price, close, volume, average_volume, previous_low)):
         return None
     assert high is not None and low is not None and open_price is not None and close is not None
@@ -190,10 +190,10 @@ def resolve_staged_exit(
     if context.position <= 0 or setup is None or not context.bars:
         return None
     current = context.bars[-1]
-    close = number(current.get("close"))
-    low = number(current.get("low"))
-    atr = number(current.get("atr_14")) or compute_recent_atr(context.bars, STOP_ATR_WINDOW)
-    invalidation = number(setup.get("invalidation_price"))
+    close = current.get("close")
+    low = current.get("low")
+    atr = current.get("atr_14") or compute_recent_atr(context.bars, STOP_ATR_WINDOW)
+    invalidation = setup.get("invalidation_price")
     if invalidation is not None and low is not None and low < invalidation:
         return "SELL", "price broke the staged pattern invalidation level", "pattern_invalidation"
     if (
@@ -237,11 +237,11 @@ def find_latest_pattern(
     earliest_breakout_idx = min_island_bars + 1
     for breakout_idx in range(len(bars) - 1, earliest_breakout_idx - 1, -1):
         breakout_bar = bars[breakout_idx]
-        breakout_open = number(breakout_bar.get("open"))
-        breakout_close = number(breakout_bar.get("close"))
-        breakout_low = number(breakout_bar.get("low"))
-        breakout_volume = number(breakout_bar.get("volume"))
-        breakout_avg_volume = number(breakout_bar.get("volume_sma_20"))
+        breakout_open = breakout_bar.get("open")
+        breakout_close = breakout_bar.get("close")
+        breakout_low = breakout_bar.get("low")
+        breakout_volume = breakout_bar.get("volume")
+        breakout_avg_volume = breakout_bar.get("volume_sma_20")
         if (
             breakout_open is None
             or breakout_close is None
@@ -263,12 +263,12 @@ def find_latest_pattern(
         for left_gap_idx in range(latest_left_gap_idx, earliest_left_gap_idx - 1, -1):
             left_gap_bar = bars[left_gap_idx]
             pre_gap_bar = bars[left_gap_idx - 1]
-            left_gap_high = number(left_gap_bar.get("high"))
-            left_gap_open = number(left_gap_bar.get("open"))
-            left_gap_close = number(left_gap_bar.get("close"))
-            left_gap_volume = number(left_gap_bar.get("volume"))
-            left_gap_avg_volume = number(left_gap_bar.get("volume_sma_20"))
-            prev_low = number(pre_gap_bar.get("low"))
+            left_gap_high = left_gap_bar.get("high")
+            left_gap_open = left_gap_bar.get("open")
+            left_gap_close = left_gap_bar.get("close")
+            left_gap_volume = left_gap_bar.get("volume")
+            left_gap_avg_volume = left_gap_bar.get("volume_sma_20")
+            prev_low = pre_gap_bar.get("low")
             if (
                 left_gap_high is None
                 or left_gap_open is None
@@ -293,11 +293,11 @@ def find_latest_pattern(
             island_bars = bars[left_gap_idx:breakout_idx]
             if len(island_bars) < min_island_bars:
                 continue
-            island_high = max(number(bar.get("high")) or float("-inf") for bar in island_bars)
-            island_low = min(number(bar.get("low")) or float("inf") for bar in island_bars)
+            island_high = max(bar.get("high") or float("-inf") for bar in island_bars)
+            island_low = min(bar.get("low") or float("inf") for bar in island_bars)
             if island_high == float("-inf") or island_low == float("inf"):
                 continue
-            if any((number(bar.get("high")) or float("inf")) >= prev_low for bar in island_bars):
+            if any((bar.get("high") or float("inf")) >= prev_low for bar in island_bars):
                 continue
             breakout_gap_pct = (breakout_low - island_high) / island_high if island_high > 0 else 0.0
             if breakout_gap_pct < right_gap_min_pct:
@@ -325,14 +325,14 @@ def has_downtrend_context(
     min_drop_pct: float,
 ) -> bool:
     left_gap_bar = bars[left_gap_idx]
-    close = number(left_gap_bar.get("close"))
+    close = left_gap_bar.get("close")
     lookback_return = None
     anchor_index = left_gap_idx - downtrend_lookback
     if close is not None and anchor_index >= 0:
-        anchor_close = number(bars[anchor_index].get("close"))
+        anchor_close = bars[anchor_index].get("close")
         if anchor_close is not None and anchor_close > 0:
             lookback_return = (close / anchor_close) - 1.0
-    sma_50 = number(left_gap_bar.get("sma_50"))
+    sma_50 = left_gap_bar.get("sma_50")
     return bool(
         (lookback_return is not None and lookback_return <= -min_drop_pct)
         or (close is not None and sma_50 is not None and close < sma_50)
@@ -350,9 +350,9 @@ def resolve_action(
 ) -> tuple[Literal["BUY", "SELL", "HOLD"] | None, str | None, str | None]:
     current_idx = len(bars) - 1
     current_bar = bars[current_idx]
-    current_close = number(current_bar.get("close"))
-    current_low = number(current_bar.get("low"))
-    current_volume = number(current_bar.get("volume"))
+    current_close = current_bar.get("close")
+    current_low = current_bar.get("low")
+    current_volume = current_bar.get("volume")
     current_atr = compute_recent_atr(bars, STOP_ATR_WINDOW)
     breakout_atr = compute_recent_atr(bars[:pattern.breakout_idx + 1], STOP_ATR_WINDOW)
     support_tolerance_pct = float(signal_cfg["support_tolerance_pct"])
@@ -391,7 +391,7 @@ def resolve_action(
     if current_low is None or current_close is None or current_volume is None:
         return None, None, None
     if any(
-        (number(bar.get("close")) or float("inf")) < support_floor
+        (bar.get("close") or float("inf")) < support_floor
         for bar in bars[pattern.breakout_idx + 1:current_idx]
     ):
         return None, None, None

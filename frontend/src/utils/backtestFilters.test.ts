@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { BacktestRunOut } from "@/types/backtest";
+import type { StrategyType } from "@/types/strategy";
 import { filterBacktestRuns } from "@/utils/backtestFilters";
 
 function run(overrides: Partial<BacktestRunOut>): BacktestRunOut {
@@ -17,7 +18,7 @@ function run(overrides: Partial<BacktestRunOut>): BacktestRunOut {
   };
 }
 
-const strategyTypes = new Map([
+const strategyTypes = new Map<string, StrategyType>([
   ["strategy-1", "trend"],
   ["strategy-2", "mean_reversion"],
 ]);
@@ -26,7 +27,6 @@ describe("backtest run filtering", () => {
   const runs = [
     run({ id: "run-1", strategy_name: "Long Trend", basket_name: "Core Tech" }),
     run({ id: "run-2", strategy_id: "strategy-2", strategy_name: "Reversal", status: "failed" }),
-    run({ id: "run-3", strategy_id: "missing", strategy_name: "Archived Strategy" }),
   ];
 
   it("matches strategy and basket keywords case-insensitively", () => {
@@ -41,8 +41,9 @@ describe("backtest run filtering", () => {
       .toEqual([runs[1]]);
   });
 
-  it("keeps missing historical strategies under the unknown type", () => {
-    expect(filterBacktestRuns(runs, strategyTypes, { query: "", status: "all", strategyType: "unknown" }))
-      .toEqual([runs[2]]);
+  it("rejects a run whose strategy contract is missing", () => {
+    const missing = run({ id: "run-3", strategy_id: "missing", strategy_name: "Archived Strategy" });
+    expect(() => filterBacktestRuns([missing], strategyTypes, { query: "", status: "all", strategyType: "all" }))
+      .toThrow("Missing strategy type");
   });
 });

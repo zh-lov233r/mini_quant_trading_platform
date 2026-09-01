@@ -29,6 +29,7 @@ from src.core.db import SessionLocal
 from src.models.tables import PaperTradingAccount, StrategyPortfolio, StrategyRun
 from src.services.paper_trading_service import (
     PAPER_TRADING_TRIGGER_SCHEDULER,
+    process_pending_support_resistance_entries,
     run_multi_strategy_paper_trading,
 )
 from src.services.strategy_allocation_service import list_allocated_strategies, normalize_portfolio_name
@@ -153,6 +154,9 @@ class PaperTradingDailyScheduler:
         - it skips portfolios already run by the scheduler for that trade date
         """
         now_ny = datetime.now(NEW_YORK)
+        if self.config.submit_orders and time(hour=9, minute=30) <= now_ny.time():
+            with SessionLocal() as db:
+                process_pending_support_resistance_entries(db, now=now_ny)
         latest_ready_trade_date = _latest_ready_daily_features_trade_date(now_ny.date())
         if latest_ready_trade_date is None:
             if self._last_no_data_log_date != now_ny.date():

@@ -214,7 +214,7 @@ export const strategyCreateEnUS = {
     breakoutVolumeRatioMin: { label: "Breakout Volume Minimum", hint: "Requires breakout volume relative to the average." },
     maxBreakoutBars: { label: "Maximum Bars To Break", hint: "Abandons the pattern if no breakout occurs within this window." },
     supportBounceEnabled: { label: "Support Bounce", hint: "Candidates enter after price visits support and recovers above confirmation." },
-    resistanceBreakoutEnabled: { label: "Resistance Breakout", hint: "Candidates enter after a volume-confirmed resistance break." },
+    resistanceBreakoutEnabled: { label: "Breakout Audit", hint: "Records volume-confirmed resistance breaks for audit without placing a BUY." },
     breakoutRetestEnabled: { label: "Breakout Retest", hint: "Candidates enter after a breakout and lower-volume retest." },
     pivotLeftBars: { label: "Pivot Left Bars", hint: "Historical bars inspected on the left side of a Pivot." },
     pivotRightBars: { label: "Pivot Right Confirmation", hint: "Completed bars that must arrive before a Pivot can be confirmed." },

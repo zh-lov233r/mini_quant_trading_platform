@@ -109,7 +109,7 @@ User cancellation first enters `cancel_requested`, prevents new trial claims, an
 
 On worker restart, orphaned trials are recovered without duplicating backtest evidence. Policy-stopped or cancelled experiments do not resume queued work. AgentOps persists external tool runs and resumes `waiting_external` polling after a Control Plane restart.
 
-Use these read endpoints for inspection:
+Use these endpoints for inspection and terminal-run cleanup:
 
 - `GET /api/research/experiments`
 - `GET /api/research/experiments/{experimentId}`
@@ -117,7 +117,10 @@ Use these read endpoints for inspection:
 - `GET /api/research/experiments/{experimentId}/rounds`
 - `GET /api/research/experiments/{experimentId}/candidates`
 - `GET /api/research/experiments/{experimentId}/report`
+- `DELETE /api/research/experiments/{experimentId}/backtests/{runId}` for one terminal run owned by the experiment
+
+Deleting a research backtest removes only run-scoped execution artifacts. It is allowed only after the experiment and run are terminal and uses the platform workspace confirmation dialog rather than a browser-native prompt. Trial parameters, metrics, fingerprints, candidate evidence, and generated report artifacts remain available; the live trial or candidate record retains a deletion timestamp instead of a run link.
 
 Reports contain progress, successful and failed trial evidence, robustness comparisons, termination details, and token usage where available. They describe research execution only and must not be presented as live-trading safety or expected profitability.
 
-The pre-registered `support_resistance_effectiveness_v2` workflow independently validates `pivot-slope-atr-v2` through a parent/child specialization with a point-in-time liquid universe, a sealed final holdout, an absolute 200-backtest budget, same-cost cache replay, and bilingual JSON/Markdown/PDF artifacts. Its child and artifact endpoints remain read-only to the UI. See [Support/resistance effectiveness study](support-resistance-effectiveness.md) for the full protocol and database rollout boundary.
+The pre-registered `support_resistance_effectiveness_v3` workflow independently validates `pivot-slope-regime-v3` through a parent/child specialization with a point-in-time liquid universe, a sealed final holdout, an absolute 200-backtest budget, same-cost replay for zone and four-regime caches, and bilingual JSON/Markdown/PDF artifacts. Generated artifacts remain immutable; terminal child-run artifacts can be deleted only from their owning child experiment while the retained evidence gets a tombstone. See [Support/resistance effectiveness study](support-resistance-effectiveness.md) for the full protocol and database rollout boundary.

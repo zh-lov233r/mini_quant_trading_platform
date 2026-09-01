@@ -468,6 +468,12 @@ class SupportResistanceMaterialization(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    regime_versions = relationship(
+        "SupportResistanceRegimeVersion",
+        back_populates="materialization",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     run_links = relationship(
         "SupportResistanceRunMaterialization",
         back_populates="materialization",
@@ -552,6 +558,60 @@ class SupportResistanceZoneVersion(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     materialization = relationship("SupportResistanceMaterialization", back_populates="zone_versions")
+
+
+class SupportResistanceRegimeVersion(Base):
+    __tablename__ = "support_resistance_regime_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "materialization_id",
+            "symbol",
+            "version",
+            name="uq_support_resistance_regime_versions_identity",
+        ),
+        UniqueConstraint(
+            "materialization_id",
+            "symbol",
+            "effective_from",
+            name="uq_support_resistance_regime_versions_effective_from",
+        ),
+        CheckConstraint(
+            "regime IN ('uptrend', 'downtrend', 'range', 'transition')",
+            name="ck_support_resistance_regime",
+        ),
+        CheckConstraint("version > 0", name="ck_support_resistance_regime_version"),
+        Index(
+            "idx_support_resistance_regime_versions_timeline",
+            "materialization_id",
+            "symbol",
+            "effective_from",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    materialization_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("support_resistance_materializations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    instrument_id = Column(
+        BigInteger,
+        ForeignKey("instruments.id", ondelete="SET NULL"),
+    )
+    symbol = Column(Text, nullable=False)
+    version = Column(Integer, nullable=False)
+    effective_from = Column(Date, nullable=False)
+    regime = Column(String(16), nullable=False)
+    lower_zone_key = Column(String(64))
+    upper_zone_key = Column(String(64))
+    reason_code = Column(String(64), nullable=False)
+    evidence = Column(JSON_VARIANT, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    materialization = relationship(
+        "SupportResistanceMaterialization",
+        back_populates="regime_versions",
+    )
 
 
 class SupportResistanceRunMaterialization(Base):

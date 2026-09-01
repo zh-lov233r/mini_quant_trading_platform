@@ -27,6 +27,15 @@ This repository is currently a fast-moving development and testing platform, not
 - Alpaca paper-account orders, positions, buying power, and other broker-side state remain external side effects. Local paper-trading records being disposable never authorizes cancelling orders, closing positions, or otherwise mutating the broker account.
 - Fast iteration does not relax quant correctness, deterministic execution, test coverage, API synchronization, bilingual documentation, or trading-safety requirements.
 
+## Ponytail project mode
+
+Apply Ponytail `full` mode to coding tasks in this repository: understand and trace the affected flow first, then stop at the first sufficient option—skip speculative work, reuse existing repository code, prefer the standard library or native platform features, reuse installed dependencies, and otherwise write the smallest coherent implementation.
+
+- Ponytail does not override repository requirements for quant correctness, deterministic execution, end-to-end API synchronization, regression tests, bilingual maintained documentation, database safety, or broker-side safety.
+- Never simplify away trust-boundary validation, data-loss prevention, security controls, accessibility basics, or behavior explicitly requested by the user.
+- Prefer deletion and direct code over speculative abstractions, compatibility-only layers, new dependencies, single-implementation interfaces, or configuration for values that do not vary.
+- A Ponytail review or audit reports over-engineering separately from correctness, security, and performance findings; it does not apply suggested deletions unless the user asks for implementation.
+
 ## Important entry points
 
 - Application wiring: `backend/src/main.py`

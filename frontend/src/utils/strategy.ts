@@ -2,6 +2,7 @@ import type {
   StrategyCatalogItem,
   StrategyOut,
   StrategyRuntimeOut,
+  StrategyType,
 } from "@/types/strategy";
 import { enUSMessages } from "@/i18n/messages/en-US";
 import { zhCNMessages } from "@/i18n/messages/zh-CN";
@@ -49,18 +50,17 @@ export function getStrategyDescription(strategy: StrategyOut): string {
 }
 
 export function getTypeLabel(
-  strategyType: string,
+  strategyType: StrategyType,
   catalog: StrategyCatalogItem[]
 ): string {
   const matched = catalog.find((item) => item.strategy_type === strategyType);
-  return matched?.label || strategyType;
+  if (!matched) throw new Error(`Missing catalog entry for strategy type: ${strategyType}`);
+  return matched.label;
 }
 
 export function getStrategyTemplateCopy(
-  strategyType: string,
+  strategyType: StrategyType,
   locale: string = "zh-CN",
-  fallbackLabel?: string,
-  fallbackDescription?: string
 ): { label: string; description: string } {
   const isZh = locale === "zh-CN";
 
@@ -118,7 +118,7 @@ export function getStrategyTemplateCopy(
       return {
         label: isZh ? "支撑 / 压力区域" : "Support / Resistance Zones",
         description: isZh
-          ? "使用已确认 Pivot 与 ATR 聚类识别动态价格区，交易支撑反弹、压力突破和突破回踩。"
+          ? "使用已确认 Pivot 与 ATR 聚类识别动态价格区，仅在支撑与压力内沿通道中交易反弹/回踩；压力突破只做审计。"
           : "Dynamic confirmed-Pivot and ATR-clustered zones for support bounces, resistance breakouts, and breakout retests.",
       };
     case "custom":
@@ -129,10 +129,7 @@ export function getStrategyTemplateCopy(
           : "Custom JSON/DSL strategy definition. Prefer storing rules rather than executable code.",
       };
     default:
-      return {
-        label: fallbackLabel || strategyType,
-        description: fallbackDescription || (isZh ? "暂无模板说明" : "No template description yet"),
-      };
+      throw new Error(`Unregistered strategy type: ${String(strategyType)}`);
   }
 }
 
@@ -144,7 +141,7 @@ export interface StrategyCategoryPresentation {
 }
 
 const STRATEGY_CATEGORY_VISUALS: Record<
-  string,
+  StrategyType,
   Pick<StrategyCategoryPresentation, "accent" | "accentRgb">
 > = {
   trend: { accent: "#2dd4bf", accentRgb: "45, 212, 191" },
@@ -160,18 +157,11 @@ const STRATEGY_CATEGORY_VISUALS: Record<
 };
 
 export function getStrategyCategoryPresentation(
-  strategyType: string,
+  strategyType: StrategyType,
   locale: string = "zh-CN",
-  fallbackLabel?: string,
-  fallbackDescription?: string
 ): StrategyCategoryPresentation {
-  const copy = getStrategyTemplateCopy(
-    strategyType,
-    locale,
-    fallbackLabel,
-    fallbackDescription
-  );
-  const visual = STRATEGY_CATEGORY_VISUALS[strategyType] || STRATEGY_CATEGORY_VISUALS.custom;
+  const copy = getStrategyTemplateCopy(strategyType, locale);
+  const visual = STRATEGY_CATEGORY_VISUALS[strategyType];
 
   return {
     ...copy,
@@ -314,7 +304,7 @@ export function getRuntimeFieldText(
     return null;
   }
 
-  const sectionValue = runtime.params?.[section];
+  const sectionValue = (runtime.params as Record<string, unknown>)[section];
   if (!sectionValue || typeof sectionValue !== "object") {
     return null;
   }

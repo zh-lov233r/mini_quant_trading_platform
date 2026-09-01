@@ -1,6 +1,7 @@
 import http from "@/api/client";
 import type {
   BacktestCreate,
+  BacktestDeleteResult,
   BacktestComparisonCurvesOut,
   BacktestDetailOut,
   BacktestEquityPoint,
@@ -27,6 +28,8 @@ export interface SupportResistanceFilters {
   end_date?: string;
 }
 
+const supportResistanceRequestCache = new Map<string, Promise<SupportResistanceBacktestOut>>();
+
 export function getBacktestSupportResistance(
   runId: string,
   filters: SupportResistanceFilters = {},
@@ -35,11 +38,28 @@ export function getBacktestSupportResistance(
   Object.entries(filters).forEach(([key, value]) => {
     if (value) query.set(key, value);
   });
+  query.sort();
   const suffix = query.size ? `?${query.toString()}` : "";
-  return http<SupportResistanceBacktestOut>(
-    `/api/backtests/${encodeURIComponent(runId)}/support-resistance${suffix}`,
+  const path = `/api/backtests/${encodeURIComponent(runId)}/support-resistance${suffix}`;
+  const cached = supportResistanceRequestCache.get(path);
+  if (cached) return cached;
+
+  const request = http<SupportResistanceBacktestOut>(
+    path,
     { method: "GET" },
-  );
+  )
+    .then((detail) => {
+      if (detail.materialization?.status !== "completed") {
+        supportResistanceRequestCache.delete(path);
+      }
+      return detail;
+    })
+    .catch((error) => {
+      supportResistanceRequestCache.delete(path);
+      throw error;
+    });
+  supportResistanceRequestCache.set(path, request);
+  return request;
 }
 
 export function listBacktests(strategyId?: string): Promise<BacktestRunOut[]> {
@@ -126,5 +146,11 @@ export function getBacktestTransactions(
 export function cancelBacktest(runId: string): Promise<BacktestRunOut> {
   return http<BacktestRunOut>(`/api/backtests/${encodeURIComponent(runId)}/cancel`, {
     method: "POST",
+  });
+}
+
+export function deleteBacktest(runId: string): Promise<BacktestDeleteResult> {
+  return http<BacktestDeleteResult>(`/api/backtests/${encodeURIComponent(runId)}`, {
+    method: "DELETE",
   });
 }

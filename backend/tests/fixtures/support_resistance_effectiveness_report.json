@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "studyId": "golden-fixture",
-  "studyKind": "support_resistance_effectiveness_v2",
+  "studyKind": "support_resistance_effectiveness_v3",
   "status": "completed",
   "decision": "not_validated",
   "disclaimer": "Research evidence only; no profitability guarantee or live-trading safety proof.",
@@ -19,7 +19,7 @@
     {
       "candidateId": "default-candidate",
       "paramsHash": "default1234567890",
-      "rationale": "pre-registered all-mode pivot-slope-atr-v2 default; validity must be re-established",
+      "rationale": "pre-registered all-mode pivot-slope-regime-v3 default; validity must be established independently",
       "passed": false,
       "base": {"excess_return": 0.0123, "max_drawdown": 0.14, "pnl_concentration": 0.18},
       "stress": {"excess_return": -0.0045},

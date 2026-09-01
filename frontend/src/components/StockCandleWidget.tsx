@@ -321,7 +321,7 @@ export default function StockCandleWidget() {
         onClick={() => setOpen((current) => !current)}
         style={{
           position: "fixed",
-          bottom: "calc(var(--workspace-floating-bottom, 24px) + 58px)",
+          bottom: "var(--workspace-market-viewer-bottom, calc(var(--workspace-floating-bottom, 24px) + 58px))",
           right: "var(--workspace-floating-right, 24px)",
           zIndex: BUTTON_Z_INDEX,
           display: "inline-flex",

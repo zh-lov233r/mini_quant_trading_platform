@@ -6,7 +6,6 @@ from src.services.patterns.common import (
     confirmed_pivot_lows,
     downtrend_context,
     highest_index,
-    number,
     position_exit,
     project_line,
     volume_ratio,
@@ -42,8 +41,8 @@ def evaluate(context: PatternContext) -> PatternDecision | None:
         gap = head_idx - left_idx
         if not min_gap <= gap <= max_gap:
             continue
-        left_low = number(bars[left_idx].get("low"))
-        head_low = number(bars[head_idx].get("low"))
+        left_low = bars[left_idx].get("low")
+        head_low = bars[head_idx].get("low")
         if left_low is None or head_low is None or head_low > left_low * (1.0 - head_depth):
             continue
         if not downtrend_context(
@@ -85,9 +84,9 @@ def evaluate(context: PatternContext) -> PatternDecision | None:
             and min_gap <= shoulder_idx - head_idx <= max_gap
         ):
             continue
-        left_low = number(bars[left_idx].get("low"))
-        head_low = number(bars[head_idx].get("low"))
-        shoulder_low = number(bars[shoulder_idx].get("low"))
+        left_low = bars[left_idx].get("low")
+        head_low = bars[head_idx].get("low")
+        shoulder_low = bars[shoulder_idx].get("low")
         if left_low is None or head_low is None or shoulder_low is None:
             continue
         shoulder_distance = abs(shoulder_low - left_low) / left_low
@@ -100,8 +99,8 @@ def evaluate(context: PatternContext) -> PatternDecision | None:
         second_high_idx = highest_index(bars, head_idx, shoulder_idx)
         if first_high_idx is None or second_high_idx is None or first_high_idx == second_high_idx:
             continue
-        first_high = number(bars[first_high_idx].get("high"))
-        second_high = number(bars[second_high_idx].get("high"))
+        first_high = bars[first_high_idx].get("high")
+        second_high = bars[second_high_idx].get("high")
         if first_high is None or second_high is None:
             continue
         neckline = project_line(first_high_idx, first_high, second_high_idx, second_high, current_idx)
@@ -137,7 +136,7 @@ def evaluate(context: PatternContext) -> PatternDecision | None:
                 volume_quality,
                 2 / 3,
             )
-        close = number(bars[-1].get("close"))
+        close = bars[-1].get("close")
         current_volume_ratio = volume_ratio(bars[-1])
         buffer = float(cfg["breakout_buffer_pct"])
         if (

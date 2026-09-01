@@ -3,8 +3,9 @@ from __future__ import annotations
 """Persistence and cache identity helpers for support/resistance materializations."""
 
 import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from hashlib import sha256
+from math import isfinite
 from time import perf_counter
 from typing import Any, Callable, Iterable
 
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Session
 from src.models.tables import (
     StrategyRun,
     SupportResistanceMaterialization,
+    SupportResistanceRegimeVersion,
     SupportResistanceRunEvent,
     SupportResistanceRunMaterialization,
     SupportResistanceZoneVersion,
@@ -38,6 +40,8 @@ SELECT
 """
 
 BATCH_INSERT_SIZE = 5_000
+NUMERIC_24_10_ABS_LIMIT = 100_000_000_000_000.0
+NUMERIC_20_10_ABS_LIMIT = 10_000_000_000.0
 PersistenceProgressCallback = Callable[[str, int, int], None]
 
 
@@ -122,7 +126,7 @@ def find_reusable_materialization(
     expected_data_fingerprint: str | None = None,
 ) -> SupportResistanceMaterialization | None:
     metadata = runtime["params"].get("metadata", {}) or {}
-    algorithm_version = str(metadata.get("algorithm_version") or "pivot-slope-atr-v2")
+    algorithm_version = str(metadata.get("algorithm_version") or "pivot-slope-regime-v3")
     price_semantics = str(
         metadata.get("price_semantics")
         or "forward_adjusted_preferred_unadjusted_fallback"
@@ -191,6 +195,29 @@ def hydrate_state_from_materialization(
                 "valid_from": _as_date(metadata.get("valid_from"), version.effective_from),
             }
         )
+    regime_versions = db.execute(
+        select(SupportResistanceRegimeVersion)
+        .where(SupportResistanceRegimeVersion.materialization_id == materialization.id)
+        .order_by(
+            SupportResistanceRegimeVersion.symbol,
+            SupportResistanceRegimeVersion.effective_from,
+            SupportResistanceRegimeVersion.version,
+        )
+    ).scalars().all()
+    for version in regime_versions:
+        symbol_state = state.symbols.setdefault(version.symbol, SupportResistanceSymbolState())
+        symbol_state.cached_regime_timeline.append(
+            {
+                "id": str(version.id),
+                "version": version.version,
+                "effective_from": version.effective_from,
+                "regime": version.regime,
+                "lower_zone_key": version.lower_zone_key,
+                "upper_zone_key": version.upper_zone_key,
+                "reason_code": version.reason_code,
+                "evidence": dict(version.evidence or {}),
+            }
+        )
     return state
 
 
@@ -212,7 +239,7 @@ def persist_support_resistance_run(
     """Reuse or build one immutable sparse cache, then attach run-scoped events."""
     persist_started = perf_counter()
     metadata = runtime["params"].get("metadata", {}) or {}
-    algorithm_version = str(metadata.get("algorithm_version") or "pivot-slope-atr-v2")
+    algorithm_version = str(metadata.get("algorithm_version") or "pivot-slope-regime-v3")
     price_semantics = str(
         metadata.get("price_semantics")
         or "forward_adjusted_preferred_unadjusted_fallback"
@@ -312,6 +339,11 @@ def persist_support_resistance_run(
                     SupportResistanceZoneVersion.materialization_id == materialization.id
                 )
             )
+            db.execute(
+                delete(SupportResistanceRegimeVersion).where(
+                    SupportResistanceRegimeVersion.materialization_id == materialization.id
+                )
+            )
 
     try:
         instrument_ids = _instrument_ids(db, normalized_symbols)
@@ -320,9 +352,14 @@ def persist_support_resistance_run(
             if should_write_zones
             else 0
         )
+        regime_version_total = (
+            sum(len(symbol_state.regime_versions) for symbol_state in state.symbols.values())
+            if should_write_zones
+            else 0
+        )
         event_count_at_build = sum(len(symbol_state.events) for symbol_state in state.symbols.values())
         run_event_total = event_count_at_build if persist_run_events else 0
-        total_items = zone_version_total + run_event_total
+        total_items = zone_version_total + regime_version_total + run_event_total
         completed_items = 0
 
         if progress_callback is not None and zone_version_total:
@@ -345,15 +382,39 @@ def persist_support_resistance_run(
             completed_items = version_count
             if performance is not None:
                 performance["support_resistance_zone_versions_ms"] = _elapsed_ms(zone_started)
+            if progress_callback is not None and regime_version_total:
+                progress_callback("regime_versions", completed_items, total_items)
+            regime_started = perf_counter()
+
+            def report_regime_batch(written: int) -> None:
+                if progress_callback is not None:
+                    progress_callback("regime_versions", completed_items + written, total_items)
+
+            regime_count = _write_regime_versions(
+                db,
+                materialization,
+                state,
+                instrument_ids,
+                batch_size=batch_size,
+                batch_callback=report_regime_batch,
+            )
+            completed_items += regime_count
+            if performance is not None:
+                performance["support_resistance_regime_versions_ms"] = _elapsed_ms(regime_started)
             materialization.statistics = {
                 "symbol_count": len(normalized_symbols),
                 "zone_version_count": version_count,
+                "regime_version_count": regime_count,
+                "regime_timeline_count": sum(
+                    1 for symbol_state in state.symbols.values() if symbol_state.history
+                ),
                 "event_count_at_build": event_count_at_build,
             }
             materialization.status = "completed"
             materialization.completed_at = datetime.now(timezone.utc)
         elif performance is not None:
             performance["support_resistance_zone_versions_ms"] = 0.0
+            performance["support_resistance_regime_versions_ms"] = 0.0
 
         if progress_callback is not None and run_event_total:
             progress_callback("run_events", completed_items, total_items)
@@ -379,6 +440,7 @@ def persist_support_resistance_run(
                 {
                     "support_resistance_cache_reused": not should_write_zones,
                     "support_resistance_zone_versions": zone_version_total,
+                    "support_resistance_regime_versions": regime_version_total,
                     "support_resistance_run_events": event_count,
                     "support_resistance_run_events_ms": _elapsed_ms(events_started),
                     "support_resistance_persist_total_ms": _elapsed_ms(persist_started),
@@ -449,6 +511,11 @@ def _write_zone_versions(
     batch_size: int = BATCH_INSERT_SIZE,
     batch_callback: Callable[[int], None] | None = None,
 ) -> int:
+    # Validate the complete materialization before the first INSERT. This keeps
+    # a late-sorting symbol from wasting a large transactional bulk write before
+    # a duplicate date or invalid geometry is discovered.
+    for _ in _zone_version_rows(materialization, state, instrument_ids):
+        pass
     return _insert_in_batches(
         db,
         SupportResistanceZoneVersion,
@@ -456,6 +523,89 @@ def _write_zone_versions(
         batch_size=batch_size,
         batch_callback=batch_callback,
     )
+
+
+def _write_regime_versions(
+    db: Session,
+    materialization: SupportResistanceMaterialization,
+    state: SupportResistanceState,
+    instrument_ids: dict[str, int],
+    *,
+    batch_size: int = BATCH_INSERT_SIZE,
+    batch_callback: Callable[[int], None] | None = None,
+) -> int:
+    return _insert_in_batches(
+        db,
+        SupportResistanceRegimeVersion,
+        _regime_version_rows(materialization, state, instrument_ids),
+        batch_size=batch_size,
+        batch_callback=batch_callback,
+    )
+
+
+def _regime_version_rows(
+    materialization: SupportResistanceMaterialization,
+    state: SupportResistanceState,
+    instrument_ids: dict[str, int],
+) -> Iterable[dict[str, Any]]:
+    for symbol, symbol_state in sorted(state.symbols.items()):
+        session_dates = sorted(
+            {
+                item["dt_ny"]
+                for item in symbol_state.history
+                if isinstance(item.get("dt_ny"), date)
+                and materialization.coverage_start <= item["dt_ny"] <= materialization.coverage_end
+            }
+        )
+        versions = sorted(
+            symbol_state.regime_versions,
+            key=lambda item: (str(item["effective_from"]), int(item["version"])),
+        )
+        _validate_regime_versions(symbol, session_dates, versions)
+        for payload in versions:
+            yield {
+                "materialization_id": materialization.id,
+                "instrument_id": instrument_ids.get(symbol),
+                "symbol": symbol,
+                "version": int(payload["version"]),
+                "effective_from": date.fromisoformat(str(payload["effective_from"])),
+                "regime": payload["regime"],
+                "lower_zone_key": payload.get("lower_zone_key"),
+                "upper_zone_key": payload.get("upper_zone_key"),
+                "reason_code": payload.get("reason_code") or "unknown",
+                "evidence": payload.get("evidence") or {},
+            }
+
+
+def _validate_regime_versions(
+    symbol: str,
+    session_dates: list[date],
+    versions: list[dict[str, Any]],
+) -> None:
+    if not session_dates:
+        if versions:
+            raise ValueError(f"{symbol}: regime versions exist without market sessions")
+        return
+    if not versions:
+        raise ValueError(f"{symbol}: missing regime timeline")
+    starts = [date.fromisoformat(str(item["effective_from"])) for item in versions]
+    if starts[0] != session_dates[0]:
+        raise ValueError(f"{symbol}: regime timeline does not start on the first market session")
+    if any(left >= right for left, right in zip(starts, starts[1:])):
+        raise ValueError(f"{symbol}: regime effective dates must be strictly increasing")
+    states = [str(item["regime"]) for item in versions]
+    allowed_states = {"uptrend", "downtrend", "range", "transition"}
+    if any(state not in allowed_states for state in states):
+        raise ValueError(f"{symbol}: regime timeline contains an invalid state")
+    if any(left == right for left, right in zip(states, states[1:])):
+        raise ValueError(f"{symbol}: adjacent regime versions must differ")
+    session_set = set(session_dates)
+    if any(start not in session_set for start in starts):
+        raise ValueError(f"{symbol}: regime transition is not aligned to a market session")
+    expected_versions = list(range(1, len(versions) + 1))
+    actual_versions = [int(item["version"]) for item in versions]
+    if actual_versions != expected_versions:
+        raise ValueError(f"{symbol}: regime versions must be contiguous and one-based")
 
 
 def _zone_version_rows(
@@ -473,16 +623,29 @@ def _zone_version_rows(
                 item["dt_ny"]: index for index, item in enumerate(symbol_state.history)
             }
             session_dates = sorted(session_index_by_date)
+            effective_dates = [date.fromisoformat(str(item["effective_from"])) for item in ordered]
+            if any(left >= right for left, right in zip(effective_dates, effective_dates[1:])):
+                raise ValueError(
+                    f"{symbol}:{zone_key}: zone effective dates must be strictly increasing"
+                )
+            if any(item not in session_index_by_date for item in effective_dates):
+                raise ValueError(
+                    f"{symbol}:{zone_key}: zone transition is not aligned to a market session"
+                )
             for index, payload in enumerate(ordered):
-                effective_from = date.fromisoformat(str(payload["effective_from"]))
+                effective_from = effective_dates[index]
                 effective_to = (
-                    date.fromisoformat(str(ordered[index + 1]["effective_from"])) - timedelta(days=1)
+                    session_dates[session_index_by_date[effective_dates[index + 1]] - 1]
                     if index + 1 < len(ordered)
                     else None
                 )
-                projection_limit = min(
-                    effective_to or materialization.coverage_end,
-                    materialization.coverage_end,
+                projection_limit = (
+                    effective_from
+                    if payload["status"] != "active"
+                    else min(
+                        effective_to or materialization.coverage_end,
+                        materialization.coverage_end,
+                    )
                 )
                 projection_dates = [item for item in session_dates if effective_from <= item <= projection_limit]
                 projection_end = projection_dates[-1] if projection_dates else effective_from
@@ -494,7 +657,7 @@ def _zone_version_rows(
                 end_delta = payload["slope_per_session"] * (
                     end_index - payload["anchor_session_index"]
                 )
-                yield {
+                row = {
                     "materialization_id": materialization.id,
                     "instrument_id": instrument_ids.get(symbol),
                     "symbol": symbol,
@@ -530,6 +693,39 @@ def _zone_version_rows(
                         "last_inside": payload["last_inside"],
                     },
                 }
+                _validate_persisted_zone_row(row)
+                yield row
+
+
+def _validate_persisted_zone_row(row: dict[str, Any]) -> None:
+    price_fields = (
+        "center_price",
+        "lower_price",
+        "upper_price",
+        "atr_width",
+        "slope_per_session",
+        "end_center_price",
+        "end_lower_price",
+        "end_upper_price",
+    )
+    values = {field: float(row[field]) for field in price_fields}
+    identity = f"{row['symbol']}:{row['zone_key']}@{row['effective_from']}"
+    if any(
+        not isfinite(value) or abs(value) >= NUMERIC_24_10_ABS_LIMIT
+        for value in values.values()
+    ):
+        raise ValueError(f"{identity}: zone geometry exceeds the NUMERIC(24,10) domain")
+    if (
+        values["atr_width"] <= 0
+        or values["lower_price"] <= 0
+        or values["end_lower_price"] <= 0
+        or not values["lower_price"] <= values["center_price"] <= values["upper_price"]
+        or not values["end_lower_price"] <= values["end_center_price"] <= values["end_upper_price"]
+    ):
+        raise ValueError(f"{identity}: zone geometry is non-positive or unordered")
+    residual = float(row["fit_residual_atr"])
+    if not isfinite(residual) or residual < 0 or residual >= NUMERIC_20_10_ABS_LIMIT:
+        raise ValueError(f"{identity}: fit residual exceeds the NUMERIC(20,10) domain")
 
 
 def _replace_run_audit_rows(

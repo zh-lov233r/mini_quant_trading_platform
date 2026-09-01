@@ -39,12 +39,20 @@ class MarketDataLoader:
     def iter_days(self) -> Iterator[tuple[date, dict[str, dict[str, Any]]]]:
         load_started = perf_counter()
         build_ms = 0.0
-        connection = self._engine.connect().execution_options(stream_results=True)
+        # A pooled connection may retain a previous execution option until the
+        # SQLAlchemy proxy is reset. Force client-side execution for the
+        # transaction command, then enable server-side streaming only for the
+        # market-data SELECT.
+        connection = self._engine.connect().execution_options(stream_results=False)
         self._connection = connection
         try:
             if connection.dialect.name == "postgresql":
-                connection.exec_driver_sql("SET TRANSACTION READ ONLY")
-            rows = connection.execute(self._statement, self._params).mappings().yield_per(
+                connection.exec_driver_sql(
+                    "SET TRANSACTION READ ONLY",
+                    execution_options={"stream_results": False},
+                )
+            streaming_connection = connection.execution_options(stream_results=True)
+            rows = streaming_connection.execute(self._statement, self._params).mappings().yield_per(
                 self._fetch_size
             )
             current_date: date | None = None

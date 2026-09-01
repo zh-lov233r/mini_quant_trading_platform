@@ -1,4 +1,5 @@
 import type { BacktestRunOut } from "@/types/backtest";
+import type { StrategyType } from "@/types/strategy";
 
 export interface BacktestRunFilters {
   query: string;
@@ -8,13 +9,16 @@ export interface BacktestRunFilters {
 
 export function filterBacktestRuns(
   runs: readonly BacktestRunOut[],
-  strategyTypesById: ReadonlyMap<string, string>,
+  strategyTypesById: ReadonlyMap<string, StrategyType>,
   filters: BacktestRunFilters,
 ): BacktestRunOut[] {
   const query = filters.query.trim().toLocaleLowerCase();
 
   return runs.filter((run) => {
-    const strategyType = strategyTypesById.get(run.strategy_id) || "unknown";
+    const strategyType = strategyTypesById.get(run.strategy_id);
+    if (!strategyType) {
+      throw new Error(`Missing strategy type for backtest run: ${run.id}`);
+    }
     if (filters.status !== "all" && run.status !== filters.status) {
       return false;
     }

@@ -1584,6 +1584,7 @@ export default function PaperTradingPage() {
                           <DetailItem label={txt("信号数", "Signals")} value={String(latestSingleRun.signal_count)} />
                           <DetailItem label={txt("订单数", "Orders")} value={String(latestSingleRun.order_count)} />
                           <DetailItem label={txt("提交数", "Submitted")} value={String(latestSingleRun.submitted_order_count)} />
+                          <DetailItem label={txt("待开盘校验", "Pending open check")} value={String(latestSingleRun.pending_order_count)} />
                           <DetailItem label={txt("最终权益", "Final Equity")} value={formatMoney(latestSingleRun.final_equity, brokerCurrency)} />
                         </div>
                       </div>

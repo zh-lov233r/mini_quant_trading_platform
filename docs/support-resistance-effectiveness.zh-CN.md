@@ -2,7 +2,7 @@
 
 [English](support-resistance-effectiveness.md) | [文档索引](README.zh-CN.md)
 
-该流程用于独立验证预注册的 `pivot-slope-atr-v2`，不会改变 allocation、激活 portfolio、启动 scheduler 或提交订单。它与普通自适应研究分离，持久化为父级 `support_resistance_effectiveness_v2` 实验，并包含发现、年度折和封存最终留出子实验。已退役水平检测器 `pivot-atr-v1` 的结果不构成 v2 证据，不得继承。
+该流程用于独立验证预注册的 `pivot-slope-regime-v3`，不会改变 allocation、激活 portfolio、启动 scheduler 或提交订单。它与普通自适应研究分离，持久化为父级 `support_resistance_effectiveness_v3` 实验，并包含发现、年度折和封存最终留出子实验。旧 v1/v2 结果不构成 v3 证据，不得继承。
 
 ## 协议与动态股票池
 
@@ -27,11 +27,13 @@ JSON 输出包含逐年合格成员和排除观测数。随后运行 `make check
 
 ## 固定候选与时间预算
 
-发现阶段分别运行 `support_bounce`、`resistance_breakout` 和 `breakout_retest`，每种模式关闭另外两种。每种模式固定 4 组 v2 检测器参数（最少拟合 Pivot/跨度、内点容差、斜率上限、区域半宽和时间衰减）与 3 档触发器，共 12 个候选、48 个 trial；三种模式合计 144 个 trial。模式冠军首先要求 2020 年 base/stress 超额收益均为正，再按超额收益、Sharpe、回撤、集中度和参数哈希确定性排序。
+发现阶段分别运行 `support_bounce`、`resistance_breakout` 和 `breakout_retest`，每种模式关闭另外两种。每种模式固定 4 组 v3 检测器参数（最少拟合 Pivot/跨度、内点容差、斜率上限、区域半宽和时间衰减）与 3 档触发器，共 12 个候选、48 个 trial；三种模式合计 144 个 trial。四状态分类不增加可调参数。模式冠军首先要求 2020 年 base/stress 超额收益均为正，再按超额收益、Sharpe、回撤、集中度和参数哈希确定性排序。
 
 默认策略和三个模式冠军进入 2021、2022、2023 年度折。校准冠军必须在三个年度折中 base 超额收益全部为正，再依次按年度超额收益中位数、最差回撤、stress 衰减和哈希冻结。最终子实验只生成样本外 trial，并增加与 base 成本完全相同的 `base_cache_replay`，用于逐项比较事件、信号、交易、持仓和 NAV。实际排队最多 198 个 trial，空余预算不会重新分配。
 
-最终判定只能是 `validated_default`、`validated_calibrated`、`not_validated` 或 `inconclusive`。候选必须同时通过预注册的收益、回撤、事件 alpha、总样本量、年度样本量、P&L 集中度、年度折和缓存等价门槛。最终留出失败后不得重定义分层或参数。
+最终对外判定归一为 `validated`、`not_validated` 或 `inconclusive`；内部仍记录通过的默认或校准候选。候选必须同时通过预注册的收益、回撤、事件 alpha、总样本量、年度样本量、P&L 集中度、年度折和缓存等价门槛。最终留出失败后不得重定义分层或参数。
+
+除原有指标外，v3 报告必须包含四状态覆盖天数、持续时间和转换次数，状态时间线零重叠/零缺口检查，各 regime/setup 的候选、准入、拒绝、成交和收益，确认下行退出及其后续表现/回撤影响，以及区域与状态缓存重放一致性。任何状态时间线完整性错误都会使 materialization 失败，不能进入研究结果。
 
 ## 报告
 
@@ -59,7 +61,7 @@ PDF 使用 ReportLab，并嵌入固定 `scifont` 运行依赖随包提供的 Not
 
 仓库没有 Alembic。`backend/utils/create_zzzzz_research_experiments.sql` 只包含加法变更：可空 `parent_experiment_id`、非空 `study_kind` 及相关索引。交付代码不会自动应用 DDL。
 
-另行授权应用前，必须确认精确数据库，执行只读 schema/ORM 对照，创建可恢复备份，排空 research worker，并保持 scheduler 和订单提交关闭。使用 `ON_ERROR_STOP` 应用后，校验字段、约束、索引和父子查询，再部署 worker。回滚时先回滚应用；新增字段可保留用于兼容和审计。
+另行授权应用前，必须确认精确数据库，执行只读 schema/ORM 对照，创建可恢复备份，排空 research worker，并保持 scheduler 和订单提交关闭。v3 还需事务应用 `backend/utils/migrate_pivot_slope_regime_v3.sql` 的新增状态表/索引。使用 `ON_ERROR_STOP` 应用后，校验字段、约束、索引、状态完整性和父子查询，再以并发 1 部署 worker。回滚时先回滚应用；新增字段和状态表可保留用于审计。
 
 ```bash
 .venv/bin/python backend/utils/preflight_support_resistance_effectiveness_rollout.py

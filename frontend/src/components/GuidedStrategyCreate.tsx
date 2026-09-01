@@ -49,10 +49,12 @@ function fieldId(path: string): string {
   return `strategy-create-${path.replaceAll(".", "-")}`;
 }
 
-function safeRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
+function parseStrategyParamsJson(raw: string): Record<string, unknown> {
+  const value: unknown = JSON.parse(raw);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Strategy params must be a JSON object");
+  }
+  return value as Record<string, unknown>;
 }
 
 function formatValue(value: unknown, field?: GuidedFieldDefinition): string {
@@ -197,7 +199,7 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
   const buildParams = (): Record<string, unknown> => {
     let result: Record<string, unknown>;
     if (selectedType === "custom") {
-      result = safeRecord(JSON.parse(rawJson));
+      result = parseStrategyParamsJson(rawJson);
     } else {
       result = cloneRecord(params);
     }
@@ -247,7 +249,7 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
     if (step === 2) {
       if (selectedType === "custom") {
         try {
-          safeRecord(JSON.parse(rawJson));
+          parseStrategyParamsJson(rawJson);
         } catch {
           next.rawJson = copy.custom.invalid;
         }
@@ -401,16 +403,10 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
         <p style={sectionSubtitleStyle}>{copy.catalog.execution}</p>
         <div style={templateGridStyle}>
           {ENGINE_READY_TYPES.map((strategyType) => {
-            const item = catalog.find((candidate) => candidate.strategy_type === strategyType);
-            if (!item) return null;
+            const item = catalog.find((candidate) => candidate.strategy_type === strategyType)!;
             const guidance = typeCopy[strategyType];
             const selected = selectedType === strategyType;
-            const presentation = getStrategyCategoryPresentation(
-              strategyType,
-              locale,
-              guidance.title,
-              guidance.summary,
-            );
+            const presentation = getStrategyCategoryPresentation(strategyType, locale);
             return (
               <button
                 key={strategyType}
@@ -583,6 +579,23 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
       <section style={panelStyle}>
         <h2 style={sectionTitleStyle}>{copy.parameters.signalTitle}</h2>
         <p style={sectionSubtitleStyle}>{copy.parameters.signalSubtitle}</p>
+        {selectedType === "support_resistance" ? (
+          <div style={{ ...readonlyCardStyle, marginBottom: 18 }}>
+            <div>
+              <strong>{isZh ? "固定四状态规则" : "Fixed Four-Regime Policy"}</strong>
+              <p style={{ ...mutedStyle, margin: "8px 0 0" }}>
+                {isZh
+                  ? "v3 将每个交易日唯一归入上行、下行、震荡或过渡。上行允许全部三种入场，震荡仅允许支撑反弹，下行与过渡保留候选审计但暂停买入；确认下行触发下一有效交易日开盘退出。状态规则没有额外可调参数。"
+                  : "V3 assigns every session to exactly one uptrend, downtrend, range, or transition. Uptrends admit all three entries, ranges admit support bounces only, and downtrend/transition keep rejected candidates for audit; a confirmed downtrend exits at the next valid open. The regime policy adds no tunable parameter."}
+              </p>
+            </div>
+            <p style={{ ...mutedStyle, margin: 0 }}>
+              {isZh
+                ? "同日可准入候选由 signal strength 排序；Beta posterior 仅作为形态统计证据。"
+                : "Signal strength ranks eligible same-day candidates; the Beta posterior is setup evidence only."}
+            </p>
+          </div>
+        ) : null}
         <h3 style={groupTitleStyle}>{copy.parameters.core}</h3>
         {renderFields(fields.filter((field) => !field.advanced), true)}
         {hasAdvanced ? (
@@ -600,7 +613,7 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
       <section style={panelStyle}>
         <h2 style={sectionTitleStyle}>{copy.parameters.riskTitle}</h2>
         <p style={sectionSubtitleStyle}>{copy.custom.subtitle}</p>
-        <ExecutionSummary copy={copy.parameters} params={safeRecord(JSON.parse(rawJson || "{}"))} />
+        <ExecutionSummary copy={copy.parameters} params={parseStrategyParamsJson(rawJson)} />
       </section>
     );
     if (!selectedType) return null;

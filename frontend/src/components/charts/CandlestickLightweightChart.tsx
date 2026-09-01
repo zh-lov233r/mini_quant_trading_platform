@@ -18,11 +18,13 @@ import {
   buildLifecycleLeaderMarkers,
   normalizeGapOverlays,
   normalizeCandleBars,
+  normalizeRegimeOverlays,
   normalizeZoneOverlays,
 } from "@/components/charts/chartModels";
 import type {
   ChartGapOverlay,
   ChartOverlayMarker,
+  ChartRegimeOverlay,
   ChartZoneOverlay,
 } from "@/components/charts/chartModels";
 import { LifecycleOverlayPrimitive } from "@/components/charts/overlayPrimitive";
@@ -33,6 +35,10 @@ interface Props {
   markers?: ChartOverlayMarker[];
   gaps?: ChartGapOverlay[];
   zones?: ChartZoneOverlay[];
+  regimes?: ChartRegimeOverlay[];
+  requireRegimeCoverage?: boolean;
+  regimeCoverageStart?: string | null;
+  regimeCoverageEnd?: string | null;
   locale: string;
   showVolume?: boolean;
   height?: number;
@@ -47,6 +53,10 @@ export default function CandlestickLightweightChart({
   markers = [],
   gaps = [],
   zones = [],
+  regimes = [],
+  requireRegimeCoverage = false,
+  regimeCoverageStart = null,
+  regimeCoverageEnd = null,
   locale,
   showVolume = true,
   height = 384,
@@ -60,6 +70,7 @@ export default function CandlestickLightweightChart({
   const volumeRef = useRef<VolumeApi | null>(null);
   const primitiveRef = useRef<LifecycleOverlayPrimitive | null>(null);
   const [pinnedMarker, setPinnedMarker] = useState<ChartOverlayMarker | null>(null);
+  const [pinnedRegime, setPinnedRegime] = useState<ChartRegimeOverlay | null>(null);
   const normalizedBars = useMemo(() => normalizeCandleBars(bars), [bars]);
   const normalizedGaps = useMemo(
     () => normalizeGapOverlays(gaps, new Set(normalizedBars.map((bar) => bar.time))),
@@ -73,6 +84,26 @@ export default function CandlestickLightweightChart({
     () => normalizeZoneOverlays(zones, availableTimes),
     [availableTimes, zones],
   );
+  const normalizedRegimeResult = useMemo(
+    () => normalizeRegimeOverlays(
+      regimes,
+      normalizedBars.map((bar) => bar.time),
+      requireRegimeCoverage,
+      { startDate: regimeCoverageStart, endDate: regimeCoverageEnd },
+    ),
+    [normalizedBars, regimes, regimeCoverageEnd, regimeCoverageStart, requireRegimeCoverage],
+  );
+  const normalizedRegimes = normalizedRegimeResult.intervals;
+  const regimeByDate = useMemo(() => {
+    const output = new Map<string, ChartRegimeOverlay>();
+    normalizedBars.forEach((bar) => {
+      const regime = normalizedRegimes.find(
+        (item) => bar.time >= item.startDate && bar.time <= item.endDate,
+      );
+      if (regime) output.set(bar.time, regime);
+    });
+    return output;
+  }, [normalizedBars, normalizedRegimes]);
   // Lifecycle events are rendered only by the gutter primitive. Keeping the
   // built-in series-marker plugin out of this chart makes it impossible for a
   // new marker tone to fall back to an inline dot over a candle.
@@ -83,8 +114,10 @@ export default function CandlestickLightweightChart({
     [leaderMarkers],
   );
   const markerByIdRef = useRef(markerById);
+  const regimeByDateRef = useRef(regimeByDate);
   const localeRef = useRef(locale);
   markerByIdRef.current = markerById;
+  regimeByDateRef.current = regimeByDate;
   localeRef.current = locale;
 
   useEffect(() => {
@@ -163,16 +196,24 @@ export default function CandlestickLightweightChart({
       const marker = typeof param.hoveredObjectId === "string"
         ? markerByIdRef.current.get(param.hoveredObjectId)
         : null;
+      const regime = regimeByDateRef.current.get(String(param.time));
       const activeLocale = localeRef.current;
       tooltip.replaceChildren();
       const title = document.createElement("div");
       title.style.fontWeight = "800";
       title.style.marginBottom = "4px";
-      title.textContent = marker?.description || String(param.time);
+      title.textContent = marker?.description || regime?.description || String(param.time);
       tooltip.appendChild(title);
       const row = document.createElement("div");
       row.textContent = `O ${formatPrice(candleData.open, activeLocale)}  H ${formatPrice(candleData.high, activeLocale)}  L ${formatPrice(candleData.low, activeLocale)}  C ${formatPrice(candleData.close, activeLocale)}`;
       tooltip.appendChild(row);
+      if (regime && marker) {
+        const regimeRow = document.createElement("div");
+        regimeRow.style.marginTop = "4px";
+        regimeRow.style.color = "rgba(203, 213, 225, 0.9)";
+        regimeRow.textContent = regime.description;
+        tooltip.appendChild(regimeRow);
+      }
       tooltip.style.display = "block";
       tooltip.style.left = `${Math.min(param.point.x + 14, Math.max(8, container.clientWidth - 340))}px`;
       tooltip.style.top = `${Math.max(8, param.point.y - 68)}px`;
@@ -183,6 +224,7 @@ export default function CandlestickLightweightChart({
         ? markerByIdRef.current.get(param.hoveredObjectId) || null
         : null;
       setPinnedMarker(marker);
+      setPinnedRegime(marker || !param.time ? null : regimeByDateRef.current.get(String(param.time)) || null);
     };
     chart.subscribeClick(onClick);
 
@@ -203,7 +245,10 @@ export default function CandlestickLightweightChart({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setPinnedMarker(null);
+      if (event.key === "Escape") {
+        setPinnedMarker(null);
+        setPinnedRegime(null);
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -246,6 +291,7 @@ export default function CandlestickLightweightChart({
     const primitive = new LifecycleOverlayPrimitive(
       normalizedGaps,
       normalizedZones,
+      normalizedRegimes,
       normalizedBars,
       leaderMarkers,
     );
@@ -263,7 +309,7 @@ export default function CandlestickLightweightChart({
       }
       if (primitiveRef.current === primitive) primitiveRef.current = null;
     };
-  }, [leaderMarkers, normalizedBars, normalizedGaps, normalizedZones]);
+  }, [leaderMarkers, normalizedBars, normalizedGaps, normalizedRegimes, normalizedZones]);
 
   return (
     <div
@@ -282,6 +328,12 @@ export default function CandlestickLightweightChart({
     >
       <div ref={containerRef} style={{ width: "100%", height }} />
       <div ref={tooltipRef} style={tooltipStyle} />
+      {normalizedRegimeResult.error ? (
+        <div role="alert" style={regimeErrorStyle}>
+          {isZh ? "市场状态区间数据不完整，已停止绘制状态背景：" : "Regime interval data is invalid; background rendering was stopped: "}
+          {normalizedRegimeResult.error}
+        </div>
+      ) : null}
       {pinnedMarker ? (
         <div role="dialog" aria-label={pinnedMarker.label} style={detailCardStyle}>
           <button
@@ -301,6 +353,22 @@ export default function CandlestickLightweightChart({
               {detail}
             </div>
           ))}
+        </div>
+      ) : pinnedRegime ? (
+        <div role="dialog" aria-label={pinnedRegime.label} style={detailCardStyle}>
+          <button
+            type="button"
+            onClick={() => setPinnedRegime(null)}
+            aria-label={isZh ? "关闭详情" : "Close details"}
+            style={detailCloseStyle}
+          >
+            ×
+          </button>
+          <div style={{ fontWeight: 800, paddingRight: 26 }}>{pinnedRegime.label}</div>
+          <div style={{ color: "rgba(148, 163, 184, 0.9)", margin: "3px 0 7px" }}>
+            {pinnedRegime.startDate} - {pinnedRegime.endDate} · {pinnedRegime.sessionCount} {isZh ? "个交易日" : "sessions"}
+          </div>
+          <div>{pinnedRegime.description}</div>
         </div>
       ) : null}
     </div>
@@ -363,4 +431,18 @@ const detailCloseStyle = {
   color: "#cbd5e1",
   cursor: "pointer",
   fontSize: 19,
+} as const;
+
+const regimeErrorStyle = {
+  position: "absolute",
+  top: 10,
+  left: 10,
+  right: 70,
+  zIndex: 7,
+  padding: "8px 10px",
+  borderRadius: 10,
+  border: "1px solid rgba(248, 113, 113, 0.42)",
+  background: "rgba(69, 10, 10, 0.94)",
+  color: "#fecaca",
+  fontSize: 12,
 } as const;

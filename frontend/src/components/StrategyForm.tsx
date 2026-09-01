@@ -960,7 +960,7 @@ export default function StrategyForm({
       metadata: {
         description,
         schema_version: 1,
-        algorithm_version: "pivot-slope-atr-v2",
+        algorithm_version: "pivot-slope-regime-v3",
         price_semantics: "forward_adjusted_preferred_unadjusted_fallback",
       },
     };
@@ -1593,13 +1593,10 @@ export default function StrategyForm({
                     if (nextTemplate) applyTemplateDefaults(nextTemplate);
                   }}
                   disabled={isEditMode}
-                  options={(catalog.length === 0
-                    ? [{ strategy_type: "trend", label: "trend" }]
-                    : catalog
-                  ).map((item) => ({
+                  options={catalog.map((item) => ({
                     value: item.strategy_type,
                     label: item.label,
-                    accent: getStrategyCategoryPresentation(item.strategy_type, locale, item.label).accent,
+                    accent: getStrategyCategoryPresentation(item.strategy_type, locale).accent,
                   }))}
                 />
               </div>
@@ -2531,12 +2528,20 @@ export default function StrategyForm({
               </p>
               <div style={{ display: "grid", gap: 14 }}>
                 <div style={groupedPanelStyle}>
+                  <div style={groupedPanelTitleStyle}>{isZh ? "固定市场状态规则" : "Fixed Market-Regime Policy"}</div>
+                  <p style={groupedPanelHintStyle}>
+                    {isZh
+                      ? "v3 将每个交易日唯一归入上行、下行、震荡或过渡区间。上行允许三种入场，震荡仅允许支撑反弹，下行与过渡暂停买入；确认下行会触发下一交易日开盘退出。该规则没有额外可调参数。"
+                      : "v3 assigns every session to exactly one uptrend, downtrend, range, or transition interval. Uptrends allow all three entries, ranges allow support bounces only, and downtrend/transition states pause buys; a confirmed downtrend exits at the next session open. This policy has no extra tunable parameters."}
+                  </p>
+                </div>
+                <div style={groupedPanelStyle}>
                   <div style={groupedPanelTitleStyle}>{isZh ? "入场模式" : "Entry Modes"}</div>
                   <p style={groupedPanelHintStyle}>{isZh ? "至少开启一种；同日多模式命中时只生成一个最高评分 BUY。" : "Enable at least one. Multiple same-day matches persist as events but emit one highest-scored BUY."}</p>
                   <div style={groupedCompactGridStyle}>
                     {[
                       { label: isZh ? "支撑反弹" : "Support Bounce", value: supportBounceEnabled, setValue: setSupportBounceEnabled },
-                      { label: isZh ? "压力突破" : "Resistance Breakout", value: resistanceBreakoutEnabled, setValue: setResistanceBreakoutEnabled },
+                      { label: isZh ? "压力突破审计（不交易）" : "Breakout Audit (No Trade)", value: resistanceBreakoutEnabled, setValue: setResistanceBreakoutEnabled },
                       { label: isZh ? "突破回踩" : "Breakout Retest", value: breakoutRetestEnabled, setValue: setBreakoutRetestEnabled },
                     ].map((item) => (
                       <label key={item.label} style={{ ...groupedBoxStyle, flexDirection: "row", alignItems: "center" }}>
@@ -2561,7 +2566,7 @@ export default function StrategyForm({
 
                 <div style={groupedPanelStyle}>
                   <div style={groupedPanelTitleStyle}>{isZh ? "确认与向前评分" : "Confirmation And Forward Scoring"}</div>
-                  <p style={groupedPanelHintStyle}>{isZh ? "Beta 后验只使用当前日期以前已结束的同类事件；未决样本不进入分母。" : "The Beta posterior only uses same-mode outcomes resolved before the current date; censored outcomes stay out of the denominator."}</p>
+                  <p style={groupedPanelHintStyle}>{isZh ? "Signal strength 决定同日候选排序；Beta 后验仅作为形态审计证据，并只使用当前日期以前已结束的同类事件。" : "Signal strength ranks same-day candidates. The Beta posterior is audit evidence only and uses same-mode outcomes resolved before the current date."}</p>
                   <div style={groupedGridStyle}>
                     {srSignalFields.map((field) => (
                       <div key={field.labelEn} style={groupedBoxStyle}>

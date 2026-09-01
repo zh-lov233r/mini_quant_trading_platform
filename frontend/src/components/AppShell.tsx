@@ -138,7 +138,10 @@ export default function AppShell({
               </Dialog.Portal>
             </Dialog.Root>
             <Link href="/" className={styles.mobileBrand}>{messages.common.appName}</Link>
-            <span className={styles.mobileTopbarSpacer} aria-hidden="true" />
+            <div className={cx(styles.localeSwitch, styles.mobileLocaleSwitch)} aria-label={messages.common.language}>
+              <button type="button" className={cx(styles.localeButton, locale === "zh-CN" && styles.localeButtonActive)} onClick={() => setLocale("zh-CN")}>中</button>
+              <button type="button" className={cx(styles.localeButton, locale === "en-US" && styles.localeButtonActive)} onClick={() => setLocale("en-US")}>EN</button>
+            </div>
           </div>
 
           <CompactPageHeader

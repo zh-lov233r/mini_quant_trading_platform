@@ -37,7 +37,7 @@ fall(value, gate, ideal) = 100 × clamp((gate - value) / (gate - ideal), 0, 1)
 | Resistance breakout | ATR confirmation 45%, volume ratio 35%, and reward/risk 20%; each rises from its configured minimum to twice that minimum. |
 | Breakout retest | ATR hold margin 35% from 0 to `bounce_confirmation_atr`, retest volume contraction 35% from `retest_volume_ratio_max` to 0, and reward/risk 30% from its configured minimum to twice that value. |
 
-For support/resistance, the existing Beta posterior remains in raw `score` and `score_evidence` as audit evidence; it does not determine v1 candidate selection or strength rank.
+For support/resistance, the existing Beta posterior remains in raw `score` and `score_evidence` as audit evidence; it does not determine v3 candidate selection or strength rank. Regime eligibility is applied before signal-strength ranking.
 
 All formula inputs are available by the T-day close. Missing or non-finite required inputs fail the run instead of silently falling back to symbol order.
 

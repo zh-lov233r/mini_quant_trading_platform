@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
 from typing import Any, Literal
 
-from src.services.patterns.common import compute_recent_atr, number
+from src.services.patterns.common import compute_recent_atr
 from src.services.patterns.models import HistoryBar, PatternContext, PatternDecision
 from src.services.staged_entry_service import build_pattern_setup, pattern_setup_from_metadata
 
@@ -66,27 +65,27 @@ def create_state() -> DoubleBottomState:
 
 def build_history_bar_from_snapshot(snapshot: dict[str, Any]) -> HistoryBar:
     return {
-        "dt_ny": _date_or_none(snapshot.get("dt_ny")),
+        "dt_ny": snapshot.get("dt_ny"),
         "ts": snapshot.get("ts"),
-        "open": number(snapshot.get("open")),
-        "high": number(snapshot.get("high")),
-        "low": number(snapshot.get("low")),
-        "close": number(snapshot.get("close")),
-        "volume": number(snapshot.get("volume")),
-        "atr_14": number(snapshot.get("atr_14")),
-        "volume_sma_20": number(snapshot.get("volume_sma_20")),
-        "ret_20d": number(snapshot.get("ret_20d")),
-        "ret_60d": number(snapshot.get("ret_60d")),
-        "sma_20": number(snapshot.get("sma_20")),
-        "sma_50": number(snapshot.get("sma_50")),
+        "open": snapshot.get("open"),
+        "high": snapshot.get("high"),
+        "low": snapshot.get("low"),
+        "close": snapshot.get("close"),
+        "volume": snapshot.get("volume"),
+        "atr_14": snapshot.get("atr_14"),
+        "volume_sma_20": snapshot.get("volume_sma_20"),
+        "ret_20d": snapshot.get("ret_20d"),
+        "ret_60d": snapshot.get("ret_60d"),
+        "sma_20": snapshot.get("sma_20"),
+        "sma_50": snapshot.get("sma_50"),
     }
 
 
 def append_snapshot(symbol_state: DoubleBottomSymbolState, snapshot: dict[str, Any]) -> None:
     history_bar = build_history_bar_from_snapshot(snapshot)
-    history_trade_date = _date_or_none(history_bar.get("dt_ny"))
+    history_trade_date = history_bar.get("dt_ny")
     if symbol_state.history_bars:
-        last_trade_date = _date_or_none(symbol_state.history_bars[-1].get("dt_ny"))
+        last_trade_date = symbol_state.history_bars[-1].get("dt_ny")
         if history_trade_date is not None and history_trade_date == last_trade_date:
             symbol_state.history_bars[-1] = history_bar
             return
@@ -308,17 +307,17 @@ def is_first_right_pullback(
     if current_idx < start + 1:
         return False
     halfway = candidate.right_bottom_low + (candidate.neckline_price - candidate.right_bottom_low) * 0.5
-    prior_closes = [number(bar.get("close")) for bar in bars[start:current_idx]]
+    prior_closes = [bar.get("close") for bar in bars[start:current_idx]]
     if not prior_closes or max((value for value in prior_closes if value is not None), default=0.0) < halfway:
         return False
 
     def qualifies(idx: int) -> bool:
         bar = bars[idx]
-        close = number(bar.get("close"))
-        low = number(bar.get("low"))
-        previous_close = number(bars[idx - 1].get("close"))
-        volume = number(bar.get("volume"))
-        average_volume = number(bar.get("volume_sma_20"))
+        close = bar.get("close")
+        low = bar.get("low")
+        previous_close = bars[idx - 1].get("close")
+        volume = bar.get("volume")
+        average_volume = bar.get("volume_sma_20")
         return bool(
             close is not None
             and low is not None
@@ -408,11 +407,11 @@ def build_setup_payload(
 
 def extract_position_setup(entry_signal_features: dict[str, Any] | None) -> dict[str, Any] | None:
     parsed = pattern_setup_from_metadata(entry_signal_features)
-    if not isinstance(parsed, dict):
+    if parsed is None:
         return None
-    left_bottom_low = number(parsed.get("left_bottom_low"))
-    right_bottom_low = number(parsed.get("right_bottom_low"))
-    neckline_price = number(parsed.get("neckline_price"))
+    left_bottom_low = parsed.get("left_bottom_low")
+    right_bottom_low = parsed.get("right_bottom_low")
+    neckline_price = parsed.get("neckline_price")
     if left_bottom_low is None or right_bottom_low is None or neckline_price is None:
         return None
     setup = dict(parsed)
@@ -421,36 +420,36 @@ def extract_position_setup(entry_signal_features: dict[str, Any] | None) -> dict
             "left_bottom_low": left_bottom_low,
             "right_bottom_low": right_bottom_low,
             "neckline_price": neckline_price,
-            "breakout_close": number(parsed.get("breakout_close")),
-            "breakout_atr": number(parsed.get("breakout_atr")),
-            "breakout_wait_bars": number(parsed.get("breakout_wait_bars")),
-            "bottom_distance_pct": number(parsed.get("bottom_distance_pct")),
-            "breakout_volume_ratio": number(parsed.get("breakout_volume_ratio")),
-            "rebound_up_day_ratio": number(parsed.get("rebound_up_day_ratio")),
+            "breakout_close": parsed.get("breakout_close"),
+            "breakout_atr": parsed.get("breakout_atr"),
+            "breakout_wait_bars": parsed.get("breakout_wait_bars"),
+            "bottom_distance_pct": parsed.get("bottom_distance_pct"),
+            "breakout_volume_ratio": parsed.get("breakout_volume_ratio"),
+            "rebound_up_day_ratio": parsed.get("rebound_up_day_ratio"),
         }
     )
     return setup
 
 
 def compute_signal_score(setup: dict[str, Any]) -> float:
-    bottom_distance_pct = number(setup.get("bottom_distance_pct")) or 1.0
-    breakout_volume_ratio = number(setup.get("breakout_volume_ratio")) or 0.0
-    rebound_up_day_ratio = number(setup.get("rebound_up_day_ratio")) or 0.0
+    bottom_distance_pct = setup.get("bottom_distance_pct") or 1.0
+    breakout_volume_ratio = setup.get("breakout_volume_ratio") or 0.0
+    rebound_up_day_ratio = setup.get("rebound_up_day_ratio") or 0.0
     return ((1.0 - bottom_distance_pct) * 100.0) + breakout_volume_ratio + rebound_up_day_ratio * 10.0
 
 
 def strength_inputs(snapshot: dict[str, Any], setup: dict[str, Any]) -> dict[str, Any]:
-    neckline_price = number(setup.get("neckline_price"))
-    breakout_close = number(setup.get("breakout_close"))
-    breakout_volume = number(setup.get("breakout_volume"))
-    current_volume = number(snapshot.get("volume"))
-    close = number(snapshot.get("close"))
-    right_bottom_low = number(setup.get("right_bottom_low"))
-    average_volume = number(snapshot.get("volume_sma_20"))
+    neckline_price = setup.get("neckline_price")
+    breakout_close = setup.get("breakout_close")
+    breakout_volume = setup.get("breakout_volume")
+    current_volume = snapshot.get("volume")
+    close = snapshot.get("close")
+    right_bottom_low = setup.get("right_bottom_low")
+    average_volume = snapshot.get("volume_sma_20")
     return {
         "stage": setup.get("stage_key") or setup.get("stage"),
-        "bottom_distance_pct": number(setup.get("bottom_distance_pct")),
-        "rebound_up_day_ratio": number(setup.get("rebound_up_day_ratio")),
+        "bottom_distance_pct": setup.get("bottom_distance_pct"),
+        "rebound_up_day_ratio": setup.get("rebound_up_day_ratio"),
         "current_volume_ratio": (
             current_volume / average_volume
             if current_volume is not None and average_volume not in {None, 0}
@@ -461,7 +460,7 @@ def strength_inputs(snapshot: dict[str, Any], setup: dict[str, Any]) -> dict[str
             if close is not None and right_bottom_low is not None and neckline_price is not None
             else None
         ),
-        "breakout_volume_ratio": number(setup.get("breakout_volume_ratio")),
+        "breakout_volume_ratio": setup.get("breakout_volume_ratio"),
         "breakout_extension_pct": (
             breakout_close / neckline_price - 1.0
             if breakout_close is not None and neckline_price is not None and neckline_price > 0
@@ -486,13 +485,13 @@ def resolve_exit_action(
     if not bars:
         return None, None, None
     current = bars[-1]
-    current_close = number(current.get("close"))
-    current_low = number(current.get("low"))
+    current_close = current.get("close")
+    current_low = current.get("low")
     current_atr = compute_recent_atr(bars, STOP_ATR_WINDOW)
-    breakout_close = number(setup.get("breakout_close"))
-    breakout_atr = number(setup.get("breakout_atr"))
-    left_bottom_low = number(setup.get("left_bottom_low"))
-    right_bottom_low = number(setup.get("right_bottom_low"))
+    breakout_close = setup.get("breakout_close")
+    breakout_atr = setup.get("breakout_atr")
+    left_bottom_low = setup.get("left_bottom_low")
+    right_bottom_low = setup.get("right_bottom_low")
     if left_bottom_low is None or right_bottom_low is None:
         return None, None, None
     hard_stop = min(left_bottom_low, right_bottom_low) * (
@@ -525,7 +524,6 @@ def resolve_exit_action(
     ):
         return "SELL", "price hit the ATR stop from the breakout confirmation", "atr_stop"
     return None, None, None
-
 
 def find_latest_pattern(
     bars: list[HistoryBar],
@@ -563,9 +561,9 @@ def build_left_candidate(
     ):
         return None
     bar = bars[left_bottom_idx]
-    low = number(bar.get("low"))
-    volume = number(bar.get("volume"))
-    average = number(bar.get("volume_sma_20"))
+    low = bar.get("low")
+    volume = bar.get("volume")
+    average = bar.get("volume_sma_20")
     if low is None or low <= 0 or volume is None or average is None or average <= 0:
         return None
     if volume / average > bottom_volume_ratio_max:
@@ -639,9 +637,9 @@ def build_right_candidate(
     bottom_volume_ratio_max: float,
 ) -> DoubleBottomRightCandidate | None:
     right_bar = bars[right_bottom_idx]
-    right_low = number(right_bar.get("low"))
-    right_volume = number(right_bar.get("volume"))
-    right_average = number(right_bar.get("volume_sma_20"))
+    right_low = right_bar.get("low")
+    right_volume = right_bar.get("volume")
+    right_average = right_bar.get("volume_sma_20")
     if right_low is None or right_volume is None or right_average is None or right_average <= 0:
         return None
     if right_volume / right_average > bottom_volume_ratio_max:
@@ -738,7 +736,7 @@ def is_local_minimum(
     before_span: int = 1,
     after_span: int | None = None,
 ) -> bool:
-    low = number(bars[idx].get("low"))
+    low = bars[idx].get("low")
     if low is None:
         return False
     after_span = before_span if after_span is None else after_span
@@ -747,7 +745,7 @@ def is_local_minimum(
     for neighbor_idx in range(idx - before_span, idx + after_span + 1):
         if neighbor_idx == idx:
             continue
-        neighbor_low = number(bars[neighbor_idx].get("low"))
+        neighbor_low = bars[neighbor_idx].get("low")
         if neighbor_low is not None and neighbor_low < low:
             return False
     return True
@@ -763,7 +761,7 @@ def intermediate_lows_hold(
     if right_bottom_idx - left_bottom_idx <= 1:
         return False
     return all(
-        number(bars[idx].get("low")) is not None and float(bars[idx]["low"]) > floor_low
+        bars[idx].get("low") is not None and float(bars[idx]["low"]) > floor_low
         for idx in range(left_bottom_idx + 1, right_bottom_idx)
     )
 
@@ -776,13 +774,13 @@ def compute_up_day_ratio(
 ) -> float | None:
     if end_idx <= start_idx:
         return None
-    previous_close = number(bars[start_idx].get("close"))
+    previous_close = bars[start_idx].get("close")
     if previous_close is None:
         return None
     up_days = 0
     directional_days = 0
     for idx in range(start_idx + 1, end_idx + 1):
-        close = number(bars[idx].get("close"))
+        close = bars[idx].get("close")
         if close is None:
             continue
         if close > previous_close:
@@ -838,7 +836,7 @@ def has_smooth_downtrend(
         return False
     closes: list[float] = []
     for idx in range(anchor_idx, left_bottom_idx + 1):
-        close = number(bars[idx].get("close"))
+        close = bars[idx].get("close")
         if close is None or close <= 0:
             return False
         closes.append(close)
@@ -853,11 +851,11 @@ def has_downtrend_context(
     downtrend_lookback: int,
     min_drop_pct: float,
 ) -> bool:
-    close = number(bars[left_bottom_idx].get("close"))
+    close = bars[left_bottom_idx].get("close")
     anchor_idx = left_bottom_idx - downtrend_lookback
     if close is None or anchor_idx < 0:
         return False
-    anchor_close = number(bars[anchor_idx].get("close"))
+    anchor_close = bars[anchor_idx].get("close")
     return bool(anchor_close is not None and anchor_close > 0 and close / anchor_close - 1.0 <= -min_drop_pct)
 
 
@@ -870,7 +868,7 @@ def find_neckline(
     if right_bottom_idx - left_bottom_idx <= 1:
         return None, None
     candidates = [
-        (idx, number(bars[idx].get("high")))
+        (idx, bars[idx].get("high"))
         for idx in range(left_bottom_idx + 1, right_bottom_idx)
     ]
     valid = [(idx, value) for idx, value in candidates if value is not None]
@@ -885,10 +883,10 @@ def match_breakout_bar(
     breakout_volume_ratio_min: float,
 ) -> tuple[float, float, float] | None:
     threshold = neckline_price * (1.0 + breakout_buffer_pct)
-    high = number(bar.get("high"))
-    close = number(bar.get("close"))
-    volume = number(bar.get("volume"))
-    average = number(bar.get("volume_sma_20"))
+    high = bar.get("high")
+    close = bar.get("close")
+    volume = bar.get("volume")
+    average = bar.get("volume_sma_20")
     if high is None or close is None or volume is None or average is None or average <= 0:
         return None
     if high <= threshold or volume / average < breakout_volume_ratio_min:
@@ -928,9 +926,9 @@ def resolve_action(
 ) -> tuple[Literal["BUY", "SELL", "HOLD"] | None, str | None, str | None]:
     current_idx = len(bars) - 1
     current = bars[current_idx]
-    current_close = number(current.get("close"))
-    current_low = number(current.get("low"))
-    current_volume = number(current.get("volume"))
+    current_close = current.get("close")
+    current_low = current.get("low")
+    current_volume = current.get("volume")
     neckline_support = pattern.neckline_price * (1.0 - float(signal_cfg["support_tolerance_pct"]))
     if position > 0:
         return resolve_exit_action(
@@ -947,7 +945,7 @@ def resolve_action(
     if current_low is None or current_close is None or current_volume is None:
         return None, None, None
     if any(
-        (number(bar.get("close")) or float("inf")) < neckline_support
+        (bar.get("close") or float("inf")) < neckline_support
         for bar in bars[pattern.breakout_idx + 1:current_idx]
     ):
         return None, None, None
@@ -957,16 +955,3 @@ def resolve_action(
     if touched and held and low_volume:
         return "BUY", "low-volume retest held the neckline after the double-bottom breakout", "retest"
     return None, None, None
-
-
-def _date_or_none(value: Any) -> date | None:
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    if isinstance(value, str):
-        try:
-            return date.fromisoformat(value[:10])
-        except ValueError:
-            return None
-    return None

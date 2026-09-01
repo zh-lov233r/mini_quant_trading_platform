@@ -23,7 +23,7 @@ export interface PointInTimeUniversePolicy {
 }
 
 export interface SupportResistanceValidationProtocol {
-  kind: "support_resistance_effectiveness_v2";
+  kind: "support_resistance_effectiveness_v3";
   maxBacktests: 200;
   bootstrapSeed: 20260828;
   bootstrapReplicates: 10000;
@@ -167,6 +167,7 @@ export interface ExperimentTrial {
   costConfig: Record<string, unknown>;
   dataFingerprint: string | null;
   backtestRunId: string | null;
+  backtestDeletedAt: string | null;
   candidateId: string | null;
   metrics: Record<string, unknown>;
   attempt: number;

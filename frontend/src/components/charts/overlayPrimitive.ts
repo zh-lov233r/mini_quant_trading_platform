@@ -20,6 +20,7 @@ import type {
   CandleChartPoint,
   ChartGapOverlay,
   ChartOverlayMarker,
+  ChartRegimeOverlay,
   ChartZoneOverlay,
 } from "@/components/charts/chartModels";
 
@@ -34,12 +35,14 @@ export class LifecycleOverlayPrimitive implements ISeriesPrimitive<Time> {
   constructor(
     gaps: ChartGapOverlay[],
     zones: ChartZoneOverlay[],
+    regimes: ChartRegimeOverlay[],
     bars: CandleChartPoint[],
     leaderMarkers: ChartOverlayMarker[] = [],
   ) {
     this.view = new LifecycleOverlayView(
       gaps,
       zones,
+      regimes,
       bars,
       leaderMarkers,
       () => this.chart,
@@ -98,12 +101,13 @@ class LifecycleOverlayView implements IPrimitivePaneView {
   constructor(
     gaps: ChartGapOverlay[],
     readonly zones: ChartZoneOverlay[],
+    readonly regimes: ChartRegimeOverlay[],
     readonly bars: CandleChartPoint[],
     leaderMarkers: ChartOverlayMarker[],
     chart: () => IChartApiBase<Time> | null,
     series: () => ISeriesApi<SeriesType, Time> | null,
   ) {
-    this.rendererValue = new LifecycleOverlayRenderer(gaps, zones, bars, leaderMarkers, chart, series);
+    this.rendererValue = new LifecycleOverlayRenderer(gaps, zones, regimes, bars, leaderMarkers, chart, series);
   }
 
   zOrder() {
@@ -200,6 +204,7 @@ class LifecycleOverlayRenderer implements IPrimitivePaneRenderer {
   constructor(
     private readonly gaps: ChartGapOverlay[],
     private readonly zones: ChartZoneOverlay[],
+    private readonly regimes: ChartRegimeOverlay[],
     bars: CandleChartPoint[],
     private readonly leaderMarkers: ChartOverlayMarker[],
     private readonly chart: () => IChartApiBase<Time> | null,
@@ -240,8 +245,39 @@ class LifecycleOverlayRenderer implements IPrimitivePaneRenderer {
     const series = this.series();
     if (!chart || !series) return;
     target.useMediaCoordinateSpace(({ context, mediaSize }) => {
-      const nextKey = `${mediaSize.width}:${mediaSize.height}:${this.gaps.length}:${this.zones.length}`;
+      const nextKey = `${mediaSize.width}:${mediaSize.height}:${this.gaps.length}:${this.zones.length}:${this.regimes.length}`;
       this.cacheKey = nextKey;
+      const regimeColors = {
+        uptrend: { fill: "rgba(34, 197, 94, 0.075)", stroke: "rgba(34, 197, 94, 0.52)" },
+        downtrend: { fill: "rgba(239, 68, 68, 0.075)", stroke: "rgba(239, 68, 68, 0.52)" },
+        range: { fill: "rgba(245, 158, 11, 0.07)", stroke: "rgba(245, 158, 11, 0.52)" },
+        transition: { fill: "rgba(148, 163, 184, 0.06)", stroke: "rgba(148, 163, 184, 0.42)" },
+      } as const;
+      const halfBar = Math.max(1, Number(chart.timeScale().options().barSpacing || 2) / 2);
+      this.regimes.forEach((regime) => {
+        const startCoordinate = chart.timeScale().timeToCoordinate(regime.startDate);
+        const endCoordinate = chart.timeScale().timeToCoordinate(regime.endDate);
+        if (startCoordinate == null || endCoordinate == null) return;
+        const left = Math.max(0, startCoordinate - halfBar);
+        const right = Math.min(mediaSize.width, endCoordinate + halfBar);
+        const width = Math.max(1, right - left);
+        const colors = regimeColors[regime.regime];
+        context.fillStyle = colors.fill;
+        context.fillRect(left, 0, width, mediaSize.height);
+        context.strokeStyle = colors.stroke;
+        context.lineWidth = 1;
+        context.setLineDash([3, 4]);
+        context.beginPath();
+        context.moveTo(left, 0);
+        context.lineTo(left, mediaSize.height);
+        context.stroke();
+        if (width >= 80) {
+          context.setLineDash([]);
+          context.font = '600 11px "Avenir Next", "Segoe UI", sans-serif';
+          context.fillStyle = colors.stroke;
+          context.fillText(`${regime.label} · ${regime.sessionCount}`, left + 6, 17, width - 12);
+        }
+      });
       this.zones.forEach((zone) => {
         const startX = chart.timeScale().timeToCoordinate(zone.startDate);
         const endX = zone.endDate ? chart.timeScale().timeToCoordinate(zone.endDate) : mediaSize.width;
@@ -251,8 +287,11 @@ class LifecycleOverlayRenderer implements IPrimitivePaneRenderer {
         const endLowerY = series.priceToCoordinate(zone.endLowerPrice);
         if ([startX, endX, startUpperY, startLowerY, endUpperY, endLowerY].some((value) => value == null)) return;
         const support = zone.role === "support";
-        context.fillStyle = support ? "rgba(34, 197, 94, 0.14)" : "rgba(239, 68, 68, 0.13)";
-        context.strokeStyle = support ? "#22c55e" : "#ef4444";
+        const channel = zone.role === "entry_channel";
+        context.fillStyle = channel
+          ? "rgba(6, 182, 212, 0.09)"
+          : support ? "rgba(34, 197, 94, 0.14)" : "rgba(239, 68, 68, 0.13)";
+        context.strokeStyle = channel ? "#06b6d4" : support ? "#22c55e" : "#ef4444";
         context.lineWidth = 1.25;
         context.setLineDash([6, 4]);
         context.beginPath();

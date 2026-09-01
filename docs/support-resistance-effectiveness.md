@@ -2,7 +2,7 @@
 
 [中文](support-resistance-effectiveness.zh-CN.md) | [Documentation index](README.md)
 
-This workflow independently validates the pre-registered `pivot-slope-atr-v2` strategy without changing allocations, activating a portfolio, starting the scheduler, or submitting orders. It is separate from ordinary adaptive research and is persisted as a parent `support_resistance_effectiveness_v2` experiment with discovery, annual-fold, and sealed-final-holdout children. Results from the retired horizontal `pivot-atr-v1` detector are not evidence for v2 and must not be carried forward.
+This workflow independently validates the pre-registered `pivot-slope-regime-v3` strategy without changing allocations, activating a portfolio, starting the scheduler, or submitting orders. It is separate from ordinary adaptive research and is persisted as a parent `support_resistance_effectiveness_v3` experiment with discovery, annual-fold, and sealed-final-holdout children. Results from v1 or v2 are not evidence for v3 and must not be carried forward.
 
 ## Protocol and universe
 
@@ -27,11 +27,13 @@ The JSON output contains yearly eligible membership and exclusion observations. 
 
 ## Fixed candidate and time budget
 
-Discovery runs `support_bounce`, `resistance_breakout`, and `breakout_retest` independently. Each mode has four frozen v2 detector profiles covering minimum line Pivot count/span, inlier tolerance, slope cap, zone half-width, and recency half-life, plus three frozen trigger profiles: 12 candidates and 48 trials per mode, 144 trials total. A discovery champion requires positive 2020 base and stress excess returns before deterministic ordering by excess return, Sharpe, drawdown, concentration, and parameter hash.
+Discovery runs `support_bounce`, `resistance_breakout`, and `breakout_retest` independently. Each mode has four frozen v3 detector profiles covering minimum line Pivot count/span, inlier tolerance, slope cap, zone half-width, and recency half-life, plus three frozen trigger profiles: 12 candidates and 48 trials per mode, 144 trials total. The four-regime classifier adds no tunable parameter. A discovery champion requires positive 2020 base and stress excess returns before deterministic ordering by excess return, Sharpe, drawdown, concentration, and parameter hash.
 
 The default plus three mode champions enter the 2021, 2022, and 2023 folds. A calibrated champion must have positive base excess return in all three folds and is frozen by median annual excess return, worst drawdown, stress decay, then hash. The final child runs only out-of-sample trials. It adds `base_cache_replay`, which has the same costs as `base`, so events, signals, transactions, positions, and NAV can be compared exactly. Total scheduled trials are at most 198; unused capacity is never reassigned.
 
-The final decision is one of `validated_default`, `validated_calibrated`, `not_validated`, or `inconclusive`. Each passing candidate must satisfy all pre-registered return, drawdown, event-alpha, sample-count, annual-count, P&L-concentration, annual-fold, and cache-equivalence gates. A failed final holdout is not used to redefine filters or parameters.
+The public final decision is normalized to `validated`, `not_validated`, or `inconclusive`; internal evidence still records whether a default or calibrated candidate passed. Each passing candidate must satisfy all pre-registered return, drawdown, event-alpha, sample-count, annual-count, P&L-concentration, annual-fold, and cache-equivalence gates. A failed final holdout is not used to redefine filters or parameters.
+
+In addition to existing metrics, the v3 report covers days, duration, and transitions for all four regimes; zero-overlap and zero-gap timeline checks; candidate, admitted, rejected, filled, and return results by regime/setup; confirmed-downtrend exits and their post-exit/drawdown impact; and exact replay equality for both zone and regime caches. Any regime timeline integrity error fails the materialization before it can enter a research result.
 
 ## Reports
 
@@ -59,7 +61,7 @@ Reports are runtime artifacts and are excluded from the maintained documentation
 
 The repository has no Alembic workflow. `backend/utils/create_zzzzz_research_experiments.sql` contains additive nullable `parent_experiment_id` and non-null `study_kind` changes plus indexes. Code delivery does not apply this DDL.
 
-Before separately authorized application: resolve the exact database, run a read-only schema/ORM comparison, take a restorable backup, drain research workers, and keep scheduler and order submission disabled. Apply with `ON_ERROR_STOP`, verify columns, constraints, indexes, and parent/child reads, then deploy workers. Roll back application code first; additive columns may remain for compatibility and audit.
+Before separately authorized application: resolve the exact database, run a read-only schema/ORM comparison, take a restorable backup, drain research workers, and keep scheduler and order submission disabled. V3 also applies the additive regime table and indexes in `backend/utils/migrate_pivot_slope_regime_v3.sql` in one transaction. Use `ON_ERROR_STOP`, verify columns, constraints, regime integrity, indexes, and parent/child reads, then deploy workers at concurrency one. Roll back application code first; additive columns and the regime table may remain for audit.
 
 ```bash
 .venv/bin/python backend/utils/preflight_support_resistance_effectiveness_rollout.py

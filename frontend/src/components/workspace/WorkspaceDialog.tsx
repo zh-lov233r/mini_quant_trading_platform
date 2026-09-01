@@ -12,10 +12,22 @@ export interface WorkspaceDialogProps {
   description?: string;
   children: ReactNode;
   footer?: ReactNode;
-  size?: "summary" | "form";
+  size?: "summary" | "form" | "wide";
   triggerTone?: "default" | "primary";
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+}
+
+interface WorkspaceConfirmDialogProps {
+  open: boolean;
+  title: string;
+  description?: string;
+  confirmLabel: string;
+  cancelLabel: string;
+  confirming?: boolean;
+  children: ReactNode;
+  onConfirm: () => void;
+  onOpenChange: (open: boolean) => void;
 }
 
 export function WorkspaceDialog({
@@ -72,7 +84,7 @@ export function WorkspaceDialog({
       ) : null}
       <Dialog.Portal>
         <Dialog.Overlay className={styles.overlay} />
-        <Dialog.Content className={`${styles.content} ${size === "form" ? styles.form : styles.summary}`}>
+        <Dialog.Content className={`${styles.content} ${size === "wide" ? styles.wide : size === "form" ? styles.form : styles.summary}`}>
           <header className={styles.header}>
             <div>
               <Dialog.Title className={styles.dialogTitle}>{title}</Dialog.Title>
@@ -87,6 +99,41 @@ export function WorkspaceDialog({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+export function WorkspaceConfirmDialog({
+  open,
+  title,
+  description,
+  confirmLabel,
+  cancelLabel,
+  confirming = false,
+  children,
+  onConfirm,
+  onOpenChange,
+}: WorkspaceConfirmDialogProps) {
+  return (
+    <WorkspaceDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!confirming) onOpenChange(next);
+      }}
+      title={title}
+      description={description}
+      footer={(
+        <>
+          <button type="button" className={styles.cancelButton} disabled={confirming} onClick={() => onOpenChange(false)}>
+            {cancelLabel}
+          </button>
+          <button type="button" className={styles.dangerButton} disabled={confirming} onClick={onConfirm}>
+            {confirmLabel}
+          </button>
+        </>
+      )}
+    >
+      <DialogNote tone="warning">{children}</DialogNote>
+    </WorkspaceDialog>
   );
 }
 

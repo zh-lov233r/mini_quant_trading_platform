@@ -47,6 +47,7 @@ class PaperTradingRunOut(BaseModel):
     submitted_order_count: int
     skipped_order_count: int
     failed_order_count: int
+    pending_order_count: int
     final_cash: float
     final_equity: float
 
@@ -81,6 +82,7 @@ def _to_run_out(result: PaperTradingResult) -> PaperTradingRunOut:
         submitted_order_count=result.submitted_order_count,
         skipped_order_count=result.skipped_order_count,
         failed_order_count=result.failed_order_count,
+        pending_order_count=result.pending_order_count,
         final_cash=result.final_cash,
         final_equity=result.final_equity,
     )

@@ -214,7 +214,7 @@ export const strategyCreateZhCN = {
     breakoutVolumeRatioMin: { label: "突破成交量下限", hint: "要求突破得到相对均量确认。" },
     maxBreakoutBars: { label: "等待突破最长 K 线", hint: "右底后超过此窗口仍未突破则放弃形态。" },
     supportBounceEnabled: { label: "支撑反弹", hint: "价格进入支撑区并重新站上确认线后候选入场。" },
-    resistanceBreakoutEnabled: { label: "压力突破", hint: "价格放量突破压力区后候选入场。" },
+    resistanceBreakoutEnabled: { label: "压力突破审计", hint: "记录放量突破事件用于审计，不直接产生买入。" },
     breakoutRetestEnabled: { label: "突破回踩", hint: "压力突破并缩量回踩确认后候选入场。" },
     pivotLeftBars: { label: "Pivot 左侧 K 线", hint: "确认 Pivot 时检查的左侧历史长度。" },
     pivotRightBars: { label: "Pivot 右侧确认 K 线", hint: "必须等待这些未来已完成 K 线后才确认 Pivot。" },

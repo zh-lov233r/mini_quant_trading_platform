@@ -4,6 +4,7 @@ import sys
 import unittest
 from datetime import date, datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
 from sqlalchemy import create_engine, select
@@ -12,15 +13,19 @@ from sqlalchemy.orm import Session, sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.models.tables import Base, Strategy, StrategyRun, Transaction  # noqa: E402
+from src.models.tables import Base, Signal, Strategy, StrategyRun, Transaction  # noqa: E402
 from src.services.paper_account_service import _transaction_net_cash_flow  # noqa: E402
 from src.services.paper_trading_service import (  # noqa: E402
     VirtualSubportfolioConfig,
     VirtualSubportfolioState,
     _execute_paper_orders,
+    _fresh_snapshot_ask,
+    _prepare_support_resistance_paper_entries,
+    _round_limit_price_down,
     _rebuild_virtual_subportfolio_state,
     _submit_paper_order,
     _sync_strategy_pending_orders,
+    process_pending_support_resistance_entries,
 )
 from src.services.signal_strength_service import annotate_and_rank_signals  # noqa: E402
 from src.services.staged_entry_service import build_pattern_setup  # noqa: E402
@@ -45,6 +50,21 @@ class StubAlpacaClient:
 
     def get_order(self, order_id: str, *, nested: bool | None = None):
         return dict(self.get_order_responses[order_id])
+
+    def get_clock(self):
+        return {"next_open": "2026-04-15T13:30:00Z", "is_open": False}
+
+    def get_stock_snapshots(self, symbols: list[str]):
+        return {
+            symbol: {"latestQuote": {"ap": 102.0, "t": "2026-04-15T13:30:01Z"}}
+            for symbol in symbols
+        }
+
+    def get_account(self):
+        return {"cash": "1000", "equity": "1000"}
+
+    def list_positions(self):
+        return []
 
 
 def _make_order(
@@ -99,7 +119,6 @@ class PaperTradingServiceTests(unittest.TestCase):
                 status="accepted",
             )
         )
-
         outcome = _submit_paper_order(
             db=self.db,
             strategy=self.strategy,
@@ -126,10 +145,128 @@ class PaperTradingServiceTests(unittest.TestCase):
         self.assertFalse((txn.meta or {}).get("paper_fill_applied"))
         self.assertEqual(_transaction_net_cash_flow(txn), 0.0)
 
+    def test_support_resistance_buy_is_deferred_with_frozen_channel(self) -> None:
+        event = SignalEvent(
+            strategy_id=str(self.strategy.id),
+            ts=datetime(2026, 4, 14, 20, tzinfo=timezone.utc),
+            symbol="AAPL",
+            action="BUY",
+            reason="valid channel",
+            metadata={
+                "support_resistance": {
+                    "entry_channel": {
+                        "valid": True,
+                        "lower": 99,
+                        "upper": 101,
+                        "lower_slope_per_session": 0,
+                        "upper_slope_per_session": 0,
+                    }
+                }
+            },
+        )
+        _prepare_support_resistance_paper_entries(
+            [event],
+            strategy=self.strategy,
+            portfolio_name="default",
+            trade_date=date(2026, 4, 14),
+            client=StubAlpacaClient(),
+            submit_orders=True,
+        )
+        execution = event.metadata["paper_execution"]
+        self.assertEqual(execution["status"], "pending")
+        self.assertEqual(execution["eligible_trade_date"], "2026-04-15")
+        self.assertEqual(execution["entry_channel"]["upper"], 101)
+
+    def test_open_quote_freshness_and_limit_tick_rounding(self) -> None:
+        ask, quote_ts = _fresh_snapshot_ask(
+            {"latestQuote": {"ap": 10.25, "t": "2026-04-15T13:30:01Z"}},
+            expected_date=date(2026, 4, 15),
+        )
+        self.assertEqual((ask, quote_ts), (10.25, "2026-04-15T13:30:01Z"))
+        self.assertEqual(_round_limit_price_down(10.239), 10.23)
+        self.assertEqual(_round_limit_price_down(0.12349), 0.1234)
+        stale, _ = _fresh_snapshot_ask(
+            {"latestQuote": {"ap": 10.25, "t": "2026-04-14T19:59:59Z"}},
+            expected_date=date(2026, 4, 15),
+        )
+        self.assertIsNone(stale)
+        pre_open, _ = _fresh_snapshot_ask(
+            {"latestQuote": {"ap": 10.25, "t": "2026-04-15T13:29:59Z"}},
+            expected_date=date(2026, 4, 15),
+        )
+        self.assertIsNone(pre_open)
+
         sleeve = self._rebuild_state(capital_base=1000.0)
         self.assertEqual(sleeve.cash, 1000.0)
         self.assertEqual(sleeve.equity, 1000.0)
         self.assertEqual(sleeve.positions_by_symbol, {})
+
+    def test_pending_open_entry_outside_channel_is_skipped_without_submission(self) -> None:
+        strategy = Strategy(
+            id=uuid4(),
+            strategy_key="unit-support-resistance",
+            name="Unit Support Resistance",
+            strategy_type="support_resistance",
+            params=normalize_strategy_params("support_resistance", {}),
+            status="active",
+            version=1,
+        )
+        run = StrategyRun(
+            id=uuid4(),
+            strategy_id=strategy.id,
+            strategy_version=1,
+            mode="paper",
+            status="completed",
+            window_start=date(2026, 4, 14),
+            window_end=date(2026, 4, 14),
+            config_snapshot={"paper_trading": {"portfolio_name": "default"}},
+            summary_metrics={"pending_order_count": 1},
+        )
+        signal = Signal(
+            run_id=run.id,
+            strategy_id=strategy.id,
+            ts=datetime(2026, 4, 14, 20, tzinfo=timezone.utc),
+            symbol="AAPL",
+            signal="BUY",
+            reason="valid channel",
+            features={
+                "support_resistance": {"selected_setup": "support_bounce"},
+                "paper_execution": {
+                    "status": "pending",
+                    "eligible_trade_date": "2026-04-15",
+                    "client_order_id": "paper-test",
+                    "entry_channel": {
+                        "valid": True,
+                        "lower": 99,
+                        "upper": 101,
+                        "lower_slope_per_session": 0,
+                        "upper_slope_per_session": 0,
+                    },
+                },
+            },
+        )
+        self.db.add_all([strategy, run, signal])
+        self.db.commit()
+        client = StubAlpacaClient()
+        client.get_clock = lambda: {"is_open": True}
+
+        with patch(
+            "src.services.paper_trading_service.build_alpaca_client_for_portfolio",
+            return_value=client,
+        ):
+            processed = process_pending_support_resistance_entries(
+                self.db,
+                now=datetime(2026, 4, 15, 13, 30, 5, tzinfo=timezone.utc),
+            )
+
+        self.assertEqual(processed, 1)
+        self.assertEqual(signal.features["paper_execution"]["status"], "skipped")
+        self.assertEqual(
+            signal.features["paper_execution"]["reason_code"],
+            "entry_price_outside_valid_channel",
+        )
+        self.assertEqual(client.submissions, [])
+        self.assertEqual(run.summary_metrics["pending_order_count"], 0)
 
     def test_submit_order_with_immediate_fill_updates_virtual_ledger(self) -> None:
         client = StubAlpacaClient(

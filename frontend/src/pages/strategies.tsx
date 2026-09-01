@@ -14,7 +14,7 @@ import MetricCard from "@/components/MetricCard";
 import { SelectControl } from "@/components/workspace/SelectControl";
 import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogStack as ContextStack, DialogStat as ContextStat, DialogStats as ContextStats, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
-import type { StrategyCatalogItem, StrategyOut } from "@/types/strategy";
+import type { StrategyCatalogItem, StrategyOut, StrategyType } from "@/types/strategy";
 import {
   formatDateTime,
   getStrategyDescription,
@@ -41,34 +41,16 @@ export default function StrategiesPage() {
   const [selectedStrategy, setSelectedStrategy] = useState<StrategyOut | null>(null);
 
   const categoryEntries = useMemo(() => {
-    const counts = new Map<string, number>();
+    const counts = new Map<StrategyType, number>();
     items.forEach((item) => {
       counts.set(item.strategy_type, (counts.get(item.strategy_type) || 0) + 1);
     });
 
-    const catalogByType = new Map<string, StrategyCatalogItem>(
-      catalog.map((item) => [item.strategy_type, item])
-    );
-    const orderedTypes = [
-      ...catalog.map((item) => item.strategy_type),
-      ...items
-        .map((item) => item.strategy_type)
-        .filter((strategyType, index, values) => (
-          !catalogByType.has(strategyType) && values.indexOf(strategyType) === index
-        )),
-    ];
-
-    return orderedTypes.map((strategyType) => {
-      const catalogItem = catalogByType.get(strategyType);
+    return catalog.map(({ strategy_type: strategyType }) => {
       return {
         strategyType,
         count: counts.get(strategyType) || 0,
-        presentation: getStrategyCategoryPresentation(
-          strategyType,
-          locale,
-          catalogItem?.label,
-          catalogItem?.description
-        ),
+        presentation: getStrategyCategoryPresentation(strategyType, locale),
       };
     });
   }, [catalog, items, locale]);
@@ -556,14 +538,9 @@ export default function StrategiesPage() {
                         "rebalance"
                       );
                       const runAt = getStrategyFieldText(item, "execution", "run_at");
-                      const catalogItem = catalog.find(
-                        (entry) => entry.strategy_type === item.strategy_type
-                      );
                       const categoryPresentation = getStrategyCategoryPresentation(
                         item.strategy_type,
-                        locale,
-                        catalogItem?.label,
-                        catalogItem?.description
+                        locale
                       );
 
                       return (

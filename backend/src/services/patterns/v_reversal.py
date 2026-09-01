@@ -5,7 +5,6 @@ from typing import Any
 from src.services.patterns.common import (
     build_setup,
     buy_decision,
-    number,
     position_exit,
     volume_ratio,
 )
@@ -64,15 +63,15 @@ def evaluate(context: PatternContext) -> PatternDecision | None:
 
     distance = current_idx - anchor_idx
     current = bars[-1]
-    close = number(current.get("close"))
-    open_price = number(current.get("open"))
+    close = current.get("close")
+    open_price = current.get("open")
     current_volume_ratio = volume_ratio(current)
     continuation = bars[anchor_idx + 1:current_idx + 1]
     continuous_advance = (
         len(continuation) >= 2
         and all(
-            number(bar.get("close")) is not None
-            and number(bar.get("open")) is not None
+            bar.get("close") is not None
+            and bar.get("open") is not None
             and float(bar["close"]) > float(bar["open"])
             and (volume_ratio(bar) or 0.0) >= float(cfg["continuation_volume_ratio_min"])
             for bar in continuation
@@ -136,8 +135,8 @@ def evaluate(context: PatternContext) -> PatternDecision | None:
         extra={"pivot_low": anchor_low, "consolidation_top": top},
     )
     breakout_volume = volume_ratio(bars[breakout_idx]) or float(cfg["breakout_volume_ratio_min"])
-    current_volume = number(current.get("volume")) or 0.0
-    breakout_raw_volume = number(bars[breakout_idx].get("volume")) or 1.0
+    current_volume = current.get("volume") or 0.0
+    breakout_raw_volume = bars[breakout_idx].get("volume") or 1.0
     volume_quality = max(
         0.0,
         1.0
@@ -171,10 +170,10 @@ def find_latest_anchor(bars: list[HistoryBar], cfg: dict[str, Any]) -> int | Non
     pivot_bars = int(cfg["pivot_max_bars"])
     for idx in range(len(bars) - 1, max(lookback - 1, 0), -1):
         bar = bars[idx]
-        open_price = number(bar.get("open"))
-        close = number(bar.get("close"))
-        low = number(bar.get("low"))
-        atr = number(bar.get("atr_14"))
+        open_price = bar.get("open")
+        close = bar.get("close")
+        low = bar.get("low")
+        atr = bar.get("atr_14")
         ratio = volume_ratio(bar)
         if None in {open_price, close, low, atr, ratio} or atr == 0 or low == 0:
             continue
@@ -186,14 +185,14 @@ def find_latest_anchor(bars: list[HistoryBar], cfg: dict[str, Any]) -> int | Non
             continue
         if ratio < float(cfg["pivot_volume_ratio_min"]):
             continue
-        lows = [number(item.get("low")) for item in bars[max(0, idx - pivot_bars + 1):idx + 1]]
+        lows = [item.get("low") for item in bars[max(0, idx - pivot_bars + 1):idx + 1]]
         valid_lows = [value for value in lows if value is not None]
         if not valid_lows or low > min(valid_lows):
             continue
         prior = [
             float(item["close"])
             for item in bars[max(0, idx - lookback):idx]
-            if number(item.get("close")) is not None
+            if item.get("close") is not None
         ]
         if not prior or (max(prior) - low) / max(prior) < float(cfg["downtrend_min_drop_pct"]):
             continue
@@ -211,9 +210,9 @@ def find_breakout_retest(
     max_bars = int(cfg["consolidation_max_bars"])
     retest_window = int(cfg["retest_window"])
     tolerance = float(cfg["support_tolerance_pct"])
-    current_low = number(bars[-1].get("low"))
-    current_close = number(bars[-1].get("close"))
-    current_volume = number(bars[-1].get("volume"))
+    current_low = bars[-1].get("low")
+    current_close = bars[-1].get("close")
+    current_volume = bars[-1].get("volume")
     if current_low is None or current_close is None or current_volume is None:
         return None
     for breakout_idx in range(
@@ -225,9 +224,9 @@ def find_breakout_retest(
             continue
         top = max(float(item["high"]) for item in consolidation)
         breakout = bars[breakout_idx]
-        breakout_close = number(breakout.get("close"))
+        breakout_close = breakout.get("close")
         breakout_ratio = volume_ratio(breakout)
-        breakout_volume = number(breakout.get("volume"))
+        breakout_volume = breakout.get("volume")
         if breakout_close is None or breakout_ratio is None or breakout_volume is None:
             continue
         if breakout_close <= top or breakout_ratio < float(cfg["breakout_volume_ratio_min"]):

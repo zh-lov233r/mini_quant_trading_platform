@@ -100,7 +100,7 @@ export function SearchableSelect({
   };
 
   return (
-    <Popover.Root open={open} onOpenChange={changeOpen}>
+    <Popover.Root open={open} onOpenChange={changeOpen} modal>
       <Popover.Trigger asChild>
         <button
           type="button"

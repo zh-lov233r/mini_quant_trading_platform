@@ -5,6 +5,7 @@ import type {
   ExperimentTrial,
   ResearchExperiment,
 } from "@/types/research";
+import type { BacktestDeleteResult } from "@/types/backtest";
 
 export function listResearchExperiments(): Promise<ResearchExperiment[]> {
   return http<ResearchExperiment[]>("/api/research/experiments", { method: "GET" });
@@ -54,5 +55,15 @@ export function getExperimentReport(id: string): Promise<Record<string, unknown>
   return http<Record<string, unknown>>(
     `/api/research/experiments/${encodeURIComponent(id)}/report`,
     { method: "GET" },
+  );
+}
+
+export function deleteResearchBacktest(
+  experimentId: string,
+  runId: string,
+): Promise<BacktestDeleteResult> {
+  return http<BacktestDeleteResult>(
+    `/api/research/experiments/${encodeURIComponent(experimentId)}/backtests/${encodeURIComponent(runId)}`,
+    { method: "DELETE" },
   );
 }

@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { createBacktest, getBacktestWorkerStatus, listBacktests } from "@/api/backtests";
+import { createBacktest, deleteBacktest, getBacktestWorkerStatus, listBacktests } from "@/api/backtests";
 import { listStockBaskets } from "@/api/stock-baskets";
 import { listStrategies } from "@/api/strategies";
 import AppShell from "@/components/AppShell";
@@ -13,11 +13,11 @@ import BacktestWorkerCapacity from "@/components/BacktestWorkerCapacity";
 import MetricCard from "@/components/MetricCard";
 import { SearchableSelect } from "@/components/workspace/SearchableSelect";
 import { SelectControl } from "@/components/workspace/SelectControl";
-import { WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
+import { WorkspaceConfirmDialog, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
 import type { BacktestCreate, BacktestRunOut, BacktestWorkerStatus } from "@/types/backtest";
 import type { StockBasketOut } from "@/types/stock-basket";
-import type { StrategyOut } from "@/types/strategy";
+import type { StrategyOut, StrategyType } from "@/types/strategy";
 import {
   formatDateTime,
   formatDurationMs,
@@ -78,6 +78,7 @@ function toDateInputValue(dt: Date): string {
 const BACKTEST_FORM_DRAFT_STORAGE_KEY = "backtests-page-form-draft-v1";
 const DEFAULT_RUN_PAGE_SIZE = 10;
 const RUN_PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
+const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 type BacktestFormDraft = {
   strategyId: string;
@@ -234,6 +235,9 @@ export default function BacktestsPage() {
   const [runTypeFilter, setRunTypeFilter] = useState("all");
   const [runPageIndex, setRunPageIndex] = useState(0);
   const [runPageSize, setRunPageSize] = useState(DEFAULT_RUN_PAGE_SIZE);
+  const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+  const [pendingDeleteRun, setPendingDeleteRun] = useState<BacktestRunOut | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const [strategyId, setStrategyId] = useState("");
   const [basketId, setBasketId] = useState("");
@@ -244,6 +248,10 @@ export default function BacktestsPage() {
   const [commissionBps, setCommissionBps] = useState(1);
   const [commissionMin, setCommissionMin] = useState(1);
   const [slippageBps, setSlippageBps] = useState(5);
+
+  useEffect(() => {
+    if (router.isReady && preselectedStrategyId && !loading) setBacktestDialogOpen(true);
+  }, [loading, preselectedStrategyId, router.isReady]);
 
   useEffect(() => {
     const draft = readBacktestFormDraft();
@@ -474,7 +482,11 @@ export default function BacktestsPage() {
   );
   const runStrategyTypes = useMemo(
     () => Array.from(new Set(
-      runs.map((run) => strategyTypesById.get(run.strategy_id) || "unknown")
+      runs.map((run) => {
+        const strategyType = strategyTypesById.get(run.strategy_id);
+        if (!strategyType) throw new Error(`Missing strategy type for backtest run: ${run.id}`);
+        return strategyType;
+      })
     )).sort(),
     [runs, strategyTypesById]
   );
@@ -524,6 +536,24 @@ export default function BacktestsPage() {
     }
   };
 
+  const handleDeleteRun = async () => {
+    const run = pendingDeleteRun;
+    if (!run) return;
+    if (!TERMINAL_RUN_STATUSES.has(run.status)) return;
+    setDeletingRunId(run.id);
+    setDeleteError(null);
+    try {
+      await deleteBacktest(run.id);
+      setRuns((current) => current.filter((item) => item.id !== run.id));
+      setSubmitSuccessRun((current) => current?.id === run.id ? null : current);
+      setPendingDeleteRun(null);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeletingRunId(null);
+    }
+  };
+
   return (
     <AppShell
       title={isZh ? "回测工作台" : "Backtest Workspace"}
@@ -544,6 +574,22 @@ export default function BacktestsPage() {
     >
       {loading ? <p>{isZh ? "加载中..." : "Loading..."}</p> : null}
       {error ? <p style={{ color: "#fda4af" }}>{error}</p> : null}
+      <WorkspaceConfirmDialog
+        open={pendingDeleteRun !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteRun(null);
+        }}
+        title={isZh ? "删除历史回测" : "Delete historical backtest"}
+        description={pendingDeleteRun?.strategy_name || pendingDeleteRun?.strategy_id}
+        cancelLabel={isZh ? "取消" : "Cancel"}
+        confirmLabel={deletingRunId ? (isZh ? "删除中…" : "Deleting…") : (isZh ? "确认删除" : "Delete backtest")}
+        confirming={deletingRunId !== null}
+        onConfirm={() => void handleDeleteRun()}
+      >
+        {isZh
+          ? "将永久删除这条回测及其交易、信号和净值快照。策略、行情数据与共享支撑/压力数据会保留。"
+          : "This permanently deletes the run and its trades, signals, and equity snapshots. The strategy, market data, and shared support/resistance data are retained."}
+      </WorkspaceConfirmDialog>
 
       {!loading && (workerStatusUnavailable || workerStatus?.automation_available === false) ? (
         <div
@@ -622,7 +668,7 @@ export default function BacktestsPage() {
           <WorkspaceDialog
             title={isZh ? "发起回测" : "Start Backtest"}
             description={isZh ? "配置策略、时间窗口、资金和交易成本后提交后台任务。" : "Configure the strategy, window, capital, and trading costs before submitting the background job."}
-            size="form"
+            size="wide"
             open={backtestDialogOpen}
             onOpenChange={setBacktestDialogOpen}
           >
@@ -1061,8 +1107,7 @@ export default function BacktestsPage() {
                         ...runStrategyTypes.map((strategyType) => {
                           const presentation = getStrategyCategoryPresentation(
                             strategyType,
-                            locale,
-                            isZh ? "未知策略类型" : "Unknown Strategy Type"
+                            locale
                           );
                           return { value: strategyType, label: presentation.label, accent: presentation.accent };
                         }),
@@ -1099,6 +1144,7 @@ export default function BacktestsPage() {
                 </div>
               ) : null}
 
+              {deleteError ? <p role="alert" style={{ color: "#fda4af" }}>{deleteError}</p> : null}
               {runs.length === 0 ? (
                 <div
                   style={{
@@ -1123,15 +1169,15 @@ export default function BacktestsPage() {
                   {pagedRuns.map((run) => {
                     const totalReturn = getMetric(run.summary_metrics, "total_return");
                     const maxDrawdown = getMetric(run.summary_metrics, "max_drawdown");
-                    const strategyType = strategyTypesById.get(run.strategy_id) || "unknown";
+                    const strategyType: StrategyType | undefined = strategyTypesById.get(run.strategy_id);
+                    if (!strategyType) throw new Error(`Missing strategy type for backtest run: ${run.id}`);
                     const categoryPresentation = getStrategyCategoryPresentation(
                       strategyType,
-                      locale,
-                      isZh ? "未知策略类型" : "Unknown Strategy Type"
+                      locale
                     );
                     return (
+                      <div key={run.id} style={{ position: "relative" }}>
                       <Link
-                        key={run.id}
                         href={`/backtests/${encodeURIComponent(run.id)}`}
                         style={{
                           textDecoration: "none",
@@ -1314,6 +1360,36 @@ export default function BacktestsPage() {
                           )}
                         </article>
                       </Link>
+                      {TERMINAL_RUN_STATUSES.has(run.status) ? (
+                        <button
+                          type="button"
+                          aria-label={isZh ? `删除 ${run.strategy_name || "回测"}` : `Delete ${run.strategy_name || "backtest"}`}
+                          disabled={deletingRunId === run.id}
+                          onClick={() => {
+                            setDeleteError(null);
+                            setPendingDeleteRun(run);
+                          }}
+                          style={{
+                            position: "absolute",
+                            right: 18,
+                            bottom: 16,
+                            zIndex: 2,
+                            padding: "7px 11px",
+                            borderRadius: 10,
+                            border: "1px solid rgba(251,113,133,.58)",
+                            background: "rgba(159,18,57,.22)",
+                            color: "#fecdd3",
+                            fontWeight: 800,
+                            cursor: deletingRunId === run.id ? "wait" : "pointer",
+                            opacity: deletingRunId === run.id ? 0.65 : 1,
+                          }}
+                        >
+                          {deletingRunId === run.id
+                            ? (isZh ? "删除中…" : "Deleting…")
+                            : (isZh ? "删除记录" : "Delete")}
+                        </button>
+                      ) : null}
+                      </div>
                     );
                   })}
                   <nav aria-label={isZh ? "回测结果分页" : "Backtest results pagination"} className={styles.paginationBar}>

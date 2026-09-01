@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal, ROUND_DOWN
 from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -17,9 +20,11 @@ from src.models.tables import (
     Strategy,
     StrategyAllocation,
     StrategyRun,
+    SupportResistanceRunEvent,
+    SupportResistanceRunMaterialization,
     Transaction,
 )
-from src.services.alpaca_services import AlpacaAPIError, AlpacaClient
+from src.services.alpaca_services import AlpacaAPIError, AlpacaClient, AlpacaClientError
 from src.services.paper_account_service import (
     build_broker_account_isolation_report,
     build_alpaca_client_for_portfolio,
@@ -65,7 +70,11 @@ from src.services.support_resistance_persistence_service import (
     record_failed_materialization_after_rollback,
     source_data_fingerprint,
 )
-from src.services.support_resistance_service import SupportResistanceState
+from src.services.support_resistance_service import (
+    SupportResistanceState,
+    entry_price_is_inside_channel,
+    project_entry_channel,
+)
 
 
 log = logging.getLogger("paper_trading")
@@ -80,6 +89,7 @@ PAPER_BROKER_TERMINAL_STATUSES = {
 PAPER_TRANSACTION_SOURCES = {PAPER_BROKER_ORDER_SOURCE, "alpaca_live", "manual_virtual"}
 PAPER_TRADING_TRIGGER_MANUAL = "manual"
 PAPER_TRADING_TRIGGER_SCHEDULER = "scheduler"
+NEW_YORK = ZoneInfo("America/New_York")
 
 
 @dataclass(slots=True)
@@ -151,6 +161,7 @@ class PaperTradingResult:
     failed_order_count: int
     final_cash: float
     final_equity: float
+    pending_order_count: int = 0
 
 
 @dataclass(slots=True)
@@ -190,9 +201,7 @@ def run_paper_trading(
     if not runtime["engine_ready"]:
         raise ValueError("strategy is not engine-ready")
 
-    handler = STRATEGY_HANDLERS.get(runtime["strategy_type"])
-    if handler is None:
-        raise ValueError(f"unsupported strategy_type for paper trading: {runtime['strategy_type']}")
+    handler = STRATEGY_HANDLERS[runtime["strategy_type"]]
 
     symbols = runtime["params"]["universe"]["symbols"]
     if not symbols:
@@ -356,6 +365,14 @@ def run_paper_trading(
         else:
             signals = handler(runtime, snapshots)
         annotate_and_rank_signals(runtime, signals)
+        _prepare_support_resistance_paper_entries(
+            signals,
+            strategy=strategy,
+            portfolio_name=allocation_cfg.portfolio_name,
+            trade_date=trade_date,
+            client=client,
+            submit_orders=submit_orders,
+        )
         _persist_signals(db, strategy, run, signals)
 
         order_outcomes, sleeve_after, broker_cash_after = _execute_paper_orders(
@@ -418,6 +435,7 @@ def run_paper_trading(
         submitted_count = sum(1 for item in order_outcomes if item.status == "submitted")
         skipped_count = sum(1 for item in order_outcomes if item.status == "skipped")
         failed_count = sum(1 for item in order_outcomes if item.status == "failed")
+        pending_count = sum(1 for item in order_outcomes if item.status == "pending")
 
         run.status = "completed"
         run.finished_at = datetime.now(timezone.utc)
@@ -433,6 +451,7 @@ def run_paper_trading(
             "submitted_order_count": submitted_count,
             "skipped_order_count": skipped_count,
             "failed_order_count": failed_count,
+            "pending_order_count": pending_count,
             "submit_orders": submit_orders,
             "trigger": trigger,
             "universe_size": len(symbols),
@@ -495,6 +514,7 @@ def run_paper_trading(
             failed_order_count=failed_count,
             final_cash=sleeve_after.cash,
             final_equity=sleeve_after.equity,
+            pending_order_count=pending_count,
         )
 
         return PaperTradingResult(
@@ -609,6 +629,683 @@ def run_multi_strategy_paper_trading(
     )
 
 
+def process_pending_support_resistance_entries(
+    db: Session,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Validate and reconcile durable support/resistance BUY intents at the open."""
+    now_ny = (now or datetime.now(timezone.utc)).astimezone(NEW_YORK)
+    cutoff = _paper_entry_cutoff()
+    signals = db.execute(
+        select(Signal)
+        .join(Strategy, Strategy.id == Signal.strategy_id)
+        .join(StrategyRun, StrategyRun.id == Signal.run_id)
+        .where(Strategy.strategy_type == "support_resistance")
+        .where(StrategyRun.mode == "paper")
+        .where(Signal.signal == "BUY")
+        .order_by(Signal.ts.asc(), Signal.id.asc())
+    ).scalars().all()
+    actionable = [
+        signal
+        for signal in signals
+        if isinstance((signal.features or {}).get("paper_execution"), dict)
+        and str((signal.features or {})["paper_execution"].get("status"))
+        in {"pending", "evaluating", "submitted"}
+    ]
+    if not actionable:
+        return 0
+
+    clients: dict[str, AlpacaClient] = {}
+    touched_runs: set[UUID] = set()
+    run_contexts: dict[UUID, tuple[AlpacaClient, str, Strategy]] = {}
+    processed = 0
+    for signal in actionable:
+        execution = dict((signal.features or {})["paper_execution"])
+        try:
+            eligible_date = date.fromisoformat(str(execution["eligible_trade_date"]))
+        except (KeyError, ValueError):
+            _update_signal_paper_execution(signal, status="failed", reason_code="invalid_eligible_trade_date")
+            touched_runs.add(signal.run_id)
+            processed += 1
+            continue
+        if eligible_date > now_ny.date():
+            continue
+
+        run = db.get(StrategyRun, signal.run_id)
+        strategy = db.get(Strategy, signal.strategy_id)
+        if run is None or strategy is None:
+            continue
+        paper_cfg = (run.config_snapshot or {}).get("paper_trading") or {}
+        portfolio_name = normalize_portfolio_name(paper_cfg.get("portfolio_name"))
+        client = clients.get(portfolio_name)
+        if client is None:
+            client = build_alpaca_client_for_portfolio(db, portfolio_name)
+            clients[portfolio_name] = client
+        run_contexts[run.id] = (client, portfolio_name, strategy)
+        status = str(execution.get("status"))
+        projected_channel = project_entry_channel(execution.get("entry_channel"), sessions=1)
+        cutoff_reached = eligible_date < now_ny.date() or now_ny.time() >= cutoff
+        if status != "submitted" and cutoff_reached:
+            _update_signal_paper_execution(
+                signal,
+                status="expired",
+                reason_code="fresh_open_quote_unavailable_before_cutoff",
+                projected_channel=projected_channel,
+            )
+            _append_support_resistance_execution_event(
+                db,
+                signal,
+                event_date=eligible_date,
+                event_type="entry_channel_rejection",
+                reason_code="fresh_open_quote_unavailable_before_cutoff",
+                projected_channel=projected_channel,
+            )
+            touched_runs.add(run.id)
+            processed += 1
+            continue
+        if status == "submitted" and cutoff_reached:
+            _reconcile_submitted_channel_entry(
+                db,
+                signal=signal,
+                strategy=strategy,
+                run=run,
+                client=client,
+                portfolio_name=portfolio_name,
+                projected_channel=projected_channel,
+                quote_inside_channel=False,
+                cutoff_reached=True,
+            )
+            touched_runs.add(run.id)
+            processed += 1
+            continue
+        clock = client.get_clock()
+        if not bool(clock.get("is_open")):
+            continue
+
+        snapshots = client.get_stock_snapshots([signal.symbol])
+        ask_price, quote_ts = _fresh_snapshot_ask(
+            snapshots.get(signal.symbol.upper()),
+            expected_date=eligible_date,
+            now=now_ny,
+        )
+        inside_channel = False
+        channel_reason = "missing_fresh_open_quote"
+        if ask_price is not None:
+            inside_channel, channel_reason = entry_price_is_inside_channel(
+                projected_channel,
+                ask_price,
+            )
+
+        if status == "submitted":
+            _reconcile_submitted_channel_entry(
+                db,
+                signal=signal,
+                strategy=strategy,
+                run=run,
+                client=client,
+                portfolio_name=portfolio_name,
+                projected_channel=projected_channel,
+                quote_inside_channel=inside_channel,
+                cutoff_reached=False,
+            )
+            touched_runs.add(run.id)
+            processed += 1
+            continue
+
+        if ask_price is None:
+            _append_signal_execution_attempt(signal, now_ny, channel_reason)
+            continue
+        if not inside_channel:
+            _update_signal_paper_execution(
+                signal,
+                status="skipped",
+                reason_code=channel_reason,
+                quote_price=ask_price,
+                quote_ts=quote_ts,
+                projected_channel=projected_channel,
+            )
+            _append_support_resistance_execution_event(
+                db,
+                signal,
+                event_date=eligible_date,
+                event_type="entry_channel_rejection",
+                reason_code=channel_reason,
+                projected_channel=projected_channel,
+                execution_price=ask_price,
+            )
+            touched_runs.add(run.id)
+            processed += 1
+            continue
+
+        open_sells = client.list_orders(status="open", side="sell")
+        if any(str(order.get("client_order_id") or "").startswith("paper-") for order in open_sells):
+            _append_signal_execution_attempt(signal, now_ny, "waiting_for_system_sell_orders")
+            continue
+
+        account = client.get_account()
+        allocation_cfg = _resolve_virtual_subportfolio_config(
+            db,
+            strategy.id,
+            portfolio_name,
+            account,
+        )
+        existing_order = next(
+            (
+                order
+                for order in client.list_orders(
+                    status="all",
+                    limit=500,
+                    symbols=[signal.symbol],
+                    side="buy",
+                )
+                if str(order.get("client_order_id") or "") == str(execution["client_order_id"])
+            ),
+            None,
+        )
+        if existing_order is not None:
+            requested_qty = _to_float(existing_order.get("qty"))
+            existing_transaction = next(
+                (
+                    item
+                    for item in db.execute(
+                        select(Transaction)
+                        .where(Transaction.strategy_id == strategy.id)
+                        .where(Transaction.run_id == run.id)
+                    ).scalars().all()
+                    if str((item.meta or {}).get("client_order_id") or "")
+                    == str(execution["client_order_id"])
+                ),
+                None,
+            )
+            transaction = _upsert_paper_broker_order_transaction(
+                db,
+                strategy_id=strategy.id,
+                run_id=run.id,
+                symbol=signal.symbol,
+                side="BUY",
+                trade_date=eligible_date,
+                reason=str(signal.reason or "support/resistance valid-channel entry"),
+                signal_ts=signal.ts,
+                entry_signal_features=dict(signal.features or {}),
+                order=existing_order,
+                requested_qty=requested_qty,
+                reference_price=ask_price,
+                client_order_id=str(execution["client_order_id"]),
+                portfolio_name=portfolio_name,
+                allocation_pct=allocation_cfg.allocation_pct,
+                existing_txn=existing_transaction,
+            )
+            broker_status = str((transaction.meta or {}).get("broker_status") or "").lower()
+            _update_signal_paper_execution(
+                signal,
+                status="submitted",
+                reason_code="existing_client_order_reconciled",
+                order_id=transaction.order_id,
+                broker_status=broker_status,
+                terminal=broker_status in PAPER_BROKER_TERMINAL_STATUSES,
+                projected_channel=projected_channel,
+            )
+            if _transaction_represents_virtual_fill(transaction):
+                _record_channel_fill_violation_if_needed(
+                    db,
+                    signal=signal,
+                    execution_price=float(transaction.price),
+                    projected_channel=projected_channel,
+                    transaction=transaction,
+                )
+            touched_runs.add(run.id)
+            processed += 1
+            continue
+
+        runtime = build_runtime_payload(strategy)
+        sleeve = _rebuild_virtual_subportfolio_state(
+            db,
+            strategy.id,
+            allocation_cfg,
+            {signal.symbol.upper(): ask_price},
+        )
+        current_position = sleeve.positions_by_symbol.get(signal.symbol.upper())
+        if current_position is not None and current_position.qty > 0:
+            reason = (
+                "channel_fill_violation_blocks_add"
+                if _position_has_channel_fill_violation(current_position)
+                else "virtual_long_position_already_exists"
+            )
+            _update_signal_paper_execution(signal, status="skipped", reason_code=reason)
+            touched_runs.add(run.id)
+            processed += 1
+            continue
+        risk_cfg = runtime["params"]["risk"]
+        if sleeve.long_position_count >= int(risk_cfg["max_positions"]):
+            _update_signal_paper_execution(signal, status="skipped", reason_code="max_positions_reached")
+            touched_runs.add(run.id)
+            processed += 1
+            continue
+        event = SignalEvent(
+            strategy_id=str(strategy.id),
+            ts=signal.ts,
+            symbol=signal.symbol,
+            action="BUY",
+            reason=str(signal.reason or "support/resistance valid-channel entry"),
+            score=float(signal.score) if signal.score is not None else None,
+            metadata=dict(signal.features or {}),
+            instrument_id=signal.instrument_id,
+        )
+        if not passes_strength_threshold(event):
+            _update_signal_paper_execution(signal, status="skipped", reason_code="strength_below_threshold")
+            touched_runs.add(run.id)
+            processed += 1
+            continue
+        target_value = min(
+            sleeve.cash,
+            _account_cash(account),
+            sleeve.equity * float(risk_cfg["position_size_pct"]),
+        )
+        qty = _estimate_paper_buy_qty(
+            target_value,
+            ask_price,
+            allow_fractional=allocation_cfg.allow_fractional,
+        )
+        if qty <= 0:
+            _update_signal_paper_execution(signal, status="skipped", reason_code="insufficient_cash")
+            touched_runs.add(run.id)
+            processed += 1
+            continue
+        limit_price = _round_limit_price_down(float(projected_channel["upper"]))
+        outcome = _submit_paper_order(
+            db=db,
+            strategy=strategy,
+            run=run,
+            trade_date=eligible_date,
+            client=client,
+            event=event,
+            submit_orders=True,
+            qty=qty,
+            reference_price=ask_price,
+            client_order_id=str(execution["client_order_id"]),
+            portfolio_name=portfolio_name,
+            allocation_pct=allocation_cfg.allocation_pct,
+            order_type="limit",
+            limit_price=limit_price,
+        )
+        _update_signal_paper_execution(
+            signal,
+            status="submitted" if outcome.status == "submitted" else "failed",
+            reason_code=(
+                "strict_channel_limit_order_submitted"
+                if outcome.status == "submitted"
+                else "limit_order_submission_failed"
+            ),
+            quote_price=ask_price,
+            quote_ts=quote_ts,
+            projected_channel=projected_channel,
+            limit_price=limit_price,
+            order_id=outcome.order_id,
+            broker_status=outcome.broker_status,
+            terminal=str(outcome.broker_status or "").lower() in PAPER_BROKER_TERMINAL_STATUSES,
+        )
+        if outcome.execution_price is not None:
+            violation = _record_channel_fill_violation_if_needed(
+                db,
+                signal=signal,
+                execution_price=outcome.execution_price,
+                projected_channel=projected_channel,
+            )
+            if violation and outcome.order_id and str(outcome.broker_status or "").lower() not in PAPER_BROKER_TERMINAL_STATUSES:
+                client.cancel_order(outcome.order_id)
+        touched_runs.add(run.id)
+        processed += 1
+
+    for run_id in touched_runs:
+        _refresh_pending_run_summary(db, run_id, context=run_contexts.get(run_id))
+    db.commit()
+    return processed
+
+
+def _paper_entry_cutoff() -> time:
+    raw = os.getenv("PAPER_TRADING_OPEN_ENTRY_CUTOFF_NY", "09:35").strip()
+    try:
+        return time.fromisoformat(raw)
+    except (TypeError, ValueError):
+        log.warning("Invalid PAPER_TRADING_OPEN_ENTRY_CUTOFF_NY=%r; using 09:35", raw)
+        return time(hour=9, minute=35)
+
+
+def _fresh_snapshot_ask(
+    snapshot: dict[str, Any] | None,
+    *,
+    expected_date: date,
+    now: datetime | None = None,
+) -> tuple[float | None, str | None]:
+    quote = (snapshot or {}).get("latestQuote")
+    if not isinstance(quote, dict):
+        return None, None
+    ask = _to_float(quote.get("ap"))
+    quote_ts = str(quote.get("t") or "") or None
+    parsed = _parse_iso_datetime(quote_ts)
+    parsed_ny = parsed.astimezone(NEW_YORK) if parsed is not None else None
+    if (
+        ask <= 0
+        or parsed_ny is None
+        or parsed_ny.date() != expected_date
+        or parsed_ny.time() < time(hour=9, minute=30)
+    ):
+        return None, quote_ts
+    if now is not None:
+        max_age = _paper_quote_max_age_seconds()
+        age = (now.astimezone(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()
+        if age < -5 or age > max_age:
+            return None, quote_ts
+    return ask, quote_ts
+
+
+def _paper_quote_max_age_seconds() -> float:
+    raw = os.getenv("PAPER_TRADING_OPEN_QUOTE_MAX_AGE_SECONDS", "15").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 15.0
+    return value if value > 0 else 15.0
+
+
+def _round_limit_price_down(price: float) -> float:
+    quantum = Decimal("0.0001") if price < 1 else Decimal("0.01")
+    return float(Decimal(str(price)).quantize(quantum, rounding=ROUND_DOWN))
+
+
+def _update_signal_paper_execution(signal: Signal, **updates: Any) -> None:
+    features = dict(signal.features or {})
+    execution = dict(features.get("paper_execution") or {})
+    execution.update(updates)
+    execution["updated_at"] = datetime.now(timezone.utc).isoformat()
+    features["paper_execution"] = execution
+    signal.features = features
+
+
+def _append_signal_execution_attempt(signal: Signal, now_ny: datetime, reason_code: str) -> None:
+    execution = dict((signal.features or {}).get("paper_execution") or {})
+    attempts = list(execution.get("attempts") or [])
+    attempts.append({"ts": now_ny.isoformat(), "reason_code": reason_code})
+    _update_signal_paper_execution(signal, status="evaluating", attempts=attempts[-50:])
+
+
+def _position_has_channel_fill_violation(position: VirtualPosition) -> bool:
+    execution = (position.entry_signal_features or {}).get("paper_execution") or {}
+    return bool(execution.get("channel_fill_violation"))
+
+
+def _reconcile_submitted_channel_entry(
+    db: Session,
+    *,
+    signal: Signal,
+    strategy: Strategy,
+    run: StrategyRun,
+    client: AlpacaClient,
+    portfolio_name: str,
+    projected_channel: dict[str, Any],
+    quote_inside_channel: bool,
+    cutoff_reached: bool,
+) -> None:
+    execution = dict((signal.features or {}).get("paper_execution") or {})
+    order_id = str(execution.get("order_id") or "")
+    if not order_id:
+        _update_signal_paper_execution(signal, status="failed", reason_code="submitted_order_missing_id")
+        return
+    _sync_strategy_pending_orders(
+        db,
+        strategy_id=strategy.id,
+        portfolio_name=portfolio_name,
+        client=client,
+    )
+    transaction = next(
+        (
+            item
+            for item in db.execute(
+                select(Transaction)
+                .where(Transaction.strategy_id == strategy.id)
+                .where(Transaction.run_id == run.id)
+                .order_by(Transaction.ts.desc())
+            ).scalars().all()
+            if str(item.order_id or "") == order_id
+        ),
+        None,
+    )
+    if transaction is None:
+        _update_signal_paper_execution(signal, status="failed", reason_code="submitted_order_not_in_ledger")
+        return
+    broker_status = str((transaction.meta or {}).get("broker_status") or "").lower()
+    violation = False
+    if _transaction_represents_virtual_fill(transaction):
+        violation = _record_channel_fill_violation_if_needed(
+            db,
+            signal=signal,
+            execution_price=float(transaction.price),
+            projected_channel=projected_channel,
+            transaction=transaction,
+        )
+    if broker_status in PAPER_BROKER_TERMINAL_STATUSES:
+        _update_signal_paper_execution(signal, broker_status=broker_status, terminal=True)
+        return
+    if violation or cutoff_reached or not quote_inside_channel:
+        client.cancel_order(order_id)
+        _update_signal_paper_execution(
+            signal,
+            broker_status="cancel_requested",
+            terminal=True,
+            reason_code=(
+                "channel_fill_violation"
+                if violation
+                else "entry_cutoff_reached"
+                if cutoff_reached
+                else "quote_left_valid_channel"
+            ),
+        )
+
+
+def _record_channel_fill_violation_if_needed(
+    db: Session,
+    *,
+    signal: Signal,
+    execution_price: float,
+    projected_channel: dict[str, Any],
+    transaction: Transaction | None = None,
+) -> bool:
+    lower = _to_float(projected_channel.get("lower"))
+    if lower <= 0 or execution_price >= lower:
+        return False
+    violation = {
+        "reason_code": "channel_fill_below_support_inner_edge",
+        "execution_price": execution_price,
+        "projected_lower": lower,
+    }
+    _update_signal_paper_execution(signal, channel_fill_violation=violation)
+    execution = (signal.features or {}).get("paper_execution") or {}
+    try:
+        event_date = date.fromisoformat(str(execution.get("eligible_trade_date")))
+    except ValueError:
+        event_date = signal.ts.date()
+    _append_support_resistance_execution_event(
+        db,
+        signal,
+        event_date=event_date,
+        event_type="channel_fill_violation",
+        reason_code=violation["reason_code"],
+        projected_channel=projected_channel,
+        execution_price=execution_price,
+    )
+    if transaction is None:
+        transaction = next(
+            (
+                item
+                for item in db.execute(
+                    select(Transaction)
+                    .where(Transaction.run_id == signal.run_id)
+                    .where(Transaction.symbol == signal.symbol)
+                    .order_by(Transaction.ts.desc())
+                ).scalars().all()
+                if item.side == "BUY"
+            ),
+            None,
+        )
+    if transaction is not None:
+        meta = dict(transaction.meta or {})
+        features = dict(meta.get("entry_signal_features") or {})
+        paper_execution = dict(features.get("paper_execution") or {})
+        paper_execution["channel_fill_violation"] = violation
+        features["paper_execution"] = paper_execution
+        meta["entry_signal_features"] = features
+        meta["channel_fill_violation"] = violation
+        transaction.meta = meta
+    return True
+
+
+def _append_support_resistance_execution_event(
+    db: Session,
+    signal: Signal,
+    *,
+    event_date: date,
+    event_type: str,
+    reason_code: str,
+    projected_channel: dict[str, Any],
+    execution_price: float | None = None,
+) -> None:
+    link = db.execute(
+        select(SupportResistanceRunMaterialization).where(
+            SupportResistanceRunMaterialization.run_id == signal.run_id
+        )
+    ).scalar_one_or_none()
+    if link is None:
+        return
+    duplicate = db.execute(
+        select(SupportResistanceRunEvent)
+        .where(SupportResistanceRunEvent.run_id == signal.run_id)
+        .where(SupportResistanceRunEvent.symbol == signal.symbol)
+        .where(SupportResistanceRunEvent.event_date == event_date)
+        .where(SupportResistanceRunEvent.event_type == event_type)
+    ).scalars().first()
+    if duplicate is not None:
+        return
+    payload = {
+        "event_date": event_date.isoformat(),
+        "event_type": event_type,
+        "reason_code": reason_code,
+        "execution_price": execution_price,
+        "lower": projected_channel.get("lower"),
+        "upper": projected_channel.get("upper"),
+        "entry_channel": projected_channel,
+    }
+    db.add(
+        SupportResistanceRunEvent(
+            run_id=signal.run_id,
+            materialization_id=link.materialization_id,
+            instrument_id=signal.instrument_id,
+            symbol=signal.symbol,
+            event_date=event_date,
+            event_type=event_type,
+            zone_key=projected_channel.get("support_zone_key"),
+            setup=((signal.features or {}).get("support_resistance") or {}).get("selected_setup"),
+            selected=False,
+            lower_price=projected_channel.get("lower"),
+            upper_price=projected_channel.get("upper"),
+            payload=payload,
+        )
+    )
+
+
+def _refresh_pending_run_summary(
+    db: Session,
+    run_id: UUID,
+    *,
+    context: tuple[AlpacaClient, str, Strategy] | None = None,
+) -> None:
+    run = db.get(StrategyRun, run_id)
+    if run is None:
+        return
+    signals = db.execute(select(Signal).where(Signal.run_id == run_id)).scalars().all()
+    executions = [
+        (signal.features or {}).get("paper_execution")
+        for signal in signals
+        if isinstance((signal.features or {}).get("paper_execution"), dict)
+    ]
+    pending_count = sum(
+        1
+        for execution in executions
+        if execution.get("status") in {"pending", "evaluating", "submitted"}
+        and not execution.get("terminal")
+    )
+    summary = dict(run.summary_metrics or {})
+    base_counts = dict(summary.get("pre_open_order_counts") or {})
+    if not base_counts:
+        base_counts = {
+            "submitted": int(summary.get("submitted_order_count") or 0),
+            "skipped": int(summary.get("skipped_order_count") or 0),
+            "failed": int(summary.get("failed_order_count") or 0),
+        }
+    summary["pre_open_order_counts"] = base_counts
+    summary["submitted_order_count"] = base_counts["submitted"] + sum(
+        1 for execution in executions if execution.get("status") == "submitted"
+    )
+    summary["skipped_order_count"] = base_counts["skipped"] + sum(
+        1 for execution in executions if execution.get("status") in {"skipped", "expired"}
+    )
+    summary["failed_order_count"] = base_counts["failed"] + sum(
+        1 for execution in executions if execution.get("status") == "failed"
+    )
+    summary["pending_order_count"] = pending_count
+    summary["paper_entry_executions"] = executions
+    if pending_count == 0 and context is not None:
+        client, portfolio_name, strategy = context
+        try:
+            account = client.get_account()
+            allocation_cfg = _resolve_virtual_subportfolio_config(
+                db,
+                strategy.id,
+                portfolio_name,
+                account,
+            )
+            broker_positions = client.list_positions()
+            price_lookup = {
+                str(position.get("symbol") or "").upper(): _to_float(position.get("current_price"))
+                for position in broker_positions
+                if position.get("symbol") and _to_float(position.get("current_price")) > 0
+            }
+            sleeve = _rebuild_virtual_subportfolio_state(
+                db,
+                strategy.id,
+                allocation_cfg,
+                price_lookup,
+            )
+            run.final_equity = sleeve.equity
+            summary.update(
+                {
+                    "virtual_cash_after": sleeve.cash,
+                    "virtual_equity_after": sleeve.equity,
+                    "virtual_gross_exposure_after": sleeve.gross_exposure,
+                    "virtual_long_position_count_after": sleeve.long_position_count,
+                }
+            )
+            db.add(
+                PortfolioSnapshot(
+                    run_id=run.id,
+                    ts=datetime.now(timezone.utc),
+                    cash=sleeve.cash,
+                    equity=sleeve.equity,
+                    gross_exposure=sleeve.gross_exposure,
+                    net_exposure=sleeve.net_exposure,
+                    drawdown=None,
+                    positions=_serialize_virtual_positions(sleeve.positions_by_symbol, {}),
+                    metrics={
+                        "portfolio_name": portfolio_name,
+                        "paper_open_entry_reconciled": True,
+                    },
+                )
+            )
+        except AlpacaClientError as exc:
+            log.warning("Could not refresh reconciled paper snapshot for run %s: %s", run_id, exc)
+    run.summary_metrics = summary
+
+
 def _resolve_runtime_universe(
     db: Session,
     runtime: dict[str, Any],
@@ -700,6 +1397,59 @@ def _persist_signals(
                 features=event.metadata,
             )
         )
+
+
+def _prepare_support_resistance_paper_entries(
+    signals: list[SignalEvent],
+    *,
+    strategy: Strategy,
+    portfolio_name: str,
+    trade_date: date,
+    client: AlpacaClient,
+    submit_orders: bool,
+) -> None:
+    eligible_trade_date = (
+        _next_broker_open_date(client, trade_date)
+        if submit_orders
+        else _next_weekday(trade_date)
+    )
+    for event in signals:
+        support_resistance = event.metadata.get("support_resistance")
+        if event.action != "BUY" or not isinstance(support_resistance, dict):
+            continue
+        event.metadata = dict(event.metadata)
+        event.metadata["paper_execution"] = {
+            "status": "pending" if submit_orders else "dry_run",
+            "eligible_trade_date": eligible_trade_date.isoformat(),
+            "signal_trade_date": trade_date.isoformat(),
+            "client_order_id": _client_order_id(
+                strategy.id,
+                portfolio_name,
+                trade_date,
+                event,
+            ),
+            "entry_channel": support_resistance.get("entry_channel"),
+            "attempts": [],
+        }
+
+
+def _next_broker_open_date(client: AlpacaClient, trade_date: date) -> date:
+    clock = client.get_clock()
+    raw_next_open = clock.get("next_open")
+    if raw_next_open:
+        try:
+            parsed = datetime.fromisoformat(str(raw_next_open).replace("Z", "+00:00"))
+            return parsed.date()
+        except ValueError as exc:
+            raise ValueError("Alpaca clock returned an invalid next_open timestamp") from exc
+    raise ValueError("Alpaca clock did not return next_open for strict entry scheduling")
+
+
+def _next_weekday(trade_date: date) -> date:
+    candidate = trade_date + timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate += timedelta(days=1)
+    return candidate
 
 
 def _rebuild_virtual_subportfolio_state(
@@ -819,6 +1569,25 @@ def _execute_paper_orders(
                     reason="open Alpaca order already exists",
                     client_order_id=client_order_id,
                     reference_price=reference_price,
+                )
+            )
+            continue
+
+        paper_execution = event.metadata.get("paper_execution")
+        if event.action == "BUY" and isinstance(paper_execution, dict):
+            outcomes.append(
+                PaperTradingOrderOutcome(
+                    symbol=symbol,
+                    action=event.action,
+                    status="pending" if submit_orders else "skipped",
+                    reason=(
+                        "awaiting strict next-session channel validation"
+                        if submit_orders
+                        else "dry run only"
+                    ),
+                    client_order_id=client_order_id,
+                    reference_price=reference_price,
+                    signal_strength=get_signal_strength(event),
                 )
             )
             continue
@@ -1092,6 +1861,8 @@ def _submit_paper_order(
     client_order_id: str,
     portfolio_name: str,
     allocation_pct: float,
+    order_type: str = "market",
+    limit_price: float | None = None,
 ) -> PaperTradingOrderOutcome:
     if not submit_orders:
         return PaperTradingOrderOutcome(
@@ -1110,9 +1881,11 @@ def _submit_paper_order(
             symbol=event.symbol,
             qty=qty,
             side=event.action.lower(),
-            order_type="market",
+            order_type=order_type,
             time_in_force="day",
             client_order_id=client_order_id,
+            limit_price=limit_price,
+            extended_hours=False,
         )
     except AlpacaAPIError as exc:
         log.warning(

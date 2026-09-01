@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from src.schemas.research import PointInTimeUniversePolicy, SupportResistanceValidationProtocol
 from src.services.backtest_universe_service import point_in_time_entry_eligible
+from src.services.research_experiment_service import _finalize_if_ready
 from src.services.support_resistance_validation_report_service import (
     _bootstrap_interval,
     _benjamini_hochberg,
@@ -87,6 +88,15 @@ class PreRegisteredCandidateTests(unittest.TestCase):
 
 
 class DeterministicReportTests(unittest.TestCase):
+    def test_effectiveness_parent_is_not_finalized_as_empty_generic_study(self) -> None:
+        parent = type(
+            "EffectivenessParent",
+            (),
+            {"study_kind": "support_resistance_effectiveness_v3", "status": "queued"},
+        )()
+        _finalize_if_ready(None, parent)
+        self.assertEqual(parent.status, "queued")
+
     def test_bootstrap_is_deterministic(self) -> None:
         observations = [
             {
@@ -110,7 +120,7 @@ class DeterministicReportTests(unittest.TestCase):
         report = {
             "schemaVersion": 1,
             "studyId": "fixture-study",
-            "studyKind": "support_resistance_effectiveness_v2",
+            "studyKind": "support_resistance_effectiveness_v3",
             "status": "completed",
             "decision": "not_validated",
             "disclaimer": "Research evidence only; no profitability guarantee.",

@@ -1,5 +1,7 @@
 .shell { --workspace-sidebar-width: 216px; min-height: 100vh; color: #e2e8f0; background: radial-gradient(circle at top left, rgba(45,212,191,.14), transparent 25%), radial-gradient(circle at top right, rgba(251,191,36,.08), transparent 20%), linear-gradient(180deg,#030712 0%,#07111c 42%,#0b1523 100%); font-family: "Avenir Next","Segoe UI","Helvetica Neue",sans-serif; }
 .shellCollapsed { --workspace-sidebar-width: 72px; }
+.shellCollapsed .brand { display: none; }
+.shellCollapsed .brandRow { justify-content: center; }
 .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 40; width: var(--workspace-sidebar-width); display: flex; flex-direction: column; gap: 14px; padding: 14px 10px; border-right: 1px solid rgba(71,85,105,.34); background: rgba(3,7,18,.94); box-shadow: 14px 0 36px rgba(2,6,23,.24); backdrop-filter: blur(14px); transition: width 180ms ease; }
 .brandRow,.sidebarFooter,.navLink,.quickCreate,.mobileTopbar,.pageHeaderRow,.pageActions,.headerControls,.localeSwitch { display: flex; align-items: center; }
 .brandRow { min-height: 42px; justify-content: space-between; gap: 8px; }
@@ -21,7 +23,7 @@
 .localeButtonActive { background: rgba(8,145,178,.9); color: #f8fafc; }
 .main { min-width: 0; min-height: 100vh; margin-left: var(--workspace-sidebar-width); padding: 16px clamp(16px,1.6vw,24px) 52px; transition: margin-left 180ms ease; }
 .mobileTopbar { display: none; }
-.mobileTopbarSpacer { width: 36px; }
+.mobileLocaleSwitch { display: none; }
 .pageHeader { margin-bottom: 14px; padding: 13px 16px; border: 1px solid rgba(71,85,105,.3); border-radius: 16px; background: rgba(5,10,18,.8); box-shadow: 0 12px 34px rgba(2,6,23,.34); backdrop-filter: blur(8px); }
 .pageHeaderRow { justify-content: space-between; gap: 18px; }
 .pageHeading { min-width: 0; max-width: 920px; }
@@ -43,6 +45,7 @@
   .shell { --workspace-sidebar-width: 72px; }
   .brand,.navLabel,.quickCreateLabel,.collapseDesktop,.localeLongLabel { display: none; }
   .brandRow,.navLink,.quickCreate { justify-content: center; }
+  .sidebarFooter { padding-bottom: 36px; }
 }
 
 @media (max-width: 767px) {
@@ -50,6 +53,8 @@
   .main { margin-left: 0; padding: 0 12px 64px; }
   .mobileTopbar { position: sticky; top: 0; z-index: 35; display: flex; justify-content: space-between; min-height: 56px; margin: 0 -12px 12px; padding: 8px 12px; border-bottom: 1px solid rgba(71,85,105,.36); background: rgba(3,7,18,.94); backdrop-filter: blur(12px); }
   .mobileBrand { color: #f8fafc; text-decoration: none; font-size: 13px; font-weight: 800; letter-spacing: .06em; }
+  .mobileLocaleSwitch { display: flex; width: 72px; }
+  .mobileLocaleSwitch .localeButton { padding: 6px 4px; }
   .pageHeader { padding: 13px 14px; }
   .pageHeaderRow { align-items: flex-start; flex-direction: column; }
   .title { font-size: 28px; }

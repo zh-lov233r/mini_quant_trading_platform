@@ -26,6 +26,7 @@ export interface PaperTradingRunOut {
   submitted_order_count: number;
   skipped_order_count: number;
   failed_order_count: number;
+  pending_order_count: number;
   final_cash: number;
   final_equity: number;
 }

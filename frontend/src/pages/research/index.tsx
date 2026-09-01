@@ -108,7 +108,7 @@ export default function ResearchHomePage() {
         triggerLabel={isZh ? "创建研究实验" : "Create Research Experiment"}
         title={isZh ? "创建研究实验" : "Create Research Experiment"}
         description={isZh ? "选择研究模式、资源上限和目标后生成待审批提案。" : "Choose the research mode, resource limits, and goal to generate a proposal for approval."}
-        size="form"
+        size="wide"
         triggerTone="primary"
       >
         <div style={modeGridStyle}>

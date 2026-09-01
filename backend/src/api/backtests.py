@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 from bisect import bisect_left, bisect_right
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import json
 import logging
 from time import perf_counter
@@ -17,12 +17,15 @@ from sqlalchemy.orm import Session, selectinload
 
 from src.core.db import get_db
 from src.models.tables import (
+    BacktestJob,
+    ExperimentTrial,
     PortfolioSnapshot,
     Signal,
     StockBasket,
     Strategy,
     StrategyRun,
     SupportResistanceMaterialization,
+    SupportResistanceRegimeVersion,
     SupportResistanceRunEvent,
     SupportResistanceRunMaterialization,
     SupportResistanceZoneVersion,
@@ -36,6 +39,7 @@ from src.services.backtest_equity_service import (
     load_downsampled_chart_points,
 )
 from src.services.backtest_job_service import (
+    delete_terminal_backtest_run,
     enqueue_backtest_job,
     normalize_backtest_progress,
     request_backtest_cancel,
@@ -74,7 +78,7 @@ class BacktestProgressOut(BaseModel):
     total_days: Optional[int] = None
     trade_date: Optional[str] = None
     finalizing_stage: Optional[
-        Literal["zone_versions", "run_events", "backtest_details", "committing"]
+        Literal["zone_versions", "regime_versions", "run_events", "backtest_details", "committing"]
     ] = None
     completed_items: Optional[int] = Field(default=None, ge=0)
     total_items: Optional[int] = Field(default=None, ge=0)
@@ -127,6 +131,11 @@ class BacktestRunOut(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class BacktestDeleteOut(BaseModel):
+    run_id: UUID
+    deleted: bool = True
+
+
 class BacktestDetailOut(BacktestRunOut):
     latest_snapshot: Optional[dict[str, Any]] = None
     transaction_count: int
@@ -156,6 +165,7 @@ class SupportResistanceBacktestOut(BaseModel):
     run_id: UUID
     materialization: Optional[dict[str, Any]] = None
     zone_versions: list[dict[str, Any]] = Field(default_factory=list)
+    regime_intervals: list[dict[str, Any]] = Field(default_factory=list)
     events: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -732,6 +742,18 @@ def create_backtest(
     strategy = db.get(Strategy, payload.strategy_id)
     if strategy is None:
         raise HTTPException(status_code=404, detail="strategy not found")
+    if (
+        strategy.strategy_type == "support_resistance"
+        and str(((strategy.params or {}).get("metadata") or {}).get("algorithm_version"))
+        != "pivot-slope-regime-v3"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "historical_strategy_read_only",
+                "message": "pivot-slope-atr-v2 is retained for audit and cannot start a new backtest",
+            },
+        )
     if payload.end_date < payload.start_date:
         raise HTTPException(status_code=422, detail="end_date must be on or after start_date")
     if payload.basket_id is not None and payload.universe_policy is not None:
@@ -823,7 +845,14 @@ def list_backtests(
     stmt = (
         select(StrategyRun, Strategy.name)
         .join(Strategy, Strategy.id == StrategyRun.strategy_id)
+        .outerjoin(BacktestJob, BacktestJob.run_id == StrategyRun.id)
         .options(selectinload(StrategyRun.backtest_job))
+        .where(
+            or_(BacktestJob.source == "manual", BacktestJob.id.is_(None)),
+            ~select(ExperimentTrial.id)
+            .where(ExperimentTrial.backtest_run_id == StrategyRun.id)
+            .exists(),
+        )
     )
 
     if strategy_id:
@@ -844,6 +873,20 @@ def list_backtests(
 @router.get("/worker-status", response_model=BacktestWorkerStatusOut)
 def get_backtest_worker_status(db: Session = Depends(get_db)):
     return BacktestWorkerStatusOut(**load_backtest_worker_status(db))
+
+
+@router.delete("/{run_id}", response_model=BacktestDeleteOut)
+def delete_backtest(run_id: UUID, db: Session = Depends(get_db)):
+    try:
+        delete_terminal_backtest_run(db, run_id, expected_source="manual")
+        db.commit()
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return BacktestDeleteOut(run_id=run_id)
 
 
 @router.get("/{run_id}", response_model=BacktestDetailOut)
@@ -1114,9 +1157,13 @@ def get_backtest_support_resistance(
     event_stmt = select(SupportResistanceRunEvent).where(
         SupportResistanceRunEvent.run_id == run_id
     )
+    regime_stmt = select(SupportResistanceRegimeVersion).where(
+        SupportResistanceRegimeVersion.materialization_id == materialization.id
+    )
     if normalized_symbol:
         zone_stmt = zone_stmt.where(SupportResistanceZoneVersion.symbol == normalized_symbol)
         event_stmt = event_stmt.where(SupportResistanceRunEvent.symbol == normalized_symbol)
+        regime_stmt = regime_stmt.where(SupportResistanceRegimeVersion.symbol == normalized_symbol)
     if zone_key:
         zone_stmt = zone_stmt.where(SupportResistanceZoneVersion.zone_key == zone_key)
         event_stmt = event_stmt.where(SupportResistanceRunEvent.zone_key == zone_key)
@@ -1145,12 +1192,41 @@ def get_backtest_support_resistance(
             SupportResistanceRunEvent.created_at,
         )
     ).scalars().all()
+    regime_versions = db.execute(
+        regime_stmt.order_by(
+            SupportResistanceRegimeVersion.symbol,
+            SupportResistanceRegimeVersion.effective_from,
+            SupportResistanceRegimeVersion.version,
+        )
+    ).scalars().all()
     geometry_by_version = _build_clipped_zone_geometry(
         db,
         versions,
         start_date=start_date,
         end_date=end_date,
     )
+    if normalized_symbol and not regime_versions and normalized_symbol not in (materialization.symbols or []):
+        regime_intervals = []
+    else:
+        try:
+            regime_intervals = _build_regime_intervals(
+                db,
+                materialization,
+                regime_versions,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "regime_timeline_integrity_error", "message": str(exc)},
+            ) from exc
+    regime_intervals = [
+        interval
+        for interval in regime_intervals
+        if (normalized_symbol is None or interval["symbol"] == normalized_symbol)
+        and (zone_key is None or zone_key in {interval["lower_zone_key"], interval["upper_zone_key"]})
+        and (start_date is None or date.fromisoformat(interval["end_date"]) >= start_date)
+        and (end_date is None or date.fromisoformat(interval["start_date"]) <= end_date)
+    ]
 
     return SupportResistanceBacktestOut(
         run_id=run_id,
@@ -1198,6 +1274,7 @@ def get_backtest_support_resistance(
             }
             for version in versions
         ],
+        regime_intervals=regime_intervals,
         events=[
             {
                 "id": str(event.id),
@@ -1216,6 +1293,108 @@ def get_backtest_support_resistance(
             for event in events
         ],
     )
+
+
+def _build_regime_intervals(
+    db: Session,
+    materialization: SupportResistanceMaterialization,
+    versions: list[SupportResistanceRegimeVersion],
+) -> list[dict[str, Any]]:
+    if not versions:
+        if materialization.algorithm_version == "pivot-slope-regime-v3":
+            raise ValueError("v3 materialization is missing its regime timeline")
+        return []
+    grouped: dict[tuple[str, int | None], list[SupportResistanceRegimeVersion]] = {}
+    for version in versions:
+        instrument_id = int(version.instrument_id) if version.instrument_id is not None else None
+        grouped.setdefault((version.symbol, instrument_id), []).append(version)
+
+    dates_by_instrument: dict[int, list[date]] = {}
+    instrument_ids = sorted({key[1] for key in grouped if key[1] is not None})
+    if instrument_ids and db.bind is not None and db.bind.dialect.name == "postgresql":
+        rows = db.execute(
+            text(
+                """
+                SELECT bars.instrument_id, bars.dt_ny
+                FROM eod_bars bars
+                JOIN daily_features features
+                  ON features.instrument_id = bars.instrument_id
+                 AND features.dt_ny = bars.dt_ny
+                WHERE bars.instrument_id = ANY(:instrument_ids)
+                  AND bars.dt_ny BETWEEN :coverage_start AND :coverage_end
+                ORDER BY bars.instrument_id, bars.dt_ny
+                """
+            ),
+            {
+                "instrument_ids": instrument_ids,
+                "coverage_start": materialization.coverage_start,
+                "coverage_end": materialization.coverage_end,
+            },
+        ).all()
+        for instrument_id, trade_date in rows:
+            dates_by_instrument.setdefault(int(instrument_id), []).append(trade_date)
+
+    output: list[dict[str, Any]] = []
+    for (symbol, instrument_id), items in sorted(
+        grouped.items(),
+        key=lambda item: (item[0][0], item[0][1] if item[0][1] is not None else -1),
+    ):
+        ordered = sorted(items, key=lambda item: (item.effective_from, item.version, str(item.id)))
+        starts = [item.effective_from for item in ordered]
+        if len(starts) != len(set(starts)) or any(left >= right for left, right in zip(starts, starts[1:])):
+            raise ValueError(f"{symbol}: regime effective dates are not strictly increasing")
+        if any(left.regime == right.regime for left, right in zip(ordered, ordered[1:])):
+            raise ValueError(f"{symbol}: adjacent regime intervals have the same state")
+        session_dates = [
+            trade_date
+            for trade_date in dates_by_instrument.get(instrument_id or -1, [])
+            if trade_date >= starts[0]
+        ]
+        if not session_dates:
+            session_dates = [
+                materialization.coverage_start + timedelta(days=offset)
+                for offset in range((materialization.coverage_end - materialization.coverage_start).days + 1)
+            ]
+        if not session_dates:
+            continue
+        if starts and starts[0] != session_dates[0]:
+            raise ValueError(f"{symbol}: regime timeline does not cover the first market session")
+        session_set = set(session_dates)
+        if any(start not in session_set for start in starts):
+            raise ValueError(f"{symbol}: regime transition is not aligned to a market session")
+        index_by_date = {trade_date: index for index, trade_date in enumerate(session_dates)}
+        covered_sessions = 0
+        previous_end_index = -1
+        for index, version in enumerate(ordered):
+            start_index = index_by_date[version.effective_from]
+            next_start_index = (
+                index_by_date[ordered[index + 1].effective_from]
+                if index + 1 < len(ordered)
+                else len(session_dates)
+            )
+            end_index = next_start_index - 1
+            if start_index != previous_end_index + 1 or end_index < start_index:
+                raise ValueError(f"{symbol}: regime intervals contain a gap or overlap")
+            session_count = end_index - start_index + 1
+            covered_sessions += session_count
+            previous_end_index = end_index
+            output.append(
+                {
+                    "version_id": str(version.id),
+                    "symbol": symbol,
+                    "regime": version.regime,
+                    "start_date": session_dates[start_index].isoformat(),
+                    "end_date": session_dates[end_index].isoformat(),
+                    "session_count": session_count,
+                    "lower_zone_key": version.lower_zone_key,
+                    "upper_zone_key": version.upper_zone_key,
+                    "reason_code": version.reason_code,
+                    "evidence": version.evidence or {},
+                }
+            )
+        if ordered and covered_sessions != len(session_dates):
+            raise ValueError(f"{symbol}: regime timeline does not cover every market session")
+    return sorted(output, key=lambda item: (item["symbol"], item["start_date"], item["version_id"]))
 
 
 def _build_clipped_zone_geometry(

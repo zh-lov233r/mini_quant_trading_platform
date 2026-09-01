@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { cancelAgentWorkflow } from "@/api/agentops";
 import {
   getResearchExperiment,
+  deleteResearchBacktest,
   listExperimentChildren,
   listExperimentCandidates,
   listExperimentRounds,
@@ -14,7 +15,7 @@ import {
 } from "@/api/research";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
-import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogStack as ContextStack, DialogStat as ContextStat, DialogStats as ContextStats, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
+import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogStack as ContextStack, DialogStat as ContextStat, DialogStats as ContextStats, WorkspaceConfirmDialog, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { DenseDataTable } from "@/components/workspace/DenseDataTable";
 import { useI18n } from "@/i18n/provider";
 import type {
@@ -37,6 +38,8 @@ export default function ResearchExperimentPage() {
   const [candidates, setCandidates] = useState<ExperimentCandidate[]>([]);
   const [children, setChildren] = useState<ResearchExperiment[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+  const [pendingDeleteRunId, setPendingDeleteRunId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!id) return;
@@ -77,12 +80,28 @@ export default function ResearchExperimentPage() {
     }
   }
 
+  const deleteExperimentBacktest = useCallback(async () => {
+    const runId = pendingDeleteRunId;
+    if (!runId) return;
+    if (!experiment || !TERMINAL.has(experiment.status)) return;
+    setDeletingRunId(runId);
+    try {
+      await deleteResearchBacktest(experiment.id, runId);
+      await refresh();
+      setPendingDeleteRunId(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeletingRunId(null);
+    }
+  }, [experiment, pendingDeleteRunId, refresh]);
+
   const report = experiment?.report || {};
   const termination = report.termination;
   const tokenUsage = report.tokenUsage || {};
   const counts = report.counts || experiment?.progress || {};
   const bestTrial = report.bestOutOfSampleTrial;
-  const isEffectivenessStudy = experiment?.studyKind === "support_resistance_effectiveness_v2";
+  const isEffectivenessStudy = experiment?.studyKind === "support_resistance_effectiveness_v3";
   const finalCandidates = Array.isArray(report.finalCandidates)
     ? report.finalCandidates.map(asRecord)
     : [];
@@ -96,8 +115,8 @@ export default function ResearchExperimentPage() {
     { id: "window", header: "Window", accessor: (trial: ExperimentTrial) => `${trial.windowStart} → ${trial.windowEnd}`, width: 230 },
     { id: "return", header: "Return", accessor: (trial: ExperimentTrial) => trial.metrics.total_return, cell: (value: unknown) => formatMetric(value), sortable: true, width: 110 },
     { id: "sharpe", header: "Sharpe", accessor: (trial: ExperimentTrial) => trial.metrics.sharpe, cell: (value: unknown) => formatMetric(value), sortable: true, width: 110 },
-    { id: "backtest", header: "Backtest", accessor: (trial: ExperimentTrial) => trial.backtestRunId || "", cell: (value: unknown, trial: ExperimentTrial) => trial.backtestRunId ? <Link href={`/backtests/${trial.backtestRunId}`} style={{ color: "#67e8f9" }}>{trial.backtestRunId.slice(0, 8)}</Link> : "—", width: 120 },
-  ], []);
+    { id: "backtest", header: "Backtest", accessor: (trial: ExperimentTrial) => trial.backtestRunId || "", cell: (_value: unknown, trial: ExperimentTrial) => trial.backtestRunId ? <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}><Link href={`/backtests/${trial.backtestRunId}`} style={{ color: "#67e8f9" }}>{trial.backtestRunId.slice(0, 8)}</Link>{experiment && TERMINAL.has(experiment.status) ? <button type="button" disabled={deletingRunId === trial.backtestRunId} onClick={() => setPendingDeleteRunId(trial.backtestRunId)} style={tableDeleteButton}>{deletingRunId === trial.backtestRunId ? "…" : (isZh ? "删除" : "Delete")}</button> : null}</span> : trial.backtestDeletedAt ? <span title={trial.backtestDeletedAt}>{isZh ? "已删除" : "Deleted"}</span> : "—", width: 180 },
+  ], [deletingRunId, experiment, isZh]);
   const childColumns = useMemo(() => [
     { id: "phase", header: isZh ? "阶段" : "Phase", accessor: (child: ResearchExperiment) => String(child.spec.validationPhase || child.studyKind), sortable: true, filterable: true, width: 180 },
     { id: "status", header: "Status", accessor: (child: ResearchExperiment) => child.status, sortable: true, filterable: true, width: 130 },
@@ -111,8 +130,9 @@ export default function ResearchExperimentPage() {
     { id: "return", header: "OOS return", accessor: (candidate: ExperimentCandidate) => candidate.aggregateMetrics.oos_total_return, cell: (value: unknown) => formatMetric(value), sortable: true, width: 130 },
     { id: "sharpe", header: "Sharpe", accessor: (candidate: ExperimentCandidate) => candidate.aggregateMetrics.oos_sharpe, cell: (value: unknown) => formatMetric(value), sortable: true, width: 110 },
     { id: "drawdown", header: "Drawdown", accessor: (candidate: ExperimentCandidate) => candidate.aggregateMetrics.oos_max_drawdown, cell: (value: unknown) => formatMetric(value), sortable: true, width: 130 },
+    { id: "verification", header: isZh ? "验证回测" : "Verification", accessor: (candidate: ExperimentCandidate) => verificationRunId(candidate), cell: (_value: unknown, candidate: ExperimentCandidate) => { const runId = verificationRunId(candidate); const deletedAt = verificationDeletedAt(candidate); return runId ? <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}><Link href={`/backtests/${runId}`} style={{ color: "#67e8f9" }}>{runId.slice(0, 8)}</Link>{experiment && TERMINAL.has(experiment.status) ? <button type="button" disabled={deletingRunId === runId} onClick={() => setPendingDeleteRunId(runId)} style={tableDeleteButton}>{deletingRunId === runId ? "…" : (isZh ? "删除" : "Delete")}</button> : null}</span> : deletedAt ? <span title={deletedAt}>{isZh ? "已删除" : "Deleted"}</span> : "—"; }, width: 180 },
     { id: "draft", header: isZh ? "已保存 draft" : "Saved draft", accessor: (candidate: ExperimentCandidate) => candidate.promotedStrategyId || "", cell: (_: unknown, candidate: ExperimentCandidate) => candidate.promotedStrategyId ? <Link href={`/strategies/${candidate.promotedStrategyId}`} style={{ color: "#67e8f9" }}>{candidate.promotedStrategyId.slice(0, 8)}</Link> : "—", width: 150 },
-  ], [isZh]);
+  ], [deletingRunId, experiment, isZh]);
 
   return (
     <AppShell
@@ -139,6 +159,22 @@ export default function ResearchExperimentPage() {
         </>
       ) : undefined}
     >
+      <WorkspaceConfirmDialog
+        open={pendingDeleteRunId !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteRunId(null);
+        }}
+        title={isZh ? "删除研究回测" : "Delete research backtest"}
+        description={pendingDeleteRunId || undefined}
+        cancelLabel={isZh ? "取消" : "Cancel"}
+        confirmLabel={deletingRunId ? (isZh ? "删除中…" : "Deleting…") : (isZh ? "确认删除" : "Delete backtest")}
+        confirming={deletingRunId !== null}
+        onConfirm={() => void deleteExperimentBacktest()}
+      >
+        {isZh
+          ? "将删除这条回测的运行数据。Trial 参数、指标、数据指纹、候选证据和已生成报告会继续保留，并记录删除时间。"
+          : "This deletes the run data. Trial parameters, metrics, fingerprints, candidate evidence, and generated reports remain available with a deletion timestamp."}
+      </WorkspaceConfirmDialog>
       {error ? <p style={{ color: "#fda4af" }}>{error}</p> : null}
       {!experiment ? <p>{isZh ? "加载中…" : "Loading…"}</p> : (
         <>
@@ -267,6 +303,16 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function verificationRunId(candidate: ExperimentCandidate): string {
+  const runId = asRecord(candidate.aggregateMetrics.verification).runId;
+  return typeof runId === "string" ? runId : "";
+}
+
+function verificationDeletedAt(candidate: ExperimentCandidate): string {
+  const deletedAt = asRecord(candidate.aggregateMetrics.verification).deletedAt;
+  return typeof deletedAt === "string" ? deletedAt : "";
+}
+
 function formatInteger(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString() : "—";
 }
@@ -295,6 +341,7 @@ function MetricCard({ label, value }: { label: string; value: string }) {
 const panelStyle: CSSProperties = { padding: 22, borderRadius: 20, border: "1px solid rgba(100,116,139,.35)", background: "rgba(8,15,24,.8)" };
 const linkButton: CSSProperties = { padding: "10px 16px", borderRadius: 10, background: "#0891b2", color: "white", textDecoration: "none", fontWeight: 800 };
 const dangerButton: CSSProperties = { padding: "10px 16px", border: "1px solid #be123c", borderRadius: 10, background: "rgba(159,18,57,.2)", color: "#fecdd3", fontWeight: 800, cursor: "pointer" };
+const tableDeleteButton: CSSProperties = { padding: "4px 7px", border: "1px solid rgba(251,113,133,.58)", borderRadius: 7, background: "rgba(159,18,57,.2)", color: "#fecdd3", fontWeight: 700, cursor: "pointer" };
 const preStyle: CSSProperties = { overflow: "auto", padding: 14, borderRadius: 10, background: "#020617", color: "#bae6fd", fontSize: 12, lineHeight: 1.55 };
 const summaryGridStyle: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 };
 const metricCardStyle: CSSProperties = { display: "flex", flexDirection: "column", padding: 14, borderRadius: 12, border: "1px solid rgba(100,116,139,.3)", background: "rgba(15,23,42,.62)" };

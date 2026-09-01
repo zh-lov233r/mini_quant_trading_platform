@@ -21,6 +21,7 @@ export function backtestPhaseLabel(phase: BacktestProgressPhase, isZh: boolean):
 
 const finalizingStageLabels: Record<BacktestFinalizingStage, { zh: string; en: string }> = {
   zone_versions: { zh: "写入压力/支撑区版本", en: "Writing zone versions" },
+  regime_versions: { zh: "写入市场状态区间", en: "Writing regime intervals" },
   run_events: { zh: "写入生命周期事件", en: "Writing lifecycle events" },
   backtest_details: { zh: "整理回测明细", en: "Preparing backtest details" },
   committing: { zh: "提交回测结果", en: "Committing backtest results" },

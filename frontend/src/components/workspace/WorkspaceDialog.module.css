@@ -6,6 +6,7 @@
 .content { position: fixed; z-index: 91; top: 50%; left: 50%; display: grid; grid-template-rows: auto minmax(0,1fr) auto; width: calc(100vw - 32px); max-height: min(88vh,900px); transform: translate(-50%,-50%); overflow: hidden; border: 1px solid rgba(71,85,105,.46); border-radius: 18px; background: #07111c; box-shadow: 0 28px 90px rgba(2,6,23,.72); color: #e2e8f0; }
 .summary { max-width: 640px; }
 .form { max-width: 880px; }
+.wide { max-width: 1040px; }
 .overlay[data-state="closed"],.content[data-state="closed"] { display: none; }
 .header { position: sticky; top: 0; z-index: 2; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid rgba(71,85,105,.34); background: rgba(7,17,28,.98); }
 .dialogTitle { margin: 0; color: #f8fafc; font-size: 18px; }
@@ -14,6 +15,12 @@
 .close:hover { border-color: rgba(45,212,191,.48); color: #99f6e4; }
 .body { min-height: 0; overflow: auto; padding: 18px; }
 .footer { position: sticky; bottom: 0; z-index: 2; display: flex; justify-content: flex-end; gap: 10px; padding: 12px 18px; border-top: 1px solid rgba(71,85,105,.34); background: rgba(7,17,28,.98); }
+.cancelButton,.dangerButton { min-height: 38px; padding: 8px 14px; border-radius: 10px; cursor: pointer; font: inherit; font-size: 12px; font-weight: 800; }
+.cancelButton { border: 1px solid rgba(71,85,105,.48); background: rgba(15,23,42,.78); color: #dbeafe; }
+.cancelButton:hover { border-color: rgba(45,212,191,.48); color: #99f6e4; }
+.dangerButton { border: 1px solid rgba(251,113,133,.62); background: rgba(159,18,57,.28); color: #fecdd3; }
+.dangerButton:hover { border-color: #fb7185; background: rgba(190,18,60,.38); color: #fff1f2; }
+.cancelButton:disabled,.dangerButton:disabled { cursor: wait; opacity: .58; }
 .stack { display: grid; gap: 12px; }
 .group { padding: 12px; border: 1px solid rgba(71,85,105,.28); border-radius: 13px; background: rgba(15,23,42,.62); }
 .groupTitle { margin: 0 0 9px; color: #f8fafc; font-size: 13px; }

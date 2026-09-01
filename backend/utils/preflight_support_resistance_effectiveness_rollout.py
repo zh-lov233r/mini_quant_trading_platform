@@ -45,11 +45,61 @@ def inspect(connection: psycopg.Connection[Any]) -> dict[str, Any]:
             """
         )
         active = {row[0]: int(row[1]) for row in cursor.fetchall()}
+        cursor.execute(
+            """
+            SELECT algorithm_version, count(*)
+            FROM support_resistance_materializations
+            GROUP BY algorithm_version
+            ORDER BY algorithm_version
+            """
+        )
+        materializations = {row[0]: int(row[1]) for row in cursor.fetchall()}
+        cursor.execute(
+            """
+            SELECT id::text, strategy_key, name, version, status,
+                   params #>> '{metadata,algorithm_version}' AS algorithm_version
+            FROM strategies
+            WHERE name = 'SR_test1'
+            ORDER BY version
+            """
+        )
+        strategies = [
+            {
+                "id": row[0],
+                "strategyKey": row[1],
+                "name": row[2],
+                "version": int(row[3]),
+                "status": row[4],
+                "algorithmVersion": row[5],
+            }
+            for row in cursor.fetchall()
+        ]
+        cursor.execute("SELECT to_regclass('public.support_resistance_regime_versions')")
+        regime_table_exists = cursor.fetchone()[0] is not None
+        cursor.execute("SELECT to_regclass('public.backtest_jobs')")
+        if cursor.fetchone()[0] is not None:
+            cursor.execute(
+                "SELECT status, count(*) FROM backtest_jobs "
+                "WHERE status IN ('queued', 'running') GROUP BY status ORDER BY status"
+            )
+            active_backtests = {row[0]: int(row[1]) for row in cursor.fetchall()}
+        else:
+            active_backtests = {}
     return {
         "target": {"database": database, "user": user, "server": server},
         "columns": columns,
         "missingAdditiveColumns": sorted(EXPECTED_COLUMNS - set(columns)),
         "activeExperiments": active,
+        "activeBacktests": active_backtests,
+        "supportResistanceMaterializations": materializations,
+        "targetStrategies": strategies,
+        "regimeTableExists": regime_table_exists,
+        "migrationImpact": {
+            "createsTables": [] if regime_table_exists else ["support_resistance_regime_versions"],
+            "createsIndexes": [] if regime_table_exists else ["idx_support_resistance_regime_versions_timeline"],
+            "rewritesExistingRows": False,
+            "deletesRows": False,
+        },
         "backupRequiredBeforeApply": True,
         "ddlApplied": EXPECTED_COLUMNS.issubset(columns),
     }

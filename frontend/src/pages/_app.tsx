@@ -28,6 +28,7 @@ export default function App({ Component, pageProps }: AppProps) {
             --workspace-control-height: 38px;
             --workspace-floating-right: max(24px, env(safe-area-inset-right));
             --workspace-floating-bottom: max(24px, env(safe-area-inset-bottom));
+            --workspace-market-viewer-bottom: calc(var(--workspace-floating-bottom) + 58px);
           }
 
           body {
@@ -74,6 +75,7 @@ export default function App({ Component, pageProps }: AppProps) {
               --workspace-control-height: 44px;
               --workspace-floating-right: max(12px, env(safe-area-inset-right));
               --workspace-floating-bottom: max(12px, env(safe-area-inset-bottom));
+              --workspace-market-viewer-bottom: calc(var(--workspace-floating-bottom) + 132px);
             }
           }
         `}</style>

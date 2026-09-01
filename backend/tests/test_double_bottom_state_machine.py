@@ -66,6 +66,9 @@ class DoubleBottomStateMachineTests(unittest.TestCase):
         "max_loss_pct": 0.08,
         "take_profit_atr": 3.0,
         "stop_loss_atr": 1.5,
+        "stage_1_target_pct": 0.2,
+        "stage_2_target_pct": 0.5,
+        "stage_3_target_pct": 1.0,
     }
 
     runtime_strategy = {
@@ -203,6 +206,14 @@ class DoubleBottomStateMachineTests(unittest.TestCase):
         )
 
         self.assertEqual(retest_signals, [])
+
+    def test_stateful_runner_rejects_a_mismatched_state_type(self) -> None:
+        with self.assertRaisesRegex(TypeError, "DoubleBottomState"):
+            generate_stateful_backtest_signals(
+                self.runtime_strategy,
+                {},
+                object(),  # type: ignore[arg-type]
+            )
 
     def test_stateful_backtest_runner_does_not_backfill_a_warmup_breakout(self) -> None:
         state = build_stateful_backtest_signal_state(self.runtime_strategy)

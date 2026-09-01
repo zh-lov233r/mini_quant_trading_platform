@@ -12,6 +12,7 @@ import {
   normalizeCandleBars,
   normalizeEquityPoints,
   normalizeGapOverlays,
+  normalizeRegimeOverlays,
   normalizeZoneOverlays,
   toChartTime,
 } from "./chartModels";
@@ -80,6 +81,33 @@ describe("chart models", () => {
     });
   });
 
+  it("keeps staged fills distinct and labels their cumulative entry stage", () => {
+    const points = normalizeEquityPoints([
+      { ts: "2025-01-02T21:00:00Z", equity: 102 },
+    ]);
+    const markers = buildEquityEventMarkers(
+      points,
+      [],
+      [
+        { id: "t1", ts: "2025-01-02T14:30:00Z", symbol: "AAA", action: "BUY", stageIndex: 1, stageKey: "stage_1" },
+        { id: "t2", ts: "2025-01-02T14:30:00Z", symbol: "BBB", action: "BUY", stageIndex: 2, stageKey: "stage_2" },
+        { id: "t3", ts: "2025-01-02T14:30:00Z", symbol: "CCC", action: "BUY", stageIndex: 3, stageKey: "stage_3" },
+      ],
+      "zh-CN",
+    );
+
+    expect(markers.map((marker) => ({
+      text: marker.text,
+      shape: marker.shape,
+      color: marker.color,
+      title: marker.title,
+    }))).toEqual([
+      { text: "试仓", shape: "circle", color: "#0ea5e9", title: "试仓成交 (1)" },
+      { text: "加仓", shape: "arrowUp", color: "#f59e0b", title: "加仓成交 (1)" },
+      { text: "确认仓", shape: "arrowUp", color: "#16a34a", title: "确认仓成交 (1)" },
+    ]);
+  });
+
   it("validates gap and support/resistance overlay bounds", () => {
     const validGap = {
       key: "left",
@@ -124,6 +152,83 @@ describe("chart models", () => {
       [9, 9],
       [9, 11],
     ]);
+  });
+
+  it("requires regime intervals to cover each visible session exactly once", () => {
+    const dates = ["2025-01-01", "2025-01-02", "2025-01-03", "2025-01-06"];
+    const base = {
+      key: "up",
+      startDate: "2025-01-01",
+      endDate: "2025-01-02",
+      regime: "uptrend" as const,
+      sessionCount: 2,
+      label: "Uptrend",
+      description: "up",
+    };
+    const valid = normalizeRegimeOverlays(
+      [
+        base,
+        {
+          ...base,
+          key: "range",
+          startDate: "2025-01-03",
+          endDate: "2025-01-06",
+          regime: "range" as const,
+          label: "Range",
+        },
+      ],
+      dates,
+      true,
+    );
+    expect(valid.error).toBeNull();
+    expect(valid.intervals.map((item) => item.key)).toEqual(["up", "range"]);
+
+    const overlap = normalizeRegimeOverlays(
+      [base, { ...base, key: "overlap", startDate: "2025-01-02", endDate: "2025-01-06" }],
+      dates,
+      true,
+    );
+    expect(overlap.intervals).toEqual([]);
+    expect(overlap.error).toContain("overlapping");
+
+    const gap = normalizeRegimeOverlays([base], dates, true);
+    expect(gap.intervals).toEqual([]);
+    expect(gap.error).toContain("missing regime interval");
+
+    const invalid = normalizeRegimeOverlays(
+      [{ ...base, key: "invalid", sessionCount: 0 }],
+      dates,
+      true,
+    );
+    expect(invalid.intervals).toEqual([]);
+    expect(invalid.error).toContain("invalid regime interval");
+  });
+
+  it("ignores visible sessions outside the materialization coverage window", () => {
+    const transition = {
+      key: "transition",
+      startDate: "2026-07-30",
+      endDate: "2026-07-31",
+      regime: "transition" as const,
+      sessionCount: 2,
+      label: "Transition",
+      description: "transition",
+    };
+    const result = normalizeRegimeOverlays(
+      [transition],
+      ["2026-07-30", "2026-07-31", "2026-08-03", "2026-08-04"],
+      true,
+      { startDate: "2024-01-01", endDate: "2026-07-31" },
+    );
+
+    expect(result.error).toBeNull();
+    expect(result.intervals).toEqual([transition]);
+    expect(normalizeRegimeOverlays(
+      [],
+      ["2026-08-03", "2026-08-04"],
+      true,
+      { startDate: "2024-01-01", endDate: "2026-07-31" },
+    )).toEqual({ intervals: [], error: null });
   });
 
   it("expands autoscale to the complete visible sloped zone", () => {

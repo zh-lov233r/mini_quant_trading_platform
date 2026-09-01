@@ -1,26 +1,14 @@
 from __future__ import annotations
 
-from datetime import date, datetime
 import math
 from typing import Any
 
 from src.services.patterns.models import HistoryBar, PatternContext, PatternDecision
 from src.services.staged_entry_service import build_pattern_setup, pattern_setup_from_metadata
-
-
-def number(value: Any) -> float | None:
-    try:
-        normalized = float(value)
-    except (TypeError, ValueError):
-        return None
-    return normalized if math.isfinite(normalized) else None
+from src.services.strategy_types import StageIndex, StagedPatternType
 
 
 def date_text(value: Any) -> str:
-    if isinstance(value, datetime):
-        return value.date().isoformat()
-    if isinstance(value, date):
-        return value.isoformat()
     return str(value)
 
 
@@ -29,16 +17,16 @@ def unit(value: float) -> float:
 
 
 def volume_ratio(bar: HistoryBar) -> float | None:
-    volume = number(bar.get("volume"))
-    average = number(bar.get("volume_sma_20"))
+    volume = bar.get("volume")
+    average = bar.get("volume_sma_20")
     if volume is None or average is None or average <= 0:
         return None
     return volume / average
 
 
 def true_range(current: HistoryBar, previous_close: float | None) -> float | None:
-    high = number(current.get("high"))
-    low = number(current.get("low"))
+    high = current.get("high")
+    low = current.get("low")
     if high is None or low is None:
         return None
     candidates = [high - low]
@@ -52,7 +40,7 @@ def compute_recent_atr(bars: list[HistoryBar], window: int) -> float | None:
         return None
     ranges: list[float] = []
     for idx in range(len(bars)):
-        previous_close = number(bars[idx - 1].get("close")) if idx > 0 else None
+        previous_close = bars[idx - 1].get("close") if idx > 0 else None
         value = true_range(bars[idx], previous_close)
         if value is not None:
             ranges.append(value)
@@ -65,11 +53,11 @@ def confirmed_pivot_lows(bars: list[HistoryBar], left: int, right: int) -> list[
     """Return lows whose complete right-confirmation window is already present."""
     pivots: list[int] = []
     for idx in range(left, len(bars) - right):
-        low = number(bars[idx].get("low"))
+        low = bars[idx].get("low")
         if low is None:
             continue
         neighbors = [
-            number(bars[pos].get("low"))
+            bars[pos].get("low")
             for pos in range(idx - left, idx + right + 1)
             if pos != idx
         ]
@@ -82,8 +70,8 @@ def confirmed_pivot_lows(bars: list[HistoryBar], left: int, right: int) -> list[
 
 def downtrend_context(bars: list[HistoryBar], idx: int, lookback: int, minimum_drop: float) -> bool:
     start = max(0, idx - lookback)
-    prior = [number(bar.get("close")) for bar in bars[start:idx]]
-    current = number(bars[idx].get("close"))
+    prior = [bar.get("close") for bar in bars[start:idx]]
+    current = bars[idx].get("close")
     values = [value for value in prior if value is not None]
     return bool(current is not None and values and (max(values) - current) / max(values) >= minimum_drop)
 
@@ -91,7 +79,7 @@ def downtrend_context(bars: list[HistoryBar], idx: int, lookback: int, minimum_d
 def highest_index(bars: list[HistoryBar], start: int, end: int) -> int | None:
     if end <= start:
         return None
-    candidates = [(idx, number(bars[idx].get("high"))) for idx in range(start, end + 1)]
+    candidates = [(idx, bars[idx].get("high")) for idx in range(start, end + 1)]
     valid = [(idx, value) for idx, value in candidates if value is not None]
     return max(valid, key=lambda item: item[1])[0] if valid else None
 
@@ -141,9 +129,9 @@ def quadratic_fit(values: list[float]) -> tuple[float, float, float] | None:
 
 def build_setup(
     *,
-    pattern_type: str,
+    pattern_type: StagedPatternType,
     context: PatternContext,
-    stage_index: int,
+    stage_index: StageIndex,
     stage_key: str,
     anchors: dict[str, Any],
     invalidation_price: float,
@@ -155,7 +143,7 @@ def build_setup(
         for key, value in anchors.items()
         if key != "pullbacks"
     }
-    if isinstance(anchors.get("pullbacks"), list):
+    if anchors.get("pullbacks") is not None:
         dated_anchors["pullbacks"] = [
             date_text(context.bars[idx].get("dt_ny")) for idx in anchors["pullbacks"]
         ]
@@ -196,13 +184,16 @@ def buy_decision(
     )
 
 
-def position_exit(context: PatternContext, pattern_type: str) -> PatternDecision | None:
+def position_exit(
+    context: PatternContext,
+    pattern_type: StagedPatternType,
+) -> PatternDecision | None:
     if context.position <= 0 or not context.bars:
         return None
     current = context.bars[-1]
-    close = number(current.get("close"))
-    low = number(current.get("low"))
-    atr = number(current.get("atr_14"))
+    close = current.get("close")
+    low = current.get("low")
+    atr = current.get("atr_14")
     setup = pattern_setup_from_metadata(context.entry_signal_features) or {
         "pattern_type": pattern_type,
         "setup_id": f"{pattern_type}:{context.symbol}:position",
@@ -213,7 +204,7 @@ def position_exit(context: PatternContext, pattern_type: str) -> PatternDecision
         "anchors": {},
         "invalidation_price": None,
     }
-    invalidation = number(setup.get("invalidation_price"))
+    invalidation = setup.get("invalidation_price")
 
     reason = None
     stage_key = None
@@ -241,7 +232,7 @@ def position_exit(context: PatternContext, pattern_type: str) -> PatternDecision
     ):
         reason, stage_key = "price reached the ATR take-profit target", "take_profit"
     elif pattern_type == "v_reversal":
-        open_price = number(current.get("open"))
+        open_price = current.get("open")
         ratio = volume_ratio(current)
         current_stage = int(setup.get("stage_index") or 0)
         if (

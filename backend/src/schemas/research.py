@@ -69,12 +69,12 @@ class PointInTimeUniversePolicy(BaseModel):
 
 
 class SupportResistanceValidationProtocol(BaseModel):
-    """Pre-registered, bounded effectiveness protocol for pivot-slope-atr-v2."""
+    """Pre-registered, bounded effectiveness protocol for pivot-slope-regime-v3."""
 
     model_config = ConfigDict(populate_by_name=True)
 
-    kind: Literal["support_resistance_effectiveness_v2"] = (
-        "support_resistance_effectiveness_v2"
+    kind: Literal["support_resistance_effectiveness_v3"] = (
+        "support_resistance_effectiveness_v3"
     )
     max_backtests: Literal[200] = Field(default=200, alias="maxBacktests")
     bootstrap_seed: Literal[20260828] = Field(default=20260828, alias="bootstrapSeed")
@@ -495,6 +495,7 @@ class TrialOut(BaseModel):
     cost_config: dict[str, Any] = Field(alias="costConfig")
     data_fingerprint: str | None = Field(default=None, alias="dataFingerprint")
     backtest_run_id: UUID | None = Field(default=None, alias="backtestRunId")
+    backtest_deleted_at: datetime | None = Field(default=None, alias="backtestDeletedAt")
     candidate_id: UUID | None = Field(default=None, alias="candidateId")
     metrics: dict[str, Any]
     attempt: int

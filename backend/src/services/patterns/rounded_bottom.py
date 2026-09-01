@@ -6,7 +6,6 @@ from src.services.patterns.common import (
     build_setup,
     buy_decision,
     confirmed_pivot_lows,
-    number,
     position_exit,
     quadratic_fit,
     volume_ratio,
@@ -29,7 +28,7 @@ def evaluate(context: PatternContext) -> PatternDecision | None:
     if len(bars) < int(cfg["min_lookback"]):
         return None
     window = bars[-int(cfg["max_lookback"]):]
-    closes = [number(bar.get("close")) for bar in window]
+    closes = [bar.get("close") for bar in window]
     if any(value is None or value <= 0 for value in closes):
         return None
     values = [math.log(float(value)) for value in closes if value is not None]
@@ -113,7 +112,7 @@ def evaluate(context: PatternContext) -> PatternDecision | None:
             stage_index / 3,
         )
     current = bars[-1]
-    close = number(current.get("close"))
+    close = current.get("close")
     current_volume_ratio = volume_ratio(current)
     buffer = float(cfg["breakout_buffer_pct"])
     if (

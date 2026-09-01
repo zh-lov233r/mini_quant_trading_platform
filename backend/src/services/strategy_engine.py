@@ -32,12 +32,13 @@ from src.services.support_resistance_persistence_service import (
     source_data_fingerprint,
 )
 from src.services.strategy_registry import build_runtime_payload
+from src.services.strategy_types import (
+    HistoryBar,
+    MarketDataBySymbol,
+    MarketSnapshot,
+    RuntimeStrategy,
+)
 
-
-RuntimeStrategy = Dict[str, Any]
-MarketSnapshot = Dict[str, Any]
-MarketDataBySymbol = Dict[str, MarketSnapshot]
-HistoryBar = Dict[str, Any]
 StrategyHandler = Callable[[RuntimeStrategy, MarketDataBySymbol], list["SignalEvent"]]
 
 RECENT_BAR_COUNT = 40
@@ -260,9 +261,7 @@ def generate_and_persist_signals_for_trade_date(
         if not runtime["engine_ready"]:
             continue
 
-        handler = STRATEGY_HANDLERS.get(runtime["strategy_type"])
-        if handler is None:
-            continue
+        handler = STRATEGY_HANDLERS[runtime["strategy_type"]]
 
         replay_state: SupportResistanceState | None = None
         replay_symbols: list[str] = []
@@ -272,9 +271,7 @@ def generate_and_persist_signals_for_trade_date(
             for symbol in replay_symbols:
                 for bar in (snapshots.get(symbol) or {}).get("recent_bars") or []:
                     value = bar.get("dt_ny")
-                    if isinstance(value, datetime):
-                        replay_dates.append(value.date())
-                    elif isinstance(value, date):
+                    if value is not None:
                         replay_dates.append(value)
             coverage_start = min(replay_dates) if replay_dates else trade_date
             reusable = find_reusable_materialization(
@@ -383,9 +380,7 @@ def generate_signals(
         if not runtime["engine_ready"]:
             continue
 
-        handler = STRATEGY_HANDLERS.get(runtime["strategy_type"])
-        if handler is None:
-            continue
+        handler = STRATEGY_HANDLERS[runtime["strategy_type"]]
 
         strategy_signals = handler(runtime, market_data_by_symbol)
         annotate_and_rank_signals(runtime, strategy_signals)
@@ -458,64 +453,56 @@ def _load_recent_bar_history(
     }
 
 
-def _safe_positive_int(value: Any, fallback: int) -> int:
-    try:
-        normalized = int(value)
-    except (TypeError, ValueError):
-        return fallback
-    return normalized if normalized > 0 else fallback
-
-
 def required_recent_bar_count_for_runtime(runtime_strategy: RuntimeStrategy) -> int:
     recent_bar_count = RECENT_BAR_COUNT
-    strategy_type = runtime_strategy.get("strategy_type")
-    signal_cfg = runtime_strategy.get("params", {}).get("signal", {}) or {}
-    risk_cfg = runtime_strategy.get("params", {}).get("risk", {}) or {}
+    strategy_type = runtime_strategy["strategy_type"]
+    signal_cfg = runtime_strategy["params"]["signal"]
+    risk_cfg = runtime_strategy["params"]["risk"]
 
     if strategy_type == "island_reversal":
-        downtrend_lookback = _safe_positive_int(signal_cfg.get("downtrend_lookback"), 0)
-        max_island_bars = _safe_positive_int(signal_cfg.get("max_island_bars"), 0)
-        retest_window = _safe_positive_int(signal_cfg.get("retest_window"), 0)
+        downtrend_lookback = int(signal_cfg["downtrend_lookback"])
+        max_island_bars = int(signal_cfg["max_island_bars"])
+        retest_window = int(signal_cfg["retest_window"])
         return max(
             recent_bar_count,
             downtrend_lookback + max_island_bars + retest_window + 2,
         )
 
     if strategy_type == "double_bottom":
-        downtrend_lookback = _safe_positive_int(signal_cfg.get("downtrend_lookback"), 0)
-        max_bottom_spacing = _safe_positive_int(signal_cfg.get("max_bottom_spacing"), 0)
-        left_bottom_before_bars = _safe_positive_int(signal_cfg.get("left_bottom_before_bars"), 0)
-        max_breakout_wait = _safe_positive_int(signal_cfg.get("max_breakout_bars_after_right_bottom"), 0)
-        retest_window = _safe_positive_int(signal_cfg.get("retest_window"), 0)
+        downtrend_lookback = int(signal_cfg["downtrend_lookback"])
+        max_bottom_spacing = int(signal_cfg["max_bottom_spacing"])
+        left_bottom_before_bars = int(signal_cfg["left_bottom_before_bars"])
+        max_breakout_wait = int(signal_cfg["max_breakout_bars_after_right_bottom"])
+        retest_window = int(signal_cfg["retest_window"])
         return max(
             recent_bar_count,
             downtrend_lookback + max_bottom_spacing + left_bottom_before_bars + max_breakout_wait + retest_window + 10,
         )
 
     if strategy_type == "head_shoulders_bottom":
-        downtrend_lookback = _safe_positive_int(signal_cfg.get("downtrend_lookback"), 60)
-        max_segment_bars = _safe_positive_int(signal_cfg.get("max_segment_bars"), 40)
-        pivot_right_bars = _safe_positive_int(signal_cfg.get("pivot_right_bars"), 2)
+        downtrend_lookback = int(signal_cfg["downtrend_lookback"])
+        max_segment_bars = int(signal_cfg["max_segment_bars"])
+        pivot_right_bars = int(signal_cfg["pivot_right_bars"])
         return max(recent_bar_count, downtrend_lookback + max_segment_bars * 2 + pivot_right_bars + 10)
 
     if strategy_type == "rounded_bottom":
-        max_lookback = _safe_positive_int(signal_cfg.get("max_lookback"), 240)
-        pivot_right_bars = _safe_positive_int(signal_cfg.get("pivot_right_bars"), 2)
+        max_lookback = int(signal_cfg["max_lookback"])
+        pivot_right_bars = int(signal_cfg["pivot_right_bars"])
         return max(recent_bar_count, max_lookback + pivot_right_bars + 10)
 
     if strategy_type == "v_reversal":
-        downtrend_lookback = _safe_positive_int(signal_cfg.get("downtrend_lookback"), 60)
-        continuation_window = _safe_positive_int(signal_cfg.get("continuation_window"), 5)
-        consolidation_max_bars = _safe_positive_int(signal_cfg.get("consolidation_max_bars"), 10)
-        retest_window = _safe_positive_int(signal_cfg.get("retest_window"), 5)
+        downtrend_lookback = int(signal_cfg["downtrend_lookback"])
+        continuation_window = int(signal_cfg["continuation_window"])
+        consolidation_max_bars = int(signal_cfg["consolidation_max_bars"])
+        retest_window = int(signal_cfg["retest_window"])
         return max(recent_bar_count, downtrend_lookback + continuation_window + consolidation_max_bars + retest_window + 10)
 
     if strategy_type == "support_resistance":
-        detection_window = _safe_positive_int(signal_cfg.get("detection_window"), 120)
-        pivot_right = _safe_positive_int(signal_cfg.get("pivot_right_bars"), 3)
-        score_window = _safe_positive_int(signal_cfg.get("score_outcome_window"), 20)
-        retest_window = _safe_positive_int(signal_cfg.get("retest_window"), 10)
-        max_holding_days = _safe_positive_int(risk_cfg.get("max_holding_days"), 40)
+        detection_window = int(signal_cfg["detection_window"])
+        pivot_right = int(signal_cfg["pivot_right_bars"])
+        score_window = int(signal_cfg["score_outcome_window"])
+        retest_window = int(signal_cfg["retest_window"])
+        max_holding_days = int(risk_cfg["max_holding_days"])
         return max(
             recent_bar_count,
             detection_window + pivot_right + score_window + retest_window + 10,
@@ -525,7 +512,7 @@ def required_recent_bar_count_for_runtime(runtime_strategy: RuntimeStrategy) -> 
     if strategy_type in {"trend", "mean_reversion", "momentum_breakout"}:
         return 0
 
-    return recent_bar_count
+    raise ValueError(f"unsupported engine-ready strategy_type: {strategy_type}")
 
 
 def required_recent_bar_lookback_days(recent_bar_count: int) -> int:
@@ -554,8 +541,7 @@ def _list_engine_ready_runtimes_from_strategies(strategies: list[Strategy]) -> l
         runtime = build_runtime_payload(strategy)
         if not runtime["engine_ready"]:
             continue
-        if STRATEGY_HANDLERS.get(runtime["strategy_type"]) is None:
-            continue
+        STRATEGY_HANDLERS[runtime["strategy_type"]]
         runtimes.append(runtime)
     return runtimes
 
@@ -660,39 +646,39 @@ def _build_feature_snapshot(row: Dict[str, Any]) -> MarketSnapshot:
         "asset_type": row["asset_type"],
         "dt_ny": row["dt_ny"],
         "ts": row["ts"] or datetime.now(timezone.utc),
-        "open": row["open"],
-        "high": row["high"],
-        "low": row["low"],
-        "close": row["close"],
-        "volume": row["volume"],
-        "atr_14": row["atr_14"],
-        "volume_sma_20": row["volume_sma_20"],
-        "ret_20d": row["ret_20d"],
-        "ret_60d": row["ret_60d"],
-        "sma_10": row["sma_10"],
-        "sma_20": row["sma_20"],
-        "sma_50": row["sma_50"],
-        "sma_100": row["sma_100"],
-        "sma_200": row["sma_200"],
-        "ema_12": row["ema_12"],
-        "ema_15": row["ema_15"],
-        "ema_20": row["ema_20"],
-        "ema_50": row["ema_50"],
-        "rsi_2": row["rsi_2"],
-        "rsi_5": row["rsi_5"],
-        "rsi_14": row["rsi_14"],
-        "zscore_5": row["zscore_5"],
-        "zscore_10": row["zscore_10"],
-        "zscore_20": row["zscore_20"],
-        "prev_sma_10": row["prev_sma_10"],
-        "prev_sma_20": row["prev_sma_20"],
-        "prev_sma_50": row["prev_sma_50"],
-        "prev_sma_100": row["prev_sma_100"],
-        "prev_sma_200": row["prev_sma_200"],
-        "prev_ema_12": row["prev_ema_12"],
-        "prev_ema_15": row["prev_ema_15"],
-        "prev_ema_20": row["prev_ema_20"],
-        "prev_ema_50": row["prev_ema_50"],
+        "open": _float_or_none(row["open"]),
+        "high": _float_or_none(row["high"]),
+        "low": _float_or_none(row["low"]),
+        "close": _float_or_none(row["close"]),
+        "volume": _float_or_none(row["volume"]),
+        "atr_14": _float_or_none(row["atr_14"]),
+        "volume_sma_20": _float_or_none(row["volume_sma_20"]),
+        "ret_20d": _float_or_none(row["ret_20d"]),
+        "ret_60d": _float_or_none(row["ret_60d"]),
+        "sma_10": _float_or_none(row["sma_10"]),
+        "sma_20": _float_or_none(row["sma_20"]),
+        "sma_50": _float_or_none(row["sma_50"]),
+        "sma_100": _float_or_none(row["sma_100"]),
+        "sma_200": _float_or_none(row["sma_200"]),
+        "ema_12": _float_or_none(row["ema_12"]),
+        "ema_15": _float_or_none(row["ema_15"]),
+        "ema_20": _float_or_none(row["ema_20"]),
+        "ema_50": _float_or_none(row["ema_50"]),
+        "rsi_2": _float_or_none(row["rsi_2"]),
+        "rsi_5": _float_or_none(row["rsi_5"]),
+        "rsi_14": _float_or_none(row["rsi_14"]),
+        "zscore_5": _float_or_none(row["zscore_5"]),
+        "zscore_10": _float_or_none(row["zscore_10"]),
+        "zscore_20": _float_or_none(row["zscore_20"]),
+        "prev_sma_10": _float_or_none(row["prev_sma_10"]),
+        "prev_sma_20": _float_or_none(row["prev_sma_20"]),
+        "prev_sma_50": _float_or_none(row["prev_sma_50"]),
+        "prev_sma_100": _float_or_none(row["prev_sma_100"]),
+        "prev_sma_200": _float_or_none(row["prev_sma_200"]),
+        "prev_ema_12": _float_or_none(row["prev_ema_12"]),
+        "prev_ema_15": _float_or_none(row["prev_ema_15"]),
+        "prev_ema_20": _float_or_none(row["prev_ema_20"]),
+        "prev_ema_50": _float_or_none(row["prev_ema_50"]),
         "position": 0,
         "avg_entry_price": None,
         "entry_trade_date": None,
@@ -702,56 +688,23 @@ def _build_feature_snapshot(row: Dict[str, Any]) -> MarketSnapshot:
     }
 
 
-# Best-effort scalar conversion when missing/non-numeric input should fall back to a number.
-# Input: arbitrary value and an optional numeric default.
-# Output: float(value) when possible, otherwise the provided default.
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    if value is None:
-        return default
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
+# Market snapshots preserve missing values but reject malformed internal values.
+def _float_or_zero(value: Any) -> float:
+    return 0.0 if value is None else float(value)
 
 
-# Best-effort scalar conversion when callers need to preserve "missing" as None.
-# Input: arbitrary value.
-# Output: float(value) when possible, otherwise None.
-def _safe_float_or_none(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _safe_date_or_none(value: Any) -> date | None:
-    if value is None:
-        return None
-    if isinstance(value, date) and not isinstance(value, datetime):
-        return value
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, str):
-        try:
-            return datetime.fromisoformat(value).date()
-        except ValueError:
-            try:
-                return date.fromisoformat(value)
-            except ValueError:
-                return None
-    return None
+def _float_or_none(value: Any) -> float | None:
+    return None if value is None else float(value)
 
 
 def _signal_timestamp_utc(snapshot: MarketSnapshot) -> datetime:
     timestamp = snapshot.get("ts")
-    if isinstance(timestamp, datetime):
+    if timestamp is not None:
         if timestamp.tzinfo is None:
             return timestamp.replace(tzinfo=timezone.utc)
         return timestamp.astimezone(timezone.utc)
 
-    trade_date = _safe_date_or_none(snapshot.get("dt_ny"))
+    trade_date = snapshot.get("dt_ny")
     if trade_date is None:
         raise ValueError("daily strategy snapshot requires ts or dt_ny")
     market_close_ny = datetime.combine(trade_date, time(hour=16), tzinfo=NEW_YORK_TZ)
@@ -769,20 +722,19 @@ def _resolve_position_holding_days(snapshot: MarketSnapshot) -> int | None:
             if holding_days >= 0:
                 return holding_days
 
-    entry_trade_date = _safe_date_or_none(snapshot.get("entry_trade_date"))
-    current_trade_date = _safe_date_or_none(snapshot.get("dt_ny"))
+    entry_trade_date = snapshot.get("entry_trade_date")
+    current_trade_date = snapshot.get("dt_ny")
     if entry_trade_date is None or current_trade_date is None or current_trade_date < entry_trade_date:
         return None
 
     recent_bars = snapshot.get("recent_bars")
-    if isinstance(recent_bars, list):
+    if recent_bars is not None:
         session_dates = sorted(
             {
-                bar_date
+                bar["dt_ny"]
                 for bar in recent_bars
-                if isinstance(bar, dict)
-                for bar_date in [_safe_date_or_none(bar.get("dt_ny"))]
-                if bar_date is not None and entry_trade_date <= bar_date <= current_trade_date
+                if bar["dt_ny"] is not None
+                and entry_trade_date <= bar["dt_ny"] <= current_trade_date
             }
         )
         if session_dates and session_dates[0] == entry_trade_date and session_dates[-1] == current_trade_date:
@@ -798,17 +750,17 @@ def _build_history_bar(row: Dict[str, Any]) -> HistoryBar:
     return {
         "dt_ny": row["dt_ny"],
         "ts": row["ts"] or datetime.now(timezone.utc),
-        "open": _safe_float_or_none(row.get("open")),
-        "high": _safe_float_or_none(row.get("high")),
-        "low": _safe_float_or_none(row.get("low")),
-        "close": _safe_float_or_none(row.get("close")),
-        "volume": _safe_float_or_none(row.get("volume")),
-        "atr_14": _safe_float_or_none(row.get("atr_14")),
-        "volume_sma_20": _safe_float_or_none(row.get("volume_sma_20")),
-        "ret_20d": _safe_float_or_none(row.get("ret_20d")),
-        "ret_60d": _safe_float_or_none(row.get("ret_60d")),
-        "sma_20": _safe_float_or_none(row.get("sma_20")),
-        "sma_50": _safe_float_or_none(row.get("sma_50")),
+        "open": _float_or_none(row["open"]),
+        "high": _float_or_none(row["high"]),
+        "low": _float_or_none(row["low"]),
+        "close": _float_or_none(row["close"]),
+        "volume": _float_or_none(row["volume"]),
+        "atr_14": _float_or_none(row["atr_14"]),
+        "volume_sma_20": _float_or_none(row["volume_sma_20"]),
+        "ret_20d": _float_or_none(row["ret_20d"]),
+        "ret_60d": _float_or_none(row["ret_60d"]),
+        "sma_20": _float_or_none(row["sma_20"]),
+        "sma_50": _float_or_none(row["sma_50"]),
     }
 
 
@@ -842,9 +794,9 @@ def _trend_following_handler(
             continue
 
         position = float(snapshot.get("position", 0) or 0)
-        avg_entry_price = _safe_float_or_none(snapshot.get("avg_entry_price"))
-        close_price = _safe_float_or_none(snapshot.get("close"))
-        current_atr = _safe_float_or_none(snapshot.get("atr_14"))
+        avg_entry_price = _float_or_none(snapshot.get("avg_entry_price"))
+        close_price = _float_or_none(snapshot.get("close"))
+        current_atr = _float_or_none(snapshot.get("atr_14"))
         stop_loss_pct = float(risk_cfg["stop_loss_pct"])
 
         if (
@@ -947,8 +899,8 @@ def _trend_following_handler(
             )
             continue
 
-        volume = _safe_float(snapshot.get("volume"))
-        avg_volume = _safe_float(snapshot.get("volume_sma_20"))
+        volume = _float_or_zero(snapshot.get("volume"))
+        avg_volume = _float_or_zero(snapshot.get("volume_sma_20"))
         if avg_volume <= 0 or volume < signal_cfg["volume_multiplier"] * avg_volume:
             continue
 
@@ -1038,13 +990,13 @@ def _mean_reversion_handler(
         if not snapshot:
             continue
 
-        zscore = _safe_float_or_none(snapshot.get(zscore_key))
+        zscore = _float_or_none(snapshot.get(zscore_key))
 
         action: Literal["BUY", "SELL", "HOLD"] | None = None
         reason: str | None = None
         position = float(snapshot.get("position", 0) or 0)
-        avg_entry_price = _safe_float_or_none(snapshot.get("avg_entry_price"))
-        close_price = _safe_float_or_none(snapshot.get("close"))
+        avg_entry_price = _float_or_none(snapshot.get("avg_entry_price"))
+        close_price = _float_or_none(snapshot.get("close"))
         position_holding_days = _resolve_position_holding_days(snapshot)
 
         if (
@@ -1176,11 +1128,11 @@ def _momentum_breakout_handler(
         if not snapshot:
             continue
 
-        close_price = _safe_float_or_none(snapshot.get("close"))
-        sma_20 = _safe_float_or_none(snapshot.get("sma_20"))
-        return_20d = _safe_float_or_none(snapshot.get("ret_20d"))
-        volume = _safe_float_or_none(snapshot.get("volume"))
-        average_volume = _safe_float_or_none(snapshot.get("volume_sma_20"))
+        close_price = _float_or_none(snapshot.get("close"))
+        sma_20 = _float_or_none(snapshot.get("sma_20"))
+        return_20d = _float_or_none(snapshot.get("ret_20d"))
+        volume = _float_or_none(snapshot.get("volume"))
+        average_volume = _float_or_none(snapshot.get("volume_sma_20"))
         if (
             close_price is None
             or sma_20 is None
@@ -1193,7 +1145,7 @@ def _momentum_breakout_handler(
             continue
 
         position = float(snapshot.get("position", 0) or 0)
-        avg_entry_price = _safe_float_or_none(snapshot.get("avg_entry_price"))
+        avg_entry_price = _float_or_none(snapshot.get("avg_entry_price"))
         breakout_threshold = sma_20 * (1.0 + breakout_buffer_pct)
         volume_ratio = volume / average_volume
         action: Literal["BUY", "SELL", "HOLD"] | None = None
@@ -1279,15 +1231,14 @@ def _pattern_context(
     signal_cfg: Dict[str, Any],
     risk_cfg: Dict[str, Any],
 ) -> PatternContext:
-    entry_features = snapshot.get("entry_signal_features")
     return PatternContext(
         symbol=symbol,
         bars=snapshot.get("recent_bars") or [],
         signal_cfg=signal_cfg,
         risk_cfg=risk_cfg,
         position=float(snapshot.get("position", 0) or 0.0),
-        avg_entry_price=_safe_float_or_none(snapshot.get("avg_entry_price")),
-        entry_signal_features=entry_features if isinstance(entry_features, dict) else None,
+        avg_entry_price=snapshot.get("avg_entry_price"),
+        entry_signal_features=snapshot.get("entry_signal_features"),
     )
 
 
@@ -1412,9 +1363,9 @@ def _island_reversal_handler(
 def build_stateful_backtest_signal_state(
     runtime_strategy: RuntimeStrategy,
 ) -> double_bottom.DoubleBottomState | SupportResistanceState | None:
-    if runtime_strategy.get("strategy_type") == "double_bottom":
+    if runtime_strategy["strategy_type"] == "double_bottom":
         return double_bottom.create_state()
-    if runtime_strategy.get("strategy_type") == "support_resistance":
+    if runtime_strategy["strategy_type"] == "support_resistance":
         return SupportResistanceState()
     return None
 
@@ -1426,22 +1377,26 @@ def generate_stateful_backtest_signals(
     *,
     emit_signals: bool = True,
 ) -> list[SignalEvent]:
-    strategy_type = runtime_strategy.get("strategy_type")
-    if strategy_type == "double_bottom" and isinstance(state, double_bottom.DoubleBottomState):
+    strategy_type = runtime_strategy["strategy_type"]
+    if strategy_type == "double_bottom":
+        if not isinstance(state, double_bottom.DoubleBottomState):
+            raise TypeError("double_bottom requires DoubleBottomState")
         return _double_bottom_backtest_handler(
             runtime_strategy,
             market_data_by_symbol,
             state,
             emit_signals=emit_signals,
         )
-    if strategy_type == "support_resistance" and isinstance(state, SupportResistanceState):
+    if strategy_type == "support_resistance":
+        if not isinstance(state, SupportResistanceState):
+            raise TypeError("support_resistance requires SupportResistanceState")
         return _support_resistance_backtest_handler(
             runtime_strategy,
             market_data_by_symbol,
             state,
             emit_signals=emit_signals,
         )
-    return []
+    raise ValueError(f"strategy_type {strategy_type} does not support stateful backtests")
 
 
 def _support_resistance_backtest_handler(
@@ -1557,7 +1512,7 @@ def _support_resistance_signal_event(
             "low": snapshot.get("low"),
             "atr_14": snapshot.get("atr_14"),
             "position": float(snapshot.get("position", 0) or 0.0),
-            "avg_entry_price": _safe_float_or_none(snapshot.get("avg_entry_price")),
+            "avg_entry_price": _float_or_none(snapshot.get("avg_entry_price")),
             "support_resistance": decision["support_resistance"],
         },
     )
@@ -1582,15 +1537,14 @@ def _double_bottom_backtest_handler(
         double_bottom.advance_symbol(symbol_state, params["signal"])
         if not emit_signals:
             continue
-        entry_features = snapshot.get("entry_signal_features")
         context = PatternContext(
             symbol=symbol,
             bars=symbol_state.history_bars,
             signal_cfg=params["signal"],
             risk_cfg=params["risk"],
             position=float(snapshot.get("position", 0) or 0.0),
-            avg_entry_price=_safe_float_or_none(snapshot.get("avg_entry_price")),
-            entry_signal_features=entry_features if isinstance(entry_features, dict) else None,
+            avg_entry_price=snapshot.get("avg_entry_price"),
+            entry_signal_features=snapshot.get("entry_signal_features"),
         )
         decision = double_bottom.evaluate(context, symbol_state=symbol_state)
         if decision is not None:

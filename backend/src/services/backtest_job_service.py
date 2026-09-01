@@ -29,6 +29,7 @@ from src.services.backtest_engine import BacktestCancelledError, run_backtest
 log = logging.getLogger(__name__)
 UTC = timezone.utc
 JobSource = Literal["manual", "research", "verification"]
+TERMINAL_BACKTEST_STATUSES = {"completed", "failed", "cancelled"}
 BacktestProgressPhase = Literal[
     "queued",
     "preparing",
@@ -40,6 +41,7 @@ BacktestProgressPhase = Literal[
 ]
 BACKTEST_FINALIZING_STAGES = {
     "zone_versions",
+    "regime_versions",
     "run_events",
     "backtest_details",
     "committing",
@@ -48,6 +50,49 @@ BACKTEST_FINALIZING_STAGES = {
 
 class BacktestVerificationError(RuntimeError):
     pass
+
+
+def delete_terminal_backtest_run(
+    db: Session,
+    run_id: UUID,
+    *,
+    expected_source: JobSource,
+) -> StrategyRun:
+    """Delete one terminal run and its run-scoped artifacts without touching shared data."""
+
+    run = db.execute(
+        select(StrategyRun).where(StrategyRun.id == run_id).with_for_update()
+    ).scalar_one_or_none()
+    if run is None:
+        raise LookupError("backtest not found")
+    if run.mode != "backtest":
+        raise ValueError("only backtest runs can be deleted")
+    if run.status not in TERMINAL_BACKTEST_STATUSES:
+        raise ValueError("queued or running backtests cannot be deleted")
+
+    job = db.execute(
+        select(BacktestJob).where(BacktestJob.run_id == run_id).with_for_update()
+    ).scalar_one_or_none()
+    if job is not None:
+        source = str(job.source)
+        if job.status not in TERMINAL_BACKTEST_STATUSES:
+            raise ValueError("queued or running backtest jobs cannot be deleted")
+    else:
+        linked_trial = db.execute(
+            select(ExperimentTrial.id)
+            .where(ExperimentTrial.backtest_run_id == run_id)
+            .limit(1)
+        ).scalar_one_or_none()
+        source = "research" if linked_trial is not None else "manual"
+    if source != expected_source:
+        raise ValueError(f"backtest belongs to {source}, not {expected_source}")
+
+    # Transaction.run_id uses SET NULL because paper/live transactions may outlive
+    # a run. Backtest transactions are run artifacts, so delete them explicitly.
+    db.execute(delete(Transaction).where(Transaction.run_id == run_id))
+    db.delete(run)
+    db.flush()
+    return run
 
 
 def _clamp_percent(value: Any) -> float:

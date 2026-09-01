@@ -12,7 +12,7 @@ from statistics import mean
 from typing import Any, Iterable
 from xml.sax.saxutils import escape
 
-from sqlalchemy import bindparam, select, text
+from sqlalchemy import bindparam, case, func, select, text
 from sqlalchemy.orm import Session
 
 from src.models.tables import (
@@ -21,7 +21,9 @@ from src.models.tables import (
     PortfolioSnapshot,
     ResearchExperiment,
     Signal,
+    SupportResistanceRegimeVersion,
     SupportResistanceRunEvent,
+    SupportResistanceRunMaterialization,
     Transaction,
 )
 
@@ -35,7 +37,7 @@ ZH_STATIC_TEXT = {
     "Delistings without modeled consideration use zero recovery; last close is reported only as an upper-bound sensitivity.": "无法建模现金对价的退市按零回收计值；最后收盘价仅作为上界敏感性。",
     "A separate same-cost final-holdout replay must match events, signals, transactions, positions, and NAV exactly.": "独立的同成本最终留出重放必须在事件、信号、交易、持仓和 NAV 上完全一致。",
     "No result authorizes portfolio activation, scheduling, or order submission.": "任何结果都不授权激活组合、启用调度或提交订单。",
-    "pre-registered all-mode pivot-slope-atr-v2 default; validity must be re-established": "预注册的全模式 pivot-slope-atr-v2 默认策略；必须重新建立有效性证据",
+    "pre-registered all-mode pivot-slope-regime-v3 default; validity must be established independently": "预注册的全模式 pivot-slope-regime-v3 默认策略；必须独立建立有效性证据",
 }
 
 
@@ -125,6 +127,36 @@ def _normalized_event_rows(db: Session, run_id: Any) -> list[tuple[Any, ...]]:
     ]
 
 
+def _normalized_regime_rows(db: Session, run_id: Any) -> list[tuple[Any, ...]]:
+    return [
+        (
+            row.instrument_id,
+            row.symbol,
+            row.version,
+            row.effective_from,
+            row.regime,
+            row.lower_zone_key,
+            row.upper_zone_key,
+            row.reason_code,
+            canonical_json(row.evidence or {}),
+        )
+        for row in db.execute(
+            select(SupportResistanceRegimeVersion)
+            .join(
+                SupportResistanceRunMaterialization,
+                SupportResistanceRunMaterialization.materialization_id
+                == SupportResistanceRegimeVersion.materialization_id,
+            )
+            .where(SupportResistanceRunMaterialization.run_id == run_id)
+            .order_by(
+                SupportResistanceRegimeVersion.instrument_id,
+                SupportResistanceRegimeVersion.effective_from,
+                SupportResistanceRegimeVersion.version,
+            )
+        ).scalars()
+    ]
+
+
 def _normalized_transaction_rows(db: Session, run_id: Any) -> list[tuple[Any, ...]]:
     return [
         (
@@ -140,7 +172,12 @@ def _normalized_transaction_rows(db: Session, run_id: Any) -> list[tuple[Any, ..
         for row in db.execute(
             select(Transaction)
             .where(Transaction.run_id == run_id)
-            .order_by(Transaction.ts, Transaction.instrument_id, Transaction.symbol, Transaction.side)
+            .order_by(
+                Transaction.ts,
+                case((Transaction.side == "SELL", 0), else_=1),
+                Transaction.instrument_id,
+                Transaction.symbol,
+            )
         ).scalars()
     ]
 
@@ -177,6 +214,8 @@ def cache_audit(db: Session, candidate: ExperimentCandidate) -> dict[str, Any]:
     replay_signals = _normalized_signal_rows(db, replay.backtest_run_id)
     base_events = _normalized_event_rows(db, base.backtest_run_id)
     replay_events = _normalized_event_rows(db, replay.backtest_run_id)
+    base_regimes = _normalized_regime_rows(db, base.backtest_run_id)
+    replay_regimes = _normalized_regime_rows(db, replay.backtest_run_id)
     base_transactions = _normalized_transaction_rows(db, base.backtest_run_id)
     replay_transactions = _normalized_transaction_rows(db, replay.backtest_run_id)
     base_nav = _normalized_nav_rows(db, base.backtest_run_id)
@@ -188,6 +227,7 @@ def cache_audit(db: Session, candidate: ExperimentCandidate) -> dict[str, Any]:
         and base_cache_key == replay_cache_key
         and base_signals == replay_signals
         and base_events == replay_events
+        and base_regimes == replay_regimes
         and base_transactions == replay_transactions
         and base_nav == replay_nav
     )
@@ -197,17 +237,354 @@ def cache_audit(db: Session, candidate: ExperimentCandidate) -> dict[str, Any]:
         "cacheKey": base_cache_key,
         "signalCount": len(base_signals),
         "eventCount": len(base_events),
+        "regimeVersionCount": len(base_regimes),
         "transactionCount": len(base_transactions),
         "navCount": len(base_nav),
         "signalDigestBase": hashlib.sha256(canonical_json(base_signals).encode()).hexdigest(),
         "signalDigestReplay": hashlib.sha256(canonical_json(replay_signals).encode()).hexdigest(),
         "eventDigestBase": hashlib.sha256(canonical_json(base_events).encode()).hexdigest(),
         "eventDigestReplay": hashlib.sha256(canonical_json(replay_events).encode()).hexdigest(),
+        "regimeDigestBase": hashlib.sha256(canonical_json(base_regimes).encode()).hexdigest(),
+        "regimeDigestReplay": hashlib.sha256(canonical_json(replay_regimes).encode()).hexdigest(),
         "transactionDigestBase": hashlib.sha256(canonical_json(base_transactions).encode()).hexdigest(),
         "transactionDigestReplay": hashlib.sha256(canonical_json(replay_transactions).encode()).hexdigest(),
         "navDigestBase": hashlib.sha256(canonical_json(base_nav).encode()).hexdigest(),
         "navDigestReplay": hashlib.sha256(canonical_json(replay_nav).encode()).hexdigest(),
-        "scope": "same-cost final-holdout events, signals, transactions, positions, and NAV",
+        "scope": "same-cost final-holdout zones, regimes, events, signals, transactions, positions, and NAV",
+    }
+
+
+def regime_audit(db: Session, run_id: Any) -> dict[str, Any]:
+    transitions = _normalized_regime_rows(db, run_id)
+    events = list(
+        db.execute(
+            select(SupportResistanceRunEvent)
+            .where(SupportResistanceRunEvent.run_id == run_id)
+            .where(
+                SupportResistanceRunEvent.event_type.in_(
+                    {"candidate", "selection", "regime_rejection", "regime_transition"}
+                )
+            )
+        ).scalars()
+    )
+    state_transition_counts: dict[str, int] = defaultdict(int)
+    candidate_counts: dict[str, int] = defaultdict(int)
+    admitted_counts: dict[str, int] = defaultdict(int)
+    rejection_counts: dict[str, int] = defaultdict(int)
+    for event in events:
+        payload = event.payload or {}
+        if event.event_type == "regime_transition":
+            state_transition_counts[str(payload.get("to_regime") or payload.get("regime") or "unknown")] += 1
+        elif event.event_type == "candidate":
+            key = f"{payload.get('regime') or 'unknown'}/{payload.get('setup') or 'unknown'}"
+            candidate_counts[key] += 1
+        elif event.event_type == "selection":
+            key = f"{payload.get('regime') or 'unknown'}/{payload.get('setup') or 'unknown'}"
+            admitted_counts[key] += 1
+        elif event.event_type == "regime_rejection":
+            key = f"{payload.get('regime') or 'unknown'}/{payload.get('setup') or 'unknown'}"
+            rejection_counts[key] += 1
+    downtrend_exit_count = db.scalar(
+        select(func.count())
+        .select_from(Signal)
+        .where(Signal.run_id == run_id)
+        .where(Signal.signal == "SELL")
+        .where(Signal.reason == "confirmed downtrend regime")
+    ) or 0
+    coverage: dict[str, int] = {}
+    duration_sessions: dict[str, dict[str, float | int]] = {}
+    integrity = {
+        "overlapCount": 0,
+        "gapCount": 0,
+        "duplicateDateCount": 0,
+        "adjacentSameCount": 0,
+        "unalignedTransitionCount": 0,
+        "exactCoverage": True,
+    }
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        rows = db.execute(
+            text(
+                """
+                WITH timeline AS (
+                  SELECT regime.materialization_id,
+                         regime.instrument_id,
+                         regime.regime,
+                         regime.effective_from,
+                         lead(regime.effective_from) OVER (
+                           PARTITION BY regime.materialization_id, regime.instrument_id
+                           ORDER BY regime.effective_from, regime.version
+                         ) AS next_start,
+                         materialization.coverage_end
+                  FROM support_resistance_regime_versions regime
+                  JOIN support_resistance_run_materializations link
+                    ON link.materialization_id = regime.materialization_id
+                  JOIN support_resistance_materializations materialization
+                    ON materialization.id = regime.materialization_id
+                  WHERE link.run_id = :run_id
+                )
+                SELECT timeline.regime, count(*)
+                FROM timeline
+                JOIN eod_bars bar
+                  ON bar.instrument_id = timeline.instrument_id
+                 AND bar.dt_ny >= timeline.effective_from
+                 AND bar.dt_ny < COALESCE(timeline.next_start, timeline.coverage_end + 1)
+                GROUP BY timeline.regime
+                ORDER BY timeline.regime
+                """
+            ),
+            {"run_id": run_id},
+        ).all()
+        coverage = {str(regime): int(count) for regime, count in rows}
+        duration_rows = db.execute(
+            text(
+                """
+                WITH timeline AS (
+                  SELECT regime.materialization_id,
+                         regime.instrument_id,
+                         regime.regime,
+                         regime.effective_from,
+                         lead(regime.effective_from) OVER (
+                           PARTITION BY regime.materialization_id, regime.instrument_id
+                           ORDER BY regime.effective_from, regime.version
+                         ) AS next_start,
+                         materialization.coverage_end
+                  FROM support_resistance_regime_versions regime
+                  JOIN support_resistance_run_materializations link
+                    ON link.materialization_id = regime.materialization_id
+                  JOIN support_resistance_materializations materialization
+                    ON materialization.id = regime.materialization_id
+                  WHERE link.run_id = :run_id
+                ), intervals AS (
+                  SELECT timeline.regime, count(bar.dt_ny)::integer AS sessions
+                  FROM timeline
+                  JOIN eod_bars bar
+                    ON bar.instrument_id = timeline.instrument_id
+                   AND bar.dt_ny >= timeline.effective_from
+                   AND bar.dt_ny < COALESCE(timeline.next_start, timeline.coverage_end + 1)
+                  GROUP BY timeline.materialization_id, timeline.instrument_id,
+                           timeline.regime, timeline.effective_from
+                )
+                SELECT regime, count(*)::integer, min(sessions)::integer,
+                       max(sessions)::integer, avg(sessions)::double precision
+                FROM intervals
+                GROUP BY regime
+                ORDER BY regime
+                """
+            ),
+            {"run_id": run_id},
+        ).all()
+        duration_sessions = {
+            str(regime): {
+                "intervalCount": int(interval_count),
+                "min": int(minimum),
+                "max": int(maximum),
+                "mean": round(float(average), 6),
+            }
+            for regime, interval_count, minimum, maximum, average in duration_rows
+        }
+        duplicate_count, adjacent_same_count, unaligned_count, missing_first_count = db.execute(
+            text(
+                """
+                WITH scoped AS (
+                  SELECT regime.*, materialization.coverage_start, materialization.coverage_end
+                  FROM support_resistance_regime_versions regime
+                  JOIN support_resistance_run_materializations link
+                    ON link.materialization_id = regime.materialization_id
+                  JOIN support_resistance_materializations materialization
+                    ON materialization.id = regime.materialization_id
+                  WHERE link.run_id = :run_id
+                ), duplicate_starts AS (
+                  SELECT count(*) AS value FROM (
+                    SELECT materialization_id, symbol, effective_from
+                    FROM scoped GROUP BY materialization_id, symbol, effective_from
+                    HAVING count(*) > 1
+                  ) rows
+                ), adjacent_same AS (
+                  SELECT count(*) AS value FROM (
+                    SELECT regime,
+                           lag(regime) OVER (
+                             PARTITION BY materialization_id, symbol
+                             ORDER BY effective_from, version
+                           ) AS previous_regime
+                    FROM scoped
+                  ) rows WHERE regime = previous_regime
+                ), unaligned AS (
+                  SELECT count(*) AS value
+                  FROM scoped
+                  LEFT JOIN eod_bars bar
+                    ON bar.instrument_id = scoped.instrument_id
+                   AND bar.dt_ny = scoped.effective_from
+                  WHERE scoped.instrument_id IS NOT NULL AND bar.instrument_id IS NULL
+                ), first_sessions AS (
+                  SELECT scoped.materialization_id, scoped.symbol,
+                         min(scoped.effective_from) AS first_regime,
+                         min(bar.dt_ny) AS first_session
+                  FROM scoped
+                  JOIN eod_bars bar
+                    ON bar.instrument_id = scoped.instrument_id
+                   AND bar.dt_ny BETWEEN scoped.coverage_start AND scoped.coverage_end
+                  GROUP BY scoped.materialization_id, scoped.symbol
+                ), missing_first AS (
+                  SELECT count(*) AS value FROM first_sessions WHERE first_regime <> first_session
+                )
+                SELECT duplicate_starts.value, adjacent_same.value,
+                       unaligned.value, missing_first.value
+                FROM duplicate_starts, adjacent_same, unaligned, missing_first
+                """
+            ),
+            {"run_id": run_id},
+        ).one()
+        integrity = {
+            "overlapCount": 0,
+            "gapCount": int(missing_first_count) + int(unaligned_count) + (0 if transitions else 1),
+            "duplicateDateCount": int(duplicate_count),
+            "adjacentSameCount": int(adjacent_same_count),
+            "unalignedTransitionCount": int(unaligned_count),
+            "exactCoverage": not any(
+                (
+                    duplicate_count,
+                    adjacent_same_count,
+                    unaligned_count,
+                    missing_first_count,
+                    0 if transitions else 1,
+                )
+            ),
+        }
+    trade_audit = _trade_results_by_regime(db, run_id)
+    return {
+        "regimeVersionCount": len(transitions),
+        "coverageSessions": coverage,
+        "durationSessions": duration_sessions,
+        "transitionCounts": dict(sorted(state_transition_counts.items())),
+        "candidateCounts": dict(sorted(candidate_counts.items())),
+        "admittedCounts": dict(sorted(admitted_counts.items())),
+        "rejectionCounts": dict(sorted(rejection_counts.items())),
+        "filledCounts": trade_audit["filledCounts"],
+        "realizedReturns": trade_audit["realizedReturns"],
+        "downtrendExitCount": int(downtrend_exit_count),
+        "downtrendExitPerformance": trade_audit["downtrendExitPerformance"],
+        "timelineIntegrity": integrity,
+    }
+
+
+def _trade_results_by_regime(db: Session, run_id: Any) -> dict[str, Any]:
+    transactions = list(
+        db.execute(
+            select(Transaction)
+            .where(Transaction.run_id == run_id)
+            .order_by(
+                Transaction.ts,
+                case((Transaction.side == "SELL", 0), else_=1),
+                Transaction.instrument_id,
+                Transaction.symbol,
+            )
+        ).scalars()
+    )
+    lots: dict[tuple[int | None, str], list[dict[str, Any]]] = defaultdict(list)
+    filled_counts: dict[str, int] = defaultdict(int)
+    realized: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    downtrend_exits: list[dict[str, Any]] = []
+    for transaction in transactions:
+        key = (transaction.instrument_id, transaction.symbol)
+        qty = float(transaction.qty)
+        price = float(transaction.price)
+        fee = float(transaction.fee or 0)
+        meta = transaction.meta or {}
+        if transaction.side == "BUY":
+            entry_features = meta.get("entry_signal_features") or {}
+            support_resistance = entry_features.get("support_resistance") or {}
+            regime = str(support_resistance.get("regime") or "unknown")
+            setup = str(support_resistance.get("selected_setup") or "unknown")
+            audit_key = f"{regime}/{setup}"
+            filled_counts[audit_key] += 1
+            lots[key].append(
+                {
+                    "qty": qty,
+                    "unit_cost": price + fee / qty,
+                    "audit_key": audit_key,
+                }
+            )
+            continue
+        remaining = qty
+        sell_unit_proceeds = price - fee / qty
+        exit_reason = str(meta.get("reason") or "")
+        exit_returns: list[float] = []
+        while remaining > 1e-10 and lots[key]:
+            lot = lots[key][0]
+            consumed = min(remaining, float(lot["qty"]))
+            unit_cost = float(lot["unit_cost"])
+            result = (sell_unit_proceeds - unit_cost) / unit_cost if unit_cost > 0 else 0.0
+            realized[str(lot["audit_key"])].append((result, consumed))
+            exit_returns.append(result)
+            lot["qty"] = float(lot["qty"]) - consumed
+            remaining -= consumed
+            if lot["qty"] <= 1e-10:
+                lots[key].pop(0)
+        if exit_reason == "confirmed downtrend regime":
+            post_exit_return = None
+            post_exit_worst_drawdown = None
+            if transaction.instrument_id is not None and db.bind is not None and db.bind.dialect.name == "postgresql":
+                future_rows = db.execute(
+                    text(
+                        """
+                        SELECT COALESCE(close_fa, close_u) AS close,
+                               COALESCE(low_fa, low_u) AS low
+                        FROM eod_bars
+                        WHERE instrument_id = :instrument_id
+                          AND dt_ny > :exit_date
+                        ORDER BY dt_ny
+                        LIMIT 20
+                        """
+                    ),
+                    {"instrument_id": transaction.instrument_id, "exit_date": transaction.ts.date()},
+                ).mappings().all()
+                if future_rows and price > 0:
+                    post_exit_return = float(future_rows[-1]["close"]) / price - 1
+                    post_exit_worst_drawdown = min(float(row["low"]) / price - 1 for row in future_rows)
+            downtrend_exits.append(
+                {
+                    "symbol": transaction.symbol,
+                    "tradeDate": transaction.ts.date().isoformat(),
+                    "realizedReturn": mean(exit_returns) if exit_returns else None,
+                    "postExitReturn20": post_exit_return,
+                    "postExitWorstDrawdown20": post_exit_worst_drawdown,
+                    "avoidedDrawdownProxy20": (
+                        max(0.0, -post_exit_worst_drawdown)
+                        if post_exit_worst_drawdown is not None
+                        else None
+                    ),
+                }
+            )
+    realized_exit_returns = [
+        item["realizedReturn"] for item in downtrend_exits if item["realizedReturn"] is not None
+    ]
+    post_exit_returns = [
+        item["postExitReturn20"] for item in downtrend_exits if item["postExitReturn20"] is not None
+    ]
+    avoided_drawdowns = [
+        item["avoidedDrawdownProxy20"]
+        for item in downtrend_exits
+        if item["avoidedDrawdownProxy20"] is not None
+    ]
+    return {
+        "filledCounts": dict(sorted(filled_counts.items())),
+        "realizedReturns": {
+            key: {
+                "tradeCount": len(values),
+                "mean": sum(value * weight for value, weight in values)
+                / sum(weight for _, weight in values),
+                "winRate": sum(weight for value, weight in values if value > 0)
+                / sum(weight for _, weight in values),
+            }
+            for key, values in sorted(realized.items())
+            if values
+        },
+        "downtrendExitPerformance": {
+            "exits": downtrend_exits,
+            "meanRealizedReturn": mean(realized_exit_returns) if realized_exit_returns else None,
+            "meanPostExitReturn20": mean(post_exit_returns) if post_exit_returns else None,
+            "meanAvoidedDrawdownProxy20": mean(avoided_drawdowns) if avoided_drawdowns else None,
+        },
     }
 
 
@@ -640,6 +1017,36 @@ def _candidate_acceptance(
         replicates=replicates,
     )
     audit = cache_audit(db, candidate)
+    regimes = (
+        regime_audit(db, payload["baseRunId"])
+        if payload.get("baseRunId")
+        else {
+            "regimeVersionCount": 0,
+            "coverageSessions": {},
+            "durationSessions": {},
+            "transitionCounts": {},
+            "candidateCounts": {},
+            "admittedCounts": {},
+            "rejectionCounts": {},
+            "filledCounts": {},
+            "realizedReturns": {},
+            "downtrendExitCount": 0,
+            "downtrendExitPerformance": {
+                "exits": [],
+                "meanRealizedReturn": None,
+                "meanPostExitReturn20": None,
+                "meanAvoidedDrawdownProxy20": None,
+            },
+            "timelineIntegrity": {
+                "overlapCount": 0,
+                "gapCount": 0,
+                "duplicateDateCount": 0,
+                "adjacentSameCount": 0,
+                "unalignedTransitionCount": 0,
+                "exactCoverage": False,
+            },
+        }
+    )
     equity_curve = (
         _equity_drawdown_series(db, payload["baseRunId"])
         if payload.get("baseRunId")
@@ -670,12 +1077,16 @@ def _candidate_acceptance(
             for row in annual
         ),
         "cacheAuditEquivalent": bool(audit.get("equivalent")),
+        "regimeTimelineIntegrity": bool(
+            (regimes.get("timelineIntegrity") or {}).get("exactCoverage")
+        ),
     }
     payload.update(
         {
             "annualFolds": annual,
             "eventStudy": event,
             "cacheAudit": audit,
+            "regimeAudit": regimes,
             "equityDrawdown": equity_curve,
             "acceptanceGates": gates,
             "passed": all(gates.values()),
@@ -723,13 +1134,17 @@ def build_validation_report(db: Session, parent: ResearchExperiment) -> dict[str
     )
     calibrated = next((item for item in candidates if item is not default), None)
     if default and default.get("passed"):
-        decision = "validated_default"
+        decision = "validated"
+        validated_candidate_source = "default"
     elif calibrated and calibrated.get("passed"):
-        decision = "validated_calibrated"
+        decision = "validated"
+        validated_candidate_source = "calibrated"
     elif final_child is None or final_child.status in {"data_changed", "cancelled"} or not candidates:
         decision = "inconclusive"
+        validated_candidate_source = None
     else:
         decision = "not_validated"
+        validated_candidate_source = None
     chart_data = {
         "equityAndDrawdown": [
             {"paramsHash": item.get("paramsHash"), "series": item.get("equityDrawdown") or []}
@@ -761,6 +1176,10 @@ def build_validation_report(db: Session, parent: ResearchExperiment) -> dict[str
             {"paramsHash": item.get("paramsHash"), "horizons": (item.get("eventStudy") or {}).get("horizons") or {}}
             for item in candidates
         ],
+        "regimeCoverage": [
+            {"paramsHash": item.get("paramsHash"), "audit": item.get("regimeAudit") or {}}
+            for item in candidates
+        ],
         "parameterMatrix": [
             {"paramsHash": item.get("paramsHash"), "overrides": item.get("overrides") or {}, "passed": item.get("passed")}
             for item in candidates
@@ -783,6 +1202,7 @@ def build_validation_report(db: Session, parent: ResearchExperiment) -> dict[str
         "studyKind": parent.study_kind,
         "status": parent.status,
         "decision": decision,
+        "validatedCandidateSource": validated_candidate_source,
         "disclaimer": REPORT_DISCLAIMER,
         "hypothesis": (parent.spec or {}).get("hypothesis"),
         "protocol": protocol,
@@ -825,7 +1245,7 @@ def render_markdown(report: dict[str, Any], language: str) -> str:
         ("2. 预注册假设、通过线和协议哈希", "2. Pre-registered hypothesis, gates, and protocol hash", f"Protocol hash: `{report.get('protocolHash') or 'N/A'}`\n\n```json\n{json.dumps(report.get('protocol') or {}, ensure_ascii=False, indent=2, sort_keys=True)}\n```"),
         ("3. 数据覆盖、质量检查和动态股票池", "3. Data coverage, quality, and dynamic universe", f"Membership: `point_in_time_liquid`\n\nData fingerprint: `{((report.get('dataFingerprint') or {}).get('sha256') or 'N/A')}`\n\n```json\n{json.dumps(report.get('universe') or {}, ensure_ascii=False, indent=2, sort_keys=True)}\n```"),
         ("4. 偏差控制与统计方法", "4. Bias controls and statistical methods", "T-close membership; T+1-open fills; 40-session de-duplication; month/instrument block bootstrap; sealed final holdout."),
-        ("5. 三种 setup 的事件研究", "5. Event study for the three setups", f"```json\n{json.dumps([{'paramsHash': item.get('paramsHash'), 'eventStudy': item.get('eventStudy')} for item in report.get('finalCandidates') or []], ensure_ascii=False, indent=2, sort_keys=True)}\n```"),
+        ("5. 三种 setup 与四类区间研究", "5. Three-setup and four-regime study", f"```json\n{json.dumps([{'paramsHash': item.get('paramsHash'), 'eventStudy': item.get('eventStudy'), 'regimeAudit': item.get('regimeAudit')} for item in report.get('finalCandidates') or []], ensure_ascii=False, indent=2, sort_keys=True)}\n```"),
         ("6. 参数搜索、Pareto 与参数敏感性", "6. Parameter search, Pareto, and sensitivity", f"```json\n{json.dumps({'modeChampions': report.get('modeChampions'), 'frozenChampion': report.get('frozenChampion'), 'parameterMatrix': (report.get('charts') or {}).get('parameterMatrix')}, ensure_ascii=False, indent=2, sort_keys=True)}\n```"),
         ("7. 2021–2023 年度样本外结果", "7. 2021–2023 annual out-of-sample results", "\n".join(f"- `{item.get('phase')}`: `{item.get('status')}`" for item in report.get('children') or [] if str(item.get('phase') or '').startswith('annual_')) or "N/A"),
     ]

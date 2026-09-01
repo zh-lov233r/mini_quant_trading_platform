@@ -7,6 +7,8 @@ import math
 import re
 from typing import Any, Dict, Iterable
 
+from src.services.strategy_types import RuntimeStrategy
+
 
 ENGINE_SUPPORTED_TYPES = {
     "trend",
@@ -409,7 +411,7 @@ SUPPORT_RESISTANCE_DEFAULTS: Dict[str, Any] = {
     "metadata": {
         "description": "",
         "schema_version": 1,
-        "algorithm_version": "pivot-slope-atr-v2",
+        "algorithm_version": "pivot-slope-regime-v3",
         "price_semantics": "forward_adjusted_preferred_unadjusted_fallback",
     },
 }
@@ -624,6 +626,8 @@ def is_engine_ready(strategy_type: str, params: Dict[str, Any]) -> bool:
         return bool(signal and params.get("risk") and execution.get("run_at") == "close")
     if strategy_type == "support_resistance":
         return bool(
+            (params.get("metadata") or {}).get("algorithm_version") == "pivot-slope-regime-v3"
+            and
             signal.get("detection_window")
             and signal.get("pivot_left_bars")
             and signal.get("pivot_right_bars")
@@ -640,7 +644,7 @@ def json_signature(payload: Dict[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
-def build_runtime_payload(strategy: Any) -> Dict[str, Any]:
+def build_runtime_payload(strategy: Any) -> RuntimeStrategy:
     normalized_params = normalize_strategy_params(
         strategy.strategy_type,
         strategy.params,
@@ -648,7 +652,7 @@ def build_runtime_payload(strategy: Any) -> Dict[str, Any]:
     )
     return {
         "strategy_id": str(strategy.id),
-        "strategy_key": str(getattr(strategy, "strategy_key", strategy.name)),
+        "strategy_key": str(strategy.strategy_key),
         "display_name": strategy.name,
         "name": strategy.name,
         "version": strategy.version,
@@ -1632,10 +1636,13 @@ def _normalize_support_resistance_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         "metadata.schema_version",
     )
     algorithm_version = str(
-        normalized["metadata"].get("algorithm_version") or "pivot-slope-atr-v2"
+        normalized["metadata"].get("algorithm_version") or "pivot-slope-regime-v3"
     )
-    if algorithm_version != "pivot-slope-atr-v2":
-        raise ValueError("metadata.algorithm_version must be pivot-slope-atr-v2")
+    if algorithm_version not in {"pivot-slope-regime-v3", "pivot-slope-atr-v2"}:
+        raise ValueError(
+            "metadata.algorithm_version must be pivot-slope-regime-v3; "
+            "pivot-slope-atr-v2 is accepted only for read-only historical records"
+        )
     normalized["metadata"]["algorithm_version"] = algorithm_version
     price_semantics = str(
         normalized["metadata"].get("price_semantics")

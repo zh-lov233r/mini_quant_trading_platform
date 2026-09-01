@@ -74,8 +74,10 @@ import {
 import type {
   ChartGapOverlay,
   ChartOverlayMarker,
+  ChartRegimeOverlay,
   ChartZoneOverlay,
 } from "@/components/charts/chartModels";
+import { isLifecycleInteractiveTarget } from "@/utils/lifecycleInteraction";
 
 // Keep the chart engine out of the shared application and server-rendered bundles.
 const EquityLightweightChart = dynamic(
@@ -529,7 +531,7 @@ type LifecycleZoneOverlay = {
   endUpperPrice: number;
   slopePerSession: number;
   slopeAtrPerSession: number | null;
-  role: "support" | "resistance";
+  role: "support" | "resistance" | "entry_channel";
   description: string;
 };
 
@@ -2268,6 +2270,8 @@ function EquityCurveCardLightweight({
         symbol: transaction.symbol,
         action: transaction.side,
         reason: `${formatCurrency(transaction.price, locale)} × ${transaction.qty.toLocaleString(locale, { maximumFractionDigits: 4 })}`,
+        stageIndex: getMetaNumber(transaction.meta, "stage_index"),
+        stageKey: getMetaText(transaction.meta, "stage_key"),
       })),
       locale,
     ),
@@ -2643,6 +2647,10 @@ function buildSupportResistanceMarkers(
     candidate: "mark",
     selection: "breakout",
     role_transition: "right_bottom",
+    entry_channel_rejection: "mark",
+    execution_rejection: "mark",
+    direct_breakout_audit: "breakout",
+    channel_fill_violation: "mark",
   } as Record<string, LifecycleChartMarker["tone"]>;
   return events
     .filter((event) => isDisplayableSupportResistanceEventType(event.event_type))
@@ -2659,6 +2667,10 @@ function buildSupportResistanceMarkers(
         candidate: isZh ? "候选" : "Candidate",
         selection: isZh ? "选中" : "Selected",
         role_transition: isZh ? "角色转换" : "Role Flip",
+        entry_channel_rejection: isZh ? "通道拒绝" : "Channel Rejection",
+        execution_rejection: isZh ? "成交拒绝" : "Fill Rejection",
+        direct_breakout_audit: isZh ? "突破审计" : "Breakout Audit",
+        channel_fill_violation: isZh ? "异常成交" : "Fill Violation",
       };
       return {
         key: `sr-${event.id}`,
@@ -2675,6 +2687,106 @@ function buildSupportResistanceMarkers(
         ].filter(Boolean).join(" · "),
       };
     });
+}
+
+function buildEntryChannelOverlays(
+  events: SupportResistanceRunEventOut[],
+  bars: CandleBarOut[],
+  locale: string,
+  isZh: boolean,
+): LifecycleZoneOverlay[] {
+  const starts = events.filter((event) => event.event_type === "entry_channel_started");
+  const visibleStarts = starts.length > 0
+    ? starts
+    : events.filter((event, index, candidates) => {
+        if (event.event_type !== "selection") return false;
+        const channel = getObjectValue(event.payload.entry_channel);
+        if (!channel) return false;
+        const supportKey = getRecordText(channel, "support_zone_key");
+        const resistanceKey = getRecordText(channel, "resistance_zone_key");
+        return candidates.findIndex((candidate) => {
+          const candidateChannel = getObjectValue(candidate.payload.entry_channel);
+          return candidate.event_type === "selection"
+            && candidateChannel != null
+            && getRecordText(candidateChannel, "support_zone_key") === supportKey
+            && getRecordText(candidateChannel, "resistance_zone_key") === resistanceKey;
+        }) === index;
+      });
+  const ends = events.filter((event) => event.event_type === "entry_channel_ended");
+  const dateIndex = new Map(bars.map((bar, index) => [bar.trade_date, index]));
+  return visibleStarts.flatMap((start) => {
+    const channel = getObjectValue(start.payload.entry_channel);
+    if (!channel) return [];
+    const supportKey = getRecordText(channel, "support_zone_key");
+    const resistanceKey = getRecordText(channel, "resistance_zone_key");
+    const lower = getRecordNumber(channel, "lower");
+    const upper = getRecordNumber(channel, "upper");
+    const lowerSlope = getRecordNumber(channel, "lower_slope_per_session") ?? 0;
+    const upperSlope = getRecordNumber(channel, "upper_slope_per_session") ?? 0;
+    const startIndex = dateIndex.get(start.event_date);
+    if (!supportKey || !resistanceKey || lower == null || upper == null || startIndex == null || lower >= upper) return [];
+    const ended = ends.find((event) => {
+      if (event.event_date <= start.event_date) return false;
+      const endedChannel = getObjectValue(event.payload.entry_channel);
+      return endedChannel
+        && getRecordText(endedChannel, "support_zone_key") === supportKey
+        && getRecordText(endedChannel, "resistance_zone_key") === resistanceKey;
+    });
+    const endEventIndex = ended ? dateIndex.get(ended.event_date) : undefined;
+    const endIndex = Math.max(startIndex, endEventIndex == null ? bars.length - 1 : endEventIndex - 1);
+    const sessions = endIndex - startIndex;
+    const endLower = lower + lowerSlope * sessions;
+    const endUpper = upper + upperSlope * sessions;
+    if (!Number.isFinite(endLower) || !Number.isFinite(endUpper) || endLower >= endUpper) return [];
+    return [{
+      key: `entry-channel-${start.id}`,
+      startDate: bars[startIndex].trade_date,
+      endDate: bars[endIndex].trade_date,
+      startCenterPrice: (lower + upper) / 2,
+      startLowerPrice: lower,
+      startUpperPrice: upper,
+      endCenterPrice: (endLower + endUpper) / 2,
+      endLowerPrice: endLower,
+      endUpperPrice: endUpper,
+      slopePerSession: (lowerSlope + upperSlope) / 2,
+      slopeAtrPerSession: null,
+      role: "entry_channel" as const,
+      description: [
+        isZh ? "有效交易通道" : "Valid Entry Channel",
+        `${formatCurrency(endLower, locale)} - ${formatCurrency(endUpper, locale)}`,
+        `${supportKey} → ${resistanceKey}`,
+      ].join(" · "),
+    }];
+  });
+}
+
+function regimeLabel(regime: ChartRegimeOverlay["regime"], isZh: boolean): string {
+  const labels = {
+    uptrend: isZh ? "上行" : "Uptrend",
+    downtrend: isZh ? "下行" : "Downtrend",
+    range: isZh ? "震荡" : "Range",
+    transition: isZh ? "过渡" : "Transition",
+  };
+  return labels[regime];
+}
+
+function regimeReasonLabel(reasonCode: string, isZh: boolean): string {
+  const labels: Record<string, { zh: string; en: string }> = {
+    missing_boundary: { zh: "缺少上下边界", en: "Missing channel boundary" },
+    unordered_boundaries: { zh: "上下边界错位", en: "Unordered boundaries" },
+    insufficient_pivot_structure: { zh: "Pivot 结构证据不足", en: "Insufficient Pivot structure" },
+    rising_channel_higher_highs_higher_lows: { zh: "上升通道且高低点抬升", en: "Rising channel with higher highs and lows" },
+    falling_channel_lower_highs_lower_lows: { zh: "下降通道且高低点下移", en: "Falling channel with lower highs and lows" },
+    flat_range: { zh: "横向震荡", en: "Flat range" },
+    contracting_range: { zh: "收敛震荡", en: "Contracting range" },
+    expanding_range: { zh: "扩张震荡", en: "Expanding range" },
+    structure_conflict: { zh: "结构信号冲突", en: "Conflicting structure" },
+    price_outside_range: { zh: "价格离开震荡边界", en: "Price outside range boundaries" },
+    uptrend_lower_boundary_broken: { zh: "跌破上行下边界", en: "Uptrend lower boundary broken" },
+    downtrend_upper_boundary_broken: { zh: "突破下行上边界", en: "Downtrend upper boundary broken" },
+  };
+  const resolved = labels[reasonCode];
+  return resolved ? (isZh ? resolved.zh : resolved.en) : reasonCode;
 }
 
 function buildDoubleBottomSetupMarkers(
@@ -2878,6 +2990,7 @@ function LifecycleDetailPanel({
   const [error, setError] = useState<string | null>(null);
   const [series, setSeries] = useState<CandleSeriesOut | null>(null);
   const [supportResistanceDetail, setSupportResistanceDetail] = useState<SupportResistanceBacktestOut | null>(null);
+  const [supportResistanceLoading, setSupportResistanceLoading] = useState(false);
   const [supportResistanceError, setSupportResistanceError] = useState<string | null>(null);
   const [lookbackTradingDays, setLookbackTradingDays] = useState(
     initialLookbackDays
@@ -3016,10 +3129,12 @@ function LifecycleDetailPanel({
   useEffect(() => {
     if (!visibleStartDate || !visibleEndDate || bars.length === 0) {
       setSupportResistanceDetail(null);
+      setSupportResistanceLoading(false);
       setSupportResistanceError(null);
       return;
     }
     let active = true;
+    setSupportResistanceLoading(true);
     setSupportResistanceError(null);
     void getBacktestSupportResistance(runId, {
       symbol: row.symbol,
@@ -3033,6 +3148,9 @@ function LifecycleDetailPanel({
         if (!active) return;
         setSupportResistanceDetail(null);
         setSupportResistanceError(err instanceof Error ? err.message : (isZh ? "加载支撑压力审计数据失败" : "Failed to load support/resistance audit data"));
+      })
+      .finally(() => {
+        if (active) setSupportResistanceLoading(false);
       });
     return () => { active = false; };
   }, [bars.length, isZh, row.symbol, runId, visibleEndDate, visibleStartDate]);
@@ -3107,10 +3225,51 @@ function LifecycleDetailPanel({
       };
     });
   }, [bars, isZh, locale, supportResistanceDetail?.zone_versions, visibleEndDate, visibleStartDate]);
-  const zoneLegendItems = useMemo(
-    () => latestVisibleZoneOverlaysByRole(zoneOverlays),
-    [zoneOverlays],
+  const entryChannelOverlays = useMemo(
+    () => buildEntryChannelOverlays(
+      supportResistanceDetail?.events || [],
+      bars,
+      locale,
+      isZh,
+    ),
+    [bars, isZh, locale, supportResistanceDetail?.events],
   );
+  const allZoneOverlays = useMemo(
+    () => [...zoneOverlays, ...entryChannelOverlays],
+    [entryChannelOverlays, zoneOverlays],
+  );
+  const zoneLegendItems = useMemo(
+    () => latestVisibleZoneOverlaysByRole(allZoneOverlays),
+    [allZoneOverlays],
+  );
+  const regimeOverlays = useMemo<ChartRegimeOverlay[]>(() =>
+    (supportResistanceDetail?.regime_intervals || []).map((interval) => {
+      const label = regimeLabel(interval.regime, isZh);
+      return {
+        key: `sr-regime-${interval.version_id}`,
+        startDate: interval.start_date,
+        endDate: interval.end_date,
+        regime: interval.regime,
+        sessionCount: interval.session_count,
+        label,
+        description: [
+          label,
+          `${interval.start_date} - ${interval.end_date}`,
+          `${interval.session_count} ${isZh ? "个交易日" : "sessions"}`,
+          regimeReasonLabel(interval.reason_code, isZh),
+          interval.lower_zone_key ? `${isZh ? "下边界" : "Lower"}: ${interval.lower_zone_key}` : null,
+          interval.upper_zone_key ? `${isZh ? "上边界" : "Upper"}: ${interval.upper_zone_key}` : null,
+        ].filter(Boolean).join(" · "),
+      };
+    }),
+  [isZh, supportResistanceDetail?.regime_intervals]);
+  const regimeLegendItems = useMemo(() => {
+    const unique = new Map<ChartRegimeOverlay["regime"], ChartRegimeOverlay>();
+    regimeOverlays.forEach((interval) => {
+      if (!unique.has(interval.regime)) unique.set(interval.regime, interval);
+    });
+    return Array.from(unique.values());
+  }, [regimeOverlays]);
 
   useEffect(() => {
     if (
@@ -3130,7 +3289,7 @@ function LifecycleDetailPanel({
       title={isZh ? "点击生命周期详情可收起" : "Click the lifecycle detail to collapse"}
       onPointerDownCapture={(event) => {
         const target = event.target instanceof Element ? event.target : null;
-        if (target?.closest("button, input, label, select, textarea, a, [role='button']")) {
+        if (isLifecycleInteractiveTarget(target)) {
           collapsePointerRef.current = null;
           return;
         }
@@ -3152,7 +3311,7 @@ function LifecycleDetailPanel({
       }}
       onClick={(event) => {
         const target = event.target instanceof Element ? event.target : null;
-        if (target?.closest("button, input, label, select, textarea, a, [role='button']")) {
+        if (isLifecycleInteractiveTarget(target)) {
           return;
         }
         const pointer = collapsePointerRef.current;
@@ -3402,7 +3561,11 @@ function LifecycleDetailPanel({
               bars={bars}
               markers={markers as ChartOverlayMarker[]}
               gaps={gapOverlays as ChartGapOverlay[]}
-              zones={zoneOverlays as ChartZoneOverlay[]}
+              zones={allZoneOverlays as ChartZoneOverlay[]}
+              regimes={regimeOverlays}
+              requireRegimeCoverage={supportResistanceDetail?.materialization?.algorithm_version === "pivot-slope-regime-v3"}
+              regimeCoverageStart={supportResistanceDetail?.materialization?.coverage_start}
+              regimeCoverageEnd={supportResistanceDetail?.materialization?.coverage_end}
               locale={locale}
               showVolume
               height={460}
@@ -3413,7 +3576,19 @@ function LifecycleDetailPanel({
                 {isZh ? "正在更新图表..." : "Updating chart..."}
               </div>
             ) : null}
+            {supportResistanceLoading ? (
+              <div role="status" aria-live="polite" style={lifecycleChartReloadingStyle}>
+                {isZh ? "正在加载支撑/压力区..." : "Loading support/resistance zones..."}
+              </div>
+            ) : null}
           </div>
+          {supportResistanceDetail?.materialization && entryChannelOverlays.length === 0 ? (
+            <div style={{ marginTop: 8, color: "rgba(148, 163, 184, 0.88)", fontSize: 13 }}>
+              {isZh
+                ? "该历史结果未计算有效交易通道；不会按当前规则反推。"
+                : "This historical result did not calculate valid entry channels; current rules are not backfilled."}
+            </div>
+          ) : null}
           <div
             style={{
               display: "flex",
@@ -3425,9 +3600,28 @@ function LifecycleDetailPanel({
               fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
             }}
           >
+            {regimeLegendItems.map((interval) => (
+              <span key={`legend-${interval.regime}`} style={legendItemStyle} title={interval.description}>
+                <span
+                  style={{
+                    ...legendDotStyle,
+                    background:
+                      interval.regime === "uptrend" ? "#22c55e"
+                        : interval.regime === "downtrend" ? "#ef4444"
+                          : interval.regime === "range" ? "#f59e0b" : "#94a3b8",
+                  }}
+                />
+                {interval.label}
+              </span>
+            ))}
             {zoneLegendItems.map((zone) => (
               <span key={zone.key} style={legendItemStyle} title={zone.description}>
-                <span style={{ ...legendDotStyle, background: zone.role === "support" ? "#22c55e" : "#ef4444" }} />
+                <span
+                  style={{
+                    ...legendDotStyle,
+                    background: zone.role === "support" ? "#22c55e" : zone.role === "entry_channel" ? "#06b6d4" : "#ef4444",
+                  }}
+                />
                 {zone.description}
               </span>
             ))}

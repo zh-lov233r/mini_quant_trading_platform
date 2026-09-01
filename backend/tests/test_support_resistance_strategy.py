@@ -4,7 +4,7 @@ import sys
 import unittest
 import uuid
 import copy
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -25,12 +25,16 @@ from src.models.tables import (  # noqa: E402
     StrategyPortfolio,
     StrategyRun,
     SupportResistanceMaterialization,
+    SupportResistanceRegimeVersion,
     SupportResistanceRunEvent,
     SupportResistanceRunMaterialization,
     SupportResistanceZoneVersion,
+    Transaction,
 )
 from src.services.support_resistance_persistence_service import (  # noqa: E402
     SupportResistanceMaterializationBuildError,
+    _validate_regime_versions,
+    _zone_version_rows,
     find_reusable_materialization,
     persist_support_resistance_run,
     record_failed_materialization_after_rollback,
@@ -44,9 +48,16 @@ from src.services.support_resistance_service import (  # noqa: E402
     SupportResistanceState,
     _fit_pivot_line,
     _match_zone,
+    _new_zone_key,
+    _record_regime_version,
+    _record_zone_version,
     _rebuild_zones,
     advance_symbol,
+    build_entry_channel,
+    classify_market_regime,
+    entry_price_is_inside_channel,
     normalized_detector_params,
+    project_entry_channel,
 )
 from src.services.strategy_engine import (  # noqa: E402
     generate_stateful_backtest_signals,
@@ -57,8 +68,16 @@ from src.services.paper_trading_service import (  # noqa: E402
     _inject_virtual_positions,
     run_paper_trading,
 )
-from src.api.backtests import get_backtest_support_resistance  # noqa: E402
+from src.api.backtests import (  # noqa: E402
+    BacktestCreate,
+    _build_regime_intervals,
+    create_backtest,
+    get_backtest_support_resistance,
+)
 from src.services.adaptive_research_service import _catalog_item  # noqa: E402
+from src.services.support_resistance_validation_report_service import (  # noqa: E402
+    _trade_results_by_regime,
+)
 
 
 def _bar(offset: int, *, high: float, low: float, close: float, volume: float = 100.0) -> dict:
@@ -94,7 +113,150 @@ def _zone(key: str, role: str, center: float) -> Zone:
     )
 
 
+def _cached_regime(regime: str = "uptrend") -> list[dict]:
+    return [
+        {
+            "version": 1,
+            "effective_from": date(2024, 1, 1),
+            "regime": regime,
+            "lower_zone_key": "support",
+            "upper_zone_key": "resistance",
+            "reason_code": "test_fixture",
+            "evidence": {"reason_code": "test_fixture"},
+        }
+    ]
+
+
 class SupportResistanceStrategyTests(unittest.TestCase):
+    def test_future_regime_changes_append_without_rewriting_historical_evidence(self) -> None:
+        state = SupportResistanceSymbolState()
+        first_evidence = {
+            "reason_code": "missing_boundary",
+            "lower_zone_key": None,
+            "upper_zone_key": None,
+        }
+        _record_regime_version(
+            state,
+            date(2025, 1, 2),
+            "transition",
+            first_evidence,
+        )
+        frozen = copy.deepcopy(state.regime_versions[0])
+        _record_regime_version(
+            state,
+            date(2025, 1, 3),
+            "uptrend",
+            {
+                "reason_code": "rising_channel_higher_highs_higher_lows",
+                "lower_zone_key": "low",
+                "upper_zone_key": "high",
+            },
+        )
+        self.assertEqual(state.regime_versions[0], frozen)
+        self.assertEqual([item["version"] for item in state.regime_versions], [1, 2])
+
+    def test_zone_projection_alone_does_not_create_a_new_version(self) -> None:
+        state = SupportResistanceSymbolState()
+        zone = _zone("projected", "support", 100)
+        zone.anchor_session_index = 0
+        zone.anchor_center = 100
+        zone.anchor_lower = 99
+        zone.anchor_upper = 101
+        zone.slope_per_session = 0.5
+        _record_zone_version(state, zone, date(2025, 1, 2), status="active")
+        _record_zone_version(
+            state,
+            zone.projected(1),
+            date(2025, 1, 3),
+            status="active",
+        )
+        self.assertEqual(len(state.zone_versions), 1)
+
+    def test_new_zone_key_changes_when_pivot_membership_changes(self) -> None:
+        first = Pivot("low:1", "low", 1, date(2025, 1, 2), date(2025, 1, 3), 10, 1)
+        second = Pivot("low:2", "low", 2, date(2025, 1, 3), date(2025, 1, 4), 11, 1)
+        third = Pivot("low:3", "low", 3, date(2025, 1, 4), date(2025, 1, 5), 12, 1)
+
+        self.assertNotEqual(
+            _new_zone_key("low", [first, second]),
+            _new_zone_key("low", [first, second, third]),
+        )
+
+    def test_non_positive_projected_zone_expires_before_classification_or_entry(self) -> None:
+        zone = _zone("falling", "support", 0.2)
+        zone.lower = 0.1
+        zone.upper = 0.3
+        zone.anchor_center = 0.2
+        zone.anchor_lower = 0.1
+        zone.anchor_upper = 0.3
+        zone.anchor_session_index = 0
+        zone.slope_per_session = -0.2
+        state = SupportResistanceSymbolState(
+            history=[_bar(0, high=1.0, low=0.5, close=0.8)],
+            zones={zone.zone_key: zone},
+        )
+
+        decision = advance_symbol(
+            state,
+            _bar(1, high=1.0, low=0.4, close=0.7),
+            self.signal,
+            self.risk,
+        )
+
+        self.assertIsNone(decision)
+        self.assertNotIn(zone.zone_key, state.zones)
+        expired = next(item for item in state.zone_versions if item["status"] == "expired")
+        self.assertGreater(expired["lower"], 0)
+        self.assertEqual(expired["slope_per_session"], 0.0)
+        invalidation = next(
+            item
+            for item in state.events
+            if item["event_type"] == "invalidation" and item["zone_key"] == zone.zone_key
+        )
+        self.assertEqual(invalidation["reason"], "projected_zone_geometry_became_invalid")
+        self.assertFalse(any(item["event_type"] == "candidate" for item in state.events))
+
+    def test_same_day_refit_after_invalid_projection_uses_a_new_zone_identity(self) -> None:
+        pivots = [
+            Pivot("low:1", "low", 0, date(2024, 12, 1), date(2024, 12, 4), 1.0, 1.0),
+            Pivot("low:2", "low", 1, date(2024, 12, 2), date(2024, 12, 5), 1.1, 1.0),
+            Pivot("low:3", "low", 2, date(2024, 12, 3), date(2024, 12, 6), 1.2, 1.0),
+        ]
+        old_key = _new_zone_key("low", pivots)
+        zone = _zone(old_key, "support", 0.2)
+        zone.pivot_keys = tuple(pivot.pivot_key for pivot in pivots)
+        zone.lower = 0.1
+        zone.upper = 0.3
+        zone.anchor_center = 0.2
+        zone.anchor_lower = 0.1
+        zone.anchor_upper = 0.3
+        zone.anchor_session_index = 0
+        zone.slope_per_session = -0.2
+        state = SupportResistanceSymbolState(
+            history=[_bar(0, high=1.0, low=0.5, close=0.8)],
+            pivots=pivots,
+            zones={old_key: zone},
+        )
+
+        with patch(
+            "src.services.support_resistance_service._fit_pivot_line",
+            side_effect=[(pivots, 1.0, 0.0, 0.0, 1.0), None],
+        ):
+            advance_symbol(
+                state,
+                _bar(1, high=1.2, low=0.8, close=1.0),
+                self.signal,
+                self.risk,
+                emit_signals=False,
+            )
+
+        same_day = [
+            item for item in state.zone_versions if item["effective_from"] == "2025-01-02"
+        ]
+        self.assertEqual({item["status"] for item in same_day}, {"active", "expired"})
+        self.assertEqual(len({item["zone_key"] for item in same_day}), 2)
+        self.assertNotIn(old_key, state.zones)
+
     def setUp(self) -> None:
         params = normalize_strategy_params("support_resistance", {})
         self.signal = params["signal"]
@@ -133,6 +295,186 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         self.assertTrue(catalog["defaults"]["signal"]["resistance_breakout_enabled"])
         self.assertTrue(catalog["defaults"]["signal"]["breakout_retest_enabled"])
 
+    def _classify(
+        self,
+        lower_delta: float,
+        upper_delta: float,
+        lower_slope: float,
+        upper_slope: float,
+        *,
+        close: float = 105.0,
+    ) -> tuple[str, dict]:
+        lower = _zone("lower", "support", 100)
+        lower.source_kind = "low"
+        lower.slope_per_session = lower_slope
+        lower.pivot_keys = ("low:1", "low:2")
+        upper = _zone("upper", "resistance", 110)
+        upper.source_kind = "high"
+        upper.slope_per_session = upper_slope
+        upper.pivot_keys = ("high:1", "high:2")
+        state = SupportResistanceSymbolState(
+            pivots=[
+                Pivot("low:1", "low", 0, date(2024, 12, 1), date(2024, 12, 4), 100, 1),
+                Pivot("low:2", "low", 10, date(2024, 12, 11), date(2024, 12, 14), 100 + lower_delta, 1),
+                Pivot("high:1", "high", 0, date(2024, 12, 1), date(2024, 12, 4), 110, 1),
+                Pivot("high:2", "high", 10, date(2024, 12, 11), date(2024, 12, 14), 110 + upper_delta, 1),
+            ]
+        )
+        return classify_market_regime(
+            state,
+            [lower, upper],
+            _bar(1, high=close + 1, low=close - 1, close=close),
+            self.signal,
+        )
+
+    def test_four_regime_classifier_matrix_and_conflict_fallback(self) -> None:
+        self.assertEqual(self._classify(2, 2, 0.2, 0.2)[0], "uptrend")
+        self.assertEqual(self._classify(-2, -2, -0.2, -0.2)[0], "downtrend")
+        self.assertEqual(self._classify(0, 0, 0, 0)[0], "range")
+        self.assertEqual(self._classify(2, -2, 0.2, -0.2)[1]["reason_code"], "contracting_range")
+        self.assertEqual(self._classify(-2, 2, -0.2, 0.2)[1]["reason_code"], "expanding_range")
+        regime, evidence = self._classify(2, -2, 0.2, 0.2)
+        self.assertEqual(regime, "transition")
+        self.assertEqual(evidence["reason_code"], "structure_conflict")
+
+    def test_transition_rejects_candidate_but_keeps_audit_event(self) -> None:
+        state = SupportResistanceSymbolState(cached_regime_timeline=_cached_regime("transition"))
+        state.history.append(_bar(-1, high=103, low=102, close=102.5))
+        state.zones["support"] = _zone("support", "support", 100)
+
+        decision = advance_symbol(
+            state,
+            _bar(1, high=104, low=100, close=102),
+            self.signal,
+            self.risk,
+        )
+
+        self.assertIsNone(decision)
+        candidate = next(event for event in state.events if event["event_type"] == "candidate")
+        self.assertFalse(candidate["entry_eligible"])
+        self.assertFalse(candidate["regime_eligible"])
+        self.assertTrue(any(event["event_type"] == "regime_rejection" for event in state.events))
+
+    def test_range_allows_only_support_bounce_and_audits_other_candidates(self) -> None:
+        state = SupportResistanceSymbolState(cached_regime_timeline=_cached_regime("range"))
+        state.history.append(_bar(-1, high=106, low=102, close=103.2))
+        state.zones = {
+            "support": _zone("support", "support", 100),
+            "breakout": _zone("breakout", "resistance", 102),
+            "ceiling": _zone("ceiling", "resistance", 110),
+        }
+
+        decision = advance_symbol(
+            state,
+            _bar(1, high=107, low=100, close=105.5, volume=160),
+            self.signal,
+            self.risk,
+        )
+
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["support_resistance"]["selected_setup"], "support_bounce")
+        candidates = {
+            event["setup"]: event
+            for event in state.events
+            if event["event_type"] == "candidate"
+        }
+        self.assertTrue(candidates["support_bounce"]["entry_eligible"])
+        self.assertFalse(candidates["resistance_breakout"]["entry_eligible"])
+        self.assertFalse(candidates["resistance_breakout"]["regime_eligible"])
+        self.assertTrue(
+            any(
+                event["event_type"] == "direct_breakout_audit"
+                and event["setup"] == "resistance_breakout"
+                for event in state.events
+            )
+        )
+
+    def test_downtrend_rejects_buy_candidate_but_keeps_audit_event(self) -> None:
+        state = SupportResistanceSymbolState(cached_regime_timeline=_cached_regime("downtrend"))
+        state.history.append(_bar(-1, high=103, low=102, close=102.5))
+        state.zones["support"] = _zone("support", "support", 100)
+
+        decision = advance_symbol(
+            state,
+            _bar(1, high=104, low=100, close=102),
+            self.signal,
+            self.risk,
+        )
+
+        self.assertIsNone(decision)
+        candidate = next(event for event in state.events if event["event_type"] == "candidate")
+        self.assertFalse(candidate["entry_eligible"])
+        self.assertFalse(candidate["regime_eligible"])
+        self.assertEqual(candidate["regime"], "downtrend")
+
+    def test_transition_does_not_force_an_open_position_to_exit(self) -> None:
+        snapshot = _bar(1, high=108, low=103, close=104)
+        snapshot.update(
+            {
+                "position": 10,
+                "avg_entry_price": 105,
+                "position_holding_days": 3,
+                "entry_signal_features": {
+                    "support_resistance": {
+                        "zone": {"lower": 99, "upper": 101},
+                        "entry_atr": 2,
+                        "entry_close": 105,
+                        "target_price": 115,
+                    }
+                },
+            }
+        )
+
+        decision = advance_symbol(
+            SupportResistanceSymbolState(cached_regime_timeline=_cached_regime("transition")),
+            snapshot,
+            self.signal,
+            self.risk,
+        )
+
+        self.assertIsNone(decision)
+
+    def test_confirmed_downtrend_exits_after_stop_and_target_checks(self) -> None:
+        def snapshot(close: float, holding_days: int = 3) -> dict:
+            item = _bar(1, high=max(108, close), low=min(103, close), close=close)
+            item.update(
+                {
+                    "position": 10,
+                    "avg_entry_price": 105,
+                    "position_holding_days": holding_days,
+                    "entry_signal_features": {
+                        "support_resistance": {
+                            "zone": {"lower": 99, "upper": 101},
+                            "entry_atr": 2,
+                            "entry_close": 105,
+                            "target_price": 115,
+                        }
+                    },
+                }
+            )
+            return item
+
+        cases = (
+            ("downtrend", snapshot(100), "closed below the frozen zone-aware invalidation line"),
+            ("downtrend", snapshot(116), "reached the frozen support/resistance target"),
+            ("downtrend", snapshot(104), "confirmed downtrend regime"),
+            (
+                "uptrend",
+                snapshot(104, int(self.risk["max_holding_days"])),
+                "reached the maximum support/resistance holding period",
+            ),
+        )
+        for regime, current, expected_reason in cases:
+            with self.subTest(regime=regime, expected_reason=expected_reason):
+                decision = advance_symbol(
+                    SupportResistanceSymbolState(cached_regime_timeline=_cached_regime(regime)),
+                    current,
+                    self.signal,
+                    self.risk,
+                )
+                self.assertEqual(decision["action"], "SELL")
+                self.assertEqual(decision["reason"], expected_reason)
+
     def test_pivot_is_confirmed_only_after_right_hand_bars(self) -> None:
         state = SupportResistanceSymbolState()
         self.signal.update(
@@ -159,12 +501,13 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         self.assertEqual(pivot.confirmed_on, bars[3]["dt_ny"])
 
     def test_same_day_candidates_emit_strongest_buy_deterministically(self) -> None:
-        state = SupportResistanceSymbolState()
+        state = SupportResistanceSymbolState(cached_regime_timeline=_cached_regime())
         state.history.append(_bar(-1, high=106, low=102, close=103.2))
         state.zones = {
             "support": _zone("support", "support", 100),
             "breakout": _zone("breakout", "resistance", 102),
             "retest": _zone("retest", "resistance", 104),
+            "ceiling": _zone("ceiling", "resistance", 110),
         }
         state.breakouts["retest"] = BreakoutRecord(
             zone_key="retest",
@@ -196,7 +539,7 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         )
 
     def test_beta_score_uses_only_resolved_prior_events_and_both_hit_is_loss(self) -> None:
-        state = SupportResistanceSymbolState()
+        state = SupportResistanceSymbolState(cached_regime_timeline=_cached_regime())
         state.pending_outcomes.append(
             PendingOutcome(
                 setup="support_bounce",
@@ -261,7 +604,7 @@ class SupportResistanceStrategyTests(unittest.TestCase):
                 "breakout_retest_enabled": True,
             }
         )
-        state = SupportResistanceSymbolState()
+        state = SupportResistanceSymbolState(cached_regime_timeline=_cached_regime())
         state.history.append(_bar(0, high=102, low=100, close=101))
         state.zones["resistance"] = _zone("resistance", "resistance", 101)
 
@@ -285,6 +628,7 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         )
 
         state.zones["resistance"] = _zone("resistance", "support", 101)
+        state.zones["new-resistance"] = _zone("new-resistance", "resistance", 106)
         retest_decision = advance_symbol(
             state,
             _bar(2, high=103, low=101.5, close=102.2, volume=150),
@@ -300,8 +644,8 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         self.assertTrue(any(event["event_type"] == "retest" for event in state.events))
         self.assertNotIn("resistance", state.breakouts)
 
-    def test_breakout_signal_freezes_resistance_before_end_of_day_role_change(self) -> None:
-        state = SupportResistanceSymbolState()
+    def test_breakout_is_audit_only_before_end_of_day_role_change(self) -> None:
+        state = SupportResistanceSymbolState(cached_regime_timeline=_cached_regime())
         state.history.append(_bar(0, high=102, low=100, close=101))
         state.zones["resistance"] = _zone("resistance", "resistance", 101)
 
@@ -312,8 +656,14 @@ class SupportResistanceStrategyTests(unittest.TestCase):
             self.risk,
         )
 
-        self.assertIsNotNone(decision)
-        self.assertEqual(decision["support_resistance"]["zone"]["role"], "resistance")
+        self.assertIsNone(decision)
+        self.assertTrue(
+            any(
+                event["event_type"] == "direct_breakout_audit"
+                and event["reason_code"] == "direct_breakout_audit_only"
+                for event in state.events
+            )
+        )
         transition = next(
             event for event in state.events if event["event_type"] == "role_transition"
         )
@@ -397,7 +747,25 @@ class SupportResistanceStrategyTests(unittest.TestCase):
                 "first_pivot_date": date(2024, 12, 1),
                 "last_pivot_date": date(2024, 12, 20),
                 "valid_from": date(2024, 12, 23),
-            }
+            },
+            {
+                "zone_key": "resistance",
+                "effective_from": date(2024, 12, 1),
+                "effective_to": None,
+                "source_kind": "high",
+                "role": "resistance",
+                "status": "active",
+                "center": 106.0,
+                "lower": 105.0,
+                "upper": 107.0,
+                "atr": 2.0,
+                "pivot_keys": ["resistance:1", "resistance:2"],
+                "pivot_count": 2,
+                "touch_count": 2,
+                "first_pivot_date": date(2024, 12, 1),
+                "last_pivot_date": date(2024, 12, 20),
+                "valid_from": date(2024, 12, 23),
+            },
         ]
         previous = {"symbol": "TEST", **_bar(0, high=103, low=102, close=102.5)}
         current = {"symbol": "TEST", **_bar(1, high=103, low=100.5, close=102)}
@@ -405,7 +773,8 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         backtest_state = SupportResistanceState(
             symbols={
                 "TEST": SupportResistanceSymbolState(
-                    cached_zone_timeline=list(timeline)
+                    cached_zone_timeline=list(timeline),
+                    cached_regime_timeline=_cached_regime(),
                 )
             }
         )
@@ -424,7 +793,8 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         paper_state = SupportResistanceState(
             symbols={
                 "TEST": SupportResistanceSymbolState(
-                    cached_zone_timeline=list(timeline)
+                    cached_zone_timeline=list(timeline),
+                    cached_regime_timeline=_cached_regime(),
                 )
             }
         )
@@ -652,7 +1022,31 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         zone = next(iter(state.zones.values()))
         self.assertEqual(zone.center, 100.1234567892)
         self.assertEqual(zone.atr, 1.2345678902)
-        self.assertEqual(normalized_detector_params({"signal": self.signal})["implementation_revision"], 6)
+        detector = normalized_detector_params({"signal": self.signal})
+        self.assertEqual(detector["implementation_revision"], 10)
+        self.assertEqual(detector["regime_logic_revision"], 2)
+
+    def test_inner_edge_channel_selection_projection_and_inclusive_price_gate(self) -> None:
+        far_support = _zone("far-support", "support", 95)
+        near_support = _zone("near-support", "support", 100)
+        near_support.slope_per_session = 0.25
+        resistance = _zone("resistance", "resistance", 110)
+        resistance.slope_per_session = 0.5
+
+        channel = build_entry_channel(
+            [far_support, resistance, near_support],
+            105,
+            date(2025, 1, 2),
+        )
+
+        self.assertTrue(channel["valid"])
+        self.assertEqual(channel["support_zone_key"], "near-support")
+        self.assertEqual((channel["lower"], channel["upper"]), (101.0, 109.0))
+        projected = project_entry_channel(channel)
+        self.assertEqual((projected["lower"], projected["upper"]), (101.25, 109.5))
+        self.assertTrue(entry_price_is_inside_channel(projected, 101.25)[0])
+        self.assertTrue(entry_price_is_inside_channel(projected, 109.5)[0])
+        self.assertFalse(entry_price_is_inside_channel(projected, 109.5001)[0])
 
     def test_paper_holding_period_counts_trading_sessions(self) -> None:
         snapshots = {
@@ -773,6 +1167,19 @@ class SupportResistancePersistenceTests(unittest.TestCase):
     def _state(self) -> SupportResistanceState:
         state = SupportResistanceState()
         symbol_state = SupportResistanceSymbolState()
+        symbol_state.history.append(_bar(0, high=102, low=99, close=100))
+        symbol_state.history.append(_bar(9, high=103, low=100, close=101))
+        symbol_state.regime_versions.append(
+            {
+                "version": 1,
+                "effective_from": "2025-01-01",
+                "regime": "transition",
+                "lower_zone_key": "zone",
+                "upper_zone_key": None,
+                "reason_code": "missing_boundary",
+                "evidence": {"reason_code": "missing_boundary"},
+            }
+        )
         symbol_state.zone_versions.append(
             {
                 **_zone("zone", "support", 100).snapshot(),
@@ -792,6 +1199,268 @@ class SupportResistancePersistenceTests(unittest.TestCase):
         )
         state.symbols["TEST"] = symbol_state
         return state
+
+    def test_regime_timeline_integrity_rejects_invalid_version_sequences(self) -> None:
+        sessions = [date(2025, 1, 2), date(2025, 1, 3), date(2025, 1, 6)]
+
+        def version(number: int, effective_from: date, regime: str) -> dict:
+            return {
+                "version": number,
+                "effective_from": effective_from.isoformat(),
+                "regime": regime,
+            }
+
+        _validate_regime_versions(
+            "TEST",
+            sessions,
+            [version(1, sessions[0], "transition"), version(2, sessions[2], "uptrend")],
+        )
+        invalid_sequences = (
+            [],
+            [version(1, sessions[1], "transition")],
+            [version(1, sessions[0], "transition"), version(2, sessions[0], "uptrend")],
+            [version(1, sessions[0], "transition"), version(2, sessions[2], "transition")],
+            [version(1, sessions[0], "transition"), version(3, sessions[2], "uptrend")],
+            [version(1, sessions[0], "transition"), version(2, date(2025, 1, 4), "uptrend")],
+            [version(1, sessions[0], "unknown")],
+        )
+        for items in invalid_sequences:
+            with self.subTest(items=items), self.assertRaises(ValueError):
+                _validate_regime_versions("TEST", sessions, items)
+
+    def test_expired_zone_tombstone_is_not_projected_to_coverage_end(self) -> None:
+        materialization = SupportResistanceMaterialization(
+            id=uuid.uuid4(),
+            coverage_start=date(2025, 1, 1),
+            coverage_end=date(2025, 1, 3),
+        )
+        zone = _zone("expired", "support", 100)
+        zone.anchor_session_index = 1
+        zone.anchor_center = 100
+        zone.anchor_lower = 99
+        zone.anchor_upper = 101
+        zone.slope_per_session = -10
+        state = SupportResistanceState(
+            symbols={
+                "TEST": SupportResistanceSymbolState(
+                    history=[
+                        _bar(0, high=103, low=99, close=101),
+                        _bar(1, high=103, low=99, close=101),
+                        _bar(2, high=103, low=99, close=101),
+                    ],
+                    zone_versions=[
+                        {
+                            **zone.snapshot(),
+                            "status": "expired",
+                            "effective_from": "2025-01-02",
+                        }
+                    ],
+                )
+            }
+        )
+
+        row = list(_zone_version_rows(materialization, state, {"TEST": 1}))[0]
+
+        self.assertEqual(row["projection_end"], date(2025, 1, 2))
+        self.assertEqual(row["center_price"], 100)
+        self.assertEqual(row["end_center_price"], 100)
+
+    def test_unrepresentable_zone_geometry_fails_before_database_insert(self) -> None:
+        materialization = SupportResistanceMaterialization(
+            id=uuid.uuid4(),
+            coverage_start=date(2025, 1, 1),
+            coverage_end=date(2025, 1, 1),
+        )
+        zone = _zone("overflow", "support", 100)
+        zone.center = 100_000_000_000_000.0
+        zone.lower = 99_999_999_999_999.0
+        zone.upper = 100_000_000_000_001.0
+        zone.anchor_center = zone.center
+        zone.anchor_lower = zone.lower
+        zone.anchor_upper = zone.upper
+        zone.anchor_session_index = 0
+        state = SupportResistanceState(
+            symbols={
+                "TEST": SupportResistanceSymbolState(
+                    history=[_bar(0, high=103, low=99, close=101)],
+                    zone_versions=[
+                        {
+                            **zone.snapshot(),
+                            "status": "active",
+                            "effective_from": "2025-01-01",
+                        }
+                    ],
+                )
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "NUMERIC\\(24,10\\) domain"):
+            list(_zone_version_rows(materialization, state, {"TEST": 1}))
+
+    def test_duplicate_zone_effective_date_fails_before_database_insert(self) -> None:
+        materialization = SupportResistanceMaterialization(
+            id=uuid.uuid4(),
+            coverage_start=date(2025, 1, 1),
+            coverage_end=date(2025, 1, 2),
+        )
+        zone = _zone("duplicate", "support", 100)
+        state = SupportResistanceState(
+            symbols={
+                "TEST": SupportResistanceSymbolState(
+                    history=[
+                        _bar(0, high=103, low=99, close=101),
+                        _bar(1, high=103, low=99, close=101),
+                    ],
+                    zone_versions=[
+                        {**zone.snapshot(), "status": "expired", "effective_from": "2025-01-02"},
+                        {**zone.snapshot(), "status": "active", "effective_from": "2025-01-02"},
+                    ],
+                )
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "strictly increasing"):
+            list(_zone_version_rows(materialization, state, {"TEST": 1}))
+
+    def test_regime_report_attributes_fills_and_realized_returns(self) -> None:
+        with self.Session() as db:
+            run = self._new_run(db)
+            db.add_all(
+                [
+                    Transaction(
+                        strategy_id=run.strategy_id,
+                        run_id=run.id,
+                        instrument_id=1,
+                        ts=datetime(2025, 1, 2, tzinfo=UTC),
+                        symbol="TEST",
+                        side="BUY",
+                        qty=10,
+                        price=100,
+                        fee=1,
+                        meta={
+                            "entry_signal_features": {
+                                "support_resistance": {
+                                    "regime": "uptrend",
+                                    "selected_setup": "support_bounce",
+                                }
+                            }
+                        },
+                    ),
+                    Transaction(
+                        strategy_id=run.strategy_id,
+                        run_id=run.id,
+                        instrument_id=1,
+                        ts=datetime(2025, 1, 6, tzinfo=UTC),
+                        symbol="TEST",
+                        side="SELL",
+                        qty=10,
+                        price=110,
+                        fee=1,
+                        meta={"reason": "confirmed downtrend regime"},
+                    ),
+                ]
+            )
+            db.flush()
+            audit = _trade_results_by_regime(db, run.id)
+            self.assertEqual(audit["filledCounts"], {"uptrend/support_bounce": 1})
+            self.assertGreater(
+                audit["realizedReturns"]["uptrend/support_bounce"]["mean"],
+                0,
+            )
+            self.assertEqual(len(audit["downtrendExitPerformance"]["exits"]), 1)
+
+    def test_historical_v2_strategy_cannot_start_a_new_backtest(self) -> None:
+        with self.Session() as db:
+            params = copy.deepcopy(self.params)
+            params["metadata"]["algorithm_version"] = "pivot-slope-atr-v2"
+            strategy = Strategy(
+                id=uuid.uuid4(),
+                strategy_key=f"sr-v2-{uuid.uuid4()}",
+                name="Historical SR v2",
+                strategy_type="support_resistance",
+                params=params,
+                version=1,
+                status="draft",
+            )
+            db.add(strategy)
+            db.commit()
+            with self.assertRaises(HTTPException) as raised:
+                create_backtest(
+                    BacktestCreate(
+                        strategy_id=strategy.id,
+                        start_date=date(2025, 1, 1),
+                        end_date=date(2025, 1, 31),
+                    ),
+                    db,
+                )
+            self.assertEqual(raised.exception.status_code, 409)
+            self.assertEqual(raised.exception.detail["code"], "historical_strategy_read_only")
+
+    def test_v3_api_rejects_a_missing_regime_timeline_but_v2_remains_empty(self) -> None:
+        with self.Session() as db:
+            materialization = SupportResistanceMaterialization(
+                id=uuid.uuid4(),
+                cache_key="missing-regimes-v3",
+                algorithm_version="pivot-slope-regime-v3",
+                detector_params={},
+                universe_hash="universe",
+                symbols=["TEST"],
+                coverage_start=date(2025, 1, 1),
+                coverage_end=date(2025, 1, 31),
+                source_data_fingerprint="fingerprint",
+                price_semantics="forward_adjusted_preferred_unadjusted_fallback",
+                status="completed",
+            )
+            with self.assertRaises(ValueError):
+                _build_regime_intervals(db, materialization, [])
+            materialization.algorithm_version = "pivot-slope-atr-v2"
+            self.assertEqual(_build_regime_intervals(db, materialization, []), [])
+
+    def test_regime_api_starts_at_the_first_persisted_state_session(self) -> None:
+        class FakeDialect:
+            name = "postgresql"
+
+        class FakeBind:
+            dialect = FakeDialect()
+
+        class FakeResult:
+            def all(self):
+                return [
+                    (211, date(2016, 10, 26)),
+                    (211, date(2016, 10, 27)),
+                    (211, date(2016, 10, 28)),
+                ]
+
+        class FakeSession:
+            bind = FakeBind()
+
+            def execute(self, *_args, **_kwargs):
+                return FakeResult()
+
+        materialization = SupportResistanceMaterialization(
+            id=uuid.uuid4(),
+            algorithm_version="pivot-slope-regime-v3",
+            coverage_start=date(2016, 10, 26),
+            coverage_end=date(2016, 10, 28),
+        )
+        version = SupportResistanceRegimeVersion(
+            id=uuid.uuid4(),
+            materialization_id=materialization.id,
+            instrument_id=211,
+            symbol="AMN",
+            version=1,
+            effective_from=date(2016, 10, 27),
+            regime="transition",
+            reason_code="first_identity_session",
+            evidence={},
+        )
+
+        intervals = _build_regime_intervals(FakeSession(), materialization, [version])
+
+        self.assertEqual(len(intervals), 1)
+        self.assertEqual(intervals[0]["start_date"], "2016-10-27")
+        self.assertEqual(intervals[0]["end_date"], "2016-10-28")
+        self.assertEqual(intervals[0]["session_count"], 2)
 
     @patch(
         "src.services.support_resistance_persistence_service._instrument_ids",
@@ -914,6 +1583,11 @@ class SupportResistancePersistenceTests(unittest.TestCase):
                     SupportResistanceZoneVersion.materialization_id == materialization.id
                 )
             ).all()
+            regime_versions = db.scalars(
+                select(SupportResistanceRegimeVersion).where(
+                    SupportResistanceRegimeVersion.materialization_id == materialization.id
+                )
+            ).all()
             events = db.scalars(
                 select(SupportResistanceRunEvent)
                 .where(SupportResistanceRunEvent.run_id == run.id)
@@ -921,6 +1595,8 @@ class SupportResistancePersistenceTests(unittest.TestCase):
             ).all()
 
             self.assertEqual(len(versions), 1)
+            self.assertEqual(len(regime_versions), 1)
+            self.assertEqual(regime_versions[0].regime, "transition")
             self.assertEqual(len(events), 8)
             version = versions[0]
             self.assertEqual(
@@ -996,11 +1672,12 @@ class SupportResistancePersistenceTests(unittest.TestCase):
             )
             self.assertEqual(events[-1].posterior_sample_count, 7)
             self.assertEqual(performance["support_resistance_zone_versions"], 1)
+            self.assertEqual(performance["support_resistance_regime_versions"], 1)
             self.assertEqual(performance["support_resistance_run_events"], 8)
             self.assertFalse(performance["support_resistance_cache_reused"])
             self.assertGreaterEqual(performance["support_resistance_persist_total_ms"], 0.0)
-            self.assertEqual(progress[0], ("zone_versions", 0, 9))
-            self.assertEqual(progress[-1], ("run_events", 9, 9))
+            self.assertEqual(progress[0], ("zone_versions", 0, 10))
+            self.assertEqual(progress[-1], ("run_events", 10, 10))
 
     @patch(
         "src.services.support_resistance_persistence_service._instrument_ids",
@@ -1332,6 +2009,7 @@ class SupportResistancePersistenceTests(unittest.TestCase):
             )
             self.assertIsNone(empty.materialization)
             self.assertEqual(empty.zone_versions, [])
+            self.assertEqual(empty.regime_intervals, [])
             self.assertEqual(empty.events, [])
 
             run = self._new_run(db)
@@ -1357,20 +2035,75 @@ class SupportResistancePersistenceTests(unittest.TestCase):
                 coverage_end=date(2025, 3, 1),
             )
             db.commit()
-            detail = get_backtest_support_resistance(
-                run.id,
-                db=db,
-                symbol="test",
-                zone_key="zone",
-                start_date=date(2025, 1, 1),
-                end_date=date(2025, 2, 1),
+            linked = db.scalar(
+                select(SupportResistanceRunMaterialization).where(
+                    SupportResistanceRunMaterialization.run_id == run.id
+                )
             )
+            db.add(
+                SupportResistanceRegimeVersion(
+                    materialization_id=linked.materialization_id,
+                    instrument_id=1,
+                    symbol="OTHER",
+                    version=1,
+                    effective_from=date(2025, 1, 1),
+                    regime="transition",
+                    reason_code="test_other_symbol",
+                    evidence={},
+                )
+            )
+            db.commit()
+            with patch(
+                "src.api.backtests._build_regime_intervals",
+                wraps=_build_regime_intervals,
+            ) as build_intervals:
+                detail = get_backtest_support_resistance(
+                    run.id,
+                    db=db,
+                    symbol="test",
+                    zone_key="zone",
+                    start_date=date(2025, 1, 1),
+                    end_date=date(2025, 2, 1),
+                )
+            queried_regime_versions = build_intervals.call_args.args[2]
+            self.assertEqual({version.symbol for version in queried_regime_versions}, {"TEST"})
             self.assertEqual(detail.materialization["status"], "completed")
             self.assertEqual(len(detail.zone_versions), 1)
             self.assertEqual(detail.zone_versions[0]["zone_key"], "zone")
+            self.assertEqual(len(detail.regime_intervals), 1)
+            self.assertEqual(detail.regime_intervals[0]["regime"], "transition")
             self.assertEqual(len(detail.events), 2)
             candidate = next(event for event in detail.events if event["event_type"] == "candidate")
             self.assertEqual(candidate["posterior_sample_count"], 0)
+
+            with patch(
+                "src.api.backtests._build_regime_intervals",
+                wraps=_build_regime_intervals,
+            ) as build_all_intervals:
+                full_detail = get_backtest_support_resistance(
+                    run.id,
+                    db=db,
+                    symbol=None,
+                    zone_key=None,
+                    start_date=None,
+                    end_date=None,
+                )
+            all_regime_versions = build_all_intervals.call_args.args[2]
+            self.assertEqual({version.symbol for version in all_regime_versions}, {"OTHER", "TEST"})
+            self.assertEqual(
+                {interval["symbol"] for interval in full_detail.regime_intervals},
+                {"OTHER", "TEST"},
+            )
+
+            no_symbol_match = get_backtest_support_resistance(
+                run.id,
+                db=db,
+                symbol="MISSING",
+                zone_key=None,
+                start_date=None,
+                end_date=None,
+            )
+            self.assertEqual(no_symbol_match.regime_intervals, [])
 
             with self.assertRaises(HTTPException) as raised:
                 get_backtest_support_resistance(

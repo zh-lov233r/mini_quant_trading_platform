@@ -23,6 +23,8 @@ export interface EquityEventInput {
   symbol: string;
   action: string;
   reason?: string | null;
+  stageIndex?: number | null;
+  stageKey?: string | null;
 }
 
 export type EquityMarkerCategory = "buy_signal" | "sell_signal" | "buy_fill" | "sell_fill";
@@ -87,8 +89,30 @@ export interface ChartZoneOverlay {
   endUpperPrice: number;
   slopePerSession: number;
   slopeAtrPerSession: number | null;
-  role: "support" | "resistance";
+  role: "support" | "resistance" | "entry_channel";
   description: string;
+}
+
+export type ChartMarketRegime = "uptrend" | "downtrend" | "range" | "transition";
+
+export interface ChartRegimeOverlay {
+  key: string;
+  startDate: string;
+  endDate: string;
+  regime: ChartMarketRegime;
+  sessionCount: number;
+  label: string;
+  description: string;
+}
+
+export interface NormalizedRegimeOverlays {
+  intervals: ChartRegimeOverlay[];
+  error: string | null;
+}
+
+interface RegimeCoverageWindow {
+  startDate?: string | null;
+  endDate?: string | null;
 }
 
 interface CandleSeriesMarkerBase {
@@ -111,6 +135,10 @@ const DISPLAYABLE_SUPPORT_RESISTANCE_EVENT_TYPES = new Set([
   "candidate",
   "selection",
   "role_transition",
+  "entry_channel_rejection",
+  "execution_rejection",
+  "direct_breakout_audit",
+  "channel_fill_violation",
 ]);
 
 export function isDisplayableSupportResistanceEventType(eventType: string): boolean {
@@ -214,12 +242,68 @@ export function normalizeZoneOverlays(
       left.startDate.localeCompare(right.startDate) || left.key.localeCompare(right.key));
 }
 
+export function normalizeRegimeOverlays(
+  intervals: ChartRegimeOverlay[],
+  availableDates: string[],
+  requireCoverage = false,
+  coverage: RegimeCoverageWindow = {},
+): NormalizedRegimeOverlays {
+  const dates = Array.from(new Set(availableDates))
+    .filter((tradeDate) =>
+      (!coverage.startDate || tradeDate >= coverage.startDate)
+      && (!coverage.endDate || tradeDate <= coverage.endDate))
+    .sort();
+  if (dates.length === 0) {
+    return { intervals: [], error: null };
+  }
+  if (intervals.length === 0) {
+    return {
+      intervals: [],
+      error: requireCoverage ? "missing regime intervals" : null,
+    };
+  }
+  const validRegimes = new Set<ChartMarketRegime>(["uptrend", "downtrend", "range", "transition"]);
+  const invalid = intervals.find(
+    (item) => !validRegimes.has(item.regime) || item.endDate < item.startDate || item.sessionCount < 1,
+  );
+  if (invalid) {
+    return { intervals: [], error: `invalid regime interval ${invalid.key}` };
+  }
+  const normalized = intervals
+    .map((item) => {
+      const covered = dates.filter((tradeDate) => tradeDate >= item.startDate && tradeDate <= item.endDate);
+      if (covered.length === 0) return null;
+      return { ...item, startDate: covered[0], endDate: covered[covered.length - 1] };
+    })
+    .filter((item): item is ChartRegimeOverlay => item !== null)
+    .sort((left, right) => left.startDate.localeCompare(right.startDate) || left.key.localeCompare(right.key));
+  if (normalized.length === 0) {
+    return { intervals: [], error: "regime intervals do not intersect visible market sessions" };
+  }
+  const ownership = new Map<string, string>();
+  for (const interval of normalized) {
+    for (const tradeDate of dates) {
+      if (tradeDate < interval.startDate || tradeDate > interval.endDate) continue;
+      const existing = ownership.get(tradeDate);
+      if (existing) {
+        return { intervals: [], error: `overlapping regime intervals on ${tradeDate}` };
+      }
+      ownership.set(tradeDate, interval.key);
+    }
+  }
+  if (requireCoverage) {
+    const uncovered = dates.find((tradeDate) => !ownership.has(tradeDate));
+    if (uncovered) return { intervals: [], error: `missing regime interval on ${uncovered}` };
+  }
+  return { intervals: normalized, error: null };
+}
+
 export function currentZoneOverlays(
   zones: ChartZoneOverlay[],
   visibleEndDate: string | null,
 ): ChartZoneOverlay[] {
   if (!visibleEndDate) return [];
-  const current = new Map<"support" | "resistance", ChartZoneOverlay>();
+  const current = new Map<ChartZoneOverlay["role"], ChartZoneOverlay>();
   zones.forEach((zone) => {
     if (zone.endDate !== visibleEndDate) return;
     const existing = current.get(zone.role);
@@ -237,7 +321,7 @@ export function currentZoneOverlays(
 export function latestVisibleZoneOverlaysByRole(
   zones: ChartZoneOverlay[],
 ): ChartZoneOverlay[] {
-  const latest = new Map<"support" | "resistance", ChartZoneOverlay>();
+  const latest = new Map<ChartZoneOverlay["role"], ChartZoneOverlay>();
   zones.forEach((zone) => {
     const existing = latest.get(zone.role);
     if (
@@ -366,15 +450,23 @@ function groupEquityEvents(
   locale: string,
   signal: boolean,
 ): ChartEventMarker[] {
-  const grouped = new Map<string, { time: string; action: "BUY" | "SELL"; items: EquityEventInput[] }>();
+  const grouped = new Map<string, {
+    time: string;
+    action: "BUY" | "SELL";
+    stageIndex: number | null;
+    items: EquityEventInput[];
+  }>();
   events.forEach((event) => {
     if (event.action !== "BUY" && event.action !== "SELL") return;
     const time = toChartTime(event.ts);
     if (!time || !equityByDate.has(time)) return;
-    const key = `${time}-${event.action}`;
+    const stageIndex = !signal && event.action === "BUY" && [1, 2, 3].includes(event.stageIndex ?? 0)
+      ? event.stageIndex as number
+      : null;
+    const key = `${time}-${event.action}-${stageIndex ?? 0}`;
     const existing = grouped.get(key);
     if (existing) existing.items.push(event);
-    else grouped.set(key, { time, action: event.action, items: [event] });
+    else grouped.set(key, { time, action: event.action, stageIndex, items: [event] });
   });
 
   return Array.from(grouped.values()).map((group) => {
@@ -385,17 +477,33 @@ function groupEquityEvents(
     const noun = signal
       ? locale === "zh-CN" ? "信号" : "Signals"
       : locale === "zh-CN" ? "成交" : "Fills";
+    const stageLabel = group.stageIndex === 1
+      ? locale === "zh-CN" ? "试仓" : "Probe"
+      : group.stageIndex === 2
+        ? locale === "zh-CN" ? "加仓" : "Add"
+        : group.stageIndex === 3
+          ? locale === "zh-CN" ? "确认仓" : "Confirmed"
+          : null;
     return {
-      id: `${signal ? "signal" : "fill"}-${group.action}-${group.time}`,
+      id: `${signal ? "signal" : "fill"}-${group.action}-${group.stageIndex ?? 0}-${group.time}`,
       time: group.time,
       price: equityByDate.get(group.time) as number,
       category,
-      color: signal ? (buy ? "#2563eb" : "#d97706") : buy ? "#16a34a" : "#dc2626",
-      shape: signal ? "circle" : buy ? "arrowUp" : "arrowDown",
+      color: signal
+        ? buy ? "#2563eb" : "#d97706"
+        : group.stageIndex === 1 ? "#0ea5e9"
+          : group.stageIndex === 2 ? "#f59e0b"
+            : buy ? "#16a34a" : "#dc2626",
+      shape: signal || group.stageIndex === 1 ? "circle" : buy ? "arrowUp" : "arrowDown",
       position: buy ? "atPriceBottom" : "atPriceTop",
-      text: "",
-      title: `${group.action} ${noun} (${group.items.length})`,
-      details: group.items.map((item) => item.reason ? `${item.symbol}: ${item.reason}` : item.symbol),
+      text: stageLabel || "",
+      title: stageLabel
+        ? `${stageLabel}${locale === "zh-CN" ? noun : ` ${noun}`} (${group.items.length})`
+        : `${group.action} ${noun} (${group.items.length})`,
+      details: group.items.map((item) => {
+        const stageKey = item.stageKey ? ` · ${item.stageKey}` : "";
+        return item.reason ? `${item.symbol}: ${item.reason}${stageKey}` : `${item.symbol}${stageKey}`;
+      }),
     };
   });
 }

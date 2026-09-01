@@ -33,6 +33,8 @@ tags:
     description: Historical bar data, instrument lookup, and market reference data.
   - name: Trading
     description: Broker-facing order placement, position inspection, and rebalance workflows.
+  - name: Paper Trading
+    description: Manual and scheduled Alpaca paper-strategy execution.
 
 paths:
   /:
@@ -488,6 +490,24 @@ paths:
                 items:
                   $ref: "#/components/schemas/ExperimentTrial"
 
+  /api/research/experiments/{experiment_id}/backtests/{run_id}:
+    delete:
+      tags: [Research]
+      summary: Delete one terminal research backtest while retaining experiment evidence
+      operationId: deleteResearchBacktest
+      x-implementation-status: implemented
+      parameters:
+        - $ref: "#/components/parameters/ExperimentIdPath"
+        - $ref: "#/components/parameters/RunIdPath"
+      responses:
+        "200":
+          description: Run artifacts deleted; the owning trial or candidate keeps a deletion tombstone
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BacktestDeleteResult"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+
   /api/research/experiments/{experiment_id}/report:
     get:
       tags: [Research]
@@ -641,13 +661,32 @@ paths:
           $ref: "#/components/responses/NotFound"
 
   /api/backtests:
+    get:
+      tags: [Backtests]
+      summary: List manual backtests
+      description: Research and verification runs are intentionally available only from their owning research experiment.
+      operationId: listBacktests
+      x-implementation-status: implemented
+      parameters:
+        - {in: query, name: strategy_id, required: false, schema: {type: string, format: uuid}}
+        - {in: query, name: mode, required: false, schema: {type: string, default: backtest}}
+        - {in: query, name: status, required: false, schema: {type: string}}
+        - {in: query, name: limit, required: false, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+        - {in: query, name: offset, required: false, schema: {type: integer, minimum: 0, default: 0}}
+      responses:
+        "200":
+          description: Manual backtest runs
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: "#/components/schemas/BacktestRun"}}
     post:
       tags: [Backtests]
       summary: Queue a backtest for an existing strategy
       description: >
         Creates a StrategyRun and durable database job. Manual requests default to full persistence;
         the on-demand manager starts a spawn-based process worker with configured concurrency when automation is available. Queueing
-        still succeeds when the manager is unavailable.
+        still succeeds when the manager is unavailable. Historical pivot-slope-atr-v2 support/resistance
+        strategies are read-only and return 409 instead of creating a new run.
       operationId: createBacktest
       x-implementation-status: implemented
       requestBody:
@@ -665,6 +704,8 @@ paths:
                 $ref: "#/components/schemas/BacktestRun"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
@@ -701,6 +742,21 @@ paths:
                 $ref: "#/components/schemas/StrategyRunDetail"
         "404":
           $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Backtests]
+      summary: Delete one terminal manual backtest and its run-scoped artifacts
+      operationId: deleteBacktest
+      x-implementation-status: implemented
+      parameters:
+        - $ref: "#/components/parameters/RunIdPath"
+      responses:
+        "200":
+          description: Backtest deleted; strategy, market data, and shared support/resistance materializations retained
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BacktestDeleteResult"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
 
   /api/backtests/{run_id}/support-resistance:
     get:
@@ -885,6 +941,58 @@ paths:
                   $ref: "#/components/schemas/PortfolioSnapshotRecord"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /api/paper-trading/latest-trade-date:
+    get:
+      tags: [Paper Trading]
+      summary: Get the latest paper-trading feature date
+      operationId: getLatestPaperTradingTradeDate
+      x-implementation-status: implemented
+      responses:
+        "200":
+          description: Latest available date
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  latest_trade_date: {type: string, format: date, nullable: true}
+
+  /api/paper-trading/run:
+    post:
+      tags: [Paper Trading]
+      summary: Run one paper strategy
+      operationId: runPaperStrategy
+      x-implementation-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PaperTradingRunRequest"}
+      responses:
+        "201":
+          description: Paper run completed; support/resistance BUYs may await the next open
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaperTradingRunOut"}
+
+  /api/paper-trading/run-multi:
+    post:
+      tags: [Paper Trading]
+      summary: Run allocated paper strategies
+      operationId: runPaperStrategies
+      x-implementation-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MultiStrategyPaperTradingRunRequest"}
+      responses:
+        "201":
+          description: Portfolio paper-run results
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MultiStrategyPaperTradingRunOut"}
 
   /api/market/bars:
     get:
@@ -1230,6 +1338,63 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
 
   schemas:
+    PaperTradingRunRequest:
+      type: object
+      required: [strategy_id, trade_date, portfolio_name]
+      properties:
+        strategy_id: {type: string, format: uuid}
+        trade_date: {type: string, format: date}
+        portfolio_name: {type: string, default: default}
+        basket_id: {type: string, format: uuid, nullable: true}
+        submit_orders: {type: boolean, default: true}
+
+    MultiStrategyPaperTradingRunRequest:
+      type: object
+      required: [trade_date, portfolio_name]
+      properties:
+        trade_date: {type: string, format: date}
+        portfolio_name: {type: string, default: default}
+        submit_orders: {type: boolean, default: true}
+        continue_on_error: {type: boolean, default: false}
+
+    PaperTradingRunOut:
+      type: object
+      required: [run_id, strategy_id, status, trade_date, portfolio_name, allocation_pct,
+        capital_base, signal_count, order_count, submitted_order_count, skipped_order_count,
+        failed_order_count, pending_order_count, final_cash, final_equity]
+      properties:
+        run_id: {type: string, format: uuid}
+        strategy_id: {type: string, format: uuid}
+        status: {type: string}
+        trade_date: {type: string, format: date}
+        portfolio_name: {type: string}
+        allocation_pct: {type: number}
+        capital_base: {type: number}
+        signal_count: {type: integer, minimum: 0}
+        order_count: {type: integer, minimum: 0}
+        submitted_order_count: {type: integer, minimum: 0}
+        skipped_order_count: {type: integer, minimum: 0}
+        failed_order_count: {type: integer, minimum: 0}
+        pending_order_count:
+          type: integer
+          minimum: 0
+          description: Support/resistance BUY intents awaiting strict next-open validation.
+        final_cash: {type: number}
+        final_equity: {type: number}
+
+    MultiStrategyPaperTradingRunOut:
+      type: object
+      required: [portfolio_name, trade_date, total_runs, completed_runs, failed_runs, results]
+      properties:
+        portfolio_name: {type: string}
+        trade_date: {type: string, format: date}
+        total_runs: {type: integer, minimum: 0}
+        completed_runs: {type: integer, minimum: 0}
+        failed_runs: {type: integer, minimum: 0}
+        results:
+          type: array
+          items: {$ref: "#/components/schemas/PaperTradingRunOut"}
+
     RootResponse:
       type: object
       required: [app, message]
@@ -1624,7 +1789,10 @@ components:
           properties:
             min_strength_score: {type: number, minimum: 0, maximum: 100, default: 50}
             support_bounce_enabled: {type: boolean, default: true}
-            resistance_breakout_enabled: {type: boolean, default: true}
+            resistance_breakout_enabled:
+              type: boolean
+              default: true
+              description: Detect and audit direct resistance breakouts without creating executable BUY signals.
             breakout_retest_enabled: {type: boolean, default: true}
             pivot_left_bars: {type: integer, minimum: 1, default: 3}
             pivot_right_bars: {type: integer, minimum: 1, default: 3}
@@ -1672,7 +1840,10 @@ components:
           properties:
             description: {type: string}
             schema_version: {type: integer, minimum: 1}
-            algorithm_version: {type: string, const: pivot-slope-atr-v2}
+            algorithm_version:
+              type: string
+              enum: [pivot-slope-regime-v3, pivot-slope-atr-v2]
+              description: pivot-slope-atr-v2 is returned only for read-only historical strategy records and cannot start a new backtest or paper execution.
             price_semantics: {type: string, const: forward_adjusted_preferred_unadjusted_fallback}
 
     UniverseConfig:
@@ -1975,7 +2146,7 @@ components:
       type: object
       required: [kind, maxBacktests, bootstrapSeed, bootstrapReplicates, eventHorizons, dedupeSessions, reportFormats]
       properties:
-        kind: {type: string, enum: [support_resistance_effectiveness_v2]}
+        kind: {type: string, enum: [support_resistance_effectiveness_v3]}
         maxBacktests: {type: integer, enum: [200]}
         bootstrapSeed: {type: integer, enum: [20260828]}
         bootstrapReplicates: {type: integer, enum: [10000]}
@@ -2127,6 +2298,7 @@ components:
         costConfig: {$ref: "#/components/schemas/FreeFormObject"}
         dataFingerprint: {type: [string, "null"]}
         backtestRunId: {type: [string, "null"], format: uuid}
+        backtestDeletedAt: {type: [string, "null"], format: date-time}
         candidateId: {type: [string, "null"], format: uuid}
         metrics: {$ref: "#/components/schemas/FreeFormObject"}
         attempt: {type: integer}
@@ -2213,7 +2385,7 @@ components:
         trade_date: {type: string, format: date, nullable: true}
         finalizing_stage:
           type: string
-          enum: [zone_versions, run_events, backtest_details, committing]
+          enum: [zone_versions, regime_versions, run_events, backtest_details, committing]
           nullable: true
         completed_items: {type: integer, minimum: 0, nullable: true}
         total_items: {type: integer, minimum: 0, nullable: true}
@@ -2263,6 +2435,13 @@ components:
               allOf:
                 - $ref: "#/components/schemas/BacktestProgress"
               nullable: true
+
+    BacktestDeleteResult:
+      type: object
+      required: [run_id, deleted]
+      properties:
+        run_id: {type: string, format: uuid}
+        deleted: {type: boolean}
 
     BacktestSummary:
       allOf:
@@ -2395,7 +2574,7 @@ components:
 
     SupportResistanceBacktest:
       type: object
-      required: [run_id, zone_versions, events]
+      required: [run_id, zone_versions, regime_intervals, events]
       properties:
         run_id: {type: string, format: uuid}
         materialization:
@@ -2459,6 +2638,22 @@ components:
                       end_upper_price: {type: number}
                       slope_per_session: {type: number}
                   - type: "null"
+        regime_intervals:
+          type: array
+          items:
+            type: object
+            required: [version_id, symbol, regime, start_date, end_date, session_count, reason_code, evidence]
+            properties:
+              version_id: {type: string, format: uuid}
+              symbol: {type: string}
+              regime: {type: string, enum: [uptrend, downtrend, range, transition]}
+              start_date: {type: string, format: date}
+              end_date: {type: string, format: date}
+              session_count: {type: integer, minimum: 1}
+              lower_zone_key: {type: [string, "null"]}
+              upper_zone_key: {type: [string, "null"]}
+              reason_code: {type: string}
+              evidence: {$ref: "#/components/schemas/FreeFormObject"}
         events:
           type: array
           items:

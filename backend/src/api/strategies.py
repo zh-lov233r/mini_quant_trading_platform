@@ -51,23 +51,13 @@ from src.services.adaptive_research_service import (
     archive_unused_research_draft,
 )
 from src.services.research_experiment_service import ExperimentConflictError, ExperimentNotFoundError
+from src.services.strategy_types import EngineReadyStrategyType, StrategyType
 
 
 class StrategyCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128, description="策略名称")
     description: Optional[str] = Field(default=None, max_length=500, description="策略说明")
-    strategy_type: Literal[
-        "trend",
-        "mean_reversion",
-        "momentum_breakout",
-        "island_reversal",
-        "double_bottom",
-        "head_shoulders_bottom",
-        "rounded_bottom",
-        "v_reversal",
-        "support_resistance",
-        "custom",
-    ] = Field(..., description="策略类型")
+    strategy_type: StrategyType = Field(..., description="策略类型")
     params: Dict[str, Any] = Field(..., description="策略参数 (JSON 对象)")
     status: Literal["draft", "active", "archived"] = "draft"
 
@@ -94,7 +84,7 @@ class StrategyConfigUpdate(BaseModel):
 
 
 class StrategyCatalogItem(BaseModel):
-    strategy_type: str
+    strategy_type: StrategyType
     label: str
     description: str
     engine_ready: bool
@@ -116,7 +106,7 @@ class StrategyOut(BaseModel):
     display_name: str
     name: str
     description: Optional[str] = None
-    strategy_type: str
+    strategy_type: StrategyType
     params: Dict[str, Any]
     status: str
     version: int
@@ -132,14 +122,14 @@ class StrategyRuntimeOut(BaseModel):
     name: str
     version: int
     status: str
-    strategy_type: str
+    strategy_type: StrategyType
     engine_ready: bool
     params: Dict[str, Any]
 
 
 class StrategyValidationOut(BaseModel):
     valid: bool = True
-    strategy_type: str
+    strategy_type: StrategyType
     normalized_params: Dict[str, Any]
     engine_ready: bool
 
@@ -152,17 +142,7 @@ class StrategyParameterOverride(BaseModel):
 class StrategyProposal(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=500)
-    strategy_type: Literal[
-        "trend",
-        "mean_reversion",
-        "momentum_breakout",
-        "island_reversal",
-        "double_bottom",
-        "head_shoulders_bottom",
-        "rounded_bottom",
-        "v_reversal",
-        "support_resistance",
-    ]
+    strategy_type: EngineReadyStrategyType
     overrides: list[StrategyParameterOverride] = Field(default_factory=list, max_length=30)
     symbols: list[str] = Field(min_length=1, max_length=500)
 
