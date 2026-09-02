@@ -7,6 +7,7 @@ from ._native import (
     catalog,
     evaluate_day,
     normalize_strategy,
+    support_resistance,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "catalog",
     "evaluate_day",
     "normalize_strategy",
+    "support_resistance",
 ]

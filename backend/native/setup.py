@@ -15,6 +15,7 @@ setup(
                 "src/quant_kernel.cpp",
                 "src/pattern_kernel.cpp",
                 "src/double_bottom_kernel.cpp",
+                "src/support_resistance_kernel.cpp",
             ],
             cxx_std=20,
             define_macros=[

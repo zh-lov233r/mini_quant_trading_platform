@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "pattern_kernel.hpp"
+#include "support_resistance_kernel.hpp"
 
 namespace py = pybind11;
 
@@ -499,4 +500,5 @@ PYBIND11_MODULE(_native, module) {
     module.def("catalog", &catalog);
     module.def("normalize_strategy", &normalize_strategy, py::arg("strategy_type"), py::arg("params"));
     module.def("evaluate_day", &evaluate_day, py::arg("runtime"), py::arg("market_data"));
+    quant_kernel::bind_support_resistance(module);
 }

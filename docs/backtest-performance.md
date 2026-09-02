@@ -90,6 +90,8 @@ Research trials use the stable key and manifest in `run_manifest.preparedDataset
 
 The native package is built with C++20, `pybind11==3.1.0`, `-O3`, and `-DNDEBUG`; fast-math is intentionally disabled. Local development installs it with `.venv/bin/pip install -e backend/native`. Docker produces a wheel in a Linux builder stage and installs only that wheel into the runtime stage.
 
+Support/Resistance now uses the native module as the single implementation for detector cache identity, full-Pivot zone identity, `NUMERIC(24,10)` half-up price normalization, deterministic weighted Theil-Sen fitting, frozen-zone projection validation, and Paper/backtest entry-channel projection. The Python state machine still owns cross-session candidate, regime, and audit evolution until that complete state is migrated and accepted; there is no runtime engine selector or fallback for the primitives already moved.
+
 Read-only benchmark preflight:
 
 ```bash

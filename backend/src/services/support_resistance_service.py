@@ -10,10 +10,10 @@ bar appended and a newly-confirmed pivot made available to the next session.
 
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime
-from decimal import Decimal, ROUND_HALF_UP
-from hashlib import sha256
 from math import isfinite
 from typing import Any, Literal
+
+from quant_kernel import support_resistance as native_support_resistance
 
 from src.services.signal_strength_service import evaluate_support_resistance_strength
 
@@ -27,10 +27,9 @@ SETUP_TIE_PRIORITY: dict[SetupMode, int] = {
     "support_bounce": 1,
     "resistance_breakout": 2,
 }
-DETECTOR_IMPLEMENTATION_REVISION = 10
-REGIME_LOGIC_REVISION = 2
-ENTRY_CHANNEL_SEMANTICS = "support_upper_to_resistance_lower_v1"
-ZONE_PRICE_QUANTUM = Decimal("0.0000000001")
+DETECTOR_IMPLEMENTATION_REVISION = native_support_resistance.DETECTOR_IMPLEMENTATION_REVISION
+REGIME_LOGIC_REVISION = native_support_resistance.REGIME_LOGIC_REVISION
+ENTRY_CHANNEL_SEMANTICS = native_support_resistance.ENTRY_CHANNEL_SEMANTICS
 
 
 @dataclass(slots=True)
@@ -171,27 +170,7 @@ class SupportResistanceState:
 
 def normalized_detector_params(params: dict[str, Any]) -> dict[str, Any]:
     """Return the cache-key subset in deterministic key order."""
-    signal = params.get("signal", {}) or {}
-    keys = (
-        "pivot_left_bars",
-        "pivot_right_bars",
-        "detection_window",
-        "min_line_pivots",
-        "min_line_span_sessions",
-        "line_inlier_tolerance_atr",
-        "max_abs_slope_atr_per_session",
-        "zone_half_width_atr",
-        "decay_half_life",
-        "breakout_confirmation_atr",
-        "breakout_volume_ratio_min",
-        "retest_window",
-        "retest_volume_ratio_max",
-    )
-    return {
-        "implementation_revision": DETECTOR_IMPLEMENTATION_REVISION,
-        "regime_logic_revision": REGIME_LOGIC_REVISION,
-        **{key: signal[key] for key in keys},
-    }
+    return dict(native_support_resistance.normalized_detector_params(params))
 
 
 def advance_symbol(
@@ -372,71 +351,13 @@ def build_entry_channel(
     trade_date: date,
 ) -> dict[str, Any]:
     """Freeze the nearest role-based inner-edge channel around one close."""
-    support_candidates = [
-        zone
-        for zone in zones
-        if zone.role == "support"
-        and zone.status == "active"
-        and _valid_zone_geometry(zone)
-        and zone.upper <= close
-    ]
-    resistance_candidates = [
-        zone
-        for zone in zones
-        if zone.role == "resistance"
-        and zone.status == "active"
-        and _valid_zone_geometry(zone)
-        and zone.lower >= close
-    ]
-    support = min(
-        support_candidates,
-        key=lambda zone: (
-            close - zone.upper,
-            -zone.pivot_count,
-            -zone.last_pivot_date.toordinal(),
-            zone.fit_residual_atr,
-            zone.zone_key,
-        ),
-        default=None,
+    return dict(
+        native_support_resistance.build_entry_channel(
+            [zone.snapshot() for zone in zones],
+            close,
+            trade_date,
+        )
     )
-    resistance = min(
-        resistance_candidates,
-        key=lambda zone: (
-            zone.lower - close,
-            -zone.pivot_count,
-            -zone.last_pivot_date.toordinal(),
-            zone.fit_residual_atr,
-            zone.zone_key,
-        ),
-        default=None,
-    )
-    payload: dict[str, Any] = {
-        "semantics": ENTRY_CHANNEL_SEMANTICS,
-        "signal_trade_date": trade_date.isoformat(),
-        "signal_close": close,
-        "valid": False,
-        "reason_code": None,
-        "support_zone_key": support.zone_key if support else None,
-        "resistance_zone_key": resistance.zone_key if resistance else None,
-        "lower": support.upper if support else None,
-        "upper": resistance.lower if resistance else None,
-        "lower_slope_per_session": support.slope_per_session if support else None,
-        "upper_slope_per_session": resistance.slope_per_session if resistance else None,
-        "support_zone": support.snapshot() if support else None,
-        "resistance_zone": resistance.snapshot() if resistance else None,
-    }
-    if support is None or resistance is None:
-        payload["reason_code"] = "missing_support_or_resistance"
-        return payload
-    if not support.upper < resistance.lower:
-        payload["reason_code"] = "unordered_or_overlapping_inner_edges"
-        return payload
-    if not support.upper <= close <= resistance.lower:
-        payload["reason_code"] = "signal_close_outside_inner_edges"
-        return payload
-    payload["valid"] = True
-    payload["reason_code"] = "valid_inner_edge_channel"
-    return payload
 
 
 def project_entry_channel(
@@ -444,57 +365,15 @@ def project_entry_channel(
     sessions: int = 1,
 ) -> dict[str, Any]:
     """Project a frozen channel without consulting future market data."""
-    payload = dict(channel or {})
-    if not payload.get("valid"):
-        return {
-            **payload,
-            "valid": False,
-            "reason_code": str(payload.get("reason_code") or "missing_valid_entry_channel"),
-        }
-    try:
-        lower = float(payload["lower"]) + float(payload["lower_slope_per_session"]) * sessions
-        upper = float(payload["upper"]) + float(payload["upper_slope_per_session"]) * sessions
-    except (KeyError, TypeError, ValueError):
-        return {**payload, "valid": False, "reason_code": "missing_channel_projection_values"}
-    if not all(isfinite(value) and value > 0 for value in (lower, upper)):
-        return {**payload, "valid": False, "reason_code": "invalid_channel_projection_values"}
-    if lower >= upper:
-        return {
-            **payload,
-            "lower": lower,
-            "upper": upper,
-            "valid": False,
-            "reason_code": "projected_inner_edges_crossed",
-        }
-    return {
-        **payload,
-        "lower": lower,
-        "upper": upper,
-        "projected_sessions": sessions,
-        "valid": bool(payload.get("valid")),
-        "reason_code": "valid_projected_inner_edge_channel",
-    }
+    return dict(native_support_resistance.project_entry_channel(channel, sessions))
 
 
 def entry_price_is_inside_channel(
     channel: dict[str, Any] | None,
     price: float,
 ) -> tuple[bool, str]:
-    if not channel or not channel.get("valid"):
-        return False, str((channel or {}).get("reason_code") or "missing_valid_entry_channel")
-    try:
-        lower = float(channel["lower"])
-        upper = float(channel["upper"])
-        resolved_price = float(price)
-    except (KeyError, TypeError, ValueError):
-        return False, "invalid_entry_channel_values"
-    if not all(isfinite(value) and value > 0 for value in (lower, upper, resolved_price)):
-        return False, "non_finite_entry_channel_values"
-    if lower >= upper:
-        return False, "unordered_entry_channel"
-    if not lower <= resolved_price <= upper:
-        return False, "entry_price_outside_valid_channel"
-    return True, "entry_price_inside_valid_channel"
+    inside, reason = native_support_resistance.entry_price_is_inside_channel(channel, price)
+    return bool(inside), str(reason)
 
 
 def _record_entry_channel_transition(
@@ -1502,91 +1381,26 @@ def _rebuild_zones(
         _record_zone_version(state, zone, bar["dt_ny"], status="active")
 
 
-def _weighted_median(values: list[tuple[float, float]]) -> float:
-    weighted = sorted(values, key=lambda item: item[0])
-    threshold = sum(weight for _, weight in weighted) / 2.0
-    cumulative = 0.0
-    for value, weight in weighted:
-        cumulative += weight
-        if cumulative >= threshold:
-            return value
-    return weighted[-1][0]
-
-
 def _fit_pivot_line(
     pivots: list[Pivot],
     current_index: int,
     signal_cfg: dict[str, Any],
 ) -> tuple[list[Pivot], float, float, float, float] | None:
     """Fit a deterministic two-stage recency-weighted Theil-Sen line."""
-    minimum = int(signal_cfg["min_line_pivots"])
-    minimum_span = int(signal_cfg["min_line_span_sessions"])
-    if len(pivots) < minimum or pivots[-1].session_index - pivots[0].session_index < minimum_span:
-        return None
-    half_life = int(signal_cfg["decay_half_life"])
-    weights = {
-        pivot.pivot_key: 0.5 ** (max(current_index - pivot.session_index, 0) / half_life)
-        for pivot in pivots
-    }
-
-    def fit(items: list[Pivot]) -> tuple[float, float] | None:
-        slopes = [
-            (
-                (right.price - left.price) / (right.session_index - left.session_index),
-                (weights[left.pivot_key] * weights[right.pivot_key]) ** 0.5,
-            )
-            for left_index, left in enumerate(items)
-            for right in items[left_index + 1 :]
-            if right.session_index - left.session_index >= minimum_span
-        ]
-        if not slopes:
-            return None
-        slope = _weighted_median(slopes)
-        intercept = _weighted_median(
-            [
-                (pivot.price - slope * pivot.session_index, weights[pivot.pivot_key])
-                for pivot in items
-            ]
-        )
-        return slope, intercept
-
-    initial = fit(pivots)
-    if initial is None:
-        return None
-    initial_slope, initial_intercept = initial
-    tolerance = float(signal_cfg["line_inlier_tolerance_atr"])
-    inliers = [
-        pivot
-        for pivot in pivots
-        if abs(pivot.price - (initial_intercept + initial_slope * pivot.session_index))
-        <= tolerance * pivot.atr
-    ]
-    if len(inliers) < minimum or inliers[-1].session_index - inliers[0].session_index < minimum_span:
-        return None
-    refined = fit(inliers)
-    if refined is None:
-        return None
-    slope, intercept = refined
-    representative_atr = _weighted_median(
-        [(pivot.atr, weights[pivot.pivot_key]) for pivot in inliers]
+    result = native_support_resistance.fit_pivot_line(
+        [asdict(pivot) for pivot in pivots],
+        current_index,
+        signal_cfg,
     )
-    if representative_atr <= 0:
+    if result is None:
         return None
-    if abs(slope) / representative_atr > float(signal_cfg["max_abs_slope_atr_per_session"]):
-        return None
-    total_weight = sum(weights[pivot.pivot_key] for pivot in inliers)
-    residual_atr = sum(
-        weights[pivot.pivot_key]
-        * abs(pivot.price - (intercept + slope * pivot.session_index))
-        / max(pivot.atr, 1e-12)
-        for pivot in inliers
-    ) / total_weight
+    by_key = {pivot.pivot_key: pivot for pivot in pivots}
     return (
-        inliers,
-        intercept + slope * current_index,
-        slope,
-        residual_atr,
-        total_weight,
+        [by_key[key] for key in result["inlier_pivot_keys"]],
+        float(result["center"]),
+        float(result["slope"]),
+        float(result["residual_atr"]),
+        float(result["total_weight"]),
     )
 
 
@@ -1613,14 +1427,16 @@ def _match_zone(
 
 
 def _new_zone_key(source_kind: str, pivots: list[Pivot]) -> str:
-    membership = "|".join(sorted(pivot.pivot_key for pivot in pivots))
-    seed = f"{source_kind}|{membership}"
-    return f"srz_{sha256(seed.encode('utf-8')).hexdigest()[:20]}"
+    return str(
+        native_support_resistance.new_zone_key(
+            source_kind,
+            [{"pivot_key": pivot.pivot_key} for pivot in pivots],
+        )
+    )
 
 
 def _revived_zone_key(zone_key: str, effective_date: date) -> str:
-    seed = f"{zone_key}|revived|{effective_date.isoformat()}"
-    return f"srz_{sha256(seed.encode('utf-8')).hexdigest()[:20]}"
+    return str(native_support_resistance.revived_zone_key(zone_key, effective_date))
 
 
 def _record_zone_version(
@@ -1681,11 +1497,14 @@ def _valid_zone_values(
     atr: float,
     slope: float,
 ) -> bool:
-    values = (center, lower, upper, atr, slope)
-    return (
-        all(isfinite(value) for value in values)
-        and atr > 0
-        and 0 < lower <= center <= upper
+    return bool(
+        native_support_resistance.valid_zone_values(
+            center,
+            lower,
+            upper,
+            atr,
+            slope,
+        )
     )
 
 
@@ -1701,4 +1520,4 @@ def _valid_zone_geometry(zone: Zone) -> bool:
 
 def _stored_zone_price(value: float) -> float:
     """Match the NUMERIC(24, 10) representation used by persisted zone rows."""
-    return float(Decimal(str(value)).quantize(ZONE_PRICE_QUANTUM, rounding=ROUND_HALF_UP))
+    return float(native_support_resistance.stored_zone_price(value))
