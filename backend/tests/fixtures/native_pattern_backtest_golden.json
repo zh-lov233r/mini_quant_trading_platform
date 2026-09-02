@@ -1,0 +1,67 @@
+{
+  "double_bottom": {
+    "sha256": "c5911cc4d1b88cc20e9334263bb9a2a2f933debf6ee357ac8ca45660de5c5b26",
+    "signal_stages": [[1, "second_bottom"], [2, "right_side_pullback"], [3, "neckline_breakout"]],
+    "summary": {
+      "final_equity": 1021.2453007518798,
+      "max_drawdown": 0.001897533206831141,
+      "signal_count": 3,
+      "total_fees": 0.0,
+      "total_slippage": 0.0,
+      "trade_count": 3
+    },
+    "trade_stages": [["BUY", 1, "second_bottom"], ["BUY", 2, "right_side_pullback"], ["BUY", 3, "neckline_breakout"]]
+  },
+  "head_shoulders_bottom": {
+    "sha256": "20fbc933bd282133572a2467d565943452ada980b37b128f794830f99bad1a1b",
+    "signal_stages": [[1, "head_candidate"], [2, "right_shoulder"], [3, "neckline_breakout"]],
+    "summary": {
+      "final_equity": 1066.2127231315217,
+      "max_drawdown": 0.0009523809523809632,
+      "signal_count": 3,
+      "total_fees": 0.0,
+      "total_slippage": 0.0,
+      "trade_count": 3
+    },
+    "trade_stages": [["BUY", 1, "head_candidate"], ["BUY", 2, "right_shoulder"], ["BUY", 3, "neckline_breakout"]]
+  },
+  "island_reversal": {
+    "sha256": "4ebb9664171a48cd420c8072f5e8c8a8be29b2ce0bdfc4c1e7b6527f88130a2b",
+    "signal_stages": [[1, "exhaustion_gap"], [2, "upside_gap"], [3, "gap_retest"]],
+    "summary": {
+      "final_equity": 1009.5353535353536,
+      "max_drawdown": 0.005952559002123744,
+      "signal_count": 3,
+      "total_fees": 0.0,
+      "total_slippage": 0.0,
+      "trade_count": 3
+    },
+    "trade_stages": [["BUY", 1, "exhaustion_gap"], ["BUY", 2, "upside_gap"], ["BUY", 3, "gap_retest"]]
+  },
+  "rounded_bottom": {
+    "sha256": "ab659d2ee636793dc360883ee069e90b611ec6a7ef60558a9a58fcb13d4f5186",
+    "signal_stages": [[1, "first_right_pullback"], [1, "first_right_pullback"], [3, "rim_breakout"]],
+    "summary": {
+      "final_equity": 1010.213475026478,
+      "max_drawdown": 0.0,
+      "signal_count": 3,
+      "total_fees": 0.0,
+      "total_slippage": 0.0,
+      "trade_count": 3
+    },
+    "trade_stages": [["BUY", 1, "first_right_pullback"], ["SELL", null, null], ["BUY", 3, "rim_breakout"]]
+  },
+  "v_reversal": {
+    "sha256": "2a5078482d7af008fabd7af6f3fed6f5d3b11df92899a3e3977a8724c57b79c8",
+    "signal_stages": [[1, "volume_pivot"], [2, "continuation"], [3, "top_breakout_retest"], [3, "top_breakout_retest"]],
+    "summary": {
+      "final_equity": 1014.1039979757084,
+      "max_drawdown": 0.0012820512820512216,
+      "signal_count": 4,
+      "total_fees": 0.0,
+      "total_slippage": 0.0,
+      "trade_count": 3
+    },
+    "trade_stages": [["BUY", 1, "volume_pivot"], ["BUY", 2, "continuation"], ["BUY", 3, "top_breakout_retest"]]
+  }
+}

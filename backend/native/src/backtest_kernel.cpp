@@ -1,9 +1,11 @@
 #include "backtest_kernel.hpp"
+#include "pattern_kernel.hpp"
 
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -81,7 +83,16 @@ enum FloatColumn : std::size_t {
     kPrevEma50 = 34,
 };
 
-enum class StrategyKind { Trend, MeanReversion, MomentumBreakout };
+enum class StrategyKind {
+    Trend,
+    MeanReversion,
+    MomentumBreakout,
+    IslandReversal,
+    DoubleBottom,
+    HeadShouldersBottom,
+    RoundedBottom,
+    VReversal,
+};
 enum class Action : std::int8_t { Sell = -1, Buy = 1 };
 
 class BacktestCancelled final : public std::runtime_error {
@@ -177,6 +188,8 @@ struct StrategyConfig {
     double minimum_return_20d = 0.0;
     double breakout_buffer_pct = 0.0;
     double exit_return_20d = 0.0;
+
+    std::optional<PatternConfig> pattern;
 };
 
 struct Position {
@@ -184,6 +197,10 @@ struct Position {
     double average_entry_price;
     std::int64_t entry_session;
     std::int32_t symbol_id;
+    std::int64_t entry_date_ordinal;
+    std::optional<PatternSetup> pattern_setup;
+    std::vector<std::string> entry_history_json;
+    std::string entry_signal_features_json;
 };
 
 struct StrengthComponentAudit {
@@ -213,6 +230,9 @@ struct SignalRecord {
     std::vector<StrengthComponentAudit> strength_components;
     std::string metadata_json;
     std::string entry_signal_features_json;
+    std::optional<PatternSetup> pattern_setup;
+    std::string pattern_setup_json;
+    std::string strength_json;
 };
 
 struct KernelResult {
@@ -253,6 +273,9 @@ struct KernelResult {
     std::vector<std::int64_t> trade_execution_date_ordinal;
     std::vector<std::string> trade_reason;
     std::vector<std::string> trade_entry_signal_features_json;
+    std::vector<std::string> trade_setup_id;
+    std::vector<std::int8_t> trade_stage_index;
+    std::vector<std::string> trade_stage_key;
     std::vector<double> trade_position_quantity_before;
     std::vector<double> trade_position_quantity_after;
     std::vector<double> trade_position_average_entry_price_after;
@@ -276,6 +299,8 @@ struct KernelResult {
     std::vector<double> position_average_entry_price;
     std::vector<double> position_close;
     std::vector<double> position_market_value;
+    std::vector<std::int64_t> position_entry_date_ordinal;
+    std::vector<std::string> position_entry_signal_features_json;
 
     bool has_universe_membership = false;
     std::vector<std::int64_t> universe_session_index;
@@ -460,6 +485,18 @@ StrategyConfig parse_strategy(const py::dict& runtime) {
         config.volume_multiplier = py::cast<double>(signal["volume_multiplier"]);
         config.exit_return_20d = py::cast<double>(signal["exit_return_20d"]);
         config.take_profit_pct = py::cast<double>(risk["take_profit_pct"]);
+    } else if (type == "island_reversal" || type == "double_bottom"
+        || type == "head_shoulders_bottom" || type == "rounded_bottom"
+        || type == "v_reversal") {
+        config.pattern = parse_pattern_config(runtime);
+        config.minimum_strength = config.pattern->minimum_strength;
+        config.max_positions = config.pattern->risk.max_positions;
+        config.position_size_pct = config.pattern->risk.position_size_pct;
+        if (type == "island_reversal") config.kind = StrategyKind::IslandReversal;
+        else if (type == "double_bottom") config.kind = StrategyKind::DoubleBottom;
+        else if (type == "head_shoulders_bottom") config.kind = StrategyKind::HeadShouldersBottom;
+        else if (type == "rounded_bottom") config.kind = StrategyKind::RoundedBottom;
+        else config.kind = StrategyKind::VReversal;
     } else {
         throw std::invalid_argument("native full backtest is not implemented: " + type);
     }
@@ -691,7 +728,36 @@ void append_universe_membership(
 }
 
 double rounded_two(double value) {
-    return std::nearbyint(value * 100.0) / 100.0;
+    if (!std::isfinite(value) || value == 0.0) return value;
+
+    const bool negative = value < 0.0;
+    const std::uint64_t bits = std::bit_cast<std::uint64_t>(std::abs(value));
+    const std::uint64_t exponent_bits = (bits >> 52U) & 0x7ffU;
+    const std::uint64_t fraction = bits & ((std::uint64_t{1} << 52U) - 1U);
+    const std::uint64_t significand = exponent_bits == 0
+        ? fraction
+        : fraction | (std::uint64_t{1} << 52U);
+    const int exponent = exponent_bits == 0
+        ? 1 - 1023 - 52
+        : static_cast<int>(exponent_bits) - 1023 - 52;
+    const std::uint64_t scaled_significand = significand * 100U;
+
+    std::uint64_t cents = 0;
+    if (exponent >= 0) {
+        cents = scaled_significand << exponent;
+    } else {
+        const unsigned shift = static_cast<unsigned>(-exponent);
+        if (shift < 64U) {
+            const std::uint64_t quotient = scaled_significand >> shift;
+            const std::uint64_t remainder = scaled_significand
+                & ((std::uint64_t{1} << shift) - 1U);
+            const std::uint64_t halfway = std::uint64_t{1} << (shift - 1U);
+            cents = quotient
+                + (remainder > halfway || (remainder == halfway && (quotient & 1U)) ? 1U : 0U);
+        }
+    }
+    const double rounded = static_cast<double>(cents) / 100.0;
+    return negative ? -rounded : rounded;
 }
 
 double rise_score(double value, double gate, double cap) {
@@ -711,6 +777,21 @@ StrengthComponentAudit rise_component(
     };
 }
 
+double fall_score(double value, double gate, double ideal) {
+    if (!std::isfinite(value) || gate <= ideal) throw std::invalid_argument("invalid signal strength input");
+    return rounded_two(100.0 * std::clamp((gate - value) / (gate - ideal), 0.0, 1.0));
+}
+
+StrengthComponentAudit fall_component(
+    std::string key,
+    double raw_value,
+    double weight,
+    double gate,
+    double ideal
+) {
+    return {std::move(key), raw_value, fall_score(raw_value, gate, ideal), weight};
+}
+
 double weighted_strength(const std::vector<StrengthComponentAudit>& components) {
     double score = 0.0;
     double weight = 0.0;
@@ -719,6 +800,167 @@ double weighted_strength(const std::vector<StrengthComponentAudit>& components) 
         weight += component.weight;
     }
     return rounded_two(score / weight);
+}
+
+bool is_pattern_strategy(const StrategyConfig& config) {
+    return config.pattern.has_value();
+}
+
+PatternBar dataset_pattern_bar(const DatasetView& dataset, py::ssize_t row) {
+    const auto value = [&](std::size_t column) -> std::optional<double> {
+        const double raw = dataset.floats.at(row, column);
+        return std::isfinite(raw) ? std::optional<double>(raw) : std::nullopt;
+    };
+    return PatternBar{
+        dataset.integers.at(row, kDateOrdinal),
+        dataset.integers.at(row, kTimestampUs),
+        value(kOpen), value(kHigh), value(kLow), value(kClose), value(kVolume), value(kAtr14),
+        value(kVolumeSma20), value(kReturn20d), value(kReturn60d), value(kSma20), value(kSma50),
+    };
+}
+
+double required_pattern_number(const PatternObject& values, const std::string& key) {
+    const auto value = pattern_number(values, key);
+    if (!value || !std::isfinite(*value)) {
+        throw std::invalid_argument("pattern BUY signal is missing finite strength input: " + key);
+    }
+    return *value;
+}
+
+void attach_pattern_strength(
+    SignalRecord& result,
+    const PatternConfig& config,
+    const PatternDecision& decision
+) {
+    if (result.action != Action::Buy) return;
+    const PatternObject& inputs = decision.strength_inputs;
+    if (config.kind == PatternKind::IslandReversal) {
+        const auto& signal = std::get<IslandConfig>(config.signal);
+        const std::string stage = pattern_text(inputs, "stage").value_or("");
+        result.strength_model_version = "island_reversal:" + stage + ":v1";
+        if (stage == "exhaustion_gap") {
+            result.strength_components = {
+                rise_component(
+                    "left_gap_pct", required_pattern_number(inputs, "left_gap_pct"), 0.60,
+                    signal.left_gap_min_pct, signal.left_gap_min_pct * 2.0
+                ),
+                fall_component(
+                    "left_volume_ratio", required_pattern_number(inputs, "left_volume_ratio"), 0.40,
+                    signal.left_volume_ratio_max, 0.0
+                ),
+            };
+        } else {
+            const bool breakout = stage == "breakout" || stage == "upside_gap";
+            result.strength_components = {
+                rise_component(
+                    "left_gap_pct", required_pattern_number(inputs, "left_gap_pct"), breakout ? 0.30 : 0.15,
+                    signal.left_gap_min_pct, signal.left_gap_min_pct * 2.0
+                ),
+                rise_component(
+                    "right_gap_pct", required_pattern_number(inputs, "right_gap_pct"), breakout ? 0.40 : 0.20,
+                    signal.right_gap_min_pct, signal.right_gap_min_pct * 2.0
+                ),
+                rise_component(
+                    "breakout_volume_ratio", required_pattern_number(inputs, "breakout_volume_ratio"), breakout ? 0.30 : 0.20,
+                    signal.right_volume_ratio_min, signal.right_volume_ratio_min * 2.0
+                ),
+            };
+            if (!breakout) {
+                result.strength_components.push_back(fall_component(
+                    "retest_volume_ratio", required_pattern_number(inputs, "retest_volume_ratio"), 0.25,
+                    signal.retest_volume_ratio_max, 0.0
+                ));
+                result.strength_components.push_back(rise_component(
+                    "hold_margin_atr", required_pattern_number(inputs, "hold_margin_atr"), 0.20, 0.0, 1.0
+                ));
+            }
+        }
+    } else if (config.kind == PatternKind::DoubleBottom) {
+        const auto& signal = std::get<DoubleBottomConfig>(config.signal);
+        const std::string stage = pattern_text(inputs, "stage").value_or("retest");
+        result.strength_model_version = "double_bottom:" + stage + ":v1";
+        if (stage == "second_bottom") {
+            result.strength_components = {
+                fall_component("bottom_distance_pct", required_pattern_number(inputs, "bottom_distance_pct"), 0.40, signal.bottom_tolerance_pct, 0.0),
+                rise_component("rebound_up_day_ratio", required_pattern_number(inputs, "rebound_up_day_ratio"), 0.30, signal.rebound_up_day_ratio_min, 1.0),
+                fall_component("current_volume_ratio", required_pattern_number(inputs, "current_volume_ratio"), 0.30, signal.second_bottom_volume_ratio_max, 0.0),
+            };
+        } else if (stage == "right_side_pullback") {
+            result.strength_components = {
+                fall_component("bottom_distance_pct", required_pattern_number(inputs, "bottom_distance_pct"), 0.25, signal.bottom_tolerance_pct, 0.0),
+                rise_component("rebound_up_day_ratio", required_pattern_number(inputs, "rebound_up_day_ratio"), 0.25, signal.rebound_up_day_ratio_min, 1.0),
+                fall_component("current_volume_ratio", required_pattern_number(inputs, "current_volume_ratio"), 0.25, signal.second_bottom_volume_ratio_max, 0.0),
+                rise_component("pullback_hold_pct", required_pattern_number(inputs, "pullback_hold_pct"), 0.25, 0.0, 1.0),
+            };
+        } else if (stage == "neckline_breakout") {
+            result.strength_components = {
+                fall_component("bottom_distance_pct", required_pattern_number(inputs, "bottom_distance_pct"), 0.25, signal.bottom_tolerance_pct, 0.0),
+                rise_component("rebound_up_day_ratio", required_pattern_number(inputs, "rebound_up_day_ratio"), 0.25, signal.rebound_up_day_ratio_min, 1.0),
+                rise_component("breakout_volume_ratio", required_pattern_number(inputs, "breakout_volume_ratio"), 0.25, signal.breakout_volume_ratio_min, signal.breakout_volume_ratio_min * 2.0),
+                rise_component("breakout_extension_pct", required_pattern_number(inputs, "breakout_extension_pct"), 0.25, signal.breakout_buffer_pct, signal.breakout_buffer_pct * 2.0),
+            };
+        } else {
+            result.strength_components = {
+                fall_component("bottom_distance_pct", required_pattern_number(inputs, "bottom_distance_pct"), 0.25, signal.bottom_tolerance_pct, 0.0),
+                rise_component("rebound_up_day_ratio", required_pattern_number(inputs, "rebound_up_day_ratio"), 0.20, signal.rebound_up_day_ratio_min, 1.0),
+                rise_component("breakout_volume_ratio", required_pattern_number(inputs, "breakout_volume_ratio"), 0.20, signal.breakout_volume_ratio_min, signal.breakout_volume_ratio_min * 2.0),
+                rise_component("breakout_extension_pct", required_pattern_number(inputs, "breakout_extension_pct"), 0.15, signal.breakout_buffer_pct, signal.breakout_buffer_pct * 2.0),
+                fall_component("retest_volume_ratio", required_pattern_number(inputs, "retest_volume_ratio"), 0.20, signal.retest_volume_ratio_max, 0.0),
+            };
+        }
+    } else {
+        result.strength_model_version = config.strategy_type + ":" + decision.setup.stage_key + ":v1";
+        result.strength_components = {
+            rise_component("structure_quality", required_pattern_number(inputs, "structure_quality"), 0.25, 0.0, 1.0),
+            rise_component("price_confirmation", required_pattern_number(inputs, "price_confirmation"), 0.25, 0.0, 1.0),
+            rise_component("volume_quality", required_pattern_number(inputs, "volume_quality"), 0.25, 0.0, 1.0),
+            rise_component("stage_confirmation", required_pattern_number(inputs, "stage_confirmation"), 0.25, 0.0, 1.0),
+        };
+    }
+    result.strength_score = weighted_strength(result.strength_components);
+    result.passes_threshold = result.strength_score >= config.minimum_strength;
+}
+
+std::optional<SignalRecord> evaluate_pattern_signal(
+    const DatasetView& dataset,
+    py::ssize_t row,
+    const StrategyConfig& strategy,
+    const PatternState& state,
+    const Position* position
+) {
+    const PatternConfig& config = *strategy.pattern;
+    const std::int32_t symbol_id = static_cast<std::int32_t>(dataset.integers.at(row, kSymbolId));
+    if (symbol_id < 0 || static_cast<std::size_t>(symbol_id) >= dataset.symbols.size()) {
+        throw std::invalid_argument("prepared dataset symbol_id is out of range");
+    }
+    const PatternPositionView position_view{
+        position ? position->quantity : 0.0,
+        position ? std::optional<double>(position->average_entry_price) : std::nullopt,
+        position && position->pattern_setup ? &*position->pattern_setup : nullptr,
+    };
+    const auto decision = evaluate_pattern(
+        config, dataset.symbols[static_cast<std::size_t>(symbol_id)], state, position_view
+    );
+    if (!decision) return std::nullopt;
+    SignalRecord result{
+        dataset.integers.at(row, kSessionIndex), dataset.integers.at(row, kInstrumentId),
+        dataset.integers.at(row, kTimestampUs), symbol_id,
+        decision->buy ? Action::Buy : Action::Sell,
+        decision->score.value_or(std::numeric_limits<double>::quiet_NaN()),
+        std::numeric_limits<double>::quiet_NaN(), 0, true, decision->reason,
+    };
+    result.dataset_row = row;
+    result.position = position_view.quantity;
+    result.average_entry_price = position_view.average_entry_price.value_or(
+        std::numeric_limits<double>::quiet_NaN()
+    );
+    result.pattern_setup = decision->setup;
+    result.pattern_setup_json = pattern_setup_json(decision->setup);
+    attach_pattern_strength(result, config, *decision);
+    result.metadata_json = pattern_metadata_json(
+        config, state.bars.back(), position_view, *decision
+    );
+    return result;
 }
 
 std::string percent_reason(const std::string& prefix, double value, const std::string& suffix) {
@@ -1018,6 +1260,20 @@ std::string build_strength_json(
     return output;
 }
 
+std::string append_strength_json(
+    const std::string& metadata_json,
+    const std::string& strength_json
+) {
+    if (strength_json.empty()) return metadata_json;
+    if (metadata_json.empty() || metadata_json.back() != '}') {
+        throw std::runtime_error("signal metadata JSON is invalid");
+    }
+    std::string output = metadata_json;
+    output.pop_back();
+    output += ",\"strength\":" + strength_json + "}";
+    return output;
+}
+
 std::string build_signal_metadata_json(
     const DatasetView& dataset,
     const SignalRecord& signal,
@@ -1166,17 +1422,43 @@ std::string build_signal_metadata_json(
 
 std::string build_entry_signal_features_json(
     const std::string& metadata_json,
-    const std::string& strength_json
+    const std::string& strength_json,
+    const std::string& setup_json = "{}"
 ) {
     if (metadata_json.empty() || metadata_json.back() != '}') {
         throw std::runtime_error("signal metadata JSON is invalid");
     }
     std::string output = metadata_json;
     output.pop_back();
-    output += ",\"entry_history\":[{\"setup\":{},\"strength\":";
+    output += ",\"entry_history\":[{\"setup\":";
+    output += setup_json;
+    output += ",\"strength\":";
     output += strength_json.empty() ? "{}" : strength_json;
     output += "}]}";
     return output;
+}
+
+std::string build_merged_entry_signal_features_json(
+    const std::string& metadata_json,
+    const std::vector<std::string>& history
+) {
+    if (metadata_json.empty() || metadata_json.back() != '}') {
+        throw std::runtime_error("signal metadata JSON is invalid");
+    }
+    std::string output = metadata_json;
+    output.pop_back();
+    output += ",\"entry_history\":[";
+    for (std::size_t index = 0; index < history.size(); ++index) {
+        if (index > 0U) output.push_back(',');
+        output += history[index];
+    }
+    output += "]}";
+    return output;
+}
+
+std::string entry_history_item(const SignalRecord& signal) {
+    return "{\"setup\":" + (signal.pattern_setup_json.empty() ? "{}" : signal.pattern_setup_json)
+        + ",\"strength\":" + (signal.strength_json.empty() ? "{}" : signal.strength_json) + "}";
 }
 
 double commission(double notional, const CostConfig& costs) {
@@ -1254,7 +1536,10 @@ void append_trade(
     double slippage_bps,
     double gross_notional,
     double net_cash_flow,
-    const std::string& entry_signal_features_json
+    const std::string& entry_signal_features_json,
+    const std::string& setup_id,
+    std::int8_t stage_index,
+    const std::string& stage_key
 ) {
     result.trade_session_index.push_back(session.session_index);
     result.trade_signal_session_index.push_back(signal.session_index);
@@ -1271,6 +1556,9 @@ void append_trade(
     result.trade_execution_date_ordinal.push_back(session.date_ordinal);
     result.trade_reason.push_back(signal.reason);
     result.trade_entry_signal_features_json.push_back(entry_signal_features_json);
+    result.trade_setup_id.push_back(setup_id);
+    result.trade_stage_index.push_back(stage_index);
+    result.trade_stage_key.push_back(stage_key);
     result.trade_position_quantity_before.push_back(position_quantity_before);
     result.trade_position_quantity_after.push_back(position_quantity_after);
     result.trade_position_average_entry_price_after.push_back(
@@ -1298,6 +1586,7 @@ std::shared_ptr<KernelResult> run_native_backtest(
     const DatasetView& dataset,
     const StrategyConfig& strategy,
     const std::optional<UniversePolicy>& universe_policy,
+    const std::vector<SessionRange>& warmup_sessions,
     const std::vector<SessionRange>& sessions,
     double initial_cash,
     const CostConfig& costs,
@@ -1313,6 +1602,7 @@ std::shared_ptr<KernelResult> run_native_backtest(
     std::map<std::int64_t, Position> positions;
     std::map<std::int64_t, double> last_marks;
     std::map<std::int64_t, std::int64_t> delisted_ordinals;
+    std::map<std::int64_t, PatternState> pattern_states;
     std::vector<SignalRecord> pending;
     const bool has_control_callback = !control_callback.is_none();
     for (py::ssize_t row = 0; row < dataset.integers.rows; ++row) {
@@ -1323,6 +1613,17 @@ std::shared_ptr<KernelResult> run_native_backtest(
 
     {
         py::gil_scoped_release release;
+        if (is_pattern_strategy(strategy)) {
+            for (const SessionRange& session : warmup_sessions) {
+                for (py::ssize_t row = session.begin; row < session.end; ++row) {
+                    append_pattern_bar(
+                        pattern_states[dataset.integers.at(row, kInstrumentId)],
+                        *strategy.pattern,
+                        dataset_pattern_bar(dataset, row)
+                    );
+                }
+            }
+        }
         for (std::size_t day = 0; day < sessions.size(); ++day) {
             const SessionRange& session = sessions[day];
             std::map<std::int64_t, py::ssize_t> rows;
@@ -1392,7 +1693,7 @@ std::shared_ptr<KernelResult> run_native_backtest(
                     position->second.quantity, 0.0,
                     std::numeric_limits<double>::quiet_NaN(),
                     std::numeric_limits<double>::quiet_NaN(),
-                    costs.slippage_bps, notional, proceeds, ""
+                    costs.slippage_bps, notional, proceeds, "", "", 0, ""
                 );
                 positions.erase(position);
                 last_marks.erase(signal.instrument_id);
@@ -1401,9 +1702,21 @@ std::shared_ptr<KernelResult> run_native_backtest(
 
             const double equity_before = cash + gross_exposure(positions, execution_marks);
             std::vector<const SignalRecord*> buys;
+            std::map<std::pair<std::int64_t, std::string>, const SignalRecord*> staged_buys;
             for (const SignalRecord& signal : pending) {
-                if (signal.action == Action::Buy) buys.push_back(&signal);
+                if (signal.action != Action::Buy) continue;
+                if (!signal.pattern_setup) {
+                    buys.push_back(&signal);
+                    continue;
+                }
+                const auto key = std::pair(signal.instrument_id, signal.pattern_setup->setup_id);
+                const auto found = staged_buys.find(key);
+                if (found == staged_buys.end()
+                    || found->second->pattern_setup->stage_index < signal.pattern_setup->stage_index) {
+                    staged_buys[key] = &signal;
+                }
             }
+            for (const auto& [key, signal] : staged_buys) buys.push_back(signal);
             std::sort(buys.begin(), buys.end(), [&dataset](const SignalRecord* left, const SignalRecord* right) {
                 return std::tuple(
                     left->strength_rank == 0 ? std::numeric_limits<std::int32_t>::max() : left->strength_rank,
@@ -1418,22 +1731,55 @@ std::shared_ptr<KernelResult> run_native_backtest(
                 );
             });
             for (const SignalRecord* signal : buys) {
-                if (!signal->passes_threshold || positions.contains(signal->instrument_id)
-                    || positions.size() >= static_cast<std::size_t>(strategy.max_positions)) continue;
+                if (!signal->passes_threshold) continue;
+                auto position = positions.find(signal->instrument_id);
+                if (position != positions.end()) {
+                    if (!signal->pattern_setup || !position->second.pattern_setup
+                        || signal->pattern_setup->setup_id != position->second.pattern_setup->setup_id
+                        || signal->pattern_setup->stage_index < position->second.pattern_setup->stage_index) continue;
+                } else if (positions.size() >= static_cast<std::size_t>(strategy.max_positions)) {
+                    continue;
+                }
                 const auto row = rows.find(signal->instrument_id);
                 if (row == rows.end()) continue;
                 const std::optional<double> mark = finite(dataset.floats.at(row->second, kOpen));
                 if (!mark || *mark <= 0.0) continue;
-                const double target = std::min(cash, equity_before * strategy.position_size_pct);
+                const double current_quantity = position == positions.end() ? 0.0 : position->second.quantity;
+                const double target_fraction = signal->pattern_setup
+                    ? signal->pattern_setup->stage_target_pct : 1.0;
+                const double desired = equity_before * strategy.position_size_pct * target_fraction;
+                const double incremental = std::max(desired - current_quantity * *mark, 0.0);
+                const double target = std::min(cash, incremental);
                 const BuyEstimate order = estimate_buy(target, *mark, costs);
                 const double cash_out = order.notional + order.fee;
                 if (order.quantity <= 0.0 || cash_out <= 0.0 || cash_out > cash) continue;
                 cash -= cash_out;
                 const double slippage = order.quantity * std::max(order.price - *mark, 0.0);
-                positions[signal->instrument_id] = {
-                    order.quantity, order.price, static_cast<std::int64_t>(day),
-                    static_cast<std::int32_t>(dataset.integers.at(row->second, kSymbolId))
-                };
+                const double new_quantity = current_quantity + order.quantity;
+                const double current_average = position == positions.end()
+                    ? 0.0 : position->second.average_entry_price;
+                const double new_average = (
+                    current_quantity * current_average + order.quantity * order.price
+                ) / new_quantity;
+                if (position == positions.end()) {
+                    Position created{
+                        new_quantity, new_average, static_cast<std::int64_t>(day),
+                        static_cast<std::int32_t>(dataset.integers.at(row->second, kSymbolId)),
+                        session.date_ordinal, signal->pattern_setup, {}, "",
+                    };
+                    position = positions.emplace(signal->instrument_id, std::move(created)).first;
+                } else {
+                    position->second.quantity = new_quantity;
+                    position->second.average_entry_price = new_average;
+                    position->second.symbol_id = static_cast<std::int32_t>(
+                        dataset.integers.at(row->second, kSymbolId)
+                    );
+                    position->second.pattern_setup = signal->pattern_setup;
+                }
+                position->second.entry_history_json.push_back(entry_history_item(*signal));
+                position->second.entry_signal_features_json = build_merged_entry_signal_features_json(
+                    signal->metadata_json, position->second.entry_history_json
+                );
                 result->total_fees += order.fee;
                 result->total_slippage += slippage;
                 append_trade(
@@ -1441,9 +1787,14 @@ std::shared_ptr<KernelResult> run_native_backtest(
                     static_cast<std::int32_t>(dataset.integers.at(row->second, kSymbolId)),
                     order.quantity, order.price, order.fee, *mark, slippage,
                     dataset.integers.at(row->second, kTimestampUs),
-                    0.0, order.quantity, order.price, 1.0,
+                    current_quantity, new_quantity, new_average,
+                    signal->pattern_setup
+                        ? target_fraction : std::numeric_limits<double>::quiet_NaN(),
                     costs.slippage_bps, order.notional, -cash_out,
-                    signal->entry_signal_features_json
+                    position->second.entry_signal_features_json,
+                    signal->pattern_setup ? signal->pattern_setup->setup_id : "",
+                    static_cast<std::int8_t>(signal->pattern_setup ? signal->pattern_setup->stage_index : 0),
+                    signal->pattern_setup ? signal->pattern_setup->stage_key : ""
                 );
             }
 
@@ -1452,11 +1803,21 @@ std::shared_ptr<KernelResult> run_native_backtest(
             for (py::ssize_t row = session.begin; row < session.end; ++row) {
                 const std::int64_t instrument = dataset.integers.at(row, kInstrumentId);
                 const auto position = positions.find(instrument);
-                const auto decision = evaluate_signal(
-                    dataset, row, strategy,
-                    position == positions.end() ? nullptr : &position->second,
-                    static_cast<std::int64_t>(day)
-                );
+                std::optional<SignalRecord> decision;
+                if (is_pattern_strategy(strategy)) {
+                    PatternState& state = pattern_states[instrument];
+                    append_pattern_bar(state, *strategy.pattern, dataset_pattern_bar(dataset, row));
+                    decision = evaluate_pattern_signal(
+                        dataset, row, strategy, state,
+                        position == positions.end() ? nullptr : &position->second
+                    );
+                } else {
+                    decision = evaluate_signal(
+                        dataset, row, strategy,
+                        position == positions.end() ? nullptr : &position->second,
+                        static_cast<std::int64_t>(day)
+                    );
+                }
                 if (!decision) continue;
                 const std::size_t session_row = static_cast<std::size_t>(row - session.begin);
                 if (decision->action == Action::Buy && universe_policy
@@ -1485,12 +1846,18 @@ std::shared_ptr<KernelResult> run_native_backtest(
             }
             for (SignalRecord& signal : current) {
                 const std::string strength_json = build_strength_json(signal, strategy);
-                signal.metadata_json = build_signal_metadata_json(
-                    dataset, signal, strategy, strength_json
-                );
+                signal.strength_json = strength_json;
+                if (is_pattern_strategy(strategy)) {
+                    signal.metadata_json = append_strength_json(signal.metadata_json, strength_json);
+                } else {
+                    signal.metadata_json = build_signal_metadata_json(
+                        dataset, signal, strategy, strength_json
+                    );
+                }
                 if (signal.action == Action::Buy) {
                     signal.entry_signal_features_json = build_entry_signal_features_json(
-                        signal.metadata_json, strength_json
+                        signal.metadata_json, strength_json,
+                        signal.pattern_setup_json.empty() ? "{}" : signal.pattern_setup_json
                     );
                 }
                 append_signal(*result, signal);
@@ -1530,6 +1897,10 @@ std::shared_ptr<KernelResult> run_native_backtest(
                 result->position_average_entry_price.push_back(position.average_entry_price);
                 result->position_close.push_back(close);
                 result->position_market_value.push_back(position.quantity * close);
+                result->position_entry_date_ordinal.push_back(position.entry_date_ordinal);
+                result->position_entry_signal_features_json.push_back(
+                    position.entry_signal_features_json
+                );
             }
 
             if (has_control_callback) {
@@ -1580,10 +1951,22 @@ std::shared_ptr<KernelResult> run_backtest_binding(
         options, "end_ordinal", "end_date", std::numeric_limits<std::int64_t>::max()
     );
     if (end < start) throw std::invalid_argument("end_date must be on or after start_date");
-    const std::vector<SessionRange> sessions = session_ranges(view, start, end);
-    attach_history_sessions(view, sessions);
+    const std::vector<SessionRange> all_sessions = session_ranges(
+        view, std::numeric_limits<std::int64_t>::min(), end
+    );
+    std::vector<SessionRange> warmup_sessions;
+    std::vector<SessionRange> sessions;
+    for (const SessionRange& session : all_sessions) {
+        if (session.date_ordinal < start) warmup_sessions.push_back(session);
+        else sessions.push_back(session);
+    }
+    if (sessions.empty()) {
+        throw std::invalid_argument("prepared dataset has no rows inside the backtest window");
+    }
+    attach_history_sessions(view, all_sessions);
     return run_native_backtest(
-        view, config, universe_policy, sessions, initial_cash, costs, control_callback
+        view, config, universe_policy, warmup_sessions, sessions,
+        initial_cash, costs, control_callback
     );
 }
 
@@ -1658,6 +2041,9 @@ void bind_backtest(py::module_& module) {
             );
             result["reason"] = value.trade_reason;
             result["entry_signal_features_json"] = value.trade_entry_signal_features_json;
+            result["setup_id"] = value.trade_setup_id;
+            result["stage_index"] = vector_view(owner, value.trade_stage_index);
+            result["stage_key"] = value.trade_stage_key;
             result["position_quantity_before"] = vector_view(
                 owner, value.trade_position_quantity_before
             );
@@ -1695,6 +2081,8 @@ void bind_backtest(py::module_& module) {
             result["average_entry_price"] = vector_view(owner, value.position_average_entry_price);
             result["close"] = vector_view(owner, value.position_close);
             result["market_value"] = vector_view(owner, value.position_market_value);
+            result["entry_date_ordinal"] = vector_view(owner, value.position_entry_date_ordinal);
+            result["entry_signal_features_json"] = value.position_entry_signal_features_json;
             return result;
         })
         .def_property_readonly("universe_membership", [](py::object owner) -> py::object {

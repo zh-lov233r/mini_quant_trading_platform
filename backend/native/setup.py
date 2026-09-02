@@ -13,9 +13,10 @@ setup(
             "quant_kernel._native",
             [
                 "src/quant_kernel.cpp",
+                "src/native_utils.cpp",
+                "src/pattern_core.cpp",
                 "src/backtest_kernel.cpp",
                 "src/pattern_kernel.cpp",
-                "src/double_bottom_kernel.cpp",
                 "src/support_resistance_kernel.cpp",
             ],
             cxx_std=20,
