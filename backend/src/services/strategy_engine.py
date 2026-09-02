@@ -1,27 +1,22 @@
 from __future__ import annotations
 
-"""Signal generation engine shared by daily runs, paper trading, and backtests.
-
-The module is organized from top-level orchestration helpers down to individual
-strategy handlers and their supporting pattern-detection utilities.
-"""
+"""Native signal orchestration shared by daily runs and paper trading."""
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta, timezone
-from typing import Any, Callable, Dict, Literal
-from zoneinfo import ZoneInfo
+from datetime import date, datetime, timedelta, timezone
+import json
+import math
+from typing import Any, Dict, Literal
 
+import quant_kernel
 from sqlalchemy import bindparam, delete, select, text
 from sqlalchemy.orm import Session
 
 from src.models.tables import Signal, Strategy, StrategyRun
-from src.services.patterns import double_bottom, head_shoulders_bottom, island_reversal, rounded_bottom, v_reversal
-from src.services.patterns.models import PatternContext, PatternDecision, PatternEvaluator
-from src.services.signal_strength_service import annotate_and_rank_signals
+from src.services.prepared_dataset_service import build_in_memory_prepared_dataset
 from src.services.support_resistance_service import (
     SupportResistanceState,
     SupportResistanceSymbolState,
-    advance_symbol as advance_support_resistance_symbol,
 )
 from src.services.support_resistance_persistence_service import (
     SupportResistanceMaterializationBuildError,
@@ -39,14 +34,15 @@ from src.services.strategy_types import (
     RuntimeStrategy,
 )
 
-StrategyHandler = Callable[[RuntimeStrategy, MarketDataBySymbol], list["SignalEvent"]]
-
 RECENT_BAR_COUNT = 40
 RECENT_BAR_LOOKBACK_DAYS = 90
-NEW_YORK_TZ = ZoneInfo("America/New_York")
+NATIVE_STRATEGY_TYPES = frozenset(
+    str(item["strategy_type"]) for item in quant_kernel.catalog()
+)
 
 FEATURE_SNAPSHOT_SQL = """
 SELECT
+    i.id AS instrument_id,
     i.ticker_canonical AS symbol,
     i.asset_type,
     curr.dt_ny,
@@ -261,8 +257,6 @@ def generate_and_persist_signals_for_trade_date(
         if not runtime["engine_ready"]:
             continue
 
-        handler = STRATEGY_HANDLERS[runtime["strategy_type"]]
-
         replay_state: SupportResistanceState | None = None
         replay_symbols: list[str] = []
         replay_dates: list[date] = []
@@ -287,14 +281,12 @@ def generate_and_persist_signals_for_trade_date(
                 if reusable is not None
                 else SupportResistanceState()
             )
-            strategy_signals = _support_resistance_replay_handler_with_state(
-                runtime,
-                snapshots,
-                replay_state,
-            )
-        else:
-            strategy_signals = handler(runtime, snapshots)
-        annotate_and_rank_signals(runtime, strategy_signals)
+            for symbol, payload in support_resistance_hydration_payload(replay_state).items():
+                if symbol in snapshots:
+                    snapshots[symbol]["support_resistance_hydration"] = payload
+        strategy_signals, native_audit = evaluate_native_day(runtime, snapshots)
+        if runtime["strategy_type"] == "support_resistance":
+            replay_state = support_resistance_state_from_native_day(native_audit, snapshots)
         run = _get_or_create_signal_run(
             db=db,
             strategy=strategy,
@@ -380,33 +372,188 @@ def generate_signals(
         if not runtime["engine_ready"]:
             continue
 
-        handler = STRATEGY_HANDLERS[runtime["strategy_type"]]
-
-        strategy_signals = handler(runtime, market_data_by_symbol)
-        annotate_and_rank_signals(runtime, strategy_signals)
+        strategy_signals = evaluate_native_signals(runtime, market_data_by_symbol)
         signals.extend(strategy_signals)
 
     return signals
 
 
-# Backward-compatible wrapper for callers that still import the old public helper.
-# Input: runtime strategy payload plus a symbol -> snapshot market map.
-# Output: the same SignalEvent list produced by the trend-following handler.
-def trend_following(
+def evaluate_native_signals(
     runtime_strategy: RuntimeStrategy,
     market_data_by_symbol: MarketDataBySymbol,
 ) -> list[SignalEvent]:
-    return _trend_following_handler(runtime_strategy, market_data_by_symbol)
+    """Adapt native day results at the Python persistence and broker boundary."""
+    return evaluate_native_day(runtime_strategy, market_data_by_symbol)[0]
 
 
-# Legacy compatibility wrapper kept for older imports/tests.
-# Input: runtime strategy payload plus a symbol -> snapshot market map.
-# Output: the same SignalEvent list produced by the trend-following handler.
-def run_trend_following_strategy(
+def evaluate_native_day(
     runtime_strategy: RuntimeStrategy,
     market_data_by_symbol: MarketDataBySymbol,
-) -> list[SignalEvent]:
-    return _trend_following_handler(runtime_strategy, market_data_by_symbol)
+) -> tuple[list[SignalEvent], dict[str, Any]]:
+    dataset, portfolio_state = _prepared_day_input(market_data_by_symbol)
+    result = quant_kernel.evaluate_day(dataset, runtime_strategy, portfolio_state)
+    columns = result.signals
+    symbols = list(result.symbols)
+    signals = [
+        SignalEvent(
+            strategy_id=str(columns["strategy_id"][index]),
+            ts=datetime.fromtimestamp(
+                int(columns["timestamp_us"][index]) / 1_000_000,
+                tz=timezone.utc,
+            ),
+            symbol=symbols[int(columns["symbol_id"][index])],
+            action="BUY" if int(columns["action"][index]) == 1 else "SELL",
+            reason=str(columns["reason"][index]),
+            score=(
+                None
+                if math.isnan(float(columns["score"][index]))
+                else float(columns["score"][index])
+            ),
+            metadata=json.loads(columns["metadata_json"][index]),
+            instrument_id=(
+                None
+                if int(columns["instrument_id"][index]) < 0
+                else int(columns["instrument_id"][index])
+            ),
+        )
+        for index in range(len(result))
+    ]
+    support_columns = result.support_resistance
+    support_symbols = list(support_columns["symbols"])
+    audit = {
+        symbol: {"events": [], "zone_versions": [], "regime_versions": []}
+        for symbol in support_symbols
+    }
+    for collection_name in ("events", "zone_versions", "regime_versions"):
+        collection = support_columns[collection_name]
+        for symbol_id, payload_json in zip(
+            collection["symbol_id"],
+            collection["payload_json"],
+            strict=True,
+        ):
+            audit[support_symbols[int(symbol_id)]][collection_name].append(
+                json.loads(payload_json)
+            )
+    return signals, audit
+
+
+def _prepared_day_input(
+    market_data_by_symbol: MarketDataBySymbol,
+) -> tuple[Any, dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    positions: dict[str, dict[str, Any]] = {}
+    hydration: dict[str, dict[str, Any]] = {}
+    for synthetic_index, symbol in enumerate(sorted(market_data_by_symbol)):
+        current = dict(market_data_by_symbol[symbol])
+        instrument_id = int(current.get("instrument_id") or -(synthetic_index + 1))
+        current_date = _prepared_bar_date(current)
+        identity = {
+            "instrument_id": instrument_id,
+            "symbol": str(symbol).upper(),
+            "asset_type": current.get("asset_type"),
+            "exchange": current.get("exchange"),
+            "listed_at": current.get("listed_at"),
+            "delisted_at": current.get("delisted_at"),
+        }
+        by_date: dict[date, dict[str, Any]] = {}
+        for raw_bar in list(current.get("recent_bars") or []):
+            bar = dict(raw_bar)
+            bar_date = _prepared_bar_date(bar, fallback=current_date)
+            bar.setdefault(
+                "ts",
+                datetime(
+                    bar_date.year,
+                    bar_date.month,
+                    bar_date.day,
+                    21,
+                    tzinfo=timezone.utc,
+                ),
+            )
+            by_date[bar_date] = {**identity, **bar, "dt_ny": bar_date}
+        current.setdefault("ts", datetime.now(timezone.utc))
+        by_date[current_date] = {
+            **by_date.get(current_date, {}),
+            **identity,
+            **current,
+            "dt_ny": current_date,
+        }
+        rows.extend(by_date.values())
+        positions[str(instrument_id)] = {
+            key: current.get(key)
+            for key in (
+                "position",
+                "avg_entry_price",
+                "entry_trade_date",
+                "position_holding_days",
+                "entry_signal_features",
+            )
+        }
+        raw_hydration = current.get("support_resistance_hydration")
+        if isinstance(raw_hydration, dict):
+            hydration[str(instrument_id)] = dict(raw_hydration)
+    return (
+        build_in_memory_prepared_dataset(rows),
+        {
+            "positions": positions,
+            "support_resistance_hydration": hydration,
+        },
+    )
+
+
+def _prepared_bar_date(
+    snapshot: dict[str, Any],
+    *,
+    fallback: date | None = None,
+) -> date:
+    value = snapshot.get("dt_ny")
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    timestamp = snapshot.get("ts")
+    if isinstance(timestamp, datetime):
+        return timestamp.date()
+    if fallback is not None:
+        return fallback
+    raise ValueError("daily strategy snapshot requires dt_ny or ts")
+
+
+def support_resistance_state_from_native_day(
+    audit: dict[str, Any],
+    market_data_by_symbol: MarketDataBySymbol,
+) -> SupportResistanceState:
+    state = SupportResistanceState()
+    for symbol, raw_payload in audit.items():
+        payload = dict(raw_payload or {})
+        symbol_state = state.symbols.setdefault(symbol, SupportResistanceSymbolState())
+        history = list((market_data_by_symbol.get(symbol) or {}).get("recent_bars") or [])
+        snapshot = market_data_by_symbol.get(symbol)
+        if snapshot and (not history or history[-1].get("dt_ny") != snapshot.get("dt_ny")):
+            history.append(snapshot)
+        symbol_state.history.extend(history)
+        symbol_state.events.extend(dict(item) for item in payload.get("events") or [])
+        symbol_state.zone_versions.extend(
+            dict(item) for item in payload.get("zone_versions") or []
+        )
+        symbol_state.regime_versions.extend(
+            dict(item) for item in payload.get("regime_versions") or []
+        )
+    return state
+
+
+def support_resistance_hydration_payload(
+    state: SupportResistanceState,
+) -> dict[str, dict[str, Any]]:
+    return {
+        symbol: {
+            "zone_timeline": list(symbol_state.cached_zone_timeline),
+            "regime_timeline": list(symbol_state.cached_regime_timeline),
+            "lifecycle_events": [
+                list(item) for item in sorted(symbol_state.cached_lifecycle_events)
+            ],
+        }
+        for symbol, symbol_state in state.symbols.items()
+    }
 
 
 # ============================================================================
@@ -454,65 +601,14 @@ def _load_recent_bar_history(
 
 
 def required_recent_bar_count_for_runtime(runtime_strategy: RuntimeStrategy) -> int:
-    recent_bar_count = RECENT_BAR_COUNT
     strategy_type = runtime_strategy["strategy_type"]
-    signal_cfg = runtime_strategy["params"]["signal"]
-    risk_cfg = runtime_strategy["params"]["risk"]
-
-    if strategy_type == "island_reversal":
-        downtrend_lookback = int(signal_cfg["downtrend_lookback"])
-        max_island_bars = int(signal_cfg["max_island_bars"])
-        retest_window = int(signal_cfg["retest_window"])
-        return max(
-            recent_bar_count,
-            downtrend_lookback + max_island_bars + retest_window + 2,
-        )
-
-    if strategy_type == "double_bottom":
-        downtrend_lookback = int(signal_cfg["downtrend_lookback"])
-        max_bottom_spacing = int(signal_cfg["max_bottom_spacing"])
-        left_bottom_before_bars = int(signal_cfg["left_bottom_before_bars"])
-        max_breakout_wait = int(signal_cfg["max_breakout_bars_after_right_bottom"])
-        retest_window = int(signal_cfg["retest_window"])
-        return max(
-            recent_bar_count,
-            downtrend_lookback + max_bottom_spacing + left_bottom_before_bars + max_breakout_wait + retest_window + 10,
-        )
-
-    if strategy_type == "head_shoulders_bottom":
-        downtrend_lookback = int(signal_cfg["downtrend_lookback"])
-        max_segment_bars = int(signal_cfg["max_segment_bars"])
-        pivot_right_bars = int(signal_cfg["pivot_right_bars"])
-        return max(recent_bar_count, downtrend_lookback + max_segment_bars * 2 + pivot_right_bars + 10)
-
-    if strategy_type == "rounded_bottom":
-        max_lookback = int(signal_cfg["max_lookback"])
-        pivot_right_bars = int(signal_cfg["pivot_right_bars"])
-        return max(recent_bar_count, max_lookback + pivot_right_bars + 10)
-
-    if strategy_type == "v_reversal":
-        downtrend_lookback = int(signal_cfg["downtrend_lookback"])
-        continuation_window = int(signal_cfg["continuation_window"])
-        consolidation_max_bars = int(signal_cfg["consolidation_max_bars"])
-        retest_window = int(signal_cfg["retest_window"])
-        return max(recent_bar_count, downtrend_lookback + continuation_window + consolidation_max_bars + retest_window + 10)
-
-    if strategy_type == "support_resistance":
-        detection_window = int(signal_cfg["detection_window"])
-        pivot_right = int(signal_cfg["pivot_right_bars"])
-        score_window = int(signal_cfg["score_outcome_window"])
-        retest_window = int(signal_cfg["retest_window"])
-        max_holding_days = int(risk_cfg["max_holding_days"])
-        return max(
-            recent_bar_count,
-            detection_window + pivot_right + score_window + retest_window + 10,
-            max_holding_days + 5,
-        )
-
-    if strategy_type in {"trend", "mean_reversion", "momentum_breakout"}:
-        return 0
-
-    raise ValueError(f"unsupported engine-ready strategy_type: {strategy_type}")
+    descriptor = next(
+        (item for item in quant_kernel.catalog() if item["strategy_type"] == strategy_type),
+        None,
+    )
+    if descriptor is None:
+        raise ValueError(f"unsupported engine-ready strategy_type: {strategy_type}")
+    return int(descriptor["history_length"])
 
 
 def required_recent_bar_lookback_days(recent_bar_count: int) -> int:
@@ -541,7 +637,8 @@ def _list_engine_ready_runtimes_from_strategies(strategies: list[Strategy]) -> l
         runtime = build_runtime_payload(strategy)
         if not runtime["engine_ready"]:
             continue
-        STRATEGY_HANDLERS[runtime["strategy_type"]]
+        if runtime["strategy_type"] not in NATIVE_STRATEGY_TYPES:
+            raise ValueError(f"unsupported engine-ready strategy_type: {runtime['strategy_type']}")
         runtimes.append(runtime)
     return runtimes
 
@@ -642,6 +739,7 @@ def _resolve_strategy_universe(
 def _build_feature_snapshot(row: Dict[str, Any]) -> MarketSnapshot:
     symbol = str(row["symbol"]).upper()
     return {
+        "instrument_id": int(row["instrument_id"]),
         "symbol": symbol,
         "asset_type": row["asset_type"],
         "dt_ny": row["dt_ny"],
@@ -689,63 +787,6 @@ def _build_feature_snapshot(row: Dict[str, Any]) -> MarketSnapshot:
 
 
 # Market snapshots preserve missing values but reject malformed internal values.
-def _float_or_zero(value: Any) -> float:
-    return 0.0 if value is None else float(value)
-
-
-def _float_or_none(value: Any) -> float | None:
-    return None if value is None else float(value)
-
-
-def _signal_timestamp_utc(snapshot: MarketSnapshot) -> datetime:
-    timestamp = snapshot.get("ts")
-    if timestamp is not None:
-        if timestamp.tzinfo is None:
-            return timestamp.replace(tzinfo=timezone.utc)
-        return timestamp.astimezone(timezone.utc)
-
-    trade_date = snapshot.get("dt_ny")
-    if trade_date is None:
-        raise ValueError("daily strategy snapshot requires ts or dt_ny")
-    market_close_ny = datetime.combine(trade_date, time(hour=16), tzinfo=NEW_YORK_TZ)
-    return market_close_ny.astimezone(timezone.utc)
-
-
-def _resolve_position_holding_days(snapshot: MarketSnapshot) -> int | None:
-    raw_holding_days = snapshot.get("position_holding_days")
-    if raw_holding_days is not None:
-        try:
-            holding_days = int(raw_holding_days)
-        except (TypeError, ValueError):
-            holding_days = None
-        else:
-            if holding_days >= 0:
-                return holding_days
-
-    entry_trade_date = snapshot.get("entry_trade_date")
-    current_trade_date = snapshot.get("dt_ny")
-    if entry_trade_date is None or current_trade_date is None or current_trade_date < entry_trade_date:
-        return None
-
-    recent_bars = snapshot.get("recent_bars")
-    if recent_bars is not None:
-        session_dates = sorted(
-            {
-                bar["dt_ny"]
-                for bar in recent_bars
-                if bar["dt_ny"] is not None
-                and entry_trade_date <= bar["dt_ny"] <= current_trade_date
-            }
-        )
-        if session_dates and session_dates[0] == entry_trade_date and session_dates[-1] == current_trade_date:
-            return max(len(session_dates) - 1, 0)
-
-    return max((current_trade_date - entry_trade_date).days, 0)
-
-
-# Convert one RECENT_BAR_HISTORY_SQL row into the history-bar shape used by pattern scanners.
-# Input: SQLAlchemy mapping row with historical OHLCV plus a few trend/volume indicators.
-# Output: compact per-day dict stored under snapshot["recent_bars"].
 def _build_history_bar(row: Dict[str, Any]) -> HistoryBar:
     return {
         "dt_ny": row["dt_ny"],
@@ -765,858 +806,3 @@ def _build_history_bar(row: Dict[str, Any]) -> HistoryBar:
 
 
 # ============================================================================
-# Strategy handlers
-# ============================================================================
-
-# Evaluate moving-average crossover signals with a volume confirmation filter.
-# Input: runtime strategy payload plus the symbol -> snapshot market map.
-# Output: BUY/SELL SignalEvent objects for symbols whose fast/slow crossover changed today.
-def _trend_following_handler(
-    runtime_strategy: RuntimeStrategy,
-    market_data_by_symbol: MarketDataBySymbol,
-) -> list[SignalEvent]:
-    params = runtime_strategy["params"]
-    signal_cfg = params["signal"]
-    risk_cfg = params["risk"]
-    universe_cfg = params["universe"]
-    universe = _resolve_strategy_universe(universe_cfg, market_data_by_symbol)
-
-    fast = signal_cfg["fast_indicator"]
-    slow = signal_cfg["slow_indicator"]
-    fast_key = f"{fast['kind']}_{fast['window']}"
-    slow_key = f"{slow['kind']}_{slow['window']}"
-
-    signals: list[SignalEvent] = []
-
-    for symbol in universe:
-        snapshot = market_data_by_symbol.get(symbol)
-        if not snapshot:
-            continue
-
-        position = float(snapshot.get("position", 0) or 0)
-        avg_entry_price = _float_or_none(snapshot.get("avg_entry_price"))
-        close_price = _float_or_none(snapshot.get("close"))
-        current_atr = _float_or_none(snapshot.get("atr_14"))
-        stop_loss_pct = float(risk_cfg["stop_loss_pct"])
-
-        if (
-            position > 0
-            and close_price is not None
-            and avg_entry_price is not None
-            and avg_entry_price > 0
-            and close_price <= avg_entry_price * (1.0 - stop_loss_pct)
-        ):
-            signals.append(
-                SignalEvent(
-                    strategy_id=runtime_strategy["strategy_id"],
-                    ts=snapshot.get("ts") or datetime.now(timezone.utc),
-                    symbol=symbol,
-                    action="SELL",
-                    reason="price fell below the fixed stop-loss threshold",
-                    score=float(abs((avg_entry_price - close_price) / avg_entry_price)),
-                    metadata={
-                        "close": close_price,
-                        "atr_14": current_atr,
-                        "position": position,
-                        "avg_entry_price": avg_entry_price,
-                        "config": {
-                            "volume_multiplier": signal_cfg["volume_multiplier"],
-                            "atr_multiplier": signal_cfg["atr_multiplier"],
-                            "stop_loss_pct": stop_loss_pct,
-                            "stop_loss_atr": risk_cfg["stop_loss_atr"],
-                            "take_profit_atr": risk_cfg["take_profit_atr"],
-                        },
-                    },
-                )
-            )
-            continue
-
-        if (
-            position > 0
-            and close_price is not None
-            and avg_entry_price is not None
-            and avg_entry_price > 0
-            and current_atr is not None
-            and current_atr > 0
-            and close_price <= avg_entry_price - (float(risk_cfg["stop_loss_atr"]) * current_atr)
-        ):
-            signals.append(
-                SignalEvent(
-                    strategy_id=runtime_strategy["strategy_id"],
-                    ts=snapshot.get("ts") or datetime.now(timezone.utc),
-                    symbol=symbol,
-                    action="SELL",
-                    reason="price hit the ATR stop-loss threshold",
-                    score=float(abs((avg_entry_price - close_price) / avg_entry_price)),
-                    metadata={
-                        "close": close_price,
-                        "atr_14": current_atr,
-                        "position": position,
-                        "avg_entry_price": avg_entry_price,
-                        "config": {
-                            "volume_multiplier": signal_cfg["volume_multiplier"],
-                            "atr_multiplier": signal_cfg["atr_multiplier"],
-                            "stop_loss_pct": stop_loss_pct,
-                            "stop_loss_atr": risk_cfg["stop_loss_atr"],
-                            "take_profit_atr": risk_cfg["take_profit_atr"],
-                        },
-                    },
-                )
-            )
-            continue
-
-        if (
-            position > 0
-            and close_price is not None
-            and avg_entry_price is not None
-            and avg_entry_price > 0
-            and current_atr is not None
-            and current_atr > 0
-            and close_price >= avg_entry_price + (float(risk_cfg["take_profit_atr"]) * current_atr)
-        ):
-            signals.append(
-                SignalEvent(
-                    strategy_id=runtime_strategy["strategy_id"],
-                    ts=snapshot.get("ts") or datetime.now(timezone.utc),
-                    symbol=symbol,
-                    action="SELL",
-                    reason="price reached the ATR take-profit threshold",
-                    score=float(abs((close_price - avg_entry_price) / avg_entry_price)),
-                    metadata={
-                        "close": close_price,
-                        "atr_14": current_atr,
-                        "position": position,
-                        "avg_entry_price": avg_entry_price,
-                        "config": {
-                            "volume_multiplier": signal_cfg["volume_multiplier"],
-                            "atr_multiplier": signal_cfg["atr_multiplier"],
-                            "stop_loss_pct": stop_loss_pct,
-                            "stop_loss_atr": risk_cfg["stop_loss_atr"],
-                            "take_profit_atr": risk_cfg["take_profit_atr"],
-                        },
-                    },
-                )
-            )
-            continue
-
-        volume = _float_or_zero(snapshot.get("volume"))
-        avg_volume = _float_or_zero(snapshot.get("volume_sma_20"))
-        if avg_volume <= 0 or volume < signal_cfg["volume_multiplier"] * avg_volume:
-            continue
-
-        fast_now = snapshot.get(fast_key)
-        slow_now = snapshot.get(slow_key)
-        prev_fast = snapshot.get(f"prev_{fast_key}", snapshot.get("prev_fast"))
-        prev_slow = snapshot.get(f"prev_{slow_key}", snapshot.get("prev_slow"))
-        if None in {fast_now, slow_now, prev_fast, prev_slow}:
-            continue
-
-        action: Literal["BUY", "SELL", "HOLD"] = "HOLD"
-        reason = "trend unchanged"
-
-        if prev_fast <= prev_slow and fast_now > slow_now:
-            action = "BUY"
-            reason = f"{fast_key} crossed above {slow_key}"
-        elif prev_fast >= prev_slow and fast_now < slow_now:
-            action = "SELL"
-            reason = f"{fast_key} crossed below {slow_key}"
-        else:
-            continue
-
-        signals.append(
-            SignalEvent(
-                strategy_id=runtime_strategy["strategy_id"],
-                ts=snapshot.get("ts") or datetime.now(timezone.utc),
-                symbol=symbol,
-                action=action,
-                reason=reason,
-                score=float(abs(fast_now - slow_now)),
-                metadata={
-                    "close": snapshot.get("close"),
-                    "atr_14": snapshot.get("atr_14"),
-                    "position": position,
-                    "avg_entry_price": avg_entry_price,
-                    "config": {
-                        "volume_multiplier": signal_cfg["volume_multiplier"],
-                        "atr_multiplier": signal_cfg["atr_multiplier"],
-                        "stop_loss_pct": stop_loss_pct,
-                        "stop_loss_atr": risk_cfg["stop_loss_atr"],
-                        "take_profit_atr": risk_cfg["take_profit_atr"],
-                    },
-                    "strength_inputs": {
-                        "separation_atr": (
-                            float(fast_now - slow_now) / current_atr
-                            if current_atr is not None and current_atr > 0
-                            else None
-                        ),
-                        "crossover_impulse_atr": (
-                            float((fast_now - slow_now) - (prev_fast - prev_slow)) / current_atr
-                            if current_atr is not None and current_atr > 0
-                            else None
-                        ),
-                        "volume_ratio": volume / avg_volume,
-                    },
-                },
-            )
-        )
-
-    return signals
-
-
-# Evaluate z-score-based mean-reversion entry/exit rules across the configured universe.
-# Input: runtime strategy payload plus the symbol -> snapshot market map.
-# Output: BUY/SELL SignalEvent objects for entry or exit conditions triggered today.
-def _mean_reversion_handler(
-    runtime_strategy: RuntimeStrategy,
-    market_data_by_symbol: MarketDataBySymbol,
-) -> list[SignalEvent]:
-    params = runtime_strategy["params"]
-    signal_cfg = params["signal"]
-    risk_cfg = params["risk"]
-    universe_cfg = params["universe"]
-    universe = _resolve_strategy_universe(universe_cfg, market_data_by_symbol)
-
-    lookback = int(signal_cfg["lookback_window"])
-    zscore_key = f"zscore_{lookback}"
-    zscore_entry = float(signal_cfg["zscore_entry"])
-    zscore_exit = float(signal_cfg["zscore_exit"])
-    stop_loss_pct = float(risk_cfg["stop_loss_pct"])
-    take_profit_pct = float(risk_cfg["take_profit_pct"])
-    max_holding_days = int(risk_cfg.get("max_holding_days") or 0)
-
-    signals: list[SignalEvent] = []
-    for symbol in universe:
-        snapshot = market_data_by_symbol.get(symbol)
-        if not snapshot:
-            continue
-
-        zscore = _float_or_none(snapshot.get(zscore_key))
-
-        action: Literal["BUY", "SELL", "HOLD"] | None = None
-        reason: str | None = None
-        position = float(snapshot.get("position", 0) or 0)
-        avg_entry_price = _float_or_none(snapshot.get("avg_entry_price"))
-        close_price = _float_or_none(snapshot.get("close"))
-        position_holding_days = _resolve_position_holding_days(snapshot)
-
-        if (
-            position > 0
-            and close_price is not None
-            and avg_entry_price is not None
-            and avg_entry_price > 0
-            and close_price <= avg_entry_price * (1.0 - stop_loss_pct)
-        ):
-            action = "SELL"
-            reason = f"price fell below the {stop_loss_pct:.1%} stop-loss threshold"
-        elif (
-            position > 0
-            and close_price is not None
-            and avg_entry_price is not None
-            and avg_entry_price > 0
-            and close_price >= avg_entry_price * (1.0 + take_profit_pct)
-        ):
-            action = "SELL"
-            reason = f"price reached the {take_profit_pct:.1%} take-profit threshold"
-        elif (
-            position > 0
-            and max_holding_days > 0
-            and position_holding_days is not None
-            and position_holding_days >= max_holding_days
-        ):
-            action = "SELL"
-            reason = f"position reached the {max_holding_days}-day max holding period"
-        elif position > 0 and zscore is not None and zscore >= -zscore_exit:
-            action = "SELL"
-            reason = f"{zscore_key} reverted above exit threshold"
-        elif (
-            position < 0
-            and close_price is not None
-            and avg_entry_price is not None
-            and avg_entry_price > 0
-            and close_price >= avg_entry_price * (1.0 + stop_loss_pct)
-        ):
-            action = "BUY"
-            reason = f"price rose above the {stop_loss_pct:.1%} short stop-loss threshold"
-        elif (
-            position < 0
-            and close_price is not None
-            and avg_entry_price is not None
-            and avg_entry_price > 0
-            and close_price <= avg_entry_price * (1.0 - take_profit_pct)
-        ):
-            action = "BUY"
-            reason = f"price reached the {take_profit_pct:.1%} short take-profit threshold"
-        elif (
-            position < 0
-            and max_holding_days > 0
-            and position_holding_days is not None
-            and position_holding_days >= max_holding_days
-        ):
-            action = "BUY"
-            reason = f"short position reached the {max_holding_days}-day max holding period"
-        elif position < 0 and zscore is not None and zscore <= zscore_exit:
-            action = "BUY"
-            reason = f"{zscore_key} reverted below exit threshold"
-        elif zscore is None:
-            continue
-        elif zscore <= -zscore_entry:
-            action = "BUY"
-            reason = f"{zscore_key} below negative entry threshold"
-        elif zscore >= zscore_entry:
-            action = "SELL"
-            reason = f"{zscore_key} above positive entry threshold"
-
-        if action is None or reason is None:
-            continue
-
-        signals.append(
-            SignalEvent(
-                strategy_id=runtime_strategy["strategy_id"],
-                ts=snapshot.get("ts") or datetime.now(timezone.utc),
-                symbol=symbol,
-                action=action,
-                reason=reason,
-                score=float(abs(zscore)) if zscore is not None else 0.0,
-                metadata={
-                    "close": snapshot.get("close"),
-                    "atr_14": snapshot.get("atr_14"),
-                    "rsi_14": snapshot.get("rsi_14"),
-                        zscore_key: zscore,
-                        "position": position,
-                        "avg_entry_price": avg_entry_price,
-                        "position_holding_days": position_holding_days,
-                        "config": {
-                            "lookback_window": lookback,
-                            "zscore_entry": zscore_entry,
-                            "zscore_exit": zscore_exit,
-                            "stop_loss_pct": stop_loss_pct,
-                            "take_profit_pct": take_profit_pct,
-                            "max_holding_days": max_holding_days,
-                        },
-                        "strength_inputs": {
-                            "absolute_zscore": abs(zscore) if zscore is not None else None,
-                        },
-                    },
-                )
-            )
-
-    return signals
-
-
-# Evaluate daily momentum breakouts using only existing adjusted snapshot fields.
-# Input: runtime strategy payload plus the symbol -> daily-feature snapshot map.
-# Output: deterministically ordered BUY/SELL SignalEvent objects for day-T close evaluation.
-def _momentum_breakout_handler(
-    runtime_strategy: RuntimeStrategy,
-    market_data_by_symbol: MarketDataBySymbol,
-) -> list[SignalEvent]:
-    params = runtime_strategy["params"]
-    signal_cfg = params["signal"]
-    risk_cfg = params["risk"]
-    universe = sorted(set(_resolve_strategy_universe(params["universe"], market_data_by_symbol)))
-
-    minimum_return_20d = float(signal_cfg["minimum_return_20d"])
-    breakout_buffer_pct = float(signal_cfg["breakout_buffer_pct"])
-    volume_multiplier = float(signal_cfg["volume_multiplier"])
-    exit_return_20d = float(signal_cfg["exit_return_20d"])
-    stop_loss_pct = float(risk_cfg["stop_loss_pct"])
-    take_profit_pct = float(risk_cfg["take_profit_pct"])
-
-    signals: list[SignalEvent] = []
-    for symbol in universe:
-        snapshot = market_data_by_symbol.get(symbol)
-        if not snapshot:
-            continue
-
-        close_price = _float_or_none(snapshot.get("close"))
-        sma_20 = _float_or_none(snapshot.get("sma_20"))
-        return_20d = _float_or_none(snapshot.get("ret_20d"))
-        volume = _float_or_none(snapshot.get("volume"))
-        average_volume = _float_or_none(snapshot.get("volume_sma_20"))
-        if (
-            close_price is None
-            or sma_20 is None
-            or sma_20 <= 0
-            or return_20d is None
-            or volume is None
-            or average_volume is None
-            or average_volume <= 0
-        ):
-            continue
-
-        position = float(snapshot.get("position", 0) or 0)
-        avg_entry_price = _float_or_none(snapshot.get("avg_entry_price"))
-        breakout_threshold = sma_20 * (1.0 + breakout_buffer_pct)
-        volume_ratio = volume / average_volume
-        action: Literal["BUY", "SELL", "HOLD"] | None = None
-        reason: str | None = None
-
-        if (
-            position > 0
-            and avg_entry_price is not None
-            and avg_entry_price > 0
-            and close_price <= avg_entry_price * (1.0 - stop_loss_pct)
-        ):
-            action = "SELL"
-            reason = f"price fell below the {stop_loss_pct:.1%} stop-loss threshold"
-        elif (
-            position > 0
-            and avg_entry_price is not None
-            and avg_entry_price > 0
-            and close_price >= avg_entry_price * (1.0 + take_profit_pct)
-        ):
-            action = "SELL"
-            reason = f"price reached the {take_profit_pct:.1%} take-profit threshold"
-        elif position > 0 and (close_price < sma_20 or return_20d <= exit_return_20d):
-            action = "SELL"
-            reason = "20-day momentum or SMA20 support failed"
-        elif (
-            position <= 0
-            and close_price >= breakout_threshold
-            and return_20d >= minimum_return_20d
-            and volume_ratio >= volume_multiplier
-        ):
-            action = "BUY"
-            reason = "adjusted close confirmed a volume-backed 20-day momentum breakout"
-
-        if action is None or reason is None:
-            continue
-
-        price_extension = (close_price / sma_20) - 1.0
-        signals.append(
-            SignalEvent(
-                strategy_id=runtime_strategy["strategy_id"],
-                ts=_signal_timestamp_utc(snapshot),
-                symbol=symbol,
-                action=action,
-                reason=reason,
-                score=return_20d + price_extension + volume_ratio,
-                metadata={
-                    "close": close_price,
-                    "sma_20": sma_20,
-                    "ret_20d": return_20d,
-                    "volume": volume,
-                    "volume_sma_20": average_volume,
-                    "volume_ratio": volume_ratio,
-                    "breakout_threshold": breakout_threshold,
-                    "position": position,
-                    "avg_entry_price": avg_entry_price,
-                    "price_semantics": "forward_adjusted_fallback_unadjusted",
-                    "config": {
-                        "minimum_return_20d": minimum_return_20d,
-                        "breakout_buffer_pct": breakout_buffer_pct,
-                        "volume_multiplier": volume_multiplier,
-                        "exit_return_20d": exit_return_20d,
-                        "stop_loss_pct": stop_loss_pct,
-                        "take_profit_pct": take_profit_pct,
-                    },
-                    "strength_inputs": {
-                        "return_20d": return_20d,
-                        "price_extension": price_extension,
-                        "volume_ratio": volume_ratio,
-                    },
-                },
-            )
-        )
-
-    return signals
-
-
-# Evaluate island-reversal setups using recent OHLCV history and position-aware exit logic.
-# Input: runtime strategy payload plus the symbol -> snapshot map with recent_bars populated.
-# Output: BUY/SELL SignalEvent objects for retest-only entries or exit conditions.
-def _pattern_context(
-    symbol: str,
-    snapshot: MarketSnapshot,
-    signal_cfg: Dict[str, Any],
-    risk_cfg: Dict[str, Any],
-) -> PatternContext:
-    return PatternContext(
-        symbol=symbol,
-        bars=snapshot.get("recent_bars") or [],
-        signal_cfg=signal_cfg,
-        risk_cfg=risk_cfg,
-        position=float(snapshot.get("position", 0) or 0.0),
-        avg_entry_price=snapshot.get("avg_entry_price"),
-        entry_signal_features=snapshot.get("entry_signal_features"),
-    )
-
-
-def _pattern_config_metadata(
-    pattern_type: str,
-    signal_cfg: Dict[str, Any],
-    risk_cfg: Dict[str, Any],
-) -> Dict[str, Any] | None:
-    if pattern_type == "island_reversal":
-        keys = (
-            "downtrend_min_drop_pct",
-            "left_gap_min_pct",
-            "right_gap_min_pct",
-            "retest_window",
-            "support_tolerance_pct",
-        )
-    elif pattern_type == "double_bottom":
-        keys = (
-            "downtrend_min_drop_pct",
-            "downtrend_max_up_day_ratio",
-            "downtrend_min_r_squared",
-            "bottom_tolerance_pct",
-            "left_bottom_before_bars",
-            "left_bottom_after_bars",
-            "neckline_min_rebound_pct",
-            "breakout_buffer_pct",
-            "breakout_volume_ratio_min",
-            "max_breakout_bars_after_right_bottom",
-            "retest_window",
-            "support_tolerance_pct",
-        )
-    else:
-        return None
-    config = {key: signal_cfg[key] for key in keys if key in signal_cfg}
-    config.update(
-        {
-            "max_loss_pct": risk_cfg["max_loss_pct"],
-            "take_profit_atr": risk_cfg["take_profit_atr"],
-        }
-    )
-    return config
-
-
-def _pattern_signal_event(
-    *,
-    pattern_type: str,
-    runtime_strategy: RuntimeStrategy,
-    snapshot: MarketSnapshot,
-    symbol: str,
-    decision: PatternDecision,
-) -> SignalEvent:
-    params = runtime_strategy["params"]
-    metadata: Dict[str, Any] = {
-        "close": snapshot.get("close"),
-        "open": snapshot.get("open"),
-        "high": snapshot.get("high"),
-        "low": snapshot.get("low"),
-        "volume": snapshot.get("volume"),
-        "atr_14": snapshot.get("atr_14"),
-        "position": float(snapshot.get("position", 0) or 0.0),
-        "avg_entry_price": snapshot.get("avg_entry_price"),
-        "setup": decision.setup,
-        "strength_inputs": decision.strength_inputs,
-    }
-    config = _pattern_config_metadata(pattern_type, params["signal"], params["risk"])
-    if config is not None:
-        metadata["config"] = config
-    else:
-        metadata["price_semantics"] = "forward_adjusted_fallback_unadjusted"
-    return SignalEvent(
-        strategy_id=runtime_strategy["strategy_id"],
-        ts=snapshot.get("ts") or datetime.now(timezone.utc),
-        symbol=symbol,
-        action=decision.action,
-        reason=decision.reason,
-        score=decision.score,
-        metadata=metadata,
-    )
-
-
-def _run_pattern_evaluator(
-    pattern_type: str,
-    evaluator: PatternEvaluator,
-    runtime_strategy: RuntimeStrategy,
-    market_data_by_symbol: MarketDataBySymbol,
-) -> list[SignalEvent]:
-    params = runtime_strategy["params"]
-    universe = _resolve_strategy_universe(params["universe"], market_data_by_symbol)
-    signals: list[SignalEvent] = []
-    for symbol in universe:
-        snapshot = market_data_by_symbol.get(symbol)
-        if not snapshot:
-            continue
-        decision = evaluator(
-            _pattern_context(symbol, snapshot, params["signal"], params["risk"])
-        )
-        if decision is not None:
-            signals.append(
-                _pattern_signal_event(
-                    pattern_type=pattern_type,
-                    runtime_strategy=runtime_strategy,
-                    snapshot=snapshot,
-                    symbol=symbol,
-                    decision=decision,
-                )
-            )
-    return signals
-
-
-def _island_reversal_handler(
-    runtime_strategy: RuntimeStrategy,
-    market_data_by_symbol: MarketDataBySymbol,
-) -> list[SignalEvent]:
-    return _run_pattern_evaluator(
-        "island_reversal",
-        island_reversal.evaluate,
-        runtime_strategy,
-        market_data_by_symbol,
-    )
-
-
-def build_stateful_backtest_signal_state(
-    runtime_strategy: RuntimeStrategy,
-) -> double_bottom.DoubleBottomState | SupportResistanceState | None:
-    if runtime_strategy["strategy_type"] == "double_bottom":
-        return double_bottom.create_state()
-    if runtime_strategy["strategy_type"] == "support_resistance":
-        return SupportResistanceState()
-    return None
-
-
-def generate_stateful_backtest_signals(
-    runtime_strategy: RuntimeStrategy,
-    market_data_by_symbol: MarketDataBySymbol,
-    state: double_bottom.DoubleBottomState | SupportResistanceState,
-    *,
-    emit_signals: bool = True,
-) -> list[SignalEvent]:
-    strategy_type = runtime_strategy["strategy_type"]
-    if strategy_type == "double_bottom":
-        if not isinstance(state, double_bottom.DoubleBottomState):
-            raise TypeError("double_bottom requires DoubleBottomState")
-        return _double_bottom_backtest_handler(
-            runtime_strategy,
-            market_data_by_symbol,
-            state,
-            emit_signals=emit_signals,
-        )
-    if strategy_type == "support_resistance":
-        if not isinstance(state, SupportResistanceState):
-            raise TypeError("support_resistance requires SupportResistanceState")
-        return _support_resistance_backtest_handler(
-            runtime_strategy,
-            market_data_by_symbol,
-            state,
-            emit_signals=emit_signals,
-        )
-    raise ValueError(f"strategy_type {strategy_type} does not support stateful backtests")
-
-
-def _support_resistance_backtest_handler(
-    runtime_strategy: RuntimeStrategy,
-    market_data_by_symbol: MarketDataBySymbol,
-    state: SupportResistanceState,
-    *,
-    emit_signals: bool = True,
-) -> list[SignalEvent]:
-    params = runtime_strategy["params"]
-    universe = _resolve_strategy_universe(params["universe"], market_data_by_symbol)
-    signals: list[SignalEvent] = []
-    for symbol in universe:
-        snapshot = market_data_by_symbol.get(symbol)
-        if not snapshot:
-            continue
-        symbol_state = state.symbols.setdefault(symbol, SupportResistanceSymbolState())
-        decision = advance_support_resistance_symbol(
-            symbol_state,
-            snapshot,
-            params["signal"],
-            params["risk"],
-            emit_signals=emit_signals,
-        )
-        if decision is not None:
-            signals.append(_support_resistance_signal_event(runtime_strategy, symbol, snapshot, decision))
-    return signals
-
-
-def _support_resistance_handler(
-    runtime_strategy: RuntimeStrategy,
-    market_data_by_symbol: MarketDataBySymbol,
-) -> list[SignalEvent]:
-    return _support_resistance_replay_handler_with_state(
-        runtime_strategy,
-        market_data_by_symbol,
-        SupportResistanceState(),
-    )
-
-
-def generate_support_resistance_replay_signals(
-    runtime_strategy: RuntimeStrategy,
-    market_data_by_symbol: MarketDataBySymbol,
-    state: SupportResistanceState,
-) -> list[SignalEvent]:
-    """Public paper-signal entrypoint that shares the causal replay state machine."""
-    return _support_resistance_replay_handler_with_state(
-        runtime_strategy,
-        market_data_by_symbol,
-        state,
-    )
-
-
-def _support_resistance_replay_handler_with_state(
-    runtime_strategy: RuntimeStrategy,
-    market_data_by_symbol: MarketDataBySymbol,
-    state: SupportResistanceState,
-) -> list[SignalEvent]:
-    params = runtime_strategy["params"]
-    universe = _resolve_strategy_universe(params["universe"], market_data_by_symbol)
-    signals: list[SignalEvent] = []
-    for symbol in universe:
-        snapshot = market_data_by_symbol.get(symbol)
-        if not snapshot:
-            continue
-        symbol_state = state.symbols.setdefault(symbol, SupportResistanceSymbolState())
-        history = list(snapshot.get("recent_bars") or [])
-        snapshot_date = snapshot.get("dt_ny")
-        if not history or history[-1].get("dt_ny") != snapshot_date:
-            history.append(snapshot)
-        decision = None
-        for index, raw_bar in enumerate(history):
-            replay_snapshot = dict(raw_bar)
-            is_last = index == len(history) - 1
-            if is_last:
-                replay_snapshot.update(
-                    {
-                        "position": snapshot.get("position"),
-                        "avg_entry_price": snapshot.get("avg_entry_price"),
-                        "position_holding_days": snapshot.get("position_holding_days"),
-                        "entry_signal_features": snapshot.get("entry_signal_features"),
-                    }
-                )
-            decision = advance_support_resistance_symbol(
-                symbol_state,
-                replay_snapshot,
-                params["signal"],
-                params["risk"],
-                emit_signals=is_last,
-            )
-        if decision is not None:
-            signals.append(_support_resistance_signal_event(runtime_strategy, symbol, snapshot, decision))
-    return signals
-
-
-def _support_resistance_signal_event(
-    runtime_strategy: RuntimeStrategy,
-    symbol: str,
-    snapshot: MarketSnapshot,
-    decision: dict[str, Any],
-) -> SignalEvent:
-    return SignalEvent(
-        strategy_id=runtime_strategy["strategy_id"],
-        ts=snapshot.get("ts") or datetime.now(timezone.utc),
-        symbol=symbol,
-        action=decision["action"],
-        reason=decision["reason"],
-        score=decision.get("score"),
-        metadata={
-            "close": snapshot.get("close"),
-            "open": snapshot.get("open"),
-            "high": snapshot.get("high"),
-            "low": snapshot.get("low"),
-            "atr_14": snapshot.get("atr_14"),
-            "position": float(snapshot.get("position", 0) or 0.0),
-            "avg_entry_price": _float_or_none(snapshot.get("avg_entry_price")),
-            "support_resistance": decision["support_resistance"],
-        },
-    )
-
-
-def _double_bottom_backtest_handler(
-    runtime_strategy: RuntimeStrategy,
-    market_data_by_symbol: MarketDataBySymbol,
-    state: double_bottom.DoubleBottomState,
-    *,
-    emit_signals: bool = True,
-) -> list[SignalEvent]:
-    params = runtime_strategy["params"]
-    universe = _resolve_strategy_universe(params["universe"], market_data_by_symbol)
-    signals: list[SignalEvent] = []
-    for symbol in universe:
-        snapshot = market_data_by_symbol.get(symbol)
-        if not snapshot:
-            continue
-        symbol_state = state.symbols.setdefault(symbol, double_bottom.DoubleBottomSymbolState())
-        double_bottom.append_snapshot(symbol_state, snapshot)
-        double_bottom.advance_symbol(symbol_state, params["signal"])
-        if not emit_signals:
-            continue
-        context = PatternContext(
-            symbol=symbol,
-            bars=symbol_state.history_bars,
-            signal_cfg=params["signal"],
-            risk_cfg=params["risk"],
-            position=float(snapshot.get("position", 0) or 0.0),
-            avg_entry_price=snapshot.get("avg_entry_price"),
-            entry_signal_features=snapshot.get("entry_signal_features"),
-        )
-        decision = double_bottom.evaluate(context, symbol_state=symbol_state)
-        if decision is not None:
-            signals.append(
-                _pattern_signal_event(
-                    pattern_type="double_bottom",
-                    runtime_strategy=runtime_strategy,
-                    snapshot=snapshot,
-                    symbol=symbol,
-                    decision=decision,
-                )
-            )
-    return signals
-
-
-def _double_bottom_handler(
-    runtime_strategy: RuntimeStrategy,
-    market_data_by_symbol: MarketDataBySymbol,
-) -> list[SignalEvent]:
-    return _run_pattern_evaluator(
-        "double_bottom",
-        double_bottom.evaluate,
-        runtime_strategy,
-        market_data_by_symbol,
-    )
-
-
-def _head_shoulders_bottom_handler(
-    runtime_strategy: RuntimeStrategy,
-    market_data_by_symbol: MarketDataBySymbol,
-) -> list[SignalEvent]:
-    return _run_pattern_evaluator(
-        "head_shoulders_bottom",
-        head_shoulders_bottom.evaluate,
-        runtime_strategy,
-        market_data_by_symbol,
-    )
-
-
-def _rounded_bottom_handler(
-    runtime_strategy: RuntimeStrategy,
-    market_data_by_symbol: MarketDataBySymbol,
-) -> list[SignalEvent]:
-    return _run_pattern_evaluator(
-        "rounded_bottom",
-        rounded_bottom.evaluate,
-        runtime_strategy,
-        market_data_by_symbol,
-    )
-
-
-def _v_reversal_handler(
-    runtime_strategy: RuntimeStrategy,
-    market_data_by_symbol: MarketDataBySymbol,
-) -> list[SignalEvent]:
-    return _run_pattern_evaluator(
-        "v_reversal",
-        v_reversal.evaluate,
-        runtime_strategy,
-        market_data_by_symbol,
-    )
-
-
-# Registry consulted by paper/live trading and backtests to route runtime strategies to handlers.
-STRATEGY_HANDLERS: dict[str, StrategyHandler] = {
-    "trend": _trend_following_handler,
-    "mean_reversion": _mean_reversion_handler,
-    "momentum_breakout": _momentum_breakout_handler,
-    "island_reversal": _island_reversal_handler,
-    "double_bottom": _double_bottom_handler,
-    "head_shoulders_bottom": _head_shoulders_bottom_handler,
-    "rounded_bottom": _rounded_bottom_handler,
-    "v_reversal": _v_reversal_handler,
-    "support_resistance": _support_resistance_handler,
-}

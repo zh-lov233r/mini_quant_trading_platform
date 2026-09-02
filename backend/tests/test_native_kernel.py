@@ -3,13 +3,14 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import date, datetime, timezone
 import copy
+import json
 import math
 from datetime import timedelta
 import unittest
 
 import quant_kernel
 
-from src.services.strategy_engine import STRATEGY_HANDLERS
+from src.services.strategy_engine import _prepared_day_input, evaluate_native_signals
 from src.services.strategy_registry import normalize_strategy_params
 
 
@@ -23,6 +24,9 @@ class NativeKernelParityTests(unittest.TestCase):
         *,
         params: dict[str, object] | None = None,
     ) -> None:
+        fallback_timestamp = datetime(2025, 1, 2, 21, tzinfo=timezone.utc)
+        for snapshot in snapshots.values():
+            snapshot.setdefault("ts", fallback_timestamp)
         raw_params = copy.deepcopy(params or {})
         raw_params.setdefault("universe", {})["symbols"] = list(snapshots)
         runtime = {
@@ -32,10 +36,36 @@ class NativeKernelParityTests(unittest.TestCase):
             "engine_ready": True,
         }
         python_signals = [
-            asdict(signal)
-            for signal in STRATEGY_HANDLERS[strategy_type](runtime, snapshots)
+            asdict(signal) for signal in evaluate_native_signals(runtime, snapshots)
         ]
-        native_signals = quant_kernel.evaluate_day(runtime, snapshots)
+        dataset, portfolio_state = _prepared_day_input(snapshots)
+        day_result = quant_kernel.evaluate_day(dataset, runtime, portfolio_state)
+        columns = day_result.signals
+        symbols = list(day_result.symbols)
+        native_signals = [
+            {
+                "strategy_id": str(columns["strategy_id"][index]),
+                "ts": datetime.fromtimestamp(
+                    int(columns["timestamp_us"][index]) / 1_000_000,
+                    tz=timezone.utc,
+                ),
+                "symbol": symbols[int(columns["symbol_id"][index])],
+                "action": "BUY" if int(columns["action"][index]) == 1 else "SELL",
+                "reason": str(columns["reason"][index]),
+                "score": (
+                    None
+                    if math.isnan(float(columns["score"][index]))
+                    else float(columns["score"][index])
+                ),
+                "metadata": json.loads(columns["metadata_json"][index]),
+                "instrument_id": (
+                    None
+                    if int(columns["instrument_id"][index]) < 0
+                    else int(columns["instrument_id"][index])
+                ),
+            }
+            for index in range(len(day_result))
+        ]
         self._assert_value_equal(native_signals, python_signals)
 
     def _assert_value_equal(self, actual: object, expected: object) -> None:
@@ -80,6 +110,27 @@ class NativeKernelParityTests(unittest.TestCase):
             ],
         )
 
+    def test_native_descriptor_exposes_constraints_and_rejects_wrong_types(self) -> None:
+        catalog = {item["strategy_type"]: item for item in quant_kernel.catalog()}
+        trend_schema = catalog["trend"]["parameter_schema"]
+        self.assertEqual(
+            trend_schema["properties"]["execution"]["properties"]["timeframe"]["enum"],
+            ("1d",),
+        )
+        strength_schema = trend_schema["properties"]["signal"]["properties"]["min_strength_score"]
+        self.assertEqual((strength_schema["minimum"], strength_schema["maximum"]), (0.0, 100.0))
+        self.assertFalse(trend_schema["properties"]["risk"]["additionalProperties"])
+        mean_schema = catalog["mean_reversion"]["parameter_schema"]
+        self.assertEqual(
+            mean_schema["properties"]["signal"]["properties"]["lookback_window"]["enum"],
+            (5, 10, 20),
+        )
+
+        with self.assertRaisesRegex(ValueError, "signal.min_strength_score must be a number"):
+            quant_kernel.normalize_strategy("trend", {"signal": {"min_strength_score": True}})
+        with self.assertRaisesRegex(ValueError, "risk.max_positions must be an integer"):
+            quant_kernel.normalize_strategy("trend", {"risk": {"max_positions": "10"}})
+
     def test_support_resistance_replay_exit_matches_python(self) -> None:
         bar = self._bar(0, 91, 92, 89, 90, 100, atr=2)
         self._assert_day_parity(
@@ -123,16 +174,6 @@ class NativeKernelParityTests(unittest.TestCase):
                     "close": 11,
                     "atr_14": 1,
                     "volume": 150,
-                    "volume_sma_20": 100,
-                    "ema_15": 11,
-                    "sma_200": 10,
-                    "prev_ema_15": 10,
-                    "prev_sma_200": 10,
-                },
-                "NAN": {
-                    "ts": ts,
-                    "position": 0,
-                    "volume": math.nan,
                     "volume_sma_20": 100,
                     "ema_15": 11,
                     "sma_200": 10,

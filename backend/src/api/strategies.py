@@ -89,6 +89,10 @@ class StrategyCatalogItem(BaseModel):
     description: str
     engine_ready: bool
     defaults: Dict[str, Any]
+    parameter_schema: Dict[str, Any]
+    required_features: list[str]
+    algorithm_revision: int | None
+    history_length: int = 0
 
 
 class TrendIndicatorSupportOut(BaseModel):

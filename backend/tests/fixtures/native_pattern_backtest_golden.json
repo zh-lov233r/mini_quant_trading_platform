@@ -1,6 +1,6 @@
 {
   "double_bottom": {
-    "sha256": "c5911cc4d1b88cc20e9334263bb9a2a2f933debf6ee357ac8ca45660de5c5b26",
+    "sha256": "4d2c14a4f95b4b89967a1152a9a8c44836ca0a225e8bba05a0b49561d0e0ed7e",
     "signal_stages": [[1, "second_bottom"], [2, "right_side_pullback"], [3, "neckline_breakout"]],
     "summary": {
       "final_equity": 1021.2453007518798,
@@ -13,7 +13,7 @@
     "trade_stages": [["BUY", 1, "second_bottom"], ["BUY", 2, "right_side_pullback"], ["BUY", 3, "neckline_breakout"]]
   },
   "head_shoulders_bottom": {
-    "sha256": "20fbc933bd282133572a2467d565943452ada980b37b128f794830f99bad1a1b",
+    "sha256": "ff28f7c0b75b22e7e0fd2334a42c80ec30074ec45ba87e571365c8ac61e7c81b",
     "signal_stages": [[1, "head_candidate"], [2, "right_shoulder"], [3, "neckline_breakout"]],
     "summary": {
       "final_equity": 1066.2127231315217,
@@ -26,7 +26,7 @@
     "trade_stages": [["BUY", 1, "head_candidate"], ["BUY", 2, "right_shoulder"], ["BUY", 3, "neckline_breakout"]]
   },
   "island_reversal": {
-    "sha256": "4ebb9664171a48cd420c8072f5e8c8a8be29b2ce0bdfc4c1e7b6527f88130a2b",
+    "sha256": "dd2e9d37dd035283c48a69d3ec369e45668ec76710347717669014c3f754866b",
     "signal_stages": [[1, "exhaustion_gap"], [2, "upside_gap"], [3, "gap_retest"]],
     "summary": {
       "final_equity": 1009.5353535353536,
@@ -39,7 +39,7 @@
     "trade_stages": [["BUY", 1, "exhaustion_gap"], ["BUY", 2, "upside_gap"], ["BUY", 3, "gap_retest"]]
   },
   "rounded_bottom": {
-    "sha256": "ab659d2ee636793dc360883ee069e90b611ec6a7ef60558a9a58fcb13d4f5186",
+    "sha256": "e0a0f68a2fd037d9ea537bf1a77920b9a7d3c26d84530f1c3559330e245e283f",
     "signal_stages": [[1, "first_right_pullback"], [1, "first_right_pullback"], [3, "rim_breakout"]],
     "summary": {
       "final_equity": 1010.213475026478,
@@ -52,7 +52,7 @@
     "trade_stages": [["BUY", 1, "first_right_pullback"], ["SELL", null, null], ["BUY", 3, "rim_breakout"]]
   },
   "v_reversal": {
-    "sha256": "2a5078482d7af008fabd7af6f3fed6f5d3b11df92899a3e3977a8724c57b79c8",
+    "sha256": "56c131f92098097cc4a52ded557deadd7f7b409bab8e9607c83c68abed7c7753",
     "signal_stages": [[1, "volume_pivot"], [2, "continuation"], [3, "top_breakout_retest"], [3, "top_breakout_retest"]],
     "summary": {
       "final_equity": 1014.1039979757084,

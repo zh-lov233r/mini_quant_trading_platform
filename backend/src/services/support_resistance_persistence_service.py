@@ -8,6 +8,7 @@ from hashlib import sha256
 from math import isfinite
 from time import perf_counter
 from typing import Any, Callable, Iterable
+from uuid import uuid4
 
 from sqlalchemy import delete, insert, select, text
 from sqlalchemy.orm import Session
@@ -43,6 +44,13 @@ BATCH_INSERT_SIZE = 5_000
 NUMERIC_24_10_ABS_LIMIT = 100_000_000_000_000.0
 NUMERIC_20_10_ABS_LIMIT = 10_000_000_000.0
 PersistenceProgressCallback = Callable[[str, int, int], None]
+CancellationCheck = Callable[[], bool]
+
+_COPY_JSON_COLUMNS = {
+    SupportResistanceZoneVersion: {"source_metadata"},
+    SupportResistanceRegimeVersion: {"evidence"},
+    SupportResistanceRunEvent: {"payload"},
+}
 
 
 class SupportResistanceMaterializationBuildError(RuntimeError):
@@ -73,6 +81,10 @@ class SupportResistanceMaterializationBuildError(RuntimeError):
         self.data_fingerprint = data_fingerprint
         self.price_semantics = price_semantics
         self.detail = detail
+
+
+class SupportResistancePersistenceCancelledError(RuntimeError):
+    pass
 
 
 def source_data_fingerprint(db: Session) -> str:
@@ -234,6 +246,7 @@ def persist_support_resistance_run(
     persist_run_events: bool = True,
     performance: dict[str, Any] | None = None,
     progress_callback: PersistenceProgressCallback | None = None,
+    cancel_check: CancellationCheck | None = None,
     batch_size: int = BATCH_INSERT_SIZE,
 ) -> SupportResistanceMaterialization:
     """Reuse or build one immutable sparse cache, then attach run-scoped events."""
@@ -347,6 +360,21 @@ def persist_support_resistance_run(
 
     try:
         instrument_ids = _instrument_ids(db, normalized_symbols)
+        missing_instruments = sorted(
+            (set(normalized_symbols) | set(state.symbols)) - set(instrument_ids)
+        )
+        if missing_instruments:
+            raise ValueError(
+                "support/resistance persistence could not resolve instrument identity for: "
+                + ", ".join(missing_instruments[:10])
+            )
+        _validate_support_resistance_state_for_persistence(
+            materialization,
+            state,
+            instrument_ids,
+            persist_run_events=persist_run_events,
+            run=run,
+        )
         zone_version_total = (
             sum(len(symbol_state.zone_versions) for symbol_state in state.symbols.values())
             if should_write_zones
@@ -378,6 +406,7 @@ def persist_support_resistance_run(
                 instrument_ids,
                 batch_size=batch_size,
                 batch_callback=report_zone_batch,
+                cancel_check=cancel_check,
             )
             completed_items = version_count
             if performance is not None:
@@ -397,6 +426,7 @@ def persist_support_resistance_run(
                 instrument_ids,
                 batch_size=batch_size,
                 batch_callback=report_regime_batch,
+                cancel_check=cancel_check,
             )
             completed_items += regime_count
             if performance is not None:
@@ -433,6 +463,7 @@ def persist_support_resistance_run(
             persist_run_events=persist_run_events,
             batch_size=batch_size,
             batch_callback=report_event_batch,
+            cancel_check=cancel_check,
         )
         db.flush()
         if performance is not None:
@@ -447,6 +478,8 @@ def persist_support_resistance_run(
                 }
             )
         return materialization
+    except SupportResistancePersistenceCancelledError:
+        raise
     except Exception as exc:
         materialization.status = "failed"
         materialization.error_message = str(exc)
@@ -464,6 +497,23 @@ def persist_support_resistance_run(
                 detail=str(exc),
             ) from exc
         raise
+
+
+def _validate_support_resistance_state_for_persistence(
+    materialization: SupportResistanceMaterialization,
+    state: SupportResistanceState,
+    instrument_ids: dict[str, int],
+    *,
+    persist_run_events: bool,
+    run: StrategyRun,
+) -> None:
+    for row in _zone_version_rows(materialization, state, instrument_ids):
+        _validate_strict_json(row["source_metadata"], "zone source_metadata")
+    for row in _regime_version_rows(materialization, state, instrument_ids):
+        _validate_strict_json(row["evidence"], "regime evidence")
+    if persist_run_events:
+        for row in _run_event_rows(run, materialization, state, instrument_ids):
+            _validate_run_event_row(row)
 
 
 def record_failed_materialization_after_rollback(
@@ -510,6 +560,7 @@ def _write_zone_versions(
     *,
     batch_size: int = BATCH_INSERT_SIZE,
     batch_callback: Callable[[int], None] | None = None,
+    cancel_check: CancellationCheck | None = None,
 ) -> int:
     # Validate the complete materialization before the first INSERT. This keeps
     # a late-sorting symbol from wasting a large transactional bulk write before
@@ -522,6 +573,7 @@ def _write_zone_versions(
         _zone_version_rows(materialization, state, instrument_ids),
         batch_size=batch_size,
         batch_callback=batch_callback,
+        cancel_check=cancel_check,
     )
 
 
@@ -533,13 +585,16 @@ def _write_regime_versions(
     *,
     batch_size: int = BATCH_INSERT_SIZE,
     batch_callback: Callable[[int], None] | None = None,
+    cancel_check: CancellationCheck | None = None,
 ) -> int:
+    rows = list(_regime_version_rows(materialization, state, instrument_ids))
     return _insert_in_batches(
         db,
         SupportResistanceRegimeVersion,
-        _regime_version_rows(materialization, state, instrument_ids),
+        rows,
         batch_size=batch_size,
         batch_callback=batch_callback,
+        cancel_check=cancel_check,
     )
 
 
@@ -710,6 +765,10 @@ def _validate_persisted_zone_row(row: dict[str, Any]) -> None:
     )
     values = {field: float(row[field]) for field in price_fields}
     identity = f"{row['symbol']}:{row['zone_key']}@{row['effective_from']}"
+    if row["role"] not in {"support", "resistance"}:
+        raise ValueError(f"{identity}: invalid zone role")
+    if row["status"] not in {"active", "expired", "broken", "transformed"}:
+        raise ValueError(f"{identity}: invalid zone status")
     if any(
         not isfinite(value) or abs(value) >= NUMERIC_24_10_ABS_LIMIT
         for value in values.values()
@@ -738,7 +797,19 @@ def _replace_run_audit_rows(
     persist_run_events: bool = True,
     batch_size: int = BATCH_INSERT_SIZE,
     batch_callback: Callable[[int], None] | None = None,
+    cancel_check: CancellationCheck | None = None,
 ) -> int:
+    rows = (
+        list(_run_event_rows(run, materialization, state, instrument_ids))
+        if persist_run_events
+        else []
+    )
+    for row in rows:
+        _validate_run_event_row(row)
+    if cancel_check is not None and cancel_check():
+        raise SupportResistancePersistenceCancelledError(
+            "backtest cancellation requested before support/resistance persistence"
+        )
     db.execute(delete(SupportResistanceRunEvent).where(SupportResistanceRunEvent.run_id == run.id))
     db.execute(
         delete(SupportResistanceRunMaterialization).where(
@@ -756,9 +827,10 @@ def _replace_run_audit_rows(
     return _insert_in_batches(
         db,
         SupportResistanceRunEvent,
-        _run_event_rows(run, materialization, state, instrument_ids),
+        rows,
         batch_size=batch_size,
         batch_callback=batch_callback,
+        cancel_check=cancel_check,
     )
 
 
@@ -793,6 +865,40 @@ def _run_event_rows(
             }
 
 
+def _validate_run_event_row(row: dict[str, Any]) -> None:
+    identity = f"{row['symbol']}:{row['event_type']}@{row['event_date']}"
+    score = row.get("score")
+    if score is not None and (
+        not isfinite(float(score)) or abs(float(score)) >= NUMERIC_20_10_ABS_LIMIT
+    ):
+        raise ValueError(f"{identity}: event score exceeds the NUMERIC(20,10) domain")
+    sample_count = row.get("posterior_sample_count")
+    if sample_count is not None and int(sample_count) < 0:
+        raise ValueError(f"{identity}: posterior sample count is negative")
+    lower = row.get("lower_price")
+    upper = row.get("upper_price")
+    if lower is not None and upper is not None:
+        lower_value = float(lower)
+        upper_value = float(upper)
+        if (
+            not isfinite(lower_value)
+            or not isfinite(upper_value)
+            or lower_value <= 0
+            or lower_value > upper_value
+            or abs(lower_value) >= NUMERIC_24_10_ABS_LIMIT
+            or abs(upper_value) >= NUMERIC_24_10_ABS_LIMIT
+        ):
+            raise ValueError(f"{identity}: event geometry exceeds the NUMERIC(24,10) domain")
+    _validate_strict_json(row["payload"], f"{identity}: event payload")
+
+
+def _validate_strict_json(value: Any, label: str) -> None:
+    try:
+        json.dumps(value, allow_nan=False, default=str)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} is not strict JSON") from exc
+
+
 def _insert_in_batches(
     db: Session,
     model: type[Any],
@@ -800,6 +906,7 @@ def _insert_in_batches(
     *,
     batch_size: int,
     batch_callback: Callable[[int], None] | None = None,
+    cancel_check: CancellationCheck | None = None,
 ) -> int:
     resolved_batch_size = max(1, int(batch_size))
     batch: list[dict[str, Any]] = []
@@ -808,18 +915,64 @@ def _insert_in_batches(
         batch.append(row)
         if len(batch) < resolved_batch_size:
             continue
-        db.execute(insert(model), batch)
+        _insert_batch(db, model, batch, cancel_check=cancel_check)
         written += len(batch)
         batch.clear()
         if batch_callback is not None:
             batch_callback(written)
     if batch:
-        db.execute(insert(model), batch)
+        _insert_batch(db, model, batch, cancel_check=cancel_check)
         written += len(batch)
         batch.clear()
         if batch_callback is not None:
             batch_callback(written)
     return written
+
+
+def _insert_batch(
+    db: Session,
+    model: type[Any],
+    rows: list[dict[str, Any]],
+    *,
+    cancel_check: CancellationCheck | None,
+) -> None:
+    if cancel_check is not None and cancel_check():
+        raise SupportResistancePersistenceCancelledError(
+            "backtest cancellation requested before support/resistance COPY batch"
+        )
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        db.execute(insert(model), rows)
+        return
+    if bind.dialect.driver != "psycopg":
+        raise RuntimeError("support/resistance COPY persistence requires postgresql+psycopg")
+    row_columns = tuple(rows[0])
+    if any(tuple(row) != row_columns for row in rows[1:]):
+        raise ValueError("support/resistance COPY batch column order differs")
+    columns = ("id", *row_columns)
+    json_columns = _COPY_JSON_COLUMNS.get(model, set())
+    statement = f"COPY {model.__table__.name} ({','.join(columns)}) FROM STDIN"
+    raw = db.connection().connection.driver_connection
+    with raw.cursor() as cursor:
+        with cursor.copy(statement) as copy:
+            for row in rows:
+                copy.write_row(
+                    (
+                        uuid4(),
+                        *(
+                            json.dumps(
+                                row[column],
+                                sort_keys=True,
+                                separators=(",", ":"),
+                                default=str,
+                                allow_nan=False,
+                            )
+                            if column in json_columns
+                            else row[column]
+                            for column in row_columns
+                        ),
+                    )
+                )
 
 
 def _elapsed_ms(started_at: float) -> float:

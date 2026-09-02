@@ -1420,7 +1420,6 @@ def process_next_trial() -> bool:
                     "universe_policy": spec.get("universePolicy"),
                     "runtime_params_override": trial.params,
                     "persist_level": persist_level,
-                    "engine_version": "v2",
                     "data_fingerprint": current_fingerprint,
                     "prepared_dataset": manifest.get("preparedDataset"),
                     "parameter_hash": canonical_hash(trial.params),

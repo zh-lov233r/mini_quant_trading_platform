@@ -16,10 +16,11 @@ The repository currently has two main parts:
   - Start from a guided `/strategies/new` hub: hand-configure an existing engine strategy in five steps, or hand off to Agent research for an existing category or new algorithm
   - Manual creation validates and normalizes the payload before persistence and always saves a `draft`; it does not activate a portfolio, create an allocation, start scheduling, or submit an order
   - Create from any strategy card or detail page: the wizard preloads the source and locks its type, then saves a uniquely named Draft with an independent `strategy_key` starting at `v1`; backtests, allocations, run history, and positions are not copied
-  - Expose a strategy catalog and normalized runtime payloads
+  - Expose a strategy catalog and normalized runtime payloads; the shared C++ descriptor registry is the single source for defaults, JSON Schema, required features, history windows, validation, and algorithm revisions
   - Current strategy types include `trend`, `mean_reversion`, `momentum_breakout`, `island_reversal`, `double_bottom`, `head_shoulders_bottom`, `rounded_bottom`, `v_reversal`, `support_resistance`, and `custom`
   - The five bottom-reversal categories use cumulative 20% / 50% / 100% staged entries; see [Bottom-reversal strategies](docs/bottom-reversal-strategies.md)
   - Engine-ready execution currently supports `trend`, `mean_reversion`, `momentum_breakout`, `island_reversal`, `double_bottom`, `head_shoulders_bottom`, `rounded_bottom`, `v_reversal`, and `support_resistance`
+  - All nine engine-ready strategies execute only through the shared C++ kernel; `custom` remains stored-only and is not an executable DSL
   - `momentum_breakout` uses existing forward-adjusted-when-available daily close, SMA20, 20-day return, and volume features; day-T close signals retain next-session open backtest fills
 
 - Market data and feature engineering
@@ -32,9 +33,9 @@ The repository currently has two main parts:
   - Queue manual and research runs in PostgreSQL and execute them with an independent worker
   - Choose `summary`, `trades`, or `full` persistence; manual runs default to `full`
   - Plan the read-only correctness/screening funnel with `make benchmark-backtests BENCHMARK_ARGS="plan"`; write benchmarks require explicit `--apply` and the safety gates in the performance guide
-  - Reuse a fingerprinted, read-only v3 columnar PreparedDataset across research trials; manual backtests keep the database loader
+  - Resolve stable instrument identity and reuse a fingerprinted, read-only v3 columnar PreparedDataset for manual, research, and verification runs; corrupt or drifted caches rebuild atomically and never fall back to a Python trading-day loop
   - Load summary, downsampled equity, signals, and transactions through incremental APIs
-  - Keep v1 as the default engine while v2 instrument-identity and batch-persistence rollout is validated
+  - Execute every engine-ready run with the in-process C++20 kernel and persist typed results with transaction-scoped psycopg3 `COPY`; Python retains queueing, database, progress/cancellation, and result orchestration
   - Rank same-strategy BUY signals by a frozen day-T strength score before day-(T+1) fills; see [Signal strength](docs/signal-strength.md)
 
 - Paper trading
@@ -42,6 +43,7 @@ The repository currently has two main parts:
   - Support multiple strategy portfolios under one paper account
   - Support strategy allocation, capital base, fractional trading, and auto-run flags
   - Support single-strategy and multi-strategy paper trading
+  - Convert Paper history into an in-memory PreparedDataset v3 and call native `evaluate_day(dataset_day, strategy, portfolio_state)`, sharing the same rules and canonical metadata as backtests; broker queries, idempotent orders, sleeve isolation, and next-session quote validation remain in Python
   - Support real paper-order submission to Alpaca
 
 - Daily scheduler
@@ -51,7 +53,7 @@ The repository currently has two main parts:
   - Can run in dry-run mode or submit real Alpaca paper orders
 
 - Agent-assisted strategy research
-  - Uses AgentOps workflows to propose draft strategies, run bounded research experiments, and prepare Draft PRs for new strategy code
+  - Uses AgentOps workflows to propose draft strategies, run bounded research experiments, and prepare Draft PRs for native C++ strategy modules, descriptors, golden differentials, and wheel validation
   - Includes engine-ready `support_resistance` research; bounce/retest BUYs require the inner-edge support/resistance channel, while direct breakouts are audit-only
   - Adds mutually exclusive four-regime timelines, regime-gated trading, lifecycle-chart backgrounds, and an independent pre-registered `pivot-slope-regime-v3` effectiveness study; v1/v2 remain audit-only and their findings are not inherited
   - Persists experiment specifications, deterministic trial expansions, progress, token usage, termination evidence, and robustness reports
@@ -64,7 +66,8 @@ The repository currently has two main parts:
   - FastAPI
   - SQLAlchemy 2.x
   - PostgreSQL
-  - Requests / Psycopg
+  - C++20 / pybind11 / NumPy buffer protocol
+  - Requests / Psycopg 3
 
 - Frontend
   - Next.js 15

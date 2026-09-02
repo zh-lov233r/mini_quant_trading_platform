@@ -27,7 +27,6 @@ from src.services.paper_trading_service import (  # noqa: E402
     _sync_strategy_pending_orders,
     process_pending_support_resistance_entries,
 )
-from src.services.signal_strength_service import annotate_and_rank_signals  # noqa: E402
 from src.services.staged_entry_service import build_pattern_setup  # noqa: E402
 from src.services.strategy_engine import SignalEvent  # noqa: E402
 from src.services.strategy_registry import normalize_strategy_params  # noqa: E402
@@ -435,7 +434,11 @@ class PaperTradingServiceTests(unittest.TestCase):
             self._strength_event("STRONG", 0.80),
             self._strength_event("MEDIUM", 0.50),
         ]
-        annotate_and_rank_signals(runtime, signals)
+        for rank, signal in enumerate(
+            sorted(signals, key=lambda item: -item.metadata["strength"]["score"]),
+            start=1,
+        ):
+            signal.metadata["strength"]["rank"] = rank
         client = StubAlpacaClient(
             submit_order_response=_make_order(
                 order_id="paper-strength-order",
@@ -563,6 +566,15 @@ class PaperTradingServiceTests(unittest.TestCase):
             reason="paper strength ordering",
             metadata={
                 "position": 0,
+                "strength": {
+                    "score": round(normalized * 100.0, 2),
+                    "level": "weak" if normalized < 0.5 else "medium" if normalized < 0.7 else "strong",
+                    "threshold": 50.0,
+                    "passes_threshold": normalized >= 0.5,
+                    "rank": None,
+                    "model_version": "double_bottom:retest:v1",
+                    "components": [],
+                },
                 "strength_inputs": {
                     "bottom_distance_pct": tolerance * (1.0 - normalized),
                     "rebound_up_day_ratio": rebound_minimum + ((1.0 - rebound_minimum) * normalized),

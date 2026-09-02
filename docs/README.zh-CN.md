@@ -9,12 +9,12 @@
 - [项目 README](../README.zh-CN.md)：功能、安装、命令以及主要 UI 和 API 入口。
 - [系统架构](architecture.zh-CN.md)：子系统边界、数据流、执行时序和安全不变量。
 - [研究实验](research-experiments.zh-CN.md)：实验输入、trial 生命周期、停止策略、报告和恢复行为。
-- [回测性能与 worker 运维](backtest-performance.zh-CN.md)：持久化级别、持久化任务、v1/v2 上线、API 迁移和数据库恢复。
+- [回测性能与 worker 运维](backtest-performance.zh-CN.md)：共享原生内核边界、typed COPY 持久化、durable job、benchmark 门槛和恢复。
 - [BUY 信号强度](signal-strength.zh-CN.md)：各大类 0–100 公式、阈值排名、T/T+1 时序和审计字段。
 - [底部反转策略](bottom-reversal-strategies.zh-CN.md)：五类形态、三阶段累计目标、审计字段与安全边界。
-- [支撑线与压力线策略](support-resistance-strategy.zh-CN.md)：因果 Pivot/ATR 区域、入场退出、稀疏持久化、缓存失效和数据库上线。
+- [支撑线与压力线策略](support-resistance-strategy.zh-CN.md)：原生因果 Pivot/ATR 区域与状态、入场退出、typed 稀疏持久化、缓存失效和数据库上线。
 - [支撑/压力区策略有效性研究](support-resistance-effectiveness.zh-CN.md)：预注册动态股票池验证、父子编排、判定门槛和双语报告交付。
-- [Quant 与 AgentOps 本地联调](agent-research-integration.zh-CN.md)：安全联合启动、服务认证、schema 准备和故障处理。
+- [Quant 与 AgentOps 本地联调](agent-research-integration.zh-CN.md)：安全联合启动、新算法原生 Draft PR 契约、服务认证、schema 准备和故障处理。
 
 ## 事实来源
 

@@ -1989,7 +1989,7 @@ components:
 
     StrategyCatalogItem:
       type: object
-      required: [strategy_type, label, description, engine_ready, defaults]
+      required: [strategy_type, label, description, engine_ready, defaults, parameter_schema, required_features, algorithm_revision, history_length]
       properties:
         strategy_type:
           $ref: "#/components/schemas/StrategyType"
@@ -2008,6 +2008,19 @@ components:
             - $ref: "#/components/schemas/DoubleBottomStrategyParams"
             - $ref: "#/components/schemas/SupportResistanceStrategyParams"
             - $ref: "#/components/schemas/FreeFormObject"
+        parameter_schema:
+          type: object
+          additionalProperties: true
+        required_features:
+          type: array
+          items:
+            type: string
+        algorithm_revision:
+          type: integer
+          nullable: true
+        history_length:
+          type: integer
+          minimum: 0
 
     StrategyCreate:
       type: object

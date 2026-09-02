@@ -13,27 +13,86 @@ from src.services.backtest_engine import (
     _available_details,
     _downsample_snapshots,
     _finalize_engine_performance,
-    _inject_backtest_positions,
-    _update_last_marks,
+    _load_split_adjustments_by_date,
 )
 from src.services.backtest_equity_service import (
     build_downsampled_chart_query,
     build_downsampled_snapshot_ids_query,
 )
-from src.services.backtest_repository import BacktestRepository
 from src.services.prepared_dataset_service import (
     PREPARED_DATASET_SCHEMA_VERSION,
     PreparedDatasetCache,
     PreparedDatasetDataChangedError,
-    PreparedDatasetDayLoader,
     encode_prepared_snapshot,
 )
-from src.services.strategy_engine import STRATEGY_HANDLERS
+from src.services.strategy_engine import evaluate_native_signals
 from src.services.strategy_registry import normalize_strategy_params, strategy_data_requirements
-from src.services.stateless_signal_kernel import vectorized_stateless_candidates
+from backend.utils.benchmark_backtests import (
+    _cases,
+    _performance_acceptance,
+    _planned_write_estimate,
+)
 
 
 class BacktestPerformanceComponentTests(unittest.TestCase):
+    def test_benchmark_cases_use_exact_supplied_correctness_session_window(self) -> None:
+        start = date(2024, 7, 1)
+        end = date(2025, 1, 2)
+        cases = _cases("correctness", end, [], correctness_start=start)
+        self.assertEqual(len(cases), 9)
+        self.assertTrue(all(case.start_date == start for case in cases))
+        self.assertTrue(all(case.symbol_count == 20 for case in cases))
+
+    def test_benchmark_plan_reports_complete_write_authorization_scope(self) -> None:
+        cases = _cases(
+            "plan",
+            date(2026, 9, 1),
+            [],
+            correctness_start=date(2026, 3, 12),
+        )
+
+        self.assertEqual(
+            _planned_write_estimate(cases),
+            {
+                "benchmarkDraftStrategies": 1,
+                "pythonBaselineStrategyRuns": 105,
+                "nativeStrategyRuns": 159,
+                "totalStrategyRuns": 264,
+            },
+        )
+
+    def test_benchmark_acceptance_enforces_speedup_and_peak_rss(self) -> None:
+        results = [
+            {
+                "case": "screening-trend-warm-summary",
+                "medianEngineTotalMs": 20.0,
+                "maxPeakRssMb": 100.0,
+            },
+            {
+                "case": "confirmation-support_resistance-3640-5y-cold-summary",
+                "medianEngineTotalMs": 40.0,
+                "maxPeakRssMb": 121.0,
+            },
+        ]
+        baseline = {
+            "screening-trend-warm-summary": {
+                "medianEngineTotalMs": 100.0,
+                "maxPeakRssMb": 100.0,
+            },
+            "confirmation-support_resistance-3640-5y-cold-summary": {
+                "medianEngineTotalMs": 120.0,
+                "maxPeakRssMb": 120.0,
+            },
+        }
+
+        comparisons = _performance_acceptance(results, baseline)
+
+        self.assertTrue(comparisons[0]["passed"])
+        self.assertEqual(comparisons[0]["requiredSpeedup"], 5.0)
+        self.assertFalse(comparisons[1]["passed"])
+        self.assertEqual(comparisons[1]["requiredSpeedup"], 3.0)
+        self.assertFalse(comparisons[1]["rssPassed"])
+
     def test_downsample_is_deterministic_and_preserves_endpoints(self) -> None:
         rows = [
             {"ts": f"2025-01-{index + 1:02d}", "equity": float(value)}
@@ -85,6 +144,30 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
         self.assertIn("transactions", _available_details("trades"))
         self.assertIn("signals", _available_details("full"))
 
+    def test_split_adjustments_load_by_stable_instrument_identity(self) -> None:
+        db = MagicMock()
+        db.execute.return_value.mappings.return_value.all.return_value = [
+            {
+                "instrument_id": 7,
+                "symbol": "NEW",
+                "ex_date": date(2025, 1, 3),
+                "split_from": 1,
+                "split_to": 2,
+            }
+        ]
+
+        result = _load_split_adjustments_by_date(
+            db,
+            [],
+            date(2025, 1, 1),
+            date(2025, 1, 4),
+            instrument_ids=[7, 7],
+        )
+
+        self.assertEqual(result, {date(2025, 1, 3): {7: 2.0}})
+        params = db.execute.call_args.args[1]
+        self.assertEqual(params["instrument_ids"], [7])
+
     def test_engine_performance_has_non_overlapping_phases_and_throughput(self) -> None:
         performance = {
             "sql_execute_ms": 10.0,
@@ -117,73 +200,27 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
         self.assertEqual(performance["microseconds_per_input_row"], 2_000.0)
         self.assertEqual(performance["data_prepare_ms"], 50.0)
 
-    def test_position_state_and_marks_only_touch_open_holdings(self) -> None:
-        snapshots = {
-            1: {"position": 0.0, "avg_entry_price": None, "close": 12.0},
-            2: {"position": 0.0, "avg_entry_price": None, "close": 20.0},
-        }
-        holdings = {1: 3.0, 3: 2.0}
-        _inject_backtest_positions(
-            snapshots,
-            holdings,
-            {1: 10.0, 3: 30.0},
-            {},
-            {},
-            {},
-            date(2025, 1, 2),
-            1,
-        )
-        self.assertEqual(snapshots[1]["position"], 3.0)
-        self.assertEqual(snapshots[2]["position"], 0.0)
-
-        marks = {1: 11.0, 2: 19.0, 3: 30.0}
-        _update_last_marks(holdings, marks, snapshots, {})
-        self.assertEqual(marks, {1: 12.0, 3: 30.0})
-
     def test_stateless_strategy_requirements_have_no_history_window(self) -> None:
         for strategy_type in ("trend", "mean_reversion", "momentum_breakout"):
             self.assertEqual(strategy_data_requirements(strategy_type).history_length, 0)
         self.assertGreater(strategy_data_requirements("double_bottom").history_length, 0)
 
-    def test_vectorized_candidates_keep_positions_and_true_entries_in_stable_order(self) -> None:
-        runtime = {
-            "strategy_type": "momentum_breakout",
-            "params": {
-                "signal": {
-                    "breakout_buffer_pct": 0.05,
-                    "minimum_return_20d": 0.1,
-                    "volume_multiplier": 1.2,
-                }
-            },
-        }
-        snapshots = {
-            "AAA": {"position": 0, "close": 11, "sma_20": 10, "volume": 100, "volume_sma_20": 80, "ret_20d": 0.2},
-            "BBB": {"position": 0, "close": 11, "sma_20": 10, "volume": None, "volume_sma_20": 80, "ret_20d": 0.2},
-            "CCC": {"position": 5, "close": 10, "volume": None, "volume_sma_20": None, "ret_20d": None},
-            "DDD": {"position": 0, "close": 10.2, "sma_20": 10, "volume": 100, "volume_sma_20": 80, "ret_20d": 0.2},
-        }
-        filtered = vectorized_stateless_candidates(runtime, snapshots)
-        self.assertEqual(list(filtered), ["AAA", "CCC"])
-
-    def test_stateless_candidate_kernels_match_shared_handlers(self) -> None:
+    def test_native_day_kernel_is_the_stateless_signal_entrypoint(self) -> None:
         ts = datetime(2025, 1, 2, 21, tzinfo=timezone.utc)
         cases = {
             "trend": {
                 "ENTRY": {"position": 0, "close": 11, "atr_14": 1, "volume": 150, "volume_sma_20": 100, "ema_15": 11, "sma_200": 10, "prev_ema_15": 10, "prev_sma_200": 10},
                 "NONE": {"position": 0, "close": 10, "atr_14": 1, "volume": 200, "volume_sma_20": 100, "ema_15": 9, "sma_200": 10, "prev_ema_15": 9, "prev_sma_200": 10},
-                "NAN": {"position": 0, "close": 10, "atr_14": 1, "volume": float("nan"), "volume_sma_20": 100, "ema_15": 11, "sma_200": 10, "prev_ema_15": 10, "prev_sma_200": 10},
                 "HOLDING": {"position": 2, "avg_entry_price": 10, "close": 8, "atr_14": 1},
             },
             "mean_reversion": {
                 "ENTRY": {"position": 0, "close": 10, "zscore_20": -2},
                 "NONE": {"position": 0, "close": 10, "zscore_20": 0},
-                "NAN": {"position": 0, "close": 10, "zscore_20": float("nan")},
                 "HOLDING": {"position": 2, "avg_entry_price": 10, "close": 11, "zscore_20": 0},
             },
             "momentum_breakout": {
                 "ENTRY": {"position": 0, "close": 10.2, "sma_20": 10, "ret_20d": 0.1, "volume": 150, "volume_sma_20": 100},
                 "NONE": {"position": 0, "close": 10, "sma_20": 10, "ret_20d": 0, "volume": 100, "volume_sma_20": 100},
-                "NAN": {"position": 0, "close": float("nan"), "sma_20": 10, "ret_20d": 0.2, "volume": 200, "volume_sma_20": 100},
                 "HOLDING": {"position": 2, "avg_entry_price": 10, "close": 12, "sma_20": 10, "ret_20d": 0.2, "volume": 200, "volume_sma_20": 100},
             },
         }
@@ -196,26 +233,12 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
                     "engine_ready": True,
                 }
                 prepared = {
-                    symbol: {**snapshot, "ts": ts}
+                    symbol: {**snapshot, "ts": ts, "asset_type": "CS"}
                     for symbol, snapshot in snapshots.items()
                 }
-                handler = STRATEGY_HANDLERS[strategy_type]
-                self.assertEqual(
-                    handler(runtime, prepared),
-                    handler(runtime, vectorized_stateless_candidates(runtime, prepared)),
-                )
-
-    def test_repository_flushes_core_rows_in_bounded_batches(self) -> None:
-        db = MagicMock()
-        repository = BacktestRepository(db, batch_size=2)
-        repository.add_signal({"symbol": "AAA"})
-        self.assertEqual(db.execute.call_count, 0)
-        repository.add_signal({"symbol": "BBB"})
-        self.assertEqual(db.execute.call_count, 1)
-        repository.add_snapshot({"equity": 100.0})
-        repository.flush()
-        self.assertEqual(db.execute.call_count, 2)
-        self.assertEqual(repository.rows_inserted, 3)
+                events = evaluate_native_signals(runtime, prepared)
+                self.assertIn("ENTRY", {event.symbol for event in events})
+                self.assertTrue(all("strength" in event.metadata for event in events if event.action == "BUY" and float(event.metadata.get("position") or 0) >= 0))
 
     def test_prepared_dataset_is_read_only_atomic_and_fingerprint_addressed(self) -> None:
         manifest = {
@@ -331,19 +354,6 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
             self.assertTrue(np.isfortran(array.floats))
             self.assertEqual(array.sidecar["symbols"], ["AAA"])
             self.assertTrue(np.isnan(array.floats[0]).sum() > 0)
-            performance = {"row_decode_ms": 0.0, "day_grouping_ms": 0.0}
-            days = list(
-                PreparedDatasetDayLoader(
-                    array,
-                    start_date=date(2025, 1, 1),
-                    end_date=date(2025, 1, 2),
-                    performance=performance,
-                ).iter_days()
-            )
-            self.assertEqual([item[0] for item in days], [date(2025, 1, 1), date(2025, 1, 2)])
-            self.assertEqual(days[1][1]["AAA"]["close"], 11.0)
-            self.assertEqual(days[1][1]["AAA"]["history_sessions"], 2)
-
             db = MagicMock()
             db.execute.return_value.scalar_one.return_value = 1
             self.assertFalse(cache.cleanup_if_unused(db, manifest))

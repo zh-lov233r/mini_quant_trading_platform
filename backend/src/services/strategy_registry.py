@@ -3,25 +3,18 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 import json
-import math
-import re
-from typing import Any, Dict, Iterable
+from typing import Any, Dict
+
+import quant_kernel
 
 from src.services.strategy_types import RuntimeStrategy
 
 
-ENGINE_SUPPORTED_TYPES = {
-    "trend",
-    "mean_reversion",
-    "momentum_breakout",
-    "island_reversal",
-    "double_bottom",
-    "head_shoulders_bottom",
-    "rounded_bottom",
-    "v_reversal",
-    "support_resistance",
+_NATIVE_CATALOG = tuple(dict(item) for item in quant_kernel.catalog())
+_NATIVE_DESCRIPTOR_BY_TYPE = {
+    str(item["strategy_type"]): item for item in _NATIVE_CATALOG
 }
-_INDICATOR_PATTERN = re.compile(r"^(EMA|SMA)(\d+)$", re.IGNORECASE)
+ENGINE_SUPPORTED_TYPES = set(_NATIVE_DESCRIPTOR_BY_TYPE)
 MEAN_REVERSION_SUPPORTED_LOOKBACK_WINDOWS = (5, 10, 20)
 
 
@@ -34,495 +27,64 @@ class StrategyDataRequirements:
     signal_metadata_fields: tuple[str, ...] = ()
 
 
-_OHLCV = ("open", "high", "low", "close", "volume")
-STRATEGY_DATA_REQUIREMENTS: dict[str, StrategyDataRequirements] = {
-    "trend": StrategyDataRequirements(
-        current_fields=("open", "close", "volume", "volume_sma_20", "atr_14", "ema_15", "sma_200"),
-        previous_fields=("ema_15", "sma_200"),
-        signal_metadata_fields=("close", "volume", "volume_sma_20", "atr_14", "ema_15", "sma_200"),
-    ),
-    "mean_reversion": StrategyDataRequirements(
-        current_fields=("open", "close", "atr_14", "zscore_5", "zscore_10", "zscore_20"),
-        signal_metadata_fields=("close", "atr_14", "zscore_5", "zscore_10", "zscore_20"),
-    ),
-    "momentum_breakout": StrategyDataRequirements(
-        current_fields=("open", "close", "volume", "volume_sma_20", "ret_20d", "atr_14"),
-        signal_metadata_fields=("close", "volume", "volume_sma_20", "ret_20d", "atr_14"),
-    ),
-    "island_reversal": StrategyDataRequirements(
-        current_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
-        history_fields=(*_OHLCV, "atr_14", "volume_sma_20", "ret_60d"),
-        history_length=90,
-        signal_metadata_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
-    ),
-    "double_bottom": StrategyDataRequirements(
-        current_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
-        history_fields=(*_OHLCV, "atr_14", "volume_sma_20", "ret_60d"),
-        history_length=150,
-        signal_metadata_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
-    ),
-    "head_shoulders_bottom": StrategyDataRequirements(
-        current_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
-        history_fields=(*_OHLCV, "atr_14", "volume_sma_20", "ret_60d"),
-        history_length=180,
-        signal_metadata_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
-    ),
-    "rounded_bottom": StrategyDataRequirements(
-        current_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
-        history_fields=(*_OHLCV, "atr_14", "volume_sma_20", "ret_60d"),
-        history_length=260,
-        signal_metadata_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
-    ),
-    "v_reversal": StrategyDataRequirements(
-        current_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
-        history_fields=(*_OHLCV, "atr_14", "volume_sma_20", "ret_60d"),
-        history_length=120,
-        signal_metadata_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
-    ),
-    "support_resistance": StrategyDataRequirements(
-        current_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
-        history_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
-        history_length=160,
-        signal_metadata_fields=(*_OHLCV, "atr_14", "volume_sma_20"),
-    ),
-}
-
-
 def strategy_data_requirements(strategy_type: str) -> StrategyDataRequirements:
     try:
-        return STRATEGY_DATA_REQUIREMENTS[str(strategy_type).strip().lower()]
+        descriptor = _NATIVE_DESCRIPTOR_BY_TYPE[str(strategy_type).strip().lower()]
     except KeyError as exc:
         raise ValueError(f"unsupported strategy type: {strategy_type}") from exc
+    features = tuple(str(value) for value in descriptor["required_features"])
+    history_length = int(descriptor["history_length"])
+    return StrategyDataRequirements(
+        current_fields=features,
+        history_fields=features if history_length else (),
+        history_length=history_length,
+        signal_metadata_fields=features,
+    )
 
-TREND_DEFAULTS: Dict[str, Any] = {
-    "signal": {
-        "min_strength_score": 50.0,
-        "fast_indicator": {"kind": "ema", "window": 15},
-        "slow_indicator": {"kind": "sma", "window": 200},
-        "volume_multiplier": 1.5,
-        "atr_multiplier": 2.0,
-        "price_field": "close",
-        "trigger": "cross_over",
-    },
-    "universe": {
-        "symbols": [],
-        "selection_mode": "all_common_stock",
-    },
-    "risk": {
-        "max_positions": 10,
-        "position_size_pct": 0.1,
-        "stop_loss_pct": 0.10,
-        "stop_loss_atr": 2.0,
-        "take_profit_atr": 4.0,
-    },
-    "execution": {
-        "timeframe": "1d",
-        "rebalance": "daily",
-        "run_at": "close",
-    },
-    "metadata": {
-        "description": "",
-        "schema_version": 1,
-    },
-}
 
-MEAN_REVERSION_DEFAULTS: Dict[str, Any] = {
-    "signal": {
-        "min_strength_score": 50.0,
-        "lookback_window": 20,
-        "zscore_entry": 2.0,
-        "zscore_exit": 0.5,
-        "price_field": "close",
-    },
-    "universe": {
-        "symbols": [],
-        "selection_mode": "all_common_stock",
-    },
-    "risk": {
-        "max_positions": 10,
-        "position_size_pct": 0.1,
-        "stop_loss_pct": 0.10,
-        "take_profit_pct": 0.10,
-        "max_holding_days": 0,
-    },
-    "execution": {
-        "timeframe": "1d",
-        "rebalance": "daily",
-        "run_at": "close",
-    },
-    "metadata": {
-        "description": "",
-        "schema_version": 1,
-    },
-}
+def _native_defaults(strategy_type: str) -> Dict[str, Any]:
+    return copy.deepcopy(_NATIVE_DESCRIPTOR_BY_TYPE[strategy_type]["defaults"])
 
-MOMENTUM_BREAKOUT_DEFAULTS: Dict[str, Any] = {
-    "signal": {
-        "min_strength_score": 50.0,
-        "minimum_return_20d": 0.10,
-        "breakout_buffer_pct": 0.02,
-        "volume_multiplier": 1.5,
-        "exit_return_20d": 0.0,
-        "price_field": "close",
-    },
-    "universe": {
-        "symbols": [],
-        "selection_mode": "all_common_stock",
-    },
-    "risk": {
-        "max_positions": 10,
-        "position_size_pct": 0.1,
-        "stop_loss_pct": 0.08,
-        "take_profit_pct": 0.20,
-    },
-    "execution": {
-        "timeframe": "1d",
-        "rebalance": "daily",
-        "run_at": "close",
-    },
-    "metadata": {
-        "description": "",
-        "schema_version": 1,
-    },
-}
 
-STAGED_ENTRY_RISK_DEFAULTS: Dict[str, float] = {
-    "stage_1_target_pct": 0.20,
-    "stage_2_target_pct": 0.50,
-    "stage_3_target_pct": 1.00,
-}
-
-ISLAND_REVERSAL_DEFAULTS: Dict[str, Any] = {
-    "signal": {
-        "min_strength_score": 50.0,
-        "downtrend_lookback": 60,
-        "downtrend_min_drop_pct": 0.15,
-        "left_gap_min_pct": 0.02,
-        "right_gap_min_pct": 0.02,
-        "min_island_bars": 1,
-        "max_island_bars": 8,
-        "left_volume_ratio_max": 0.8,
-        "right_volume_ratio_min": 1.5,
-        "retest_window": 10,
-        "retest_volume_ratio_max": 0.7,
-        "support_tolerance_pct": 0.01,
-    },
-    "universe": {
-        "symbols": [],
-        "selection_mode": "all_common_stock",
-    },
-    "risk": {
-        "max_positions": 6,
-        "position_size_pct": 0.15,
-        **STAGED_ENTRY_RISK_DEFAULTS,
-        "stop_loss_atr": 1.5,
-        "max_loss_pct": 0.10,
-        "take_profit_atr": 3.0,
-    },
-    "execution": {
-        "timeframe": "1d",
-        "rebalance": "daily",
-        "run_at": "close",
-    },
-    "metadata": {
-        "description": "",
-        "schema_version": 1,
-    },
-}
-
-DOUBLE_BOTTOM_DEFAULTS: Dict[str, Any] = {
-    "signal": {
-        "min_strength_score": 50.0,
-        "downtrend_lookback": 60,
-        "downtrend_min_drop_pct": 0.20,
-        "downtrend_max_up_day_ratio": 0.35,
-        "downtrend_min_r_squared": 0.65,
-        "min_bottom_spacing": 5,
-        "max_bottom_spacing": 30,
-        "left_bottom_before_bars": 1,
-        "left_bottom_after_bars": 1,
-        "bottom_tolerance_pct": 0.03,
-        "neckline_min_rebound_pct": 0.06,
-        "rebound_up_day_ratio_min": 0.60,
-        "second_bottom_volume_ratio_max": 0.90,
-        "breakout_volume_ratio_min": 1.50,
-        "max_breakout_bars_after_right_bottom": 40,
-        "breakout_buffer_pct": 0.005,
-        "retest_window": 10,
-        "retest_volume_ratio_max": 0.80,
-        "support_tolerance_pct": 0.02,
-    },
-    "universe": {
-        "symbols": [],
-        "selection_mode": "all_common_stock",
-    },
-    "risk": {
-        "max_positions": 6,
-        "position_size_pct": 0.15,
-        **STAGED_ENTRY_RISK_DEFAULTS,
-        "stop_loss_atr": 1.5,
-        "max_loss_pct": 0.08,
-        "take_profit_atr": 3.0,
-    },
-    "execution": {
-        "timeframe": "1d",
-        "rebalance": "daily",
-        "run_at": "close",
-    },
-    "metadata": {
-        "description": "",
-        "schema_version": 1,
-    },
-}
-
-HEAD_SHOULDERS_BOTTOM_DEFAULTS: Dict[str, Any] = {
-    "signal": {
-        "min_strength_score": 50.0,
-        "downtrend_lookback": 60,
-        "downtrend_min_drop_pct": 0.20,
-        "pivot_left_bars": 2,
-        "pivot_right_bars": 2,
-        "min_segment_bars": 5,
-        "max_segment_bars": 40,
-        "shoulder_tolerance_pct": 0.05,
-        "head_depth_min_pct": 0.05,
-        "head_volume_ratio_max": 0.80,
-        "right_shoulder_volume_ratio_max": 0.90,
-        "breakout_volume_ratio_min": 1.50,
-        "breakout_buffer_pct": 0.005,
-    },
-    "universe": {"symbols": [], "selection_mode": "all_common_stock"},
-    "risk": {
-        "max_positions": 6,
-        "position_size_pct": 0.15,
-        **STAGED_ENTRY_RISK_DEFAULTS,
-        "stop_loss_atr": 1.5,
-        "max_loss_pct": 0.08,
-        "take_profit_atr": 3.0,
-    },
-    "execution": {"timeframe": "1d", "rebalance": "daily", "run_at": "close"},
-    "metadata": {"description": "", "schema_version": 1, "algorithm_version": "confirmed-pivots-v1"},
-}
-
-ROUNDED_BOTTOM_DEFAULTS: Dict[str, Any] = {
-    "signal": {
-        "min_strength_score": 50.0,
-        "min_lookback": 80,
-        "max_lookback": 240,
-        "min_depth_pct": 0.20,
-        "min_r_squared": 0.75,
-        "vertex_position_min": 0.35,
-        "vertex_position_max": 0.65,
-        "pivot_left_bars": 2,
-        "pivot_right_bars": 2,
-        "min_pullback_spacing": 5,
-        "right_volume_ratio_min": 1.30,
-        "pullback_volume_ratio_max": 0.80,
-        "breakout_volume_ratio_min": 1.50,
-        "breakout_buffer_pct": 0.005,
-    },
-    "universe": {"symbols": [], "selection_mode": "all_common_stock"},
-    "risk": {
-        "max_positions": 6,
-        "position_size_pct": 0.15,
-        **STAGED_ENTRY_RISK_DEFAULTS,
-        "stop_loss_atr": 1.5,
-        "max_loss_pct": 0.08,
-        "take_profit_atr": 3.0,
-    },
-    "execution": {"timeframe": "1d", "rebalance": "daily", "run_at": "close"},
-    "metadata": {"description": "", "schema_version": 1, "algorithm_version": "log-quadratic-v1"},
-}
-
-V_REVERSAL_DEFAULTS: Dict[str, Any] = {
-    "signal": {
-        "min_strength_score": 50.0,
-        "downtrend_lookback": 60,
-        "downtrend_min_drop_pct": 0.20,
-        "pivot_max_bars": 3,
-        "reversal_min_return_pct": 0.05,
-        "reversal_min_atr": 1.50,
-        "pivot_volume_ratio_min": 2.00,
-        "continuation_window": 5,
-        "continuation_volume_ratio_min": 1.20,
-        "consolidation_min_bars": 3,
-        "consolidation_max_bars": 10,
-        "breakout_volume_ratio_min": 1.50,
-        "retest_window": 5,
-        "retest_volume_ratio_max": 0.80,
-        "support_tolerance_pct": 0.02,
-        "bearish_reversal_volume_ratio_min": 2.00,
-    },
-    "universe": {"symbols": [], "selection_mode": "all_common_stock"},
-    "risk": {
-        "max_positions": 6,
-        "position_size_pct": 0.15,
-        **STAGED_ENTRY_RISK_DEFAULTS,
-        "stop_loss_atr": 1.5,
-        "max_loss_pct": 0.08,
-        "take_profit_atr": 3.0,
-    },
-    "execution": {"timeframe": "1d", "rebalance": "daily", "run_at": "close"},
-    "metadata": {"description": "", "schema_version": 1, "algorithm_version": "volume-v-reversal-v1"},
-}
-
-SUPPORT_RESISTANCE_DEFAULTS: Dict[str, Any] = {
-    "signal": {
-        "min_strength_score": 50.0,
-        "support_bounce_enabled": True,
-        "resistance_breakout_enabled": True,
-        "breakout_retest_enabled": True,
-        "pivot_left_bars": 3,
-        "pivot_right_bars": 3,
-        "detection_window": 120,
-        "min_line_pivots": 3,
-        "min_line_span_sessions": 10,
-        "line_inlier_tolerance_atr": 0.75,
-        "max_abs_slope_atr_per_session": 0.25,
-        "zone_half_width_atr": 0.5,
-        "decay_half_life": 60,
-        "bounce_confirmation_atr": 0.25,
-        "breakout_confirmation_atr": 0.5,
-        "breakout_volume_ratio_min": 1.5,
-        "retest_window": 10,
-        "retest_volume_ratio_max": 0.8,
-        "score_outcome_window": 20,
-        "score_target_atr": 3.0,
-        "score_stop_atr": 1.5,
-    },
-    "universe": {
-        "symbols": [],
-        "selection_mode": "all_common_stock",
-    },
-    "risk": {
-        "max_positions": 6,
-        "position_size_pct": 0.15,
-        "stop_loss_atr": 1.5,
-        "max_loss_pct": 0.08,
-        "take_profit_atr": 3.0,
-        "min_reward_risk": 1.5,
-        "max_holding_days": 40,
-    },
-    "execution": {
-        "timeframe": "1d",
-        "rebalance": "daily",
-        "run_at": "close",
-    },
-    "metadata": {
-        "description": "",
-        "schema_version": 1,
-        "algorithm_version": "pivot-slope-regime-v3",
-        "price_semantics": "forward_adjusted_preferred_unadjusted_fallback",
-    },
-}
+# Public aliases remain for fixture construction; their values are sourced from C++.
+TREND_DEFAULTS = _native_defaults("trend")
+MEAN_REVERSION_DEFAULTS = _native_defaults("mean_reversion")
+MOMENTUM_BREAKOUT_DEFAULTS = _native_defaults("momentum_breakout")
+ISLAND_REVERSAL_DEFAULTS = _native_defaults("island_reversal")
+DOUBLE_BOTTOM_DEFAULTS = _native_defaults("double_bottom")
+HEAD_SHOULDERS_BOTTOM_DEFAULTS = _native_defaults("head_shoulders_bottom")
+ROUNDED_BOTTOM_DEFAULTS = _native_defaults("rounded_bottom")
+V_REVERSAL_DEFAULTS = _native_defaults("v_reversal")
+SUPPORT_RESISTANCE_DEFAULTS = _native_defaults("support_resistance")
 
 CUSTOM_DEFAULTS: Dict[str, Any] = {
     "rules": [],
-    "universe": {
-        "symbols": [],
-        "selection_mode": "all_common_stock",
-    },
-    "risk": {
-        "max_positions": 10,
-        "position_size_pct": 0.1,
-    },
-    "execution": {
-        "timeframe": "1d",
-        "rebalance": "daily",
-        "run_at": "close",
-    },
-    "metadata": {
-        "description": "",
-        "schema_version": 1,
-    },
-}
-
-TREND_ENGINE_SUPPORTED_WINDOWS: Dict[str, list[int]] = {
-    "ema": [12, 15, 20, 50],
-    "sma": [10, 20, 50, 100, 200],
+    "universe": {"symbols": [], "selection_mode": "all_common_stock"},
+    "risk": {"max_positions": 10, "position_size_pct": 0.1},
+    "execution": {"timeframe": "1d", "rebalance": "daily", "run_at": "close"},
+    "metadata": {"description": "", "schema_version": 1},
 }
 
 
 def build_strategy_catalog() -> list[Dict[str, Any]]:
     return [
-        {
-            "strategy_type": "trend",
-            "label": "Trend Following",
-            "description": "双均线趋势策略，带成交量过滤、ATR 风控和调仓配置。",
-            "engine_ready": True,
-            "defaults": copy.deepcopy(TREND_DEFAULTS),
-        },
-        {
-            "strategy_type": "mean_reversion",
-            "label": "Mean Reversion",
-            "description": "均值回归配置模板，基于 z-score / ATR / 流动性特征做日线信号。",
-            "engine_ready": True,
-            "defaults": copy.deepcopy(MEAN_REVERSION_DEFAULTS),
-        },
-        {
-            "strategy_type": "momentum_breakout",
-            "label": "Momentum Breakout",
-            "description": "动量突破策略，使用 20 日收益、20 日均线和成交量确认日线突破。",
-            "engine_ready": True,
-            "defaults": copy.deepcopy(MOMENTUM_BREAKOUT_DEFAULTS),
-        },
-        {
-            "strategy_type": "island_reversal",
-            "label": "Island Reversal Bottom",
-            "description": "底部岛形反转策略，识别缩量向下衰竭缺口、放量向上突破缺口和缩量回踩缺口。",
-            "engine_ready": True,
-            "defaults": copy.deepcopy(ISLAND_REVERSAL_DEFAULTS),
-        },
-        {
-            "strategy_type": "double_bottom",
-            "label": "Double Bottom",
-            "description": "保守版双底形态策略，确认长期下跌后的双底，等待放量突破后的缩量回踩再买入。",
-            "engine_ready": True,
-            "defaults": copy.deepcopy(DOUBLE_BOTTOM_DEFAULTS),
-        },
-        {
-            "strategy_type": "head_shoulders_bottom",
-            "label": "Head and Shoulders Bottom",
-            "description": "头肩底反转策略，分阶段识别缩量头部、右肩回踩与放量突破动态颈线。",
-            "engine_ready": True,
-            "defaults": copy.deepcopy(HEAD_SHOULDERS_BOTTOM_DEFAULTS),
-        },
-        {
-            "strategy_type": "rounded_bottom",
-            "label": "Rounded Bottom",
-            "description": "圆弧底反转策略，使用因果二次曲线拟合、右侧更高回踩与放量突破碗口。",
-            "engine_ready": True,
-            "defaults": copy.deepcopy(ROUNDED_BOTTOM_DEFAULTS),
-        },
-        {
-            "strategy_type": "v_reversal",
-            "label": "V Reversal",
-            "description": "V 型反转策略，识别底部放量转折、连续上升与顶部突破回踩。",
-            "engine_ready": True,
-            "defaults": copy.deepcopy(V_REVERSAL_DEFAULTS),
-        },
-        {
-            "strategy_type": "support_resistance",
-            "label": "Support / Resistance Zones",
-            "description": "使用已确认 Pivot 与 ATR 聚类识别动态支撑/压力区，并交易反弹、突破和突破回踩。",
-            "engine_ready": True,
-            "defaults": copy.deepcopy(SUPPORT_RESISTANCE_DEFAULTS),
-        },
+        *[copy.deepcopy(item) for item in _NATIVE_CATALOG],
         {
             "strategy_type": "custom",
             "label": "Custom Config",
             "description": "自定义 JSON/DSL 策略定义。建议存储规则，不要直接存储可执行代码。",
             "engine_ready": False,
             "defaults": copy.deepcopy(CUSTOM_DEFAULTS),
+            "parameter_schema": {"type": "object"},
+            "required_features": [],
+            "algorithm_revision": None,
+            "history_length": 0,
         },
     ]
 
 
 def get_trend_engine_supported_windows() -> Dict[str, list[int]]:
-    return {
-        kind: list(windows)
-        for kind, windows in TREND_ENGINE_SUPPORTED_WINDOWS.items()
-    }
+    return {"ema": [12, 15, 20, 50], "sma": [10, 20, 50, 100, 200]}
 
 
 def normalize_strategy_params(
@@ -531,41 +93,17 @@ def normalize_strategy_params(
     description: str | None = None,
 ) -> Dict[str, Any]:
     raw = copy.deepcopy(params or {})
-
-    if strategy_type == "trend":
-        normalized = _normalize_trend_params(raw)
-    elif strategy_type == "mean_reversion":
-        normalized = _normalize_mean_reversion_params(raw)
-    elif strategy_type == "momentum_breakout":
-        normalized = _normalize_momentum_breakout_params(raw)
-    elif strategy_type == "island_reversal":
-        normalized = _normalize_island_reversal_params(raw)
-    elif strategy_type == "double_bottom":
-        normalized = _normalize_double_bottom_params(raw)
-    elif strategy_type == "head_shoulders_bottom":
-        normalized = _normalize_head_shoulders_bottom_params(raw)
-    elif strategy_type == "rounded_bottom":
-        normalized = _normalize_rounded_bottom_params(raw)
-    elif strategy_type == "v_reversal":
-        normalized = _normalize_v_reversal_params(raw)
-    elif strategy_type == "support_resistance":
-        normalized = _normalize_support_resistance_params(raw)
-    elif strategy_type == "custom":
-        normalized = _normalize_custom_params(raw)
-    else:
-        raise ValueError(f"unsupported strategy_type: {strategy_type}")
-
     if strategy_type in ENGINE_SUPPORTED_TYPES:
-        signal = normalized.setdefault("signal", {})
-        raw_signal = raw.get("signal") if isinstance(raw.get("signal"), dict) else {}
-        signal["min_strength_score"] = _strength_score(
-            raw_signal.get(
-                "min_strength_score",
-                raw.get("min_strength_score", signal.get("min_strength_score", 50.0)),
-            ),
-            "signal.min_strength_score",
-        )
-
+        if description is not None:
+            metadata = raw.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+                raw["metadata"] = metadata
+            metadata["description"] = description.strip()
+        return dict(quant_kernel.normalize_strategy(strategy_type, raw))
+    if strategy_type != "custom":
+        raise ValueError(f"unsupported strategy_type: {strategy_type}")
+    normalized = _normalize_custom_params(raw)
     metadata = normalized.setdefault("metadata", {})
     metadata["description"] = (description or metadata.get("description") or "").strip()
     metadata.setdefault("schema_version", 1)
@@ -573,71 +111,20 @@ def normalize_strategy_params(
 
 
 def extract_description(params: Dict[str, Any] | None) -> str | None:
-    if not isinstance(params, dict):
+    if not isinstance(params, dict) or not isinstance(params.get("metadata"), dict):
         return None
-    metadata = params.get("metadata")
-    if not isinstance(metadata, dict):
-        return None
-    description = metadata.get("description")
-    if isinstance(description, str) and description.strip():
-        return description.strip()
-    return None
+    description = params["metadata"].get("description")
+    return description.strip() if isinstance(description, str) and description.strip() else None
 
 
 def is_engine_ready(strategy_type: str, params: Dict[str, Any]) -> bool:
     if strategy_type not in ENGINE_SUPPORTED_TYPES:
         return False
-    execution = params.get("execution") or {}
-    if execution.get("timeframe") != "1d":
+    try:
+        quant_kernel.normalize_strategy(strategy_type, params)
+    except (TypeError, ValueError):
         return False
-    signal = params.get("signal") or {}
-    if strategy_type == "trend":
-        return bool(signal.get("fast_indicator") and signal.get("slow_indicator"))
-    if strategy_type == "mean_reversion":
-        return bool(
-            signal.get("lookback_window")
-            and signal.get("zscore_entry")
-            and signal.get("zscore_exit")
-        )
-    if strategy_type == "momentum_breakout":
-        return bool(
-            signal.get("minimum_return_20d")
-            and signal.get("breakout_buffer_pct")
-            and signal.get("volume_multiplier")
-        )
-    if strategy_type == "island_reversal":
-        return bool(
-            signal.get("downtrend_lookback")
-            and signal.get("left_gap_min_pct")
-            and signal.get("right_gap_min_pct")
-            and signal.get("max_island_bars")
-            and signal.get("retest_window")
-        )
-    if strategy_type == "double_bottom":
-        return bool(
-            signal.get("downtrend_lookback")
-            and signal.get("min_bottom_spacing")
-            and signal.get("max_bottom_spacing")
-            and signal.get("bottom_tolerance_pct")
-            and signal.get("breakout_volume_ratio_min")
-            and signal.get("retest_window")
-        )
-    if strategy_type in {"head_shoulders_bottom", "rounded_bottom", "v_reversal"}:
-        return bool(signal and params.get("risk") and execution.get("run_at") == "close")
-    if strategy_type == "support_resistance":
-        return bool(
-            (params.get("metadata") or {}).get("algorithm_version") == "pivot-slope-regime-v3"
-            and
-            signal.get("detection_window")
-            and signal.get("pivot_left_bars")
-            and signal.get("pivot_right_bars")
-            and (
-                signal.get("support_bounce_enabled")
-                or signal.get("resistance_breakout_enabled")
-                or signal.get("breakout_retest_enabled")
-            )
-        )
-    return False
+    return True
 
 
 def json_signature(payload: Dict[str, Any]) -> str:
@@ -681,1130 +168,83 @@ def required_feature_keys(strategy_type: str, params: Dict[str, Any]) -> list[st
         ]
     if strategy_type == "mean_reversion":
         lookback = normalized["signal"]["lookback_window"]
-        return [
-            "close",
-            f"zscore_{lookback}",
-            "rsi_14",
-            "atr_14",
-            "volume_sma_20",
-        ]
-    if strategy_type == "momentum_breakout":
-        return [
-            "close",
-            "sma_20",
-            "ret_20d",
-            "volume",
-            "volume_sma_20",
-        ]
-    if strategy_type == "island_reversal":
-        return [
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "volume_sma_20",
-            "atr_14",
-            "ret_20d",
-            "ret_60d",
-            "sma_50",
-        ]
-    if strategy_type == "double_bottom":
-        return [
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "volume_sma_20",
-            "atr_14",
-            "sma_20",
-        ]
-    if strategy_type in {"head_shoulders_bottom", "rounded_bottom", "v_reversal"}:
-        return [
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "volume_sma_20",
-            "atr_14",
-            "ret_60d",
-        ]
-    if strategy_type == "support_resistance":
-        return [
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "volume_sma_20",
-            "atr_14",
-        ]
-    return []
-
-
-def _normalize_trend_params(raw: Dict[str, Any]) -> Dict[str, Any]:
-    normalized = copy.deepcopy(TREND_DEFAULTS)
-
-    if "signal" in raw:
-        signal = raw.get("signal") or {}
-        normalized["signal"]["fast_indicator"] = _normalize_indicator(
-            signal.get("fast_indicator"),
-            fallback=normalized["signal"]["fast_indicator"],
-            label="signal.fast_indicator",
-        )
-        normalized["signal"]["slow_indicator"] = _normalize_indicator(
-            signal.get("slow_indicator"),
-            fallback=normalized["signal"]["slow_indicator"],
-            label="signal.slow_indicator",
-        )
-        normalized["signal"]["volume_multiplier"] = _positive_float(
-            signal.get("volume_multiplier", normalized["signal"]["volume_multiplier"]),
-            "signal.volume_multiplier",
-        )
-        normalized["signal"]["atr_multiplier"] = _positive_float(
-            signal.get("atr_multiplier", normalized["signal"]["atr_multiplier"]),
-            "signal.atr_multiplier",
-        )
-        normalized["signal"]["price_field"] = str(
-            signal.get("price_field", normalized["signal"]["price_field"])
-        )
-        normalized["signal"]["trigger"] = str(
-            signal.get("trigger", normalized["signal"]["trigger"])
-        )
-    else:
-        normalized["signal"]["fast_indicator"] = _normalize_indicator(
-            raw.get("ema_short") or raw.get("fast_indicator"),
-            fallback=normalized["signal"]["fast_indicator"],
-            label="ema_short",
-        )
-        normalized["signal"]["slow_indicator"] = _normalize_indicator(
-            raw.get("sma_long") or raw.get("slow_indicator"),
-            fallback=normalized["signal"]["slow_indicator"],
-            label="sma_long",
-        )
-        normalized["signal"]["volume_multiplier"] = _positive_float(
-            raw.get("volume_multiplier", normalized["signal"]["volume_multiplier"]),
-            "volume_multiplier",
-        )
-        normalized["signal"]["atr_multiplier"] = _positive_float(
-            raw.get("atr_multiplier", normalized["signal"]["atr_multiplier"]),
-            "atr_multiplier",
-        )
-
-    normalized["universe"] = _merge_nested_section(
-        normalized["universe"],
-        raw.get("universe"),
-        symbols=raw.get("symbols") or raw.get("universe_symbols"),
-    )
-    normalized["risk"] = _merge_nested_section(normalized["risk"], raw.get("risk"))
-    normalized["execution"] = _merge_nested_section(normalized["execution"], raw.get("execution"))
-    normalized["metadata"] = _merge_nested_section(normalized["metadata"], raw.get("metadata"))
-
-    if "max_positions" in raw:
-        normalized["risk"]["max_positions"] = raw["max_positions"]
-    if "position_size_pct" in raw:
-        normalized["risk"]["position_size_pct"] = raw["position_size_pct"]
-    if "stop_loss_pct" in raw:
-        normalized["risk"]["stop_loss_pct"] = raw["stop_loss_pct"]
-    if "stop_loss_atr" in raw:
-        normalized["risk"]["stop_loss_atr"] = raw["stop_loss_atr"]
-    if "take_profit_atr" in raw:
-        normalized["risk"]["take_profit_atr"] = raw["take_profit_atr"]
-    if "rebalance" in raw:
-        normalized["execution"]["rebalance"] = raw["rebalance"]
-    if "timeframe" in raw:
-        normalized["execution"]["timeframe"] = raw["timeframe"]
-    if "run_at" in raw:
-        normalized["execution"]["run_at"] = raw["run_at"]
-    if "description" in raw:
-        normalized["metadata"]["description"] = raw["description"]
-
-    normalized["universe"]["symbols"] = _normalize_symbols(normalized["universe"].get("symbols", []))
-    normalized["universe"]["selection_mode"] = _normalize_selection_mode(
-        normalized["universe"].get("selection_mode"),
-        normalized["universe"]["symbols"],
-    )
-    normalized["risk"]["max_positions"] = _positive_int(
-        normalized["risk"].get("max_positions", TREND_DEFAULTS["risk"]["max_positions"]),
-        "risk.max_positions",
-    )
-    normalized["risk"]["position_size_pct"] = _fraction(
-        normalized["risk"].get("position_size_pct", TREND_DEFAULTS["risk"]["position_size_pct"]),
-        "risk.position_size_pct",
-    )
-    normalized["risk"]["stop_loss_pct"] = _fraction(
-        normalized["risk"].get("stop_loss_pct", TREND_DEFAULTS["risk"]["stop_loss_pct"]),
-        "risk.stop_loss_pct",
-    )
-    normalized["risk"]["stop_loss_atr"] = _positive_float(
-        normalized["risk"].get("stop_loss_atr", normalized["signal"]["atr_multiplier"]),
-        "risk.stop_loss_atr",
-    )
-    normalized["risk"]["take_profit_atr"] = _positive_float(
-        normalized["risk"].get("take_profit_atr", TREND_DEFAULTS["risk"]["take_profit_atr"]),
-        "risk.take_profit_atr",
-    )
-    normalized["execution"]["timeframe"] = str(
-        normalized["execution"].get("timeframe", TREND_DEFAULTS["execution"]["timeframe"])
-    )
-    normalized["execution"]["rebalance"] = str(
-        normalized["execution"].get("rebalance", TREND_DEFAULTS["execution"]["rebalance"])
-    )
-    normalized["execution"]["run_at"] = str(
-        normalized["execution"].get("run_at", TREND_DEFAULTS["execution"]["run_at"])
-    )
-    normalized["metadata"]["description"] = str(normalized["metadata"].get("description", "")).strip()
-    normalized["metadata"]["schema_version"] = _positive_int(
-        normalized["metadata"].get("schema_version", 1),
-        "metadata.schema_version",
-    )
-    return normalized
-
-
-def _normalize_mean_reversion_params(raw: Dict[str, Any]) -> Dict[str, Any]:
-    normalized = copy.deepcopy(MEAN_REVERSION_DEFAULTS)
-    normalized["signal"] = _merge_nested_section(normalized["signal"], raw.get("signal"))
-    normalized["universe"] = _merge_nested_section(
-        normalized["universe"],
-        raw.get("universe"),
-        symbols=raw.get("symbols") or raw.get("universe_symbols"),
-    )
-    normalized["risk"] = _merge_nested_section(normalized["risk"], raw.get("risk"))
-    normalized["execution"] = _merge_nested_section(normalized["execution"], raw.get("execution"))
-    normalized["metadata"] = _merge_nested_section(normalized["metadata"], raw.get("metadata"))
-
-    if "lookback_window" in raw:
-        normalized["signal"]["lookback_window"] = raw["lookback_window"]
-    if "zscore_entry" in raw:
-        normalized["signal"]["zscore_entry"] = raw["zscore_entry"]
-    if "zscore_exit" in raw:
-        normalized["signal"]["zscore_exit"] = raw["zscore_exit"]
-    if "max_positions" in raw:
-        normalized["risk"]["max_positions"] = raw["max_positions"]
-    if "position_size_pct" in raw:
-        normalized["risk"]["position_size_pct"] = raw["position_size_pct"]
-    if "stop_loss_pct" in raw:
-        normalized["risk"]["stop_loss_pct"] = raw["stop_loss_pct"]
-    if "take_profit_pct" in raw:
-        normalized["risk"]["take_profit_pct"] = raw["take_profit_pct"]
-    if "max_holding_days" in raw:
-        normalized["risk"]["max_holding_days"] = raw["max_holding_days"]
-    if "rebalance" in raw:
-        normalized["execution"]["rebalance"] = raw["rebalance"]
-    if "timeframe" in raw:
-        normalized["execution"]["timeframe"] = raw["timeframe"]
-    if "run_at" in raw:
-        normalized["execution"]["run_at"] = raw["run_at"]
-    if "description" in raw:
-        normalized["metadata"]["description"] = raw["description"]
-
-    normalized["signal"]["lookback_window"] = _positive_int(
-        normalized["signal"].get("lookback_window"),
-        "signal.lookback_window",
-    )
-    if normalized["signal"]["lookback_window"] not in MEAN_REVERSION_SUPPORTED_LOOKBACK_WINDOWS:
-        allowed = ", ".join(str(window) for window in MEAN_REVERSION_SUPPORTED_LOOKBACK_WINDOWS)
-        raise ValueError(f"signal.lookback_window must be one of: {allowed}")
-    normalized["signal"]["zscore_entry"] = _positive_float(
-        normalized["signal"].get("zscore_entry"),
-        "signal.zscore_entry",
-    )
-    normalized["signal"]["zscore_exit"] = _positive_float(
-        normalized["signal"].get("zscore_exit"),
-        "signal.zscore_exit",
-    )
-    normalized["universe"]["symbols"] = _normalize_symbols(normalized["universe"].get("symbols", []))
-    normalized["universe"]["selection_mode"] = _normalize_selection_mode(
-        normalized["universe"].get("selection_mode"),
-        normalized["universe"]["symbols"],
-    )
-    normalized["risk"]["max_positions"] = _positive_int(
-        normalized["risk"].get("max_positions", 10),
-        "risk.max_positions",
-    )
-    normalized["risk"]["position_size_pct"] = _fraction(
-        normalized["risk"].get("position_size_pct", MEAN_REVERSION_DEFAULTS["risk"]["position_size_pct"]),
-        "risk.position_size_pct",
-    )
-    normalized["risk"]["stop_loss_pct"] = _fraction(
-        normalized["risk"].get("stop_loss_pct", MEAN_REVERSION_DEFAULTS["risk"]["stop_loss_pct"]),
-        "risk.stop_loss_pct",
-    )
-    normalized["risk"]["take_profit_pct"] = _fraction(
-        normalized["risk"].get("take_profit_pct", MEAN_REVERSION_DEFAULTS["risk"]["take_profit_pct"]),
-        "risk.take_profit_pct",
-    )
-    normalized["risk"]["max_holding_days"] = _non_negative_int(
-        normalized["risk"].get("max_holding_days", MEAN_REVERSION_DEFAULTS["risk"]["max_holding_days"]),
-        "risk.max_holding_days",
-    )
-    normalized["execution"]["timeframe"] = str(
-        normalized["execution"].get("timeframe", MEAN_REVERSION_DEFAULTS["execution"]["timeframe"])
-    )
-    normalized["execution"]["rebalance"] = str(
-        normalized["execution"].get("rebalance", MEAN_REVERSION_DEFAULTS["execution"]["rebalance"])
-    )
-    normalized["execution"]["run_at"] = str(
-        normalized["execution"].get("run_at", MEAN_REVERSION_DEFAULTS["execution"]["run_at"])
-    )
-    normalized["metadata"]["description"] = str(normalized["metadata"].get("description", "")).strip()
-    normalized["metadata"]["schema_version"] = _positive_int(
-        normalized["metadata"].get("schema_version", 1),
-        "metadata.schema_version",
-    )
-    return normalized
-
-
-def _normalize_momentum_breakout_params(raw: Dict[str, Any]) -> Dict[str, Any]:
-    normalized = copy.deepcopy(MOMENTUM_BREAKOUT_DEFAULTS)
-    normalized["signal"] = _merge_nested_section(normalized["signal"], raw.get("signal"))
-    normalized["universe"] = _merge_nested_section(
-        normalized["universe"],
-        raw.get("universe"),
-        symbols=raw.get("symbols") or raw.get("universe_symbols"),
-    )
-    normalized["risk"] = _merge_nested_section(normalized["risk"], raw.get("risk"))
-    normalized["execution"] = _merge_nested_section(normalized["execution"], raw.get("execution"))
-    normalized["metadata"] = _merge_nested_section(normalized["metadata"], raw.get("metadata"))
-
-    for field in (
-        "minimum_return_20d",
-        "breakout_buffer_pct",
-        "volume_multiplier",
-        "exit_return_20d",
-        "price_field",
-    ):
-        if field in raw:
-            normalized["signal"][field] = raw[field]
-    for field in ("max_positions", "position_size_pct", "stop_loss_pct", "take_profit_pct"):
-        if field in raw:
-            normalized["risk"][field] = raw[field]
-    for field in ("rebalance", "timeframe", "run_at"):
-        if field in raw:
-            normalized["execution"][field] = raw[field]
-    if "description" in raw:
-        normalized["metadata"]["description"] = raw["description"]
-
-    normalized["signal"]["minimum_return_20d"] = _fraction(
-        normalized["signal"].get("minimum_return_20d"),
-        "signal.minimum_return_20d",
-    )
-    normalized["signal"]["breakout_buffer_pct"] = _fraction(
-        normalized["signal"].get("breakout_buffer_pct"),
-        "signal.breakout_buffer_pct",
-    )
-    normalized["signal"]["volume_multiplier"] = _positive_float(
-        normalized["signal"].get("volume_multiplier"),
-        "signal.volume_multiplier",
-    )
-    try:
-        normalized["signal"]["exit_return_20d"] = float(
-            normalized["signal"].get("exit_return_20d", 0.0)
-        )
-    except (TypeError, ValueError) as exc:
-        raise ValueError("signal.exit_return_20d must be a number") from exc
-    if not -1 <= normalized["signal"]["exit_return_20d"] <= 1:
-        raise ValueError("signal.exit_return_20d must be within [-1, 1]")
-    normalized["signal"]["price_field"] = str(
-        normalized["signal"].get("price_field", "close")
-    )
-    if normalized["signal"]["price_field"] != "close":
-        raise ValueError("signal.price_field must be close")
-
-    normalized["universe"]["symbols"] = _normalize_symbols(normalized["universe"].get("symbols", []))
-    normalized["universe"]["selection_mode"] = _normalize_selection_mode(
-        normalized["universe"].get("selection_mode"),
-        normalized["universe"]["symbols"],
-    )
-    normalized["risk"]["max_positions"] = _positive_int(
-        normalized["risk"].get("max_positions"),
-        "risk.max_positions",
-    )
-    normalized["risk"]["position_size_pct"] = _fraction(
-        normalized["risk"].get("position_size_pct"),
-        "risk.position_size_pct",
-    )
-    normalized["risk"]["stop_loss_pct"] = _fraction(
-        normalized["risk"].get("stop_loss_pct"),
-        "risk.stop_loss_pct",
-    )
-    normalized["risk"]["take_profit_pct"] = _fraction(
-        normalized["risk"].get("take_profit_pct"),
-        "risk.take_profit_pct",
-    )
-    normalized["execution"]["timeframe"] = str(normalized["execution"].get("timeframe", "1d"))
-    normalized["execution"]["rebalance"] = str(normalized["execution"].get("rebalance", "daily"))
-    normalized["execution"]["run_at"] = str(normalized["execution"].get("run_at", "close"))
-    if normalized["execution"]["timeframe"] != "1d":
-        raise ValueError("execution.timeframe must be 1d for momentum_breakout")
-    if normalized["execution"]["run_at"] != "close":
-        raise ValueError("execution.run_at must be close for momentum_breakout")
-    normalized["metadata"]["description"] = str(normalized["metadata"].get("description", "")).strip()
-    normalized["metadata"]["schema_version"] = _positive_int(
-        normalized["metadata"].get("schema_version", 1),
-        "metadata.schema_version",
-    )
-    return normalized
-
-
-def _normalize_island_reversal_params(raw: Dict[str, Any]) -> Dict[str, Any]:
-    normalized = copy.deepcopy(ISLAND_REVERSAL_DEFAULTS)
-    normalized["signal"] = _merge_nested_section(normalized["signal"], raw.get("signal"))
-    normalized["universe"] = _merge_nested_section(
-        normalized["universe"],
-        raw.get("universe"),
-        symbols=raw.get("symbols") or raw.get("universe_symbols"),
-    )
-    normalized["risk"] = _merge_nested_section(normalized["risk"], raw.get("risk"))
-    normalized["execution"] = _merge_nested_section(normalized["execution"], raw.get("execution"))
-    normalized["metadata"] = _merge_nested_section(normalized["metadata"], raw.get("metadata"))
-
-    for field in (
-        "downtrend_lookback",
-        "downtrend_min_drop_pct",
-        "left_gap_min_pct",
-        "right_gap_min_pct",
-        "min_island_bars",
-        "max_island_bars",
-        "left_volume_ratio_max",
-        "right_volume_ratio_min",
-        "retest_window",
-        "retest_volume_ratio_max",
-        "support_tolerance_pct",
-    ):
-        if field in raw:
-            normalized["signal"][field] = raw[field]
-
-    if "max_positions" in raw:
-        normalized["risk"]["max_positions"] = raw["max_positions"]
-    if "position_size_pct" in raw:
-        normalized["risk"]["position_size_pct"] = raw["position_size_pct"]
-    if "stop_loss_atr" in raw:
-        normalized["risk"]["stop_loss_atr"] = raw["stop_loss_atr"]
-    if "take_profit_atr" in raw:
-        normalized["risk"]["take_profit_atr"] = raw["take_profit_atr"]
-    if "rebalance" in raw:
-        normalized["execution"]["rebalance"] = raw["rebalance"]
-    if "timeframe" in raw:
-        normalized["execution"]["timeframe"] = raw["timeframe"]
-    if "run_at" in raw:
-        normalized["execution"]["run_at"] = raw["run_at"]
-    if "description" in raw:
-        normalized["metadata"]["description"] = raw["description"]
-
-    normalized["signal"]["downtrend_lookback"] = _positive_int(
-        normalized["signal"].get("downtrend_lookback"),
-        "signal.downtrend_lookback",
-    )
-    normalized["signal"]["downtrend_min_drop_pct"] = _fraction(
-        normalized["signal"].get("downtrend_min_drop_pct"),
-        "signal.downtrend_min_drop_pct",
-    )
-    normalized["signal"]["left_gap_min_pct"] = _fraction(
-        normalized["signal"].get("left_gap_min_pct"),
-        "signal.left_gap_min_pct",
-    )
-    normalized["signal"]["right_gap_min_pct"] = _fraction(
-        normalized["signal"].get("right_gap_min_pct"),
-        "signal.right_gap_min_pct",
-    )
-    normalized["signal"]["min_island_bars"] = _positive_int(
-        normalized["signal"].get("min_island_bars"),
-        "signal.min_island_bars",
-    )
-    normalized["signal"]["max_island_bars"] = _positive_int(
-        normalized["signal"].get("max_island_bars"),
-        "signal.max_island_bars",
-    )
-    if normalized["signal"]["min_island_bars"] > normalized["signal"]["max_island_bars"]:
-        raise ValueError("signal.min_island_bars cannot exceed signal.max_island_bars")
-    normalized["signal"]["left_volume_ratio_max"] = _positive_float(
-        normalized["signal"].get("left_volume_ratio_max"),
-        "signal.left_volume_ratio_max",
-    )
-    normalized["signal"]["right_volume_ratio_min"] = _positive_float(
-        normalized["signal"].get("right_volume_ratio_min"),
-        "signal.right_volume_ratio_min",
-    )
-    normalized["signal"]["retest_window"] = _positive_int(
-        normalized["signal"].get("retest_window"),
-        "signal.retest_window",
-    )
-    normalized["signal"]["retest_volume_ratio_max"] = _positive_float(
-        normalized["signal"].get("retest_volume_ratio_max"),
-        "signal.retest_volume_ratio_max",
-    )
-    normalized["signal"]["support_tolerance_pct"] = _fraction(
-        normalized["signal"].get("support_tolerance_pct"),
-        "signal.support_tolerance_pct",
-    )
-
-    normalized["universe"]["symbols"] = _normalize_symbols(normalized["universe"].get("symbols", []))
-    normalized["universe"]["selection_mode"] = _normalize_selection_mode(
-        normalized["universe"].get("selection_mode"),
-        normalized["universe"]["symbols"],
-    )
-    normalized["risk"]["max_positions"] = _positive_int(
-        normalized["risk"].get("max_positions", ISLAND_REVERSAL_DEFAULTS["risk"]["max_positions"]),
-        "risk.max_positions",
-    )
-    normalized["risk"]["position_size_pct"] = _fraction(
-        normalized["risk"].get("position_size_pct", ISLAND_REVERSAL_DEFAULTS["risk"]["position_size_pct"]),
-        "risk.position_size_pct",
-    )
-    normalized["risk"]["stop_loss_atr"] = _positive_float(
-        normalized["risk"].get("stop_loss_atr", ISLAND_REVERSAL_DEFAULTS["risk"]["stop_loss_atr"]),
-        "risk.stop_loss_atr",
-    )
-    normalized["risk"]["max_loss_pct"] = _fraction(
-        normalized["risk"].get("max_loss_pct", ISLAND_REVERSAL_DEFAULTS["risk"]["max_loss_pct"]),
-        "risk.max_loss_pct",
-    )
-    normalized["risk"]["take_profit_atr"] = _positive_float(
-        normalized["risk"].get("take_profit_atr", ISLAND_REVERSAL_DEFAULTS["risk"]["take_profit_atr"]),
-        "risk.take_profit_atr",
-    )
-    _normalize_staged_risk(normalized["risk"])
-    normalized["execution"]["timeframe"] = str(
-        normalized["execution"].get("timeframe", ISLAND_REVERSAL_DEFAULTS["execution"]["timeframe"])
-    )
-    normalized["execution"]["rebalance"] = str(
-        normalized["execution"].get("rebalance", ISLAND_REVERSAL_DEFAULTS["execution"]["rebalance"])
-    )
-    normalized["execution"]["run_at"] = str(
-        normalized["execution"].get("run_at", ISLAND_REVERSAL_DEFAULTS["execution"]["run_at"])
-    )
-    normalized["metadata"]["description"] = str(normalized["metadata"].get("description", "")).strip()
-    normalized["metadata"]["schema_version"] = _positive_int(
-        normalized["metadata"].get("schema_version", 1),
-        "metadata.schema_version",
-    )
-    return normalized
-
-
-def _normalize_double_bottom_params(raw: Dict[str, Any]) -> Dict[str, Any]:
-    normalized = copy.deepcopy(DOUBLE_BOTTOM_DEFAULTS)
-    normalized["signal"] = _merge_nested_section(normalized["signal"], raw.get("signal"))
-    normalized["universe"] = _merge_nested_section(
-        normalized["universe"],
-        raw.get("universe"),
-        symbols=raw.get("symbols") or raw.get("universe_symbols"),
-    )
-    normalized["risk"] = _merge_nested_section(normalized["risk"], raw.get("risk"))
-    normalized["execution"] = _merge_nested_section(normalized["execution"], raw.get("execution"))
-    normalized["metadata"] = _merge_nested_section(normalized["metadata"], raw.get("metadata"))
-
-    for field in (
-        "downtrend_lookback",
-        "downtrend_min_drop_pct",
-        "downtrend_max_up_day_ratio",
-        "downtrend_min_r_squared",
-        "min_bottom_spacing",
-        "max_bottom_spacing",
-        "left_bottom_before_bars",
-        "left_bottom_after_bars",
-        "bottom_tolerance_pct",
-        "neckline_min_rebound_pct",
-        "rebound_up_day_ratio_min",
-        "second_bottom_volume_ratio_max",
-        "breakout_volume_ratio_min",
-        "max_breakout_bars_after_right_bottom",
-        "breakout_buffer_pct",
-        "retest_window",
-        "retest_volume_ratio_max",
-        "support_tolerance_pct",
-    ):
-        if field in raw:
-            normalized["signal"][field] = raw[field]
-
-    if "max_positions" in raw:
-        normalized["risk"]["max_positions"] = raw["max_positions"]
-    if "position_size_pct" in raw:
-        normalized["risk"]["position_size_pct"] = raw["position_size_pct"]
-    if "stop_loss_atr" in raw:
-        normalized["risk"]["stop_loss_atr"] = raw["stop_loss_atr"]
-    if "max_loss_pct" in raw:
-        normalized["risk"]["max_loss_pct"] = raw["max_loss_pct"]
-    if "take_profit_atr" in raw:
-        normalized["risk"]["take_profit_atr"] = raw["take_profit_atr"]
-    if "rebalance" in raw:
-        normalized["execution"]["rebalance"] = raw["rebalance"]
-    if "timeframe" in raw:
-        normalized["execution"]["timeframe"] = raw["timeframe"]
-    if "run_at" in raw:
-        normalized["execution"]["run_at"] = raw["run_at"]
-    if "description" in raw:
-        normalized["metadata"]["description"] = raw["description"]
-
-    normalized["signal"]["downtrend_lookback"] = _positive_int(
-        normalized["signal"].get("downtrend_lookback"),
-        "signal.downtrend_lookback",
-    )
-    normalized["signal"]["downtrend_min_drop_pct"] = _fraction(
-        normalized["signal"].get("downtrend_min_drop_pct"),
-        "signal.downtrend_min_drop_pct",
-    )
-    normalized["signal"]["downtrend_max_up_day_ratio"] = _fraction(
-        normalized["signal"].get("downtrend_max_up_day_ratio"),
-        "signal.downtrend_max_up_day_ratio",
-    )
-    normalized["signal"]["downtrend_min_r_squared"] = _fraction(
-        normalized["signal"].get("downtrend_min_r_squared"),
-        "signal.downtrend_min_r_squared",
-    )
-    normalized["signal"]["min_bottom_spacing"] = _positive_int(
-        normalized["signal"].get("min_bottom_spacing"),
-        "signal.min_bottom_spacing",
-    )
-    normalized["signal"]["max_bottom_spacing"] = _positive_int(
-        normalized["signal"].get("max_bottom_spacing"),
-        "signal.max_bottom_spacing",
-    )
-    if normalized["signal"]["min_bottom_spacing"] > normalized["signal"]["max_bottom_spacing"]:
-        raise ValueError("signal.min_bottom_spacing cannot exceed signal.max_bottom_spacing")
-    normalized["signal"]["left_bottom_before_bars"] = _positive_int(
-        normalized["signal"].get("left_bottom_before_bars"),
-        "signal.left_bottom_before_bars",
-    )
-    normalized["signal"]["left_bottom_after_bars"] = _positive_int(
-        normalized["signal"].get("left_bottom_after_bars"),
-        "signal.left_bottom_after_bars",
-    )
-    normalized["signal"]["bottom_tolerance_pct"] = _fraction(
-        normalized["signal"].get("bottom_tolerance_pct"),
-        "signal.bottom_tolerance_pct",
-    )
-    normalized["signal"]["neckline_min_rebound_pct"] = _fraction(
-        normalized["signal"].get("neckline_min_rebound_pct"),
-        "signal.neckline_min_rebound_pct",
-    )
-    normalized["signal"]["rebound_up_day_ratio_min"] = _fraction(
-        normalized["signal"].get("rebound_up_day_ratio_min"),
-        "signal.rebound_up_day_ratio_min",
-    )
-    normalized["signal"]["second_bottom_volume_ratio_max"] = _positive_float(
-        normalized["signal"].get("second_bottom_volume_ratio_max"),
-        "signal.second_bottom_volume_ratio_max",
-    )
-    normalized["signal"]["breakout_volume_ratio_min"] = _positive_float(
-        normalized["signal"].get("breakout_volume_ratio_min"),
-        "signal.breakout_volume_ratio_min",
-    )
-    normalized["signal"]["max_breakout_bars_after_right_bottom"] = _positive_int(
-        normalized["signal"].get("max_breakout_bars_after_right_bottom"),
-        "signal.max_breakout_bars_after_right_bottom",
-    )
-    normalized["signal"]["breakout_buffer_pct"] = _fraction(
-        normalized["signal"].get("breakout_buffer_pct"),
-        "signal.breakout_buffer_pct",
-    )
-    normalized["signal"]["retest_window"] = _positive_int(
-        normalized["signal"].get("retest_window"),
-        "signal.retest_window",
-    )
-    normalized["signal"]["retest_volume_ratio_max"] = _positive_float(
-        normalized["signal"].get("retest_volume_ratio_max"),
-        "signal.retest_volume_ratio_max",
-    )
-    normalized["signal"]["support_tolerance_pct"] = _fraction(
-        normalized["signal"].get("support_tolerance_pct"),
-        "signal.support_tolerance_pct",
-    )
-
-    normalized["universe"]["symbols"] = _normalize_symbols(normalized["universe"].get("symbols", []))
-    normalized["universe"]["selection_mode"] = _normalize_selection_mode(
-        normalized["universe"].get("selection_mode"),
-        normalized["universe"]["symbols"],
-    )
-    normalized["risk"]["max_positions"] = _positive_int(
-        normalized["risk"].get("max_positions", DOUBLE_BOTTOM_DEFAULTS["risk"]["max_positions"]),
-        "risk.max_positions",
-    )
-    normalized["risk"]["position_size_pct"] = _fraction(
-        normalized["risk"].get("position_size_pct", DOUBLE_BOTTOM_DEFAULTS["risk"]["position_size_pct"]),
-        "risk.position_size_pct",
-    )
-    normalized["risk"]["stop_loss_atr"] = _positive_float(
-        normalized["risk"].get("stop_loss_atr", DOUBLE_BOTTOM_DEFAULTS["risk"]["stop_loss_atr"]),
-        "risk.stop_loss_atr",
-    )
-    normalized["risk"]["max_loss_pct"] = _fraction(
-        normalized["risk"].get("max_loss_pct", DOUBLE_BOTTOM_DEFAULTS["risk"]["max_loss_pct"]),
-        "risk.max_loss_pct",
-    )
-    normalized["risk"]["take_profit_atr"] = _positive_float(
-        normalized["risk"].get("take_profit_atr", DOUBLE_BOTTOM_DEFAULTS["risk"]["take_profit_atr"]),
-        "risk.take_profit_atr",
-    )
-    _normalize_staged_risk(normalized["risk"])
-    normalized["execution"]["timeframe"] = str(
-        normalized["execution"].get("timeframe", DOUBLE_BOTTOM_DEFAULTS["execution"]["timeframe"])
-    )
-    normalized["execution"]["rebalance"] = str(
-        normalized["execution"].get("rebalance", DOUBLE_BOTTOM_DEFAULTS["execution"]["rebalance"])
-    )
-    normalized["execution"]["run_at"] = str(
-        normalized["execution"].get("run_at", DOUBLE_BOTTOM_DEFAULTS["execution"]["run_at"])
-    )
-    normalized["metadata"]["description"] = str(normalized["metadata"].get("description", "")).strip()
-    normalized["metadata"]["schema_version"] = _positive_int(
-        normalized["metadata"].get("schema_version", 1),
-        "metadata.schema_version",
-    )
-    return normalized
-
-
-def _normalize_head_shoulders_bottom_params(raw: Dict[str, Any]) -> Dict[str, Any]:
-    normalized = _normalize_staged_pattern_params(
-        raw,
-        HEAD_SHOULDERS_BOTTOM_DEFAULTS,
-        integer_fields=(
-            "downtrend_lookback",
-            "pivot_left_bars",
-            "pivot_right_bars",
-            "min_segment_bars",
-            "max_segment_bars",
-        ),
-        fraction_fields=(
-            "downtrend_min_drop_pct",
-            "shoulder_tolerance_pct",
-            "head_depth_min_pct",
-            "breakout_buffer_pct",
-        ),
-        positive_float_fields=(
-            "head_volume_ratio_max",
-            "right_shoulder_volume_ratio_max",
-            "breakout_volume_ratio_min",
-        ),
-    )
-    if normalized["signal"]["min_segment_bars"] > normalized["signal"]["max_segment_bars"]:
-        raise ValueError("signal.min_segment_bars cannot exceed signal.max_segment_bars")
-    return normalized
-
-
-def _normalize_rounded_bottom_params(raw: Dict[str, Any]) -> Dict[str, Any]:
-    normalized = _normalize_staged_pattern_params(
-        raw,
-        ROUNDED_BOTTOM_DEFAULTS,
-        integer_fields=(
-            "min_lookback",
-            "max_lookback",
-            "pivot_left_bars",
-            "pivot_right_bars",
-            "min_pullback_spacing",
-        ),
-        fraction_fields=(
-            "min_depth_pct",
-            "min_r_squared",
-            "vertex_position_min",
-            "vertex_position_max",
-            "breakout_buffer_pct",
-        ),
-        positive_float_fields=(
-            "right_volume_ratio_min",
-            "pullback_volume_ratio_max",
-            "breakout_volume_ratio_min",
-        ),
-    )
-    signal = normalized["signal"]
-    if signal["min_lookback"] > signal["max_lookback"]:
-        raise ValueError("signal.min_lookback cannot exceed signal.max_lookback")
-    if signal["vertex_position_min"] >= signal["vertex_position_max"]:
-        raise ValueError("signal.vertex_position_min must be below vertex_position_max")
-    return normalized
-
-
-def _normalize_v_reversal_params(raw: Dict[str, Any]) -> Dict[str, Any]:
-    normalized = _normalize_staged_pattern_params(
-        raw,
-        V_REVERSAL_DEFAULTS,
-        integer_fields=(
-            "downtrend_lookback",
-            "pivot_max_bars",
-            "continuation_window",
-            "consolidation_min_bars",
-            "consolidation_max_bars",
-            "retest_window",
-        ),
-        fraction_fields=(
-            "downtrend_min_drop_pct",
-            "reversal_min_return_pct",
-            "support_tolerance_pct",
-        ),
-        positive_float_fields=(
-            "reversal_min_atr",
-            "pivot_volume_ratio_min",
-            "continuation_volume_ratio_min",
-            "breakout_volume_ratio_min",
-            "retest_volume_ratio_max",
-            "bearish_reversal_volume_ratio_min",
-        ),
-    )
-    signal = normalized["signal"]
-    if signal["consolidation_min_bars"] > signal["consolidation_max_bars"]:
-        raise ValueError("signal.consolidation_min_bars cannot exceed consolidation_max_bars")
-    return normalized
-
-
-def _normalize_staged_pattern_params(
-    raw: Dict[str, Any],
-    defaults: Dict[str, Any],
-    *,
-    integer_fields: Iterable[str],
-    fraction_fields: Iterable[str],
-    positive_float_fields: Iterable[str],
-) -> Dict[str, Any]:
-    normalized = copy.deepcopy(defaults)
-    for section in ("signal", "risk", "execution", "metadata"):
-        normalized[section] = _merge_nested_section(normalized[section], raw.get(section))
-    normalized["universe"] = _merge_nested_section(
-        normalized["universe"],
-        raw.get("universe"),
-        symbols=raw.get("symbols") or raw.get("universe_symbols"),
-    )
-    for field in defaults["signal"]:
-        if field in raw:
-            normalized["signal"][field] = raw[field]
-    for field in defaults["risk"]:
-        if field in raw:
-            normalized["risk"][field] = raw[field]
-
-    signal = normalized["signal"]
-    for field in integer_fields:
-        signal[field] = _positive_int(signal.get(field), f"signal.{field}")
-    for field in fraction_fields:
-        signal[field] = _fraction(signal.get(field), f"signal.{field}")
-    for field in positive_float_fields:
-        signal[field] = _positive_float(signal.get(field), f"signal.{field}")
-
-    normalized["universe"]["symbols"] = _normalize_symbols(normalized["universe"].get("symbols", []))
-    normalized["universe"]["selection_mode"] = _normalize_selection_mode(
-        normalized["universe"].get("selection_mode"),
-        normalized["universe"]["symbols"],
-    )
-    risk = normalized["risk"]
-    risk["max_positions"] = _positive_int(risk.get("max_positions"), "risk.max_positions")
-    risk["position_size_pct"] = _fraction(risk.get("position_size_pct"), "risk.position_size_pct")
-    risk["stop_loss_atr"] = _positive_float(risk.get("stop_loss_atr"), "risk.stop_loss_atr")
-    risk["max_loss_pct"] = _fraction(risk.get("max_loss_pct"), "risk.max_loss_pct")
-    risk["take_profit_atr"] = _positive_float(risk.get("take_profit_atr"), "risk.take_profit_atr")
-    _normalize_staged_risk(risk)
-
-    execution = normalized["execution"]
-    execution["timeframe"] = str(execution.get("timeframe"))
-    execution["rebalance"] = str(execution.get("rebalance"))
-    execution["run_at"] = str(execution.get("run_at"))
-    if any(
-        execution.get(key) != expected
-        for key, expected in {"timeframe": "1d", "rebalance": "daily", "run_at": "close"}.items()
-    ):
-        raise ValueError("staged pattern strategies require daily close execution")
-    normalized["metadata"]["description"] = str(normalized["metadata"].get("description", "")).strip()
-    normalized["metadata"]["schema_version"] = _positive_int(
-        normalized["metadata"].get("schema_version", 1),
-        "metadata.schema_version",
-    )
-    return normalized
-
-
-def _normalize_staged_risk(risk: Dict[str, Any]) -> None:
-    stage_1 = _fraction(risk.get("stage_1_target_pct", 0.20), "risk.stage_1_target_pct")
-    stage_2 = _fraction(risk.get("stage_2_target_pct", 0.50), "risk.stage_2_target_pct")
-    stage_3 = _fraction(risk.get("stage_3_target_pct", 1.00), "risk.stage_3_target_pct")
-    if not stage_1 < stage_2 < stage_3:
-        raise ValueError("staged entry targets must be strictly increasing")
-    if not math.isclose(stage_3, 1.0, rel_tol=0.0, abs_tol=1e-9):
-        raise ValueError("risk.stage_3_target_pct must equal 1")
-    risk["stage_1_target_pct"] = stage_1
-    risk["stage_2_target_pct"] = stage_2
-    risk["stage_3_target_pct"] = stage_3
-
-
-def _normalize_support_resistance_params(raw: Dict[str, Any]) -> Dict[str, Any]:
-    normalized = copy.deepcopy(SUPPORT_RESISTANCE_DEFAULTS)
-    normalized["signal"] = _merge_nested_section(normalized["signal"], raw.get("signal"))
-    normalized["universe"] = _merge_nested_section(
-        normalized["universe"],
-        raw.get("universe"),
-        symbols=raw.get("symbols") or raw.get("universe_symbols"),
-    )
-    normalized["risk"] = _merge_nested_section(normalized["risk"], raw.get("risk"))
-    normalized["execution"] = _merge_nested_section(normalized["execution"], raw.get("execution"))
-    normalized["metadata"] = _merge_nested_section(normalized["metadata"], raw.get("metadata"))
-
-    for field in SUPPORT_RESISTANCE_DEFAULTS["signal"]:
-        if field in raw:
-            normalized["signal"][field] = raw[field]
-    for field in SUPPORT_RESISTANCE_DEFAULTS["risk"]:
-        if field in raw:
-            normalized["risk"][field] = raw[field]
-    for field in ("timeframe", "rebalance", "run_at"):
-        if field in raw:
-            normalized["execution"][field] = raw[field]
-    if "description" in raw:
-        normalized["metadata"]["description"] = raw["description"]
-
-    signal = normalized["signal"]
-    for field in (
-        "support_bounce_enabled",
-        "resistance_breakout_enabled",
-        "breakout_retest_enabled",
-    ):
-        signal[field] = _boolean(signal.get(field), f"signal.{field}")
-    if not any(
-        signal[field]
-        for field in (
-            "support_bounce_enabled",
-            "resistance_breakout_enabled",
-            "breakout_retest_enabled",
-        )
-    ):
-        raise ValueError("at least one support/resistance entry mode must be enabled")
-
-    for field in (
-        "pivot_left_bars",
-        "pivot_right_bars",
-        "detection_window",
-        "min_line_pivots",
-        "min_line_span_sessions",
-        "decay_half_life",
-        "retest_window",
-        "score_outcome_window",
-    ):
-        signal[field] = _positive_int(signal.get(field), f"signal.{field}")
-    minimum_window = signal["pivot_left_bars"] + signal["pivot_right_bars"] + 1
-    if signal["detection_window"] < minimum_window:
-        raise ValueError(
-            "signal.detection_window must cover pivot_left_bars + pivot_right_bars + 1"
-        )
-    for field in (
-        "line_inlier_tolerance_atr",
-        "max_abs_slope_atr_per_session",
-        "zone_half_width_atr",
-        "bounce_confirmation_atr",
-        "breakout_confirmation_atr",
-        "breakout_volume_ratio_min",
-        "retest_volume_ratio_max",
-        "score_target_atr",
-        "score_stop_atr",
-    ):
-        signal[field] = _positive_float(signal.get(field), f"signal.{field}")
-
-    normalized["universe"]["symbols"] = _normalize_symbols(
-        normalized["universe"].get("symbols", [])
-    )
-    normalized["universe"]["selection_mode"] = _normalize_selection_mode(
-        normalized["universe"].get("selection_mode"),
-        normalized["universe"]["symbols"],
-    )
-
-    risk = normalized["risk"]
-    risk["max_positions"] = _positive_int(risk.get("max_positions"), "risk.max_positions")
-    risk["position_size_pct"] = _fraction(
-        risk.get("position_size_pct"), "risk.position_size_pct"
-    )
-    risk["stop_loss_atr"] = _positive_float(
-        risk.get("stop_loss_atr"), "risk.stop_loss_atr"
-    )
-    risk["max_loss_pct"] = _fraction(risk.get("max_loss_pct"), "risk.max_loss_pct")
-    risk["take_profit_atr"] = _positive_float(
-        risk.get("take_profit_atr"), "risk.take_profit_atr"
-    )
-    risk["min_reward_risk"] = _positive_float(
-        risk.get("min_reward_risk"), "risk.min_reward_risk"
-    )
-    risk["max_holding_days"] = _positive_int(
-        risk.get("max_holding_days"), "risk.max_holding_days"
-    )
-
-    normalized["execution"]["timeframe"] = str(normalized["execution"].get("timeframe"))
-    normalized["execution"]["rebalance"] = str(normalized["execution"].get("rebalance"))
-    normalized["execution"]["run_at"] = str(normalized["execution"].get("run_at"))
-    if normalized["execution"]["timeframe"] != "1d":
-        raise ValueError("execution.timeframe must be 1d for support_resistance")
-    if normalized["execution"]["rebalance"] != "daily":
-        raise ValueError("execution.rebalance must be daily for support_resistance")
-    if normalized["execution"]["run_at"] != "close":
-        raise ValueError("execution.run_at must be close for support_resistance")
-    normalized["metadata"]["description"] = str(
-        normalized["metadata"].get("description", "")
-    ).strip()
-    normalized["metadata"]["schema_version"] = _positive_int(
-        normalized["metadata"].get("schema_version", 1),
-        "metadata.schema_version",
-    )
-    algorithm_version = str(
-        normalized["metadata"].get("algorithm_version") or "pivot-slope-regime-v3"
-    )
-    if algorithm_version not in {"pivot-slope-regime-v3", "pivot-slope-atr-v2"}:
-        raise ValueError(
-            "metadata.algorithm_version must be pivot-slope-regime-v3; "
-            "pivot-slope-atr-v2 is accepted only for read-only historical records"
-        )
-    normalized["metadata"]["algorithm_version"] = algorithm_version
-    price_semantics = str(
-        normalized["metadata"].get("price_semantics")
-        or "forward_adjusted_preferred_unadjusted_fallback"
-    )
-    if price_semantics != "forward_adjusted_preferred_unadjusted_fallback":
-        raise ValueError(
-            "metadata.price_semantics must be forward_adjusted_preferred_unadjusted_fallback"
-        )
-    normalized["metadata"]["price_semantics"] = price_semantics
-    return normalized
+        return ["close", f"zscore_{lookback}", "rsi_14", "atr_14", "volume_sma_20"]
+    return list(_NATIVE_DESCRIPTOR_BY_TYPE.get(strategy_type, {}).get("required_features") or [])
 
 
 def _normalize_custom_params(raw: Dict[str, Any]) -> Dict[str, Any]:
-    normalized = copy.deepcopy(CUSTOM_DEFAULTS)
     if not isinstance(raw, dict):
         raise ValueError("custom params must be a JSON object")
-
-    normalized.update({k: copy.deepcopy(v) for k, v in raw.items() if k not in {"universe", "risk", "execution", "metadata"}})
-    normalized["universe"] = _merge_nested_section(
-        normalized["universe"],
-        raw.get("universe"),
-        symbols=raw.get("symbols") or raw.get("universe_symbols"),
+    normalized = copy.deepcopy(CUSTOM_DEFAULTS)
+    for key, value in raw.items():
+        if key not in {"universe", "risk", "execution", "metadata"}:
+            normalized[key] = copy.deepcopy(value)
+    for section in ("universe", "risk", "execution", "metadata"):
+        incoming = raw.get(section)
+        if incoming is not None and not isinstance(incoming, dict):
+            raise ValueError(f"{section} must be a JSON object")
+        if incoming:
+            normalized[section].update(copy.deepcopy(incoming))
+    legacy_symbols = raw.get("symbols") or raw.get("universe_symbols")
+    if legacy_symbols is not None:
+        normalized["universe"]["symbols"] = legacy_symbols
+    normalized["universe"]["symbols"] = _normalize_symbols(
+        normalized["universe"].get("symbols")
     )
-    normalized["risk"] = _merge_nested_section(normalized["risk"], raw.get("risk"))
-    normalized["execution"] = _merge_nested_section(normalized["execution"], raw.get("execution"))
-    normalized["metadata"] = _merge_nested_section(normalized["metadata"], raw.get("metadata"))
-
-    normalized["universe"]["symbols"] = _normalize_symbols(normalized["universe"].get("symbols", []))
     normalized["universe"]["selection_mode"] = _normalize_selection_mode(
         normalized["universe"].get("selection_mode"),
         normalized["universe"]["symbols"],
     )
     normalized["risk"]["max_positions"] = _positive_int(
-        normalized["risk"].get("max_positions", 10),
-        "risk.max_positions",
+        normalized["risk"].get("max_positions"), "risk.max_positions"
     )
     normalized["risk"]["position_size_pct"] = _fraction(
-        normalized["risk"].get("position_size_pct", 0.1),
-        "risk.position_size_pct",
+        normalized["risk"].get("position_size_pct"), "risk.position_size_pct"
     )
-    normalized["metadata"]["description"] = str(normalized["metadata"].get("description", "")).strip()
+    normalized["metadata"]["description"] = str(
+        normalized["metadata"].get("description") or ""
+    ).strip()
     normalized["metadata"]["schema_version"] = _positive_int(
-        normalized["metadata"].get("schema_version", 1),
-        "metadata.schema_version",
+        normalized["metadata"].get("schema_version"), "metadata.schema_version"
     )
     return normalized
 
 
-def _merge_nested_section(
-    defaults: Dict[str, Any],
-    incoming: Any,
-    *,
-    symbols: Any = None,
-) -> Dict[str, Any]:
-    merged = copy.deepcopy(defaults)
-    if isinstance(incoming, dict):
-        for key, value in incoming.items():
-            merged[key] = copy.deepcopy(value)
-    if symbols is not None:
-        merged["symbols"] = symbols
-    return merged
-
-
-def _normalize_indicator(value: Any, *, fallback: Dict[str, Any], label: str) -> Dict[str, Any]:
-    if value in (None, ""):
-        return copy.deepcopy(fallback)
-
-    if isinstance(value, str):
-        matched = _INDICATOR_PATTERN.match(value.strip())
-        if not matched:
-            raise ValueError(f"{label} must look like EMA15 or SMA200")
-        return {"kind": matched.group(1).lower(), "window": int(matched.group(2))}
-
-    if isinstance(value, dict):
-        kind = str(value.get("kind", fallback.get("kind", "ema"))).lower()
-        if kind not in {"ema", "sma"}:
-            raise ValueError(f"{label}.kind must be ema or sma")
-        window = _positive_int(value.get("window", fallback.get("window")), f"{label}.window")
-        return {"kind": kind, "window": window}
-
-    raise ValueError(f"{label} must be a string or object")
-
-
 def _normalize_symbols(value: Any) -> list[str]:
-    if value is None:
+    if value in (None, ""):
         return []
-    if isinstance(value, str):
-        raw_items = value.split(",")
-    elif isinstance(value, Iterable) and not isinstance(value, (dict, bytes)):
-        raw_items = list(value)
-    else:
-        raise ValueError("symbols must be a string or array")
-
-    symbols: list[str] = []
-    seen = set()
-    for item in raw_items:
-        symbol = str(item).strip().upper()
-        if not symbol or symbol in seen:
-            continue
-        seen.add(symbol)
-        symbols.append(symbol)
-    return symbols
+    if not isinstance(value, (list, tuple, set)):
+        raise ValueError("universe.symbols must be an array")
+    result: list[str] = []
+    for raw in value:
+        symbol = str(raw or "").strip().upper()
+        if symbol and symbol not in result:
+            result.append(symbol)
+    return result
 
 
 def _normalize_selection_mode(value: Any, symbols: list[str]) -> str:
-    raw = str(value).strip().lower() if value is not None else ""
-    if raw not in {"manual", "all_common_stock", "stock_basket"}:
-        return "manual" if symbols else "all_common_stock"
-    if raw == "manual" and not symbols:
-        return "all_common_stock"
-    return raw
+    mode = str(value or ("explicit" if symbols else "all_common_stock")).strip()
+    if mode not in {"explicit", "manual", "all_common_stock", "point_in_time_liquid"}:
+        raise ValueError("universe.selection_mode is invalid")
+    return mode
 
 
 def _positive_int(value: Any, label: str) -> int:
     try:
-        ivalue = int(value)
+        result = int(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{label} must be a positive integer") from exc
-    if ivalue <= 0:
+    if result <= 0:
         raise ValueError(f"{label} must be a positive integer")
-    return ivalue
-
-
-def _boolean(value: Any, label: str) -> bool:
-    if isinstance(value, bool):
-        return value
-    raise ValueError(f"{label} must be a boolean")
-
-
-def _non_negative_int(value: Any, label: str) -> int:
-    try:
-        ivalue = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{label} must be a non-negative integer") from exc
-    if ivalue < 0:
-        raise ValueError(f"{label} must be a non-negative integer")
-    return ivalue
-
-
-def _positive_float(value: Any, label: str) -> float:
-    try:
-        fvalue = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{label} must be a positive number") from exc
-    if fvalue <= 0:
-        raise ValueError(f"{label} must be a positive number")
-    return fvalue
-
-
-def _strength_score(value: Any, label: str) -> float:
-    try:
-        fvalue = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{label} must be a number within [0, 100]") from exc
-    if not math.isfinite(fvalue) or fvalue < 0 or fvalue > 100:
-        raise ValueError(f"{label} must be within [0, 100]")
-    return fvalue
+    return result
 
 
 def _fraction(value: Any, label: str) -> float:
-    fvalue = _positive_float(value, label)
-    if fvalue > 1:
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be within (0, 1]") from exc
+    if not 0 < result <= 1:
         raise ValueError(f"{label} must be within (0, 1]")
-    return fvalue
+    return result

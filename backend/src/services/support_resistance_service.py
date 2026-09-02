@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-"""Causal Pivot + ATR support/resistance and market-regime detector.
+"""Persistence DTOs and thin bindings for the native support/resistance kernel.
 
-The important timing rule is implemented in :func:`advance_symbol`: the current
-bar is evaluated against a frozen copy of zones produced after the previous
-bar.  Only after decisions and outcome resolution are complete is the current
-bar appended and a newly-confirmed pivot made available to the next session.
+Signal generation, Pivot/zone/regime evolution, posterior tracking, and entry
+channel rules are implemented by ``quant_kernel``.  The Python dataclasses in
+this module only adapt typed native audit output to database persistence and
+test fixtures; they are not a separately routable strategy engine.
 """
 
 from dataclasses import asdict, dataclass, field, replace
@@ -96,8 +96,8 @@ class BreakoutRecord:
     breakout_date: date
     breakout_session_index: int
     breakout_volume: float
-    # Kept only for deserializing older in-memory fixtures; v2 always projects
-    # the live zone and never uses these horizontal bounds.
+    # Kept for fixture and persistence hydration; the native kernel projects
+    # the live zone and does not use these horizontal bounds.
     original_lower: float | None = None
     original_upper: float | None = None
 

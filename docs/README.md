@@ -9,12 +9,12 @@ This index contains the maintained documentation for developers and local operat
 - [Project README](../README.md): capabilities, setup, commands, and the main UI and API surfaces.
 - [System architecture](architecture.md): subsystem boundaries, data flow, execution timing, and safety invariants.
 - [Research experiments](research-experiments.md): experiment inputs, trial lifecycle, stop policies, reports, and recovery.
-- [Backtest performance and worker operations](backtest-performance.md): persistence levels, durable jobs, v1/v2 rollout, API migration, and database recovery.
+- [Backtest performance and worker operations](backtest-performance.md): shared native-kernel boundaries, typed COPY persistence, durable jobs, benchmark gates, and recovery.
 - [BUY signal strength](signal-strength.md): category-specific 0–100 formulas, threshold ranking, T/T+1 timing, and audit fields.
 - [Bottom-reversal strategies](bottom-reversal-strategies.md): five pattern categories, cumulative staged targets, audit fields, and safety boundaries.
-- [Support and resistance strategy](support-resistance-strategy.md): causal Pivot/ATR zones, entry and exit rules, sparse persistence, cache invalidation, and database rollout.
+- [Support and resistance strategy](support-resistance-strategy.md): native causal Pivot/ATR zones and regimes, entry/exit rules, typed sparse persistence, cache invalidation, and database rollout.
 - [Support/resistance effectiveness study](support-resistance-effectiveness.md): pre-registered dynamic-universe validation, parent/child orchestration, acceptance gates, and bilingual report delivery.
-- [Quant and AgentOps local integration](agent-research-integration.md): safe joint startup, service authentication, schema setup, and failure handling.
+- [Quant and AgentOps local integration](agent-research-integration.md): safe joint startup, native new-algorithm Draft PR contract, service authentication, schema setup, and failure handling.
 
 ## Sources of Truth
 

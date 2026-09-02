@@ -1,0 +1,318 @@
+{
+  "oracle": {
+    "base_commit": "95af970360e1cd66dd4b1b976e332a85118364cd",
+    "description": "Frozen full-ledger output before the pure-STL support/resistance refactor.",
+    "pre_refactor_diff_sha256": "e7817c449824a1a72998e61a09fb4c023f2fdd9772996b7ea28919d886a88a6c"
+  },
+  "seed": 20260902,
+  "sessions": 120,
+  "strategies": {
+    "double_bottom": {
+      "equity": {
+        "rows": 120,
+        "sha256": "98e330267bd0ccd4747a1538971ec96ce02bfd88b3928cd8393c1f0d102071e0"
+      },
+      "positions": {
+        "rows": 2220,
+        "sha256": "544b498717cbcdb04ef3c7f8fac58fb1837e743b001ceae97edf72e1570d0eba"
+      },
+      "signals": {
+        "rows": 60,
+        "sha256": "4d72372bcaafa26c8f154db9f39b6f1572a53667539c7c7195f4a95ec700c740"
+      },
+      "summary": {
+        "delisting_zero_write_off": 0.0,
+        "final_equity": 101697.8089668615,
+        "initial_cash": 100000.0,
+        "max_drawdown": 0.0015191796429928736,
+        "signal_count": 60,
+        "total_fees": 0.0,
+        "total_return": 0.016978089668614915,
+        "total_slippage": 0.0,
+        "trade_count": 60,
+        "trading_days": 120
+      },
+      "support_events": null,
+      "support_regime_versions": null,
+      "support_zone_versions": null,
+      "trades": {
+        "rows": 60,
+        "sha256": "da36b75ca1bf403beca89703812b7fb2c9230326e8555be088c0f6dd0df086a1"
+      }
+    },
+    "head_shoulders_bottom": {
+      "equity": {
+        "rows": 120,
+        "sha256": "cb67048eb9d10206504e709d9180ffd117e3cb4fb4d2ff8b0e252ec5fb6e316f"
+      },
+      "positions": {
+        "rows": 2280,
+        "sha256": "d997a3e96493e0bd882d4a52bc070a1fcc856a19573d807596e1dbd7d8dd5f31"
+      },
+      "signals": {
+        "rows": 60,
+        "sha256": "58fbb760fe230826ea2d2b24a752a2cb506182e03b2468241f08cbda0a655814"
+      },
+      "summary": {
+        "delisting_zero_write_off": 0.0,
+        "final_equity": 105277.75750834271,
+        "initial_cash": 100000.0,
+        "max_drawdown": 0.0007619047619047342,
+        "signal_count": 60,
+        "total_fees": 0.0,
+        "total_return": 0.052777575083427175,
+        "total_slippage": 0.0,
+        "trade_count": 60,
+        "trading_days": 120
+      },
+      "support_events": null,
+      "support_regime_versions": null,
+      "support_zone_versions": null,
+      "trades": {
+        "rows": 60,
+        "sha256": "88884558d8d74129313dcff47acb36c0ac78dab77fc4d183ec18ed36c89ef768"
+      }
+    },
+    "island_reversal": {
+      "equity": {
+        "rows": 120,
+        "sha256": "c2ee15504a53b8f4c4f855374521123611f12f215fdfb4a6e128968d0f538c3c"
+      },
+      "positions": {
+        "rows": 2320,
+        "sha256": "c2a0fd33b7d906880f592f9621e8192ab8c48d500d735665c3c417cfa848aa40"
+      },
+      "signals": {
+        "rows": 60,
+        "sha256": "e50febaf2756f59caa288b11e978e3f9e29acbe6211064adcf27a03d7e2c7c37"
+      },
+      "summary": {
+        "delisting_zero_write_off": 0.0,
+        "final_equity": 100762.98253825385,
+        "initial_cash": 100000.0,
+        "max_drawdown": 0.004763330021030368,
+        "signal_count": 60,
+        "total_fees": 0.0,
+        "total_return": 0.007629825382538646,
+        "total_slippage": 0.0,
+        "trade_count": 60,
+        "trading_days": 120
+      },
+      "support_events": null,
+      "support_regime_versions": null,
+      "support_zone_versions": null,
+      "trades": {
+        "rows": 60,
+        "sha256": "758f352b4914f9b3e2ddd72246ca0677de11ef010e6e25406bd55e5df714d1cf"
+      }
+    },
+    "mean_reversion": {
+      "equity": {
+        "rows": 120,
+        "sha256": "be35c3ffa9f515cefe77b6c9da6523f3d7532f195590e1fad6a4ea5fc515fca8"
+      },
+      "positions": {
+        "rows": 1200,
+        "sha256": "0ad8b2b3741207be0c404091dcfabc9fd6f6500d74b2ba5d86e2a9cda07d8028"
+      },
+      "signals": {
+        "rows": 1800,
+        "sha256": "8a80192b5cf2b28c01e6bda075ad1150c0e1d3a68f2bed6b74addf1f796a3839"
+      },
+      "summary": {
+        "delisting_zero_write_off": 0.0,
+        "final_equity": 100000.0,
+        "initial_cash": 100000.0,
+        "max_drawdown": 0.0,
+        "signal_count": 1800,
+        "total_fees": 0.0,
+        "total_return": 0.0,
+        "total_slippage": 0.0,
+        "trade_count": 1200,
+        "trading_days": 120
+      },
+      "support_events": null,
+      "support_regime_versions": null,
+      "support_zone_versions": null,
+      "trades": {
+        "rows": 1200,
+        "sha256": "10ebb63cb4675e980791e69a7969e619af3038eaf605c8024106903fec9ba464"
+      }
+    },
+    "momentum_breakout": {
+      "equity": {
+        "rows": 120,
+        "sha256": "6622409e24036c825e35f5fce1fe953d347d51b21b15096f786fe23e011e833a"
+      },
+      "positions": {
+        "rows": 1200,
+        "sha256": "069cb9776933c9970828d46e1ad8c91c323f1c62ca02bd26a29fc99389a87ddb"
+      },
+      "signals": {
+        "rows": 1200,
+        "sha256": "d611a3acd2a4a7d137ca0403124dd7c6adc1ed3da96d29d554e98630b32dd895"
+      },
+      "summary": {
+        "delisting_zero_write_off": 0.0,
+        "final_equity": 10380.651189027529,
+        "initial_cash": 100000.0,
+        "max_drawdown": 0.9002643317132648,
+        "signal_count": 1200,
+        "total_fees": 0.0,
+        "total_return": -0.8961934881097247,
+        "total_slippage": 0.0,
+        "trade_count": 1200,
+        "trading_days": 120
+      },
+      "support_events": null,
+      "support_regime_versions": null,
+      "support_zone_versions": null,
+      "trades": {
+        "rows": 1200,
+        "sha256": "948123f7228c508a153a5e51d7a7652c1c9133249b3a3c410c9a160fcfb09644"
+      }
+    },
+    "rounded_bottom": {
+      "equity": {
+        "rows": 120,
+        "sha256": "74b89ab9036a821114cd2f4860d0876022b7f2647529cd40fbcfcde3caa4c6a4"
+      },
+      "positions": {
+        "rows": 520,
+        "sha256": "0ac62cd5be627f21a88623001f91fb238d9083f23184c4f9f79114a66b0659db"
+      },
+      "signals": {
+        "rows": 60,
+        "sha256": "09bd25d7465711a2d63d4cf3efb548e73ee411c99fa3119cc5b87a4a80082e7a"
+      },
+      "summary": {
+        "delisting_zero_write_off": 0.0,
+        "final_equity": 100816.76919360836,
+        "initial_cash": 100000.0,
+        "max_drawdown": 0.0,
+        "signal_count": 60,
+        "total_fees": 0.0,
+        "total_return": 0.008167691936083576,
+        "total_slippage": 0.0,
+        "trade_count": 60,
+        "trading_days": 120
+      },
+      "support_events": null,
+      "support_regime_versions": null,
+      "support_zone_versions": null,
+      "trades": {
+        "rows": 60,
+        "sha256": "16a0bb2fc3b28170769bb16c5b56c6f25e5ec01c7450be699f2dd8ac6a1f22b7"
+      }
+    },
+    "support_resistance": {
+      "equity": {
+        "rows": 120,
+        "sha256": "eb5622356d71de0bc9ca9b531d98755f2a85964710e9b30be930c30e7b7a0b27"
+      },
+      "positions": {
+        "rows": 800,
+        "sha256": "f0ca9a87bf7629de5268b10d2c7b7c230168efe963d6a8deae856fdc1d657000"
+      },
+      "signals": {
+        "rows": 800,
+        "sha256": "cfe32d50f6b329354978da566a277e88c3d04fe6b5c3c0fc5aceddb9aa99332f"
+      },
+      "summary": {
+        "delisting_zero_write_off": 0.0,
+        "final_equity": 108060.32790489758,
+        "initial_cash": 100000.0,
+        "max_drawdown": 0.007677543186182548,
+        "signal_count": 800,
+        "total_fees": 0.0,
+        "total_return": 0.0806032790489759,
+        "total_slippage": 0.0,
+        "trade_count": 800,
+        "trading_days": 120
+      },
+      "support_events": {
+        "rows": 2820,
+        "sha256": "ae3b6117496056673783886756fe789895e1113fe7ebe5170c5cfabf2bdce867"
+      },
+      "support_regime_versions": {
+        "rows": 0,
+        "sha256": "933a41a8a94ebc23ed8f0f20660eafe9702ad0a14b62d7e839895fb72617dde6"
+      },
+      "support_zone_versions": {
+        "rows": 0,
+        "sha256": "933a41a8a94ebc23ed8f0f20660eafe9702ad0a14b62d7e839895fb72617dde6"
+      },
+      "trades": {
+        "rows": 800,
+        "sha256": "285d3578446b75f414530e4bb77d532af179a9b76814cdd261ee132e5947b0ec"
+      }
+    },
+    "trend": {
+      "equity": {
+        "rows": 120,
+        "sha256": "1e32640f266c51b2facbd0b7f51af0d1af29a750fffa2b43c1397aa5ae0e8e8b"
+      },
+      "positions": {
+        "rows": 2380,
+        "sha256": "2255f10cbb5cfc525b15a25661fae8063d754536eab9f1cdb0037890c8215d8c"
+      },
+      "signals": {
+        "rows": 600,
+        "sha256": "44131f464d82c44852802303c3b6cdd6d42db5a24b22cd3c57a83458ed0260be"
+      },
+      "summary": {
+        "delisting_zero_write_off": 0.0,
+        "final_equity": 100000.0,
+        "initial_cash": 100000.0,
+        "max_drawdown": 0.0,
+        "signal_count": 600,
+        "total_fees": 0.0,
+        "total_return": 0.0,
+        "total_slippage": 0.0,
+        "trade_count": 20,
+        "trading_days": 120
+      },
+      "support_events": null,
+      "support_regime_versions": null,
+      "support_zone_versions": null,
+      "trades": {
+        "rows": 20,
+        "sha256": "6e17d4f89fcbca8085a98982ab8b95e052110d94538d2aa24abfa147eb57573a"
+      }
+    },
+    "v_reversal": {
+      "equity": {
+        "rows": 120,
+        "sha256": "459ea243b60b4a87dbc4270bfd2b51e63c759b445366178e62f49a127a9c555b"
+      },
+      "positions": {
+        "rows": 1180,
+        "sha256": "1feb2ac5e403bdd9fdca0cf45ea24a26511d868ebedb7a17c77fb3302bcf2bd3"
+      },
+      "signals": {
+        "rows": 140,
+        "sha256": "f809f14919eda7bdb00364cb049864134a81292a9959a76dd223b9190a743358"
+      },
+      "summary": {
+        "delisting_zero_write_off": 0.0,
+        "final_equity": 101127.32415654499,
+        "initial_cash": 100000.0,
+        "max_drawdown": 0.0010256410256409135,
+        "signal_count": 140,
+        "total_fees": 0.0,
+        "total_return": 0.011273241565449954,
+        "total_slippage": 0.0,
+        "trade_count": 60,
+        "trading_days": 120
+      },
+      "support_events": null,
+      "support_regime_versions": null,
+      "support_zone_versions": null,
+      "trades": {
+        "rows": 60,
+        "sha256": "30d1312cf58cdf165d7a46d774e4d677dac00d9cfa05cdfedc6522b9b45b80b3"
+      }
+    }
+  },
+  "symbols": 20
+}

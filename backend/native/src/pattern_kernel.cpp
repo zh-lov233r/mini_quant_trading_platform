@@ -281,7 +281,9 @@ py::list evaluate_pattern_day(const py::dict& runtime, const py::dict& market) {
         event["reason"] = decision->reason;
         event["score"] = decision->score ? py::cast(*decision->score) : py::none();
         event["metadata"] = json_loads(pattern_metadata_json(config, state.bars.back(), position, *decision));
-        event["instrument_id"] = py::none();
+        event["instrument_id"] = snapshot.contains("instrument_id")
+            ? py::reinterpret_borrow<py::object>(snapshot["instrument_id"])
+            : py::object(py::none());
         results.append(std::move(event));
     }
     return results;

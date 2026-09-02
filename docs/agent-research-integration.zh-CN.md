@@ -17,6 +17,10 @@ PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false
 
 GitHub 交付默认使用 mock 模式。真实交付只能创建 Draft PR，需要显式设置交付模式并经过审批，不会合并或部署代码。
 
+## 新算法原生契约
+
+新算法 workflow 面向当前单引擎架构。Draft PR 必须新增 C++20 策略模块和原生 descriptor，覆盖默认值、严格 JSON Schema、所需特征、历史窗口与算法 revision；只允许保留 test/reference Python 实现或冻结 golden 证据，并提供 `1e-10` Python/native 全差分、原生 wheel build/smoke，以及回测与 Paper 日信号使用同一原生规则的证明。新增策略必须重新构建并部署 wheel。AgentOps 不会自动 merge、deploy、发起回测、激活 scheduler 或提交订单。
+
 ## 首次数据库升级
 
 Quant 没有 Alembic。应用 additive SQL 之前必须解析并确认准确的本地 Quant 数据库：
@@ -98,5 +102,5 @@ workflow 处于 `waiting_external` 时，AgentOps 会定期向认证后的实验
 - 创建实验时会固化 universe，以及特征、复权/未复权价格和公司行动的 SHA-256 指纹；漂移结果为 `data_changed`。
 - 取消会阻止领取新 trial；运行中的同步回测到达安全边界后进入 `cancelled`。
 - 已因策略停止或取消的实验不会在重启后恢复排队工作。
-- 新代码策略会停留在 Draft PR，直到被审查、合并、部署并出现在 engine-ready catalog 中。
+- 新代码策略会停留在 Draft PR，直到被审查、合并、重新构建进原生 wheel、部署并出现在 engine-ready catalog 中。
 - 稳健性报告是研究证据，不是盈利或实盘安全证明。

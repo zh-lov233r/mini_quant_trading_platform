@@ -17,6 +17,10 @@ PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false
 
 GitHub delivery defaults to mock mode. Real delivery is Draft-PR-only, requires an explicit delivery mode and approval, and does not merge or deploy code.
 
+## New-Algorithm Native Contract
+
+The new-algorithm workflow targets the current single-engine architecture. A Draft PR must add a C++20 strategy module and native descriptor covering defaults, strict JSON Schema, required features, history window, and algorithm revision. It must include only a test/reference Python implementation or frozen golden evidence, a complete `1e-10` Python/native differential, native wheel build and smoke checks, and proof that backtest and Paper daily signals use the same native rules. Adding a strategy requires rebuilding and redeploying the wheel. AgentOps never merges, deploys, starts a backtest, activates scheduling, or submits an order.
+
 ## First Database Upgrade
 
 Quant does not use Alembic. Resolve the exact local Quant database before applying the additive SQL file:
@@ -98,5 +102,5 @@ While the workflow is `waiting_external`, AgentOps periodically sends cumulative
 - Creation freezes the universe and a SHA-256 fingerprint of features, adjusted and unadjusted prices, and corporate actions. Drift produces `data_changed`.
 - Cancellation stops new trial claims; already-running synchronous backtests reach a safe boundary before `cancelled`.
 - Policy-stopped and cancelled experiments do not resume queued work after restart.
-- A new code strategy remains in a Draft PR until it is reviewed, merged, deployed, and present in the engine-ready catalog.
+- A new code strategy remains in a Draft PR until it is reviewed, merged, rebuilt into the native wheel, deployed, and present in the engine-ready catalog.
 - Robustness reports are research evidence, not proof of profitability or live-trading safety.

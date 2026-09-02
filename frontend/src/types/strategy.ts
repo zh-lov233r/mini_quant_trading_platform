@@ -416,6 +416,10 @@ export interface StrategyCatalogItem {
   description: string;
   engine_ready: boolean;
   defaults: Record<string, unknown>;
+  parameter_schema: Record<string, unknown>;
+  required_features: string[];
+  algorithm_revision: number | null;
+  history_length: number;
 }
 
 export interface TrendIndicatorSupport {

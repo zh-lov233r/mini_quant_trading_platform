@@ -6,7 +6,7 @@ import uuid
 import copy
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from sqlalchemy import create_engine, event, func, insert, select
 from sqlalchemy.orm import sessionmaker
@@ -33,6 +33,7 @@ from src.models.tables import (  # noqa: E402
 )
 from src.services.support_resistance_persistence_service import (  # noqa: E402
     SupportResistanceMaterializationBuildError,
+    _insert_in_batches,
     _validate_regime_versions,
     _zone_version_rows,
     find_reusable_materialization,
@@ -60,8 +61,7 @@ from src.services.support_resistance_service import (  # noqa: E402
     project_entry_channel,
 )
 from src.services.strategy_engine import (  # noqa: E402
-    generate_stateful_backtest_signals,
-    generate_support_resistance_replay_signals,
+    evaluate_native_signals,
 )
 from src.services.paper_trading_service import (  # noqa: E402
     VirtualPosition,
@@ -767,39 +767,19 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         previous = {"symbol": "TEST", **_bar(0, high=103, low=102, close=102.5)}
         current = {"symbol": "TEST", **_bar(1, high=103, low=100.5, close=102)}
 
-        backtest_state = SupportResistanceState(
-            symbols={
-                "TEST": SupportResistanceSymbolState(
-                    cached_zone_timeline=list(timeline),
-                    cached_regime_timeline=_cached_regime(),
-                )
+        market = {
+            "TEST": {
+                **current,
+                "recent_bars": [previous, current],
+                "support_resistance_hydration": {
+                    "zone_timeline": timeline,
+                    "regime_timeline": _cached_regime(),
+                    "lifecycle_events": [],
+                },
             }
-        )
-        generate_stateful_backtest_signals(
-            runtime,
-            {"TEST": previous},
-            backtest_state,
-            emit_signals=False,
-        )
-        backtest_signals = generate_stateful_backtest_signals(
-            runtime,
-            {"TEST": current},
-            backtest_state,
-        )
-
-        paper_state = SupportResistanceState(
-            symbols={
-                "TEST": SupportResistanceSymbolState(
-                    cached_zone_timeline=list(timeline),
-                    cached_regime_timeline=_cached_regime(),
-                )
-            }
-        )
-        paper_signals = generate_support_resistance_replay_signals(
-            runtime,
-            {"TEST": {**current, "recent_bars": [previous, current]}},
-            paper_state,
-        )
+        }
+        backtest_signals = evaluate_native_signals(runtime, market)
+        paper_signals = evaluate_native_signals(runtime, market)
 
         self.assertEqual(len(backtest_signals), 1)
         self.assertEqual(len(paper_signals), 1)
@@ -1196,6 +1176,96 @@ class SupportResistancePersistenceTests(unittest.TestCase):
         )
         state.symbols["TEST"] = symbol_state
         return state
+
+    def test_postgres_batches_use_psycopg_copy_with_canonical_json(self) -> None:
+        db = MagicMock()
+        db.get_bind.return_value.dialect.name = "postgresql"
+        db.get_bind.return_value.dialect.driver = "psycopg"
+        raw = MagicMock()
+        db.connection.return_value.connection.driver_connection = raw
+        writer = raw.cursor.return_value.__enter__.return_value.copy.return_value.__enter__.return_value
+        run_id = uuid.uuid4()
+        materialization_id = uuid.uuid4()
+        rows = [
+            {
+                "run_id": run_id,
+                "materialization_id": materialization_id,
+                "instrument_id": 1,
+                "symbol": "TEST",
+                "event_date": date(2025, 1, 2),
+                "event_type": "touch",
+                "zone_key": "zone",
+                "setup": None,
+                "selected": False,
+                "score": 0.5,
+                "posterior_sample_count": 2,
+                "lower_price": 99.0,
+                "upper_price": 101.0,
+                "payload": {"z": 2, "a": 1},
+            }
+        ]
+
+        written = _insert_in_batches(
+            db,
+            SupportResistanceRunEvent,
+            rows,
+            batch_size=1,
+        )
+
+        self.assertEqual(written, 1)
+        statement = raw.cursor.return_value.__enter__.return_value.copy.call_args.args[0]
+        self.assertTrue(statement.startswith("COPY support_resistance_run_events (id,run_id,"))
+        copied = writer.write_row.call_args.args[0]
+        self.assertIsInstance(copied[0], uuid.UUID)
+        self.assertEqual(copied[-1], '{"a":1,"z":2}')
+        db.execute.assert_not_called()
+
+    def test_support_resistance_copy_checks_cancellation_before_each_batch(self) -> None:
+        db = MagicMock()
+        with self.assertRaisesRegex(RuntimeError, "before support/resistance COPY batch"):
+            _insert_in_batches(
+                db,
+                SupportResistanceRunEvent,
+                [{"run_id": uuid.uuid4(), "payload": {}}],
+                batch_size=1,
+                cancel_check=lambda: True,
+            )
+        db.get_bind.assert_not_called()
+
+    @patch(
+        "src.services.support_resistance_persistence_service._instrument_ids",
+        return_value={"TEST": 1},
+    )
+    @patch(
+        "src.services.support_resistance_persistence_service.source_data_fingerprint",
+        return_value="fingerprint-invalid-event",
+    )
+    def test_invalid_event_geometry_is_rejected_before_detail_insert(self, _fingerprint, _ids) -> None:
+        state = self._state()
+        state.symbols["TEST"].events[0]["lower"] = float("nan")
+        with self.Session() as db:
+            run = self._new_run(db)
+            with self.assertRaisesRegex(
+                SupportResistanceMaterializationBuildError,
+                "event geometry exceeds",
+            ):
+                persist_support_resistance_run(
+                    db,
+                    run=run,
+                    runtime=self.runtime,
+                    state=state,
+                    symbols=["TEST"],
+                    coverage_start=date(2025, 1, 1),
+                    coverage_end=date(2025, 3, 1),
+                )
+            self.assertEqual(
+                db.scalar(select(func.count()).select_from(SupportResistanceRunEvent)),
+                0,
+            )
+            self.assertEqual(
+                db.scalar(select(func.count()).select_from(SupportResistanceZoneVersion)),
+                0,
+            )
 
     def test_regime_timeline_integrity_rejects_invalid_version_sequences(self) -> None:
         sessions = [date(2025, 1, 2), date(2025, 1, 3), date(2025, 1, 6)]

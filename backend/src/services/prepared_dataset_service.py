@@ -39,10 +39,14 @@ class PreparedDatasetDataChangedError(RuntimeError):
 
 @dataclass(slots=True)
 class PreparedDataset:
-    """Two Fortran-order memmaps and dictionary sidecars for the v3 dataset."""
+    """Two Fortran-order arrays plus dictionary sidecars for the v3 dataset.
 
-    integers: np.memmap
-    floats: np.memmap
+    Fingerprinted caches use read-only memmaps; Paper evaluation uses the same
+    schema in ordinary in-memory NumPy arrays.
+    """
+
+    integers: np.ndarray
+    floats: np.ndarray
     sidecar: dict[str, Any]
     _symbols: list[str] = field(default_factory=list)
     _asset_types: list[str] = field(default_factory=list)
@@ -349,93 +353,35 @@ def encode_prepared_snapshot(dataset: PreparedDataset, index: int, snapshot: dic
     dataset.encode(index, snapshot)
 
 
-def decode_prepared_snapshot(
-    dataset: PreparedDataset,
-    index: int,
-) -> tuple[date, str, dict[str, Any]]:
-    integer_row = dataset.integers[index]
-    float_row = dataset.floats[index]
-    trade_date = date.fromordinal(int(integer_row[PREPARED_INTEGER_INDEX["dt_ordinal"]]))
-    symbol = dataset._symbols[int(integer_row[PREPARED_INTEGER_INDEX["symbol_id"]])]
-    timestamp_us = int(integer_row[PREPARED_INTEGER_INDEX["ts_us"]])
-    snapshot: dict[str, Any] = {
-        "instrument_id": int(integer_row[PREPARED_INTEGER_INDEX["instrument_id"]]),
-        "symbol": symbol,
-        "dt_ny": trade_date,
-        "ts": datetime.fromtimestamp(timestamp_us / 1_000_000, tz=timezone.utc),
-        "asset_type": dataset._asset_types[
-            int(integer_row[PREPARED_INTEGER_INDEX["asset_type_id"]])
-        ] or None,
-        "exchange": dataset._exchanges[
-            int(integer_row[PREPARED_INTEGER_INDEX["exchange_id"]])
-        ] or None,
-        "position": 0.0,
-        "avg_entry_price": None,
-        "entry_trade_date": None,
-        "entry_signal_features": None,
-        "position_holding_days": None,
-        "recent_bars": [],
-    }
-    for name in ("listed", "delisted"):
-        ordinal = int(integer_row[PREPARED_INTEGER_INDEX[f"{name}_ordinal"]])
-        snapshot[f"{name}_at"] = date.fromordinal(ordinal) if ordinal != PREPARED_DATE_SENTINEL else None
-    for name, column in PREPARED_FLOAT_INDEX.items():
-        value = float(float_row[column])
-        snapshot[name] = value if np.isfinite(value) else None
-    return trade_date, symbol, snapshot
-
-
-class PreparedDatasetDayLoader:
-    def __init__(
-        self,
-        dataset: PreparedDataset,
-        *,
-        start_date: date,
-        end_date: date,
-        performance: dict[str, Any],
-    ) -> None:
-        self.dataset = dataset
-        self.start_date = start_date
-        self.end_date = end_date
-        self.performance = performance
-        self.rows_loaded = 0
-        self.loaded_symbols: set[str] = set()
-        self._history_sessions_by_instrument: dict[int, int] = {}
-
-    def iter_days(self) -> Iterator[tuple[date, dict[str, dict[str, Any]]]]:
-        from time import perf_counter
-
-        current_date: date | None = None
-        current: dict[str, dict[str, Any]] = {}
-        decode_ms = 0.0
-        grouping_ms = 0.0
-        for index in range(len(self.dataset)):
-            ordinal = int(self.dataset.integers[index, PREPARED_INTEGER_INDEX["dt_ordinal"]])
-            if ordinal == PREPARED_DATE_SENTINEL:
-                continue
-            trade_date = date.fromordinal(ordinal)
-            if trade_date < self.start_date or trade_date > self.end_date:
-                continue
-            started = perf_counter()
-            decoded_date, symbol, snapshot = decode_prepared_snapshot(self.dataset, index)
-            instrument_id = int(snapshot["instrument_id"])
-            history_sessions = self._history_sessions_by_instrument.get(instrument_id, 0) + 1
-            self._history_sessions_by_instrument[instrument_id] = history_sessions
-            snapshot["history_sessions"] = history_sessions
-            decode_ms += (perf_counter() - started) * 1000.0
-            if current_date is not None and decoded_date != current_date:
-                self.performance["row_decode_ms"] += round(decode_ms, 3)
-                self.performance["day_grouping_ms"] += round(grouping_ms, 3)
-                decode_ms = grouping_ms = 0.0
-                yield current_date, current
-                current = {}
-            started = perf_counter()
-            current_date = decoded_date
-            current[symbol] = snapshot
-            self.rows_loaded += 1
-            self.loaded_symbols.add(symbol)
-            grouping_ms += (perf_counter() - started) * 1000.0
-        if current_date is not None:
-            self.performance["row_decode_ms"] += round(decode_ms, 3)
-            self.performance["day_grouping_ms"] += round(grouping_ms, 3)
-            yield current_date, current
+def build_in_memory_prepared_dataset(
+    snapshots: list[dict[str, Any]],
+    *,
+    sidecar: dict[str, Any] | None = None,
+) -> PreparedDataset:
+    """Build a read-only v3 columnar view for one-day native evaluation."""
+    ordered = sorted(
+        (dict(snapshot) for snapshot in snapshots),
+        key=lambda snapshot: (
+            snapshot["dt_ny"],
+            int(snapshot["instrument_id"]),
+        ),
+    )
+    integers = np.full(
+        (len(ordered), len(PREPARED_INTEGER_FIELDS)),
+        PREPARED_DATE_SENTINEL,
+        dtype="<i8",
+        order="F",
+    )
+    floats = np.full(
+        (len(ordered), len(PREPARED_FLOAT_FIELDS)),
+        np.nan,
+        dtype="<f8",
+        order="F",
+    )
+    dataset = PreparedDataset(integers, floats, {})
+    for index, snapshot in enumerate(ordered):
+        encode_prepared_snapshot(dataset, index, snapshot)
+    dataset.sidecar = {**dataset.mapping_sidecar(), **dict(sidecar or {})}
+    dataset.integers.flags.writeable = False
+    dataset.floats.flags.writeable = False
+    return dataset

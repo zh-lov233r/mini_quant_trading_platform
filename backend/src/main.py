@@ -20,7 +20,8 @@ from src.api.stock_baskets import router as stock_baskets_router
 from src.api.strategy_allocations import router as strategy_allocations_router
 from src.api.strategies import agent_router as agent_strategies_router
 from src.api.strategies import router as strategies_router
-from src.core.db import SessionLocal, ensure_extensions, ensure_strategy_allocation_schema
+from src.core.db import SessionLocal, engine, ensure_extensions, ensure_strategy_allocation_schema
+from src.services.native_runtime_service import validate_native_runtime
 from src.services.paper_trading_scheduler import PaperTradingDailyScheduler
 from src.services.research_experiment_service import ResearchExperimentWorker
 from src.services.stock_basket_service import ensure_default_common_stock_basket
@@ -73,6 +74,7 @@ app.include_router(agent_research_router)
 # -----------------------------
 @app.on_event("startup")
 async def on_startup():
+    validate_native_runtime(engine)
     resolve_backtest_worker_concurrency()
     ensure_extensions()
     ensure_strategy_allocation_schema()

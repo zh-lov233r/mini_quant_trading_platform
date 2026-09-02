@@ -2,10 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Iterable, cast
+from typing import Any, Iterable, TypedDict, cast
 
-from src.services.patterns.models import PatternSetup
 from src.services.strategy_types import StageIndex, StagedPatternType
+
+
+class PatternSetup(TypedDict):
+    """Persisted pattern-stage metadata emitted by the native kernel."""
+
+    pattern_type: StagedPatternType
+    setup_id: str
+    stage_index: StageIndex
+    stage_key: str
+    stage_target_pct: float
+    stage: str
+    anchors: dict[str, Any]
+    invalidation_price: float | None
 
 
 def build_setup_id(pattern_type: str, symbol: str, *anchors: Any) -> str:

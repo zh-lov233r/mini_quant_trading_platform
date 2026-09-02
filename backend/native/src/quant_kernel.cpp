@@ -1,20 +1,27 @@
 #include <pybind11/pybind11.h>
+#include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <iomanip>
 #include <limits>
+#include <map>
 #include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "backtest_kernel.hpp"
+#include "native_utils.hpp"
 #include "pattern_kernel.hpp"
+#include "signal_strength.hpp"
 #include "support_resistance_kernel.hpp"
+#include "strategy_descriptor.hpp"
 
 namespace py = pybind11;
 
@@ -26,6 +33,165 @@ constexpr int kAbiVersion = 1;
 #define QUANT_KERNEL_BUILD_ID "local"
 #endif
 constexpr const char* kBuildId = QUANT_KERNEL_BUILD_ID;
+
+struct DayAuditCollection {
+    std::vector<std::int32_t> symbol_ids;
+    std::vector<std::string> payload_json;
+};
+
+struct DayResult {
+    std::vector<std::string> symbols;
+    std::vector<std::string> strategy_ids;
+    std::vector<std::int64_t> timestamp_us;
+    std::vector<std::int64_t> instrument_ids;
+    std::vector<std::int32_t> symbol_ids;
+    std::vector<std::int8_t> actions;
+    std::vector<double> scores;
+    std::vector<std::string> reasons;
+    std::vector<std::string> metadata_json;
+    std::vector<std::string> support_symbols;
+    DayAuditCollection support_events;
+    DayAuditCollection support_zone_versions;
+    DayAuditCollection support_regime_versions;
+};
+
+template <typename T>
+py::array_t<T> day_vector_view(const py::object& owner, std::vector<T>& values) {
+    py::array_t<T> result(
+        {static_cast<py::ssize_t>(values.size())},
+        {static_cast<py::ssize_t>(sizeof(T))},
+        values.data(),
+        owner
+    );
+    result.attr("setflags")(py::arg("write") = false);
+    return result;
+}
+
+std::int64_t timestamp_us(const py::handle& value) {
+    const double seconds = py::cast<double>(value.attr("timestamp")());
+    return static_cast<std::int64_t>(std::llround(seconds * 1'000'000.0));
+}
+
+void append_native_json(std::string& output, const py::handle& value) {
+    if (value.is_none()) {
+        output += "null";
+    } else if (py::isinstance<py::bool_>(value)) {
+        output += py::cast<bool>(value) ? "true" : "false";
+    } else if (py::isinstance<py::int_>(value)) {
+        output += py::cast<std::string>(py::str(value));
+    } else if (py::isinstance<py::float_>(value)) {
+        const double number = py::cast<double>(value);
+        if (!std::isfinite(number)) {
+            throw std::invalid_argument("native day metadata contains a non-finite number");
+        }
+        std::ostringstream encoded;
+        encoded.imbue(std::locale::classic());
+        encoded << std::setprecision(std::numeric_limits<double>::max_digits10) << number;
+        output += encoded.str();
+    } else if (py::isinstance<py::str>(value)) {
+        output += quant_kernel::json_string(py::cast<std::string>(value));
+    } else if (py::isinstance<py::dict>(value)) {
+        output.push_back('{');
+        bool first = true;
+        for (const auto& [raw_key, raw_value] : py::cast<py::dict>(value)) {
+            if (!first) output.push_back(',');
+            first = false;
+            output += quant_kernel::json_string(py::cast<std::string>(py::str(raw_key)));
+            output.push_back(':');
+            append_native_json(output, raw_value);
+        }
+        output.push_back('}');
+    } else if (py::isinstance<py::list>(value) || py::isinstance<py::tuple>(value)) {
+        output.push_back('[');
+        bool first = true;
+        for (const py::handle item : py::reinterpret_borrow<py::iterable>(value)) {
+            if (!first) output.push_back(',');
+            first = false;
+            append_native_json(output, item);
+        }
+        output.push_back(']');
+    } else {
+        output += quant_kernel::json_string(py::cast<std::string>(py::str(value)));
+    }
+}
+
+std::string canonical_json(const py::handle& value) {
+    std::string output;
+    append_native_json(output, value);
+    return output;
+}
+
+DayResult typed_day_result(const py::list& raw_signals, py::dict support_resistance) {
+    DayResult result;
+    const std::size_t count = static_cast<std::size_t>(py::len(raw_signals));
+    result.strategy_ids.reserve(count);
+    result.timestamp_us.reserve(count);
+    result.instrument_ids.reserve(count);
+    result.symbol_ids.reserve(count);
+    result.actions.reserve(count);
+    result.scores.reserve(count);
+    result.reasons.reserve(count);
+    result.metadata_json.reserve(count);
+    std::unordered_map<std::string, std::int32_t> symbol_ids;
+    for (const py::handle raw : raw_signals) {
+        const py::dict signal = py::cast<py::dict>(raw);
+        const std::string symbol = py::cast<std::string>(signal["symbol"]);
+        auto found = symbol_ids.find(symbol);
+        if (found == symbol_ids.end()) {
+            const auto symbol_id = static_cast<std::int32_t>(result.symbols.size());
+            result.symbols.push_back(symbol);
+            found = symbol_ids.emplace(symbol, symbol_id).first;
+        }
+        const std::string action = py::cast<std::string>(signal["action"]);
+        if (action != "BUY" && action != "SELL") {
+            throw std::invalid_argument("native day signal action must be BUY or SELL");
+        }
+        result.strategy_ids.push_back(py::cast<std::string>(py::str(signal["strategy_id"])));
+        result.timestamp_us.push_back(::timestamp_us(signal["ts"]));
+        result.instrument_ids.push_back(
+            signal.contains("instrument_id") && !signal["instrument_id"].is_none()
+                ? py::cast<std::int64_t>(signal["instrument_id"])
+                : -1
+        );
+        result.symbol_ids.push_back(found->second);
+        result.actions.push_back(action == "BUY" ? 1 : -1);
+        result.scores.push_back(
+            signal.contains("score") && !signal["score"].is_none()
+                ? py::cast<double>(signal["score"])
+                : std::numeric_limits<double>::quiet_NaN()
+        );
+        result.reasons.push_back(py::cast<std::string>(py::str(signal["reason"])));
+        result.metadata_json.push_back(canonical_json(signal["metadata"]));
+    }
+    std::vector<std::string> audit_symbols;
+    audit_symbols.reserve(static_cast<std::size_t>(py::len(support_resistance)));
+    for (const auto& [raw_symbol, raw_payload] : support_resistance) {
+        static_cast<void>(raw_payload);
+        audit_symbols.push_back(py::cast<std::string>(raw_symbol));
+    }
+    std::sort(audit_symbols.begin(), audit_symbols.end());
+    const auto append_collection = [](
+        DayAuditCollection& target,
+        std::int32_t symbol_id,
+        const py::dict& payload,
+        const char* key
+    ) {
+        if (!payload.contains(key) || payload[key].is_none()) return;
+        for (const py::handle item : py::reinterpret_borrow<py::iterable>(payload[key])) {
+            target.symbol_ids.push_back(symbol_id);
+            target.payload_json.push_back(canonical_json(item));
+        }
+    };
+    for (const std::string& symbol : audit_symbols) {
+        const auto symbol_id = static_cast<std::int32_t>(result.support_symbols.size());
+        result.support_symbols.push_back(symbol);
+        const py::dict payload = py::cast<py::dict>(support_resistance[py::str(symbol)]);
+        append_collection(result.support_events, symbol_id, payload, "events");
+        append_collection(result.support_zone_versions, symbol_id, payload, "zone_versions");
+        append_collection(result.support_regime_versions, symbol_id, payload, "regime_versions");
+    }
+    return result;
+}
 
 std::optional<double> number(const py::dict& value, const char* key) {
     if (!value.contains(key) || value[key].is_none()) {
@@ -186,7 +352,9 @@ py::dict signal(
     result["reason"] = reason;
     result["score"] = score;
     result["metadata"] = std::move(metadata);
-    result["instrument_id"] = py::none();
+    result["instrument_id"] = snapshot.contains("instrument_id")
+        ? py::reinterpret_borrow<py::object>(snapshot["instrument_id"])
+        : py::object(py::none());
     return result;
 }
 
@@ -445,55 +613,183 @@ py::list evaluate_momentum(const py::dict& runtime, const py::dict& market) {
     return results;
 }
 
-py::list evaluate_day(const py::dict& runtime, const py::dict& market) {
+template <typename T>
+T prepared_value(
+    const py::buffer_info& info,
+    py::ssize_t row,
+    py::ssize_t column
+) {
+    const auto* bytes = static_cast<const char*>(info.ptr);
+    return *reinterpret_cast<const T*>(
+        bytes + row * info.strides[0] + column * info.strides[1]
+    );
+}
+
+py::dict prepared_day_market(
+    const py::object& dataset,
+    const py::dict& portfolio_state
+) {
+    const py::array integers = py::cast<py::array>(dataset.attr("integers"));
+    const py::array floats = py::cast<py::array>(dataset.attr("floats"));
+    if (!integers.dtype().is(py::dtype::of<std::int64_t>())
+        || !floats.dtype().is(py::dtype::of<double>())) {
+        throw std::invalid_argument("prepared day arrays must use int64 and float64");
+    }
+    const py::buffer_info integer_info = integers.request();
+    const py::buffer_info float_info = floats.request();
+    constexpr py::ssize_t integer_columns = 9;
+    constexpr py::ssize_t float_columns = 35;
+    if (integer_info.ndim != 2 || float_info.ndim != 2
+        || integer_info.shape[1] != integer_columns
+        || float_info.shape[1] != float_columns
+        || integer_info.shape[0] != float_info.shape[0]) {
+        throw std::invalid_argument("prepared day arrays do not match schema v3");
+    }
+    const py::dict sidecar = py::cast<py::dict>(dataset.attr("sidecar"));
+    const std::vector<std::string> symbols = py::cast<std::vector<std::string>>(
+        sidecar["symbols"]
+    );
+    const std::vector<std::string> asset_types = py::cast<std::vector<std::string>>(
+        sidecar["asset_types"]
+    );
+    const std::vector<std::string> exchanges = py::cast<std::vector<std::string>>(
+        sidecar["exchanges"]
+    );
+    static constexpr const char* float_fields[float_columns] = {
+        "open", "high", "low", "close", "close_unadjusted", "volume", "atr_14",
+        "volume_sma_20", "dollar_volume_20", "ret_20d", "ret_60d", "sma_10",
+        "sma_20", "sma_50", "sma_100", "sma_200", "ema_12", "ema_15", "ema_20",
+        "ema_50", "rsi_2", "rsi_5", "rsi_14", "zscore_5", "zscore_10", "zscore_20",
+        "prev_sma_10", "prev_sma_20", "prev_sma_50", "prev_sma_100", "prev_sma_200",
+        "prev_ema_12", "prev_ema_15", "prev_ema_20", "prev_ema_50"
+    };
+    const py::module_ datetime_module = py::module_::import("datetime");
+    const py::object date_type = datetime_module.attr("date");
+    const py::object datetime_type = datetime_module.attr("datetime");
+    const py::object utc = datetime_module.attr("timezone").attr("utc");
+    const auto date_value = [&](std::int64_t ordinal) -> py::object {
+        if (ordinal == std::numeric_limits<std::int64_t>::min()) return py::none();
+        return date_type.attr("fromordinal")(ordinal);
+    };
+    const auto dictionary_value = [](
+        const std::vector<std::string>& values,
+        std::int64_t index,
+        const char* label
+    ) -> const std::string& {
+        if (index < 0 || static_cast<std::size_t>(index) >= values.size()) {
+            throw std::invalid_argument(std::string("prepared day ") + label + " id is invalid");
+        }
+        return values[static_cast<std::size_t>(index)];
+    };
+
+    std::map<std::int64_t, py::list> history_by_instrument;
+    std::map<std::int64_t, py::dict> latest_by_instrument;
+    for (py::ssize_t row = 0; row < integer_info.shape[0]; ++row) {
+        const std::int64_t instrument_id = prepared_value<std::int64_t>(integer_info, row, 1);
+        const std::int64_t timestamp = prepared_value<std::int64_t>(integer_info, row, 2);
+        const std::int64_t ordinal = prepared_value<std::int64_t>(integer_info, row, 3);
+        const std::string& symbol = dictionary_value(
+            symbols, prepared_value<std::int64_t>(integer_info, row, 4), "symbol"
+        );
+        py::dict snapshot;
+        snapshot["instrument_id"] = instrument_id;
+        snapshot["symbol"] = symbol;
+        snapshot["dt_ny"] = date_value(ordinal);
+        snapshot["ts"] = timestamp == 0
+            ? py::object(py::none())
+            : datetime_type.attr("fromtimestamp")(
+                static_cast<double>(timestamp) / 1'000'000.0,
+                py::arg("tz") = utc
+            );
+        snapshot["asset_type"] = dictionary_value(
+            asset_types, prepared_value<std::int64_t>(integer_info, row, 5), "asset type"
+        );
+        snapshot["exchange"] = dictionary_value(
+            exchanges, prepared_value<std::int64_t>(integer_info, row, 6), "exchange"
+        );
+        snapshot["listed_at"] = date_value(
+            prepared_value<std::int64_t>(integer_info, row, 7)
+        );
+        snapshot["delisted_at"] = date_value(
+            prepared_value<std::int64_t>(integer_info, row, 8)
+        );
+        for (py::ssize_t column = 0; column < float_columns; ++column) {
+            const double value = prepared_value<double>(float_info, row, column);
+            snapshot[py::str(float_fields[column])] = std::isfinite(value)
+                ? py::object(py::float_(value))
+                : py::object(py::none());
+        }
+        history_by_instrument[instrument_id].append(snapshot);
+        latest_by_instrument[instrument_id] = std::move(snapshot);
+    }
+
+    const py::dict positions = portfolio_state.contains("positions")
+        && py::isinstance<py::dict>(portfolio_state["positions"])
+        ? py::cast<py::dict>(portfolio_state["positions"])
+        : py::dict();
+    const py::dict hydration = portfolio_state.contains("support_resistance_hydration")
+        && py::isinstance<py::dict>(portfolio_state["support_resistance_hydration"])
+        ? py::cast<py::dict>(portfolio_state["support_resistance_hydration"])
+        : py::dict();
+    py::dict market;
+    for (auto& [instrument_id, snapshot] : latest_by_instrument) {
+        snapshot["recent_bars"] = history_by_instrument.at(instrument_id);
+        const py::str instrument_key(std::to_string(instrument_id));
+        py::dict position;
+        if (positions.contains(instrument_key) && py::isinstance<py::dict>(positions[instrument_key])) {
+            position = py::cast<py::dict>(positions[instrument_key]);
+        }
+        for (const char* key : {
+            "position", "avg_entry_price", "entry_trade_date",
+            "position_holding_days", "entry_signal_features"
+        }) {
+            snapshot[py::str(key)] = position.contains(key)
+                ? py::reinterpret_borrow<py::object>(position[key])
+                : py::object(py::none());
+        }
+        if (snapshot["position"].is_none()) snapshot["position"] = 0.0;
+        if (hydration.contains(instrument_key)
+            && py::isinstance<py::dict>(hydration[instrument_key])) {
+            snapshot["support_resistance_hydration"] = hydration[instrument_key];
+        }
+        market[snapshot["symbol"]] = std::move(snapshot);
+    }
+    return market;
+}
+
+DayResult evaluate_day(
+    const py::object& dataset_day,
+    const py::dict& runtime,
+    const py::dict& portfolio_state
+) {
+    const py::dict market = prepared_day_market(dataset_day, portfolio_state);
     const std::string type = py::cast<std::string>(runtime["strategy_type"]);
-    if (type == "trend") return evaluate_trend(runtime, market);
-    if (type == "mean_reversion") return evaluate_mean_reversion(runtime, market);
-    if (type == "momentum_breakout") return evaluate_momentum(runtime, market);
-    if (type == "island_reversal" || type == "double_bottom" || type == "head_shoulders_bottom"
+    py::list results;
+    py::dict support_resistance;
+    if (type == "trend") results = evaluate_trend(runtime, market);
+    else if (type == "mean_reversion") results = evaluate_mean_reversion(runtime, market);
+    else if (type == "momentum_breakout") results = evaluate_momentum(runtime, market);
+    else if (type == "island_reversal" || type == "double_bottom" || type == "head_shoulders_bottom"
         || type == "rounded_bottom" || type == "v_reversal") {
-        return quant_kernel::evaluate_pattern_day(runtime, market);
+        results = quant_kernel::evaluate_pattern_day(runtime, market);
     }
-    if (type == "support_resistance") {
-        return quant_kernel::evaluate_support_resistance_day(runtime, market);
+    else if (type == "support_resistance") {
+        results = quant_kernel::evaluate_support_resistance_day(
+            runtime, market, support_resistance
+        );
+    } else {
+        throw std::invalid_argument("native strategy is not implemented: " + type);
     }
-    throw std::invalid_argument("native strategy is not implemented: " + type);
+    quant_kernel::annotate_signal_strength(type, runtime, results);
+    return typed_day_result(results, std::move(support_resistance));
 }
 
 py::list catalog() {
-    py::list result;
-    const std::vector<std::tuple<std::string, int, int, std::vector<std::string>>> descriptors = {
-        {"trend", 1, 0, {"close", "volume", "volume_sma_20", "atr_14", "ema_15", "sma_200"}},
-        {"mean_reversion", 1, 0, {"close", "atr_14", "zscore_5", "zscore_10", "zscore_20"}},
-        {"momentum_breakout", 1, 0, {"close", "sma_20", "ret_20d", "volume", "volume_sma_20"}},
-        {"island_reversal", 1, 100, {"open", "high", "low", "close", "volume", "volume_sma_20", "sma_50"}},
-        {"double_bottom", 1, 220, {"open", "high", "low", "close", "volume", "volume_sma_20"}},
-        {"head_shoulders_bottom", 1, 160, {"open", "high", "low", "close", "volume", "volume_sma_20"}},
-        {"rounded_bottom", 1, 200, {"open", "high", "low", "close", "volume", "volume_sma_20"}},
-        {"v_reversal", 1, 180, {"open", "high", "low", "close", "volume", "volume_sma_20", "atr_14"}},
-        {"support_resistance", 10, 160, {"open", "high", "low", "close", "volume", "volume_sma_20", "atr_14"}},
-    };
-    for (const auto& [type, revision, history_length, features] : descriptors) {
-        py::dict item;
-        item["strategy_type"] = type;
-        item["algorithm_revision"] = revision;
-        item["history_length"] = history_length;
-        item["required_features"] = features;
-        item["parameter_schema"] = py::dict();
-        result.append(std::move(item));
-    }
-    return result;
+    return quant_kernel::strategy_catalog();
 }
 
 py::dict normalize_strategy(const std::string& type, const py::dict& params) {
-    static const std::set<std::string> implemented = {
-        "trend", "mean_reversion", "momentum_breakout", "island_reversal", "double_bottom",
-        "head_shoulders_bottom", "rounded_bottom", "v_reversal", "support_resistance"
-    };
-    if (!implemented.contains(type)) {
-        throw std::invalid_argument("native strategy is not implemented: " + type);
-    }
-    return py::module_::import("copy").attr("deepcopy")(params).cast<py::dict>();
+    return quant_kernel::normalize_strategy_params(type, params);
 }
 
 }  // namespace
@@ -502,9 +798,49 @@ PYBIND11_MODULE(_native, module) {
     module.attr("KERNEL_VERSION") = kKernelVersion;
     module.attr("ABI_VERSION") = kAbiVersion;
     module.attr("BUILD_ID") = kBuildId;
+    py::class_<DayResult>(module, "DayResult")
+        .def_property_readonly("symbols", [](const DayResult& value) { return value.symbols; })
+        .def_property_readonly("signals", [](py::object owner) {
+            DayResult& value = owner.cast<DayResult&>();
+            py::dict result;
+            result["strategy_id"] = value.strategy_ids;
+            result["timestamp_us"] = day_vector_view(owner, value.timestamp_us);
+            result["instrument_id"] = day_vector_view(owner, value.instrument_ids);
+            result["symbol_id"] = day_vector_view(owner, value.symbol_ids);
+            result["action"] = day_vector_view(owner, value.actions);
+            result["score"] = day_vector_view(owner, value.scores);
+            result["reason"] = value.reasons;
+            result["metadata_json"] = value.metadata_json;
+            return result;
+        })
+        .def_property_readonly(
+            "support_resistance",
+            [](py::object owner) {
+                DayResult& value = owner.cast<DayResult&>();
+                const auto collection = [&owner](DayAuditCollection& items) {
+                    py::dict result;
+                    result["symbol_id"] = day_vector_view(owner, items.symbol_ids);
+                    result["payload_json"] = items.payload_json;
+                    return result;
+                };
+                py::dict result;
+                result["symbols"] = value.support_symbols;
+                result["events"] = collection(value.support_events);
+                result["zone_versions"] = collection(value.support_zone_versions);
+                result["regime_versions"] = collection(value.support_regime_versions);
+                return result;
+            }
+        )
+        .def("__len__", [](const DayResult& value) { return value.actions.size(); });
     module.def("catalog", &catalog);
     module.def("normalize_strategy", &normalize_strategy, py::arg("strategy_type"), py::arg("params"));
-    module.def("evaluate_day", &evaluate_day, py::arg("runtime"), py::arg("market_data"));
+    module.def(
+        "evaluate_day",
+        &evaluate_day,
+        py::arg("dataset_day"),
+        py::arg("strategy"),
+        py::arg("portfolio_state")
+    );
     quant_kernel::bind_backtest(module);
     quant_kernel::bind_support_resistance(module);
 }

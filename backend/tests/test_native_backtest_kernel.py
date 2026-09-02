@@ -1,73 +1,30 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import gc
-import hashlib
 import json
 import math
 from pathlib import Path
 import threading
 import unittest
-from unittest.mock import MagicMock
 
 import numpy as np
 import quant_kernel
 
-from src.services.backtest_engine import (
-    BacktestCostConfig,
-    _apply_buy_signals,
-    _apply_sell_signals,
-    _inject_backtest_positions,
-    _portfolio_equity,
-    _update_last_marks,
-)
 from src.services.prepared_dataset_service import (
     PREPARED_FLOAT_FIELDS,
     PREPARED_INTEGER_FIELDS,
     PreparedDataset,
 )
-from src.services.signal_strength_service import annotate_and_rank_signals
-from src.services.strategy_engine import STRATEGY_HANDLERS, required_recent_bar_count_for_runtime
 from src.services.strategy_registry import normalize_strategy_params
 from src.services.backtest_universe_service import point_in_time_entry_eligible
-
-
-@dataclass
-class _TransactionCollector:
-    rows: list[dict[str, object]]
-
-    def add_transaction(self, values: dict[str, object]) -> None:
-        self.rows.append(values)
 
 
 class NativeBacktestKernelTests(unittest.TestCase):
     maxDiff = None
 
     GOLDEN_PATH = Path(__file__).with_name("fixtures") / "native_pattern_backtest_golden.json"
-
-    def _assert_nested_close(self, actual: object, expected: object, path: str = "$") -> None:
-        if isinstance(expected, float):
-            self.assertIsInstance(actual, (int, float), msg=path)
-            if math.isnan(expected):
-                self.assertTrue(math.isnan(float(actual)))
-            else:
-                self.assertAlmostEqual(float(actual), expected, delta=1e-10, msg=path)
-            return
-        if isinstance(expected, dict):
-            self.assertIsInstance(actual, dict)
-            self.assertEqual(set(actual), set(expected))
-            for key in expected:
-                self._assert_nested_close(actual[key], expected[key], f"{path}.{key}")
-            return
-        if isinstance(expected, (list, tuple)):
-            self.assertIsInstance(actual, (list, tuple))
-            self.assertEqual(len(actual), len(expected))
-            for index, (actual_item, expected_item) in enumerate(zip(actual, expected, strict=True)):
-                self._assert_nested_close(actual_item, expected_item, f"{path}[{index}]")
-            return
-        self.assertEqual(actual, expected)
 
     def _market_days(self) -> list[tuple[date, dict[str, dict[str, object]]]]:
         raw = [
@@ -401,419 +358,127 @@ class NativeBacktestKernelTests(unittest.TestCase):
             days.append((trade_day, snapshots))
         return days
 
-    def _python_oracle(
+    def _run_native(
         self,
         days: list[tuple[date, dict[str, dict[str, object]]]],
         runtime: dict[str, object],
         *,
-        costs: BacktestCostConfig | None = None,
-    ) -> dict[str, object]:
-        cash = 1_000.0
-        holdings: dict[int, float] = {}
-        averages: dict[int, float] = {}
-        entry_dates: dict[int, date] = {}
-        entry_indices: dict[int, int] = {}
-        entry_features: dict[int, dict[str, object]] = {}
-        last_prices: dict[int, float] = {}
-        pending = []
-        costs = costs or BacktestCostConfig(0.0, 0.0, 0.0)
-        transactions: list[dict[str, object]] = []
-        collector = _TransactionCollector(transactions)
-        signals: list[tuple[object, ...]] = []
-        signal_metadata: list[dict[str, object]] = []
-        equities: list[float] = []
-        peak = cash
-        max_drawdown = 0.0
-        total_fees = 0.0
-        total_slippage = 0.0
-        trade_count = 0
-        recent_bar_count = required_recent_bar_count_for_runtime(runtime)
-
-        for day_index, (trade_day, snapshots) in enumerate(days):
-            if recent_bar_count > 0:
-                for snapshot in snapshots.values():
-                    snapshot["recent_bars"] = list(snapshot["recent_bars"][-recent_bar_count:])
-            identity = {
-                int(snapshot["instrument_id"]): snapshot
-                for snapshot in snapshots.values()
-            }
-            prices = {
-                int(event.instrument_id): float(identity[int(event.instrument_id)]["open"])
-                for event in pending
-                if event.instrument_id in identity
-            }
-            marks = {
-                instrument_id: float(
-                    (identity.get(instrument_id) or {}).get("open")
-                    or last_prices.get(instrument_id, 0.0)
-                )
-                for instrument_id in holdings
-            }
-            cash_ref = {"cash": cash}
-            sell = _apply_sell_signals(
-                db=MagicMock(),
-                strategy=MagicMock(id="strategy"),
-                run=MagicMock(id="run"),
-                signals=pending,
-                holdings=holdings,
-                avg_entry_prices=averages,
-                entry_trade_dates=entry_dates,
-                entry_day_indices=entry_indices,
-                entry_signal_features=entry_features,
-                execution_prices=prices,
-                execution_snapshots=identity,
-                cash_ref=cash_ref,
-                cost_config=costs,
-                repository=collector,
-                stable_instrument_identity=True,
-            )
-            equity_before = _portfolio_equity(float(cash_ref["cash"]), holdings, marks)
-            risk = runtime["params"]["risk"]  # type: ignore[index]
-            buy = _apply_buy_signals(
-                db=MagicMock(),
-                strategy=MagicMock(id="strategy"),
-                run=MagicMock(id="run"),
-                signals=pending,
-                holdings=holdings,
-                avg_entry_prices=averages,
-                entry_trade_dates=entry_dates,
-                entry_day_indices=entry_indices,
-                entry_signal_features=entry_features,
-                execution_prices=prices,
-                execution_snapshots=identity,
-                cash_ref=cash_ref,
-                equity_before=equity_before,
-                max_positions=int(risk["max_positions"]),
-                position_size_pct=float(risk["position_size_pct"]),
-                cost_config=costs,
-                trade_day=trade_day,
-                trade_day_index=day_index,
-                repository=collector,
-                stable_instrument_identity=True,
-            )
-            trade_count += sell.trade_count + buy.trade_count
-            total_fees += sell.total_fees + buy.total_fees
-            total_slippage += sell.total_slippage + buy.total_slippage
-            cash = float(cash_ref["cash"])
-            _inject_backtest_positions(
-                identity,
-                holdings,
-                averages,
-                entry_dates,
-                entry_indices,
-                entry_features,
-                trade_day,
-                day_index,
-            )
-            current = STRATEGY_HANDLERS[str(runtime["strategy_type"])](runtime, snapshots)
-            for event in current:
-                event.instrument_id = int(snapshots[event.symbol]["instrument_id"])
-            annotate_and_rank_signals(runtime, current)
-            for event in current:
-                strength = event.metadata.get("strength") or {}
-                signals.append(
-                    (
-                        day_index,
-                        event.instrument_id,
-                        1 if event.action == "BUY" else -1,
-                        event.score,
-                        strength.get("score"),
-                        strength.get("rank"),
-                        strength.get("passes_threshold", True),
-                        event.reason,
-                    )
-                )
-                signal_metadata.append(copy.deepcopy(event.metadata))
-            pending = current
-            _update_last_marks(holdings, last_prices, identity, prices)
-            equity = _portfolio_equity(cash, holdings, last_prices)
-            equities.append(equity)
-            peak = max(peak, equity)
-            max_drawdown = max(max_drawdown, (peak - equity) / peak)
-
-        return {
-            "final_equity": equities[-1],
-            "max_drawdown": max_drawdown,
-            "signal_count": len(signals),
-            "trade_count": trade_count,
-            "total_fees": total_fees,
-            "total_slippage": total_slippage,
-            "signals": signals,
-            "signal_metadata": signal_metadata,
-            "transactions": transactions,
-            "equity": equities,
-            "holdings": copy.deepcopy(holdings),
-            "averages": copy.deepcopy(averages),
-            "entry_dates": copy.deepcopy(entry_dates),
-            "entry_features": copy.deepcopy(entry_features),
-            "last_prices": copy.deepcopy(last_prices),
-        }
-
-    def _assert_trades_match_oracle(
-        self,
-        result: quant_kernel.KernelResult,
-        oracle: dict[str, object],
-    ) -> None:
-        transactions = oracle["transactions"]
-        self.assertEqual(len(result.trades["side"]), len(transactions))
-        for index, transaction in enumerate(transactions):
-            meta = transaction["meta"]
-            is_buy = transaction["side"] == "BUY"
-            self.assertEqual(int(result.trades["side"][index]), 1 if is_buy else -1)
-            self.assertEqual(
-                int(result.trades["instrument_id"][index]),
-                int(transaction["instrument_id"]),
-            )
-            for column, key in (("quantity", "qty"), ("price", "price"), ("fee", "fee")):
-                self.assertAlmostEqual(
-                    float(result.trades[column][index]),
-                    float(transaction[key]),
-                    delta=1e-10,
-                )
-            self.assertEqual(result.trades["reason"][index], meta["reason"])
-            self.assertEqual(
-                int(result.trades["execution_timestamp_us"][index]),
-                int(transaction["ts"].timestamp() * 1_000_000),
-            )
-            self.assertEqual(
-                int(result.trades["signal_timestamp_us"][index]),
-                int(datetime.fromisoformat(meta["signal_ts"]).timestamp() * 1_000_000),
-            )
-            self.assertEqual(
-                date.fromordinal(int(result.trades["execution_date_ordinal"][index])).isoformat(),
-                meta["execution_trade_date"],
-            )
-            for column, key in (
-                ("reference_price", "reference_price"),
-                ("slippage_cost", "slippage_cost"),
-                ("slippage_bps", "slippage_bps"),
-                ("gross_notional", "gross_notional"),
-                ("net_cash_flow", "net_cash_flow"),
-            ):
-                self.assertAlmostEqual(
-                    float(result.trades[column][index]),
-                    float(meta[key]),
-                    delta=1e-10,
-                )
-            if is_buy:
-                self._assert_nested_close(
-                    json.loads(result.trades["entry_signal_features_json"][index]),
-                    meta["entry_signal_features"],
-                )
-                setup_id = meta.get("setup_id")
-                self.assertEqual(result.trades["setup_id"][index], setup_id or "")
-                self.assertEqual(
-                    int(result.trades["stage_index"][index]),
-                    int(meta["stage_index"] or 0),
-                )
-                self.assertEqual(result.trades["stage_key"][index], meta.get("stage_key") or "")
-                stage_target = float(result.trades["stage_target_pct"][index])
-                if setup_id is None:
-                    self.assertTrue(math.isnan(stage_target))
-                else:
-                    self.assertAlmostEqual(stage_target, float(meta["stage_target_pct"]), delta=1e-10)
-                for column, key in (
-                    ("position_quantity_before", "position_qty_before"),
-                    ("position_quantity_after", "position_qty_after"),
-                    ("position_average_entry_price_after", "position_avg_entry_price_after"),
-                ):
-                    self.assertAlmostEqual(
-                        float(result.trades[column][index]),
-                        float(meta[key]),
-                        delta=1e-10,
-                    )
-            else:
-                self.assertEqual(result.trades["entry_signal_features_json"][index], "")
-                self.assertEqual(result.trades["setup_id"][index], "")
-                self.assertEqual(int(result.trades["stage_index"][index]), 0)
-                self.assertEqual(result.trades["stage_key"][index], "")
-                self.assertTrue(math.isnan(float(result.trades["stage_target_pct"][index])))
-
-    def _assert_final_positions_match_oracle(
-        self,
-        result: quant_kernel.KernelResult,
-        oracle: dict[str, object],
-    ) -> None:
-        final_session = int(result.equity["session_index"][-1])
-        native: dict[int, int] = {
-            int(instrument_id): index
-            for index, (session_index, instrument_id) in enumerate(
-                zip(
-                    result.positions["session_index"],
-                    result.positions["instrument_id"],
-                    strict=True,
-                )
-            )
-            if int(session_index) == final_session
-        }
-        holdings = oracle["holdings"]
-        self.assertEqual(set(native), set(holdings))
-        for instrument_id, quantity in holdings.items():
-            index = native[int(instrument_id)]
-            self.assertAlmostEqual(
-                float(result.positions["quantity"][index]),
-                float(quantity),
-                delta=1e-10,
-            )
-            self.assertAlmostEqual(
-                float(result.positions["average_entry_price"][index]),
-                float(oracle["averages"][instrument_id]),
-                delta=1e-10,
-            )
-            self.assertAlmostEqual(
-                float(result.positions["close"][index]),
-                float(oracle["last_prices"][instrument_id]),
-                delta=1e-10,
-            )
-            self.assertEqual(
-                date.fromordinal(int(result.positions["entry_date_ordinal"][index])),
-                oracle["entry_dates"][instrument_id],
-            )
-            self._assert_nested_close(
-                json.loads(result.positions["entry_signal_features_json"][index]),
-                oracle["entry_features"][instrument_id],
-            )
-
-    @staticmethod
-    def _oracle_golden_record(oracle: dict[str, object]) -> dict[str, object]:
-        payload = {
-            "summary": {
-                key: oracle[key]
-                for key in (
-                    "final_equity",
-                    "max_drawdown",
-                    "signal_count",
-                    "trade_count",
-                    "total_fees",
-                    "total_slippage",
-                )
-            },
-            "signals": oracle["signals"],
-            "signal_metadata": oracle["signal_metadata"],
-            "transactions": oracle["transactions"],
-            "equity": oracle["equity"],
-            "holdings": oracle["holdings"],
-            "averages": oracle["averages"],
-            "entry_dates": oracle["entry_dates"],
-            "entry_features": oracle["entry_features"],
-            "last_prices": oracle["last_prices"],
-        }
-
-        def encode(value: object) -> str:
-            if isinstance(value, (date, datetime)):
-                return value.isoformat()
-            raise TypeError(f"unsupported golden value: {type(value).__name__}")
-
-        canonical = json.dumps(
-            payload,
-            default=encode,
-            ensure_ascii=True,
-            separators=(",", ":"),
-            sort_keys=True,
-            allow_nan=False,
-        )
-        metadata = oracle["signal_metadata"]
-        transactions = oracle["transactions"]
-        return {
-            "sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
-            "summary": payload["summary"],
-            "signal_stages": [
-                [
-                    item.get("setup", {}).get("stage_index"),
-                    item.get("setup", {}).get("stage_key"),
-                ]
-                for item in metadata
-            ],
-            "trade_stages": [
-                [
-                    item["side"],
-                    item["meta"].get("stage_index"),
-                    item["meta"].get("stage_key"),
-                ]
-                for item in transactions
-            ],
-        }
-
-    def _assert_summary_matches_oracle(
-        self,
-        days: list[tuple[date, dict[str, dict[str, object]]]],
-        runtime: dict[str, object],
-        *,
-        costs: BacktestCostConfig | None = None,
-        oracle: dict[str, object] | None = None,
+        commission_bps: float = 0.0,
+        commission_min: float = 0.0,
+        slippage_bps: float = 0.0,
     ) -> quant_kernel.KernelResult:
-        costs = costs or BacktestCostConfig(0.0, 0.0, 0.0)
-        oracle = oracle or self._python_oracle(days, runtime, costs=costs)
-        result = quant_kernel.run_backtest(
+        return quant_kernel.run_backtest(
             self._dataset(days),
             runtime,
             {
                 "initial_cash": 1_000.0,
-                "commission_bps": costs.commission_bps,
-                "commission_min": costs.commission_min,
-                "slippage_bps": costs.slippage_bps,
+                "commission_bps": commission_bps,
+                "commission_min": commission_min,
+                "slippage_bps": slippage_bps,
             },
         )
-        for key in (
-            "final_equity",
-            "max_drawdown",
-            "signal_count",
-            "trade_count",
-            "total_fees",
-            "total_slippage",
-        ):
-            self.assertAlmostEqual(float(result.summary[key]), float(oracle[key]), delta=1e-10)
-        np.testing.assert_allclose(result.equity["equity"], oracle["equity"], atol=1e-10)
-        native_signals = []
-        for index, reason in enumerate(result.signals["reason"]):
-            raw_score = float(result.signals["score"][index])
-            strength = float(result.signals["strength_score"][index])
-            native_signals.append(
-                (
-                    int(result.signals["session_index"][index]),
-                    int(result.signals["instrument_id"][index]),
-                    int(result.signals["action"][index]),
-                    None if math.isnan(raw_score) else raw_score,
-                    None if math.isnan(strength) else strength,
-                    int(result.signals["strength_rank"][index]) or None,
-                    bool(result.signals["passes_threshold"][index]),
-                    reason,
-                )
-            )
-        self._assert_nested_close(native_signals, oracle["signals"])
-        self._assert_nested_close(
-            [json.loads(value) for value in result.signals["metadata_json"]],
-            oracle["signal_metadata"],
-        )
-        self._assert_trades_match_oracle(result, oracle)
-        self._assert_final_positions_match_oracle(result, oracle)
-        return result
 
-    def test_momentum_t_plus_one_sell_first_and_shared_cash_match_python(self) -> None:
+    def _assert_pattern_golden(
+        self,
+        result: quant_kernel.KernelResult,
+        expected: dict[str, object],
+    ) -> None:
+        for key, value in expected["summary"].items():
+            self.assertAlmostEqual(float(result.summary[key]), float(value), delta=1e-10)
+        signal_metadata = [json.loads(value) for value in result.signals["metadata_json"]]
+        signal_stages = [
+            [
+                item.get("setup", {}).get("stage_index"),
+                item.get("setup", {}).get("stage_key"),
+            ]
+            for item in signal_metadata
+        ]
+        trade_stages = [
+            [
+                "BUY" if int(side) == 1 else "SELL",
+                int(stage_index) or None,
+                stage_key or None,
+            ]
+            for side, stage_index, stage_key in zip(
+                result.trades["side"],
+                result.trades["stage_index"],
+                result.trades["stage_key"],
+                strict=True,
+            )
+        ]
+        self.assertEqual(signal_stages, expected["signal_stages"])
+        self.assertEqual(trade_stages, expected["trade_stages"])
+
+    def _assert_prepared_day_matches_backtest(
+        self,
+        dataset: PreparedDataset,
+        runtime: dict[str, object],
+        backtest: quant_kernel.KernelResult,
+        session_index: int,
+        *,
+        hydration: dict[str, object] | None = None,
+    ) -> None:
+        positions: dict[str, dict[str, object]] = {}
+        for index, raw_session in enumerate(backtest.positions["session_index"]):
+            if int(raw_session) != session_index:
+                continue
+            instrument_id = int(backtest.positions["instrument_id"][index])
+            entry_ordinal = int(backtest.positions["entry_date_ordinal"][index])
+            positions[str(instrument_id)] = {
+                "position": float(backtest.positions["quantity"][index]),
+                "avg_entry_price": float(backtest.positions["average_entry_price"][index]),
+                "entry_trade_date": date.fromordinal(entry_ordinal),
+                "position_holding_days": None,
+                "entry_signal_features": json.loads(
+                    backtest.positions["entry_signal_features_json"][index]
+                ),
+            }
+        paper = quant_kernel.evaluate_day(
+            dataset,
+            runtime,
+            {
+                "positions": positions,
+                "support_resistance_hydration": dict(hydration or {}),
+            },
+        )
+        expected_indexes = [
+            index
+            for index, raw_session in enumerate(backtest.signals["session_index"])
+            if int(raw_session) == session_index
+        ]
+        self.assertEqual(
+            paper.signals["instrument_id"].tolist(),
+            [int(backtest.signals["instrument_id"][index]) for index in expected_indexes],
+        )
+        self.assertEqual(
+            paper.signals["action"].tolist(),
+            [int(backtest.signals["action"][index]) for index in expected_indexes],
+        )
+        np.testing.assert_allclose(
+            paper.signals["score"],
+            [float(backtest.signals["score"][index]) for index in expected_indexes],
+            atol=1e-10,
+            equal_nan=True,
+        )
+        self.assertEqual(
+            list(paper.signals["reason"]),
+            [backtest.signals["reason"][index] for index in expected_indexes],
+        )
+        self.assertEqual(
+            list(paper.signals["metadata_json"]),
+            [backtest.signals["metadata_json"][index] for index in expected_indexes],
+        )
+
+    def test_momentum_t_plus_one_sell_first_and_shared_cash(self) -> None:
         days = self._market_days()
         runtime = self._runtime()
-        oracle = self._python_oracle(days, runtime)
-        result = self._assert_summary_matches_oracle(days, runtime)
-
-        native_signals = []
-        columns = result.signals
-        for index, reason in enumerate(columns["reason"]):
-            strength = float(columns["strength_score"][index])
-            native_signals.append(
-                (
-                    int(columns["session_index"][index]),
-                    int(columns["instrument_id"][index]),
-                    int(columns["action"][index]),
-                    float(columns["score"][index]),
-                    None if math.isnan(strength) else strength,
-                    int(columns["strength_rank"][index]) or None,
-                    bool(columns["passes_threshold"][index]),
-                    reason,
-                )
-            )
-        self.assertEqual(native_signals, oracle["signals"])
+        result = self._run_native(days, runtime)
 
         native_trades = result.trades
+        self.assertEqual(result.summary["signal_count"], 4)
+        self.assertEqual(result.summary["trade_count"], 3)
+        self.assertAlmostEqual(result.summary["final_equity"], 900.0, delta=1e-10)
+        self.assertAlmostEqual(result.summary["max_drawdown"], 0.1, delta=1e-10)
         self.assertEqual(native_trades["side"].tolist(), [1, -1, 1])
         self.assertEqual(native_trades["instrument_id"].tolist(), [1, 1, 2])
         self.assertEqual(native_trades["session_index"].tolist(), [1, 2, 2])
@@ -821,13 +486,30 @@ class NativeBacktestKernelTests(unittest.TestCase):
         np.testing.assert_allclose(native_trades["quantity"], [50.0, 50.0, 22.5], atol=1e-10)
         np.testing.assert_allclose(native_trades["price"], [10.0, 8.0, 20.0], atol=1e-10)
 
-    def test_trend_and_mean_reversion_ledgers_match_python(self) -> None:
+    def test_prepared_day_signal_matches_backtest_signal_for_same_session(self) -> None:
+        dataset = self._dataset(self._market_days()[:2])
+        runtime = self._runtime()
+        backtest = quant_kernel.run_backtest(
+            dataset,
+            runtime,
+            {
+                "initial_cash": 1_000.0,
+                "commission_bps": 0.0,
+                "commission_min": 0.0,
+                "slippage_bps": 0.0,
+            },
+        )
+        self._assert_prepared_day_matches_backtest(dataset, runtime, backtest, 1)
+
+    def test_trend_and_mean_reversion_ledgers(self) -> None:
         for strategy_type in ("trend", "mean_reversion"):
             with self.subTest(strategy_type=strategy_type):
-                result = self._assert_summary_matches_oracle(
+                result = self._run_native(
                     self._single_symbol_days(strategy_type),
                     self._single_symbol_runtime(strategy_type),
                 )
+                self.assertEqual(result.summary["signal_count"], 2)
+                self.assertEqual(result.summary["trade_count"], 2)
                 self.assertEqual(result.trades["side"].tolist(), [1, -1])
                 self.assertEqual(result.trades["session_index"].tolist(), [1, 2])
 
@@ -941,24 +623,47 @@ class NativeBacktestKernelTests(unittest.TestCase):
         ]
         return cases
 
-    def test_all_staged_pattern_ledgers_match_python(self) -> None:
+    def test_all_staged_pattern_ledgers_match_frozen_golden(self) -> None:
         cases = self._staged_pattern_cases()
         golden = json.loads(self.GOLDEN_PATH.read_text(encoding="utf-8"))
         for strategy_type, bars, params in cases:
             with self.subTest(strategy_type=strategy_type):
                 days = self._pattern_days(bars)
                 runtime = self._pattern_runtime(strategy_type, params)
-                oracle = self._python_oracle(days, runtime)
-                self.assertEqual(self._oracle_golden_record(oracle), golden[strategy_type])
-                result = self._assert_summary_matches_oracle(days, runtime, oracle=oracle)
+                result = self._run_native(days, runtime)
+                self._assert_pattern_golden(result, golden[strategy_type])
                 self.assertGreater(result.summary["signal_count"], 0)
                 self.assertGreater(result.summary["trade_count"], 0)
-                self._assert_nested_close(
-                    [json.loads(value) for value in result.signals["metadata_json"]],
-                    oracle["signal_metadata"],
-                )
 
-    def test_staged_pattern_20_symbol_120_session_ledgers_match_python(self) -> None:
+    def test_all_pattern_prepared_day_signals_match_backtest_sessions(self) -> None:
+        for strategy_type, bars, params in self._staged_pattern_cases():
+            with self.subTest(strategy_type=strategy_type):
+                days = self._pattern_days(bars)
+                runtime = self._pattern_runtime(strategy_type, params)
+                full_dataset = self._dataset(days)
+                backtest = quant_kernel.run_backtest(
+                    full_dataset,
+                    runtime,
+                    {
+                        "initial_cash": 1_000.0,
+                        "commission_bps": 0.0,
+                        "commission_min": 0.0,
+                        "slippage_bps": 0.0,
+                    },
+                )
+                signal_sessions = sorted(
+                    {int(value) for value in backtest.signals["session_index"]}
+                )
+                self.assertTrue(signal_sessions)
+                for session_index in signal_sessions:
+                    self._assert_prepared_day_matches_backtest(
+                        self._dataset(days[: session_index + 1]),
+                        runtime,
+                        backtest,
+                        session_index,
+                    )
+
+    def test_staged_pattern_20_symbol_120_session_ledgers(self) -> None:
         for strategy_type, bars, params in self._staged_pattern_cases():
             with self.subTest(strategy_type=strategy_type):
                 days = self._pattern_matrix_days(bars)
@@ -968,90 +673,32 @@ class NativeBacktestKernelTests(unittest.TestCase):
                     max_positions=20,
                     position_size_pct=0.02,
                 )
-                result = self._assert_summary_matches_oracle(days, runtime)
+                result = self._run_native(days, runtime)
                 self.assertEqual(result.summary["trading_days"], 120)
                 self.assertEqual(len(result.equity["session_index"]), 120)
 
-    def test_commission_minimum_and_slippage_match_python(self) -> None:
+    def test_commission_minimum_and_slippage(self) -> None:
         days = self._market_days()
         runtime = self._runtime()
-        costs = BacktestCostConfig(1.0, 1.0, 10.0)
-        oracle = self._python_oracle(days, runtime, costs=costs)
-        result = self._assert_summary_matches_oracle(days, runtime, costs=costs)
-        transactions = oracle["transactions"]
-        self.assertEqual(len(transactions), len(result.trades["side"]))
-        for index, transaction in enumerate(transactions):
-            self.assertAlmostEqual(result.trades["quantity"][index], transaction["qty"], delta=1e-10)
-            self.assertAlmostEqual(result.trades["price"][index], transaction["price"], delta=1e-10)
-            self.assertAlmostEqual(result.trades["fee"][index], transaction["fee"], delta=1e-10)
-            self.assertAlmostEqual(
-                result.trades["reference_price"][index],
-                transaction["meta"]["reference_price"],
-                delta=1e-10,
-            )
-            self.assertAlmostEqual(
-                result.trades["slippage_cost"][index],
-                transaction["meta"]["slippage_cost"],
-                delta=1e-10,
-            )
-            self.assertEqual(result.trades["reason"][index], transaction["meta"]["reason"])
-            self.assertEqual(
-                int(result.trades["execution_timestamp_us"][index]),
-                int(transaction["ts"].timestamp() * 1_000_000),
-            )
-            self.assertEqual(
-                int(result.trades["signal_timestamp_us"][index]),
-                int(datetime.fromisoformat(transaction["meta"]["signal_ts"]).timestamp() * 1_000_000),
-            )
-            self.assertEqual(
-                date.fromordinal(int(result.trades["execution_date_ordinal"][index])).isoformat(),
-                transaction["meta"]["execution_trade_date"],
-            )
-            self.assertAlmostEqual(
-                result.trades["gross_notional"][index],
-                transaction["meta"]["gross_notional"],
-                delta=1e-10,
-            )
-            self.assertAlmostEqual(
-                result.trades["net_cash_flow"][index],
-                transaction["meta"]["net_cash_flow"],
-                delta=1e-10,
-            )
-            self.assertAlmostEqual(
-                result.trades["slippage_bps"][index],
-                transaction["meta"]["slippage_bps"],
-                delta=1e-10,
-            )
-            entry_features = result.trades["entry_signal_features_json"][index]
-            if int(result.trades["side"][index]) == 1:
-                self.assertEqual(
-                    json.loads(entry_features),
-                    transaction["meta"]["entry_signal_features"],
-                )
-                self.assertTrue(math.isnan(float(result.trades["stage_target_pct"][index])))
-                self.assertEqual(float(result.trades["position_quantity_before"][index]), 0.0)
-                self.assertAlmostEqual(
-                    result.trades["position_quantity_after"][index],
-                    transaction["qty"],
-                    delta=1e-10,
-                )
-                self.assertAlmostEqual(
-                    result.trades["position_average_entry_price_after"][index],
-                    transaction["meta"]["position_avg_entry_price_after"],
-                    delta=1e-10,
-                )
-            else:
-                self.assertEqual(entry_features, "")
-                self.assertTrue(math.isnan(result.trades["stage_target_pct"][index]))
-                self.assertAlmostEqual(
-                    result.trades["position_quantity_before"][index],
-                    transaction["qty"],
-                    delta=1e-10,
-                )
-                self.assertEqual(float(result.trades["position_quantity_after"][index]), 0.0)
-                self.assertTrue(
-                    math.isnan(result.trades["position_average_entry_price_after"][index])
-                )
+        result = self._run_native(
+            days,
+            runtime,
+            commission_bps=1.0,
+            commission_min=1.0,
+            slippage_bps=10.0,
+        )
+        self.assertEqual(result.trades["side"].tolist(), [1, -1, 1])
+        self.assertEqual(result.trades["instrument_id"].tolist(), [1, 1, 2])
+        np.testing.assert_allclose(
+            result.trades["reference_price"],
+            [10.0, 8.0, 20.0],
+            atol=1e-10,
+        )
+        np.testing.assert_allclose(result.trades["slippage_bps"], [10.0] * 3, atol=1e-10)
+        np.testing.assert_allclose(result.trades["fee"], [1.0] * 3, atol=1e-10)
+        self.assertTrue(all(value for value in result.trades["reason"]))
+        self.assertEqual(result.trades["entry_signal_features_json"][1], "")
+        self.assertTrue(all(math.isnan(float(value)) for value in result.trades["stage_target_pct"]))
 
     def test_delisted_missing_position_is_written_off(self) -> None:
         days = self._market_days()
@@ -1109,7 +756,6 @@ class NativeBacktestKernelTests(unittest.TestCase):
         days = self._pattern_days(bars)
         start_index = 3
         runtime = self._pattern_runtime(strategy_type, params)
-        oracle = self._python_oracle(days[start_index:], runtime)
         calls: list[tuple[int, int]] = []
 
         def control(completed: int, total: int) -> bool:
@@ -1134,21 +780,8 @@ class NativeBacktestKernelTests(unittest.TestCase):
         self.assertEqual(result.summary["trading_days"], len(days) - start_index)
         self.assertEqual(len(result.equity["session_index"]), len(days) - start_index)
         self.assertGreaterEqual(min(result.signals["session_index"]), start_index)
-        for key in (
-            "final_equity",
-            "max_drawdown",
-            "signal_count",
-            "trade_count",
-            "total_fees",
-            "total_slippage",
-        ):
-            self.assertAlmostEqual(float(result.summary[key]), float(oracle[key]), delta=1e-10)
-        np.testing.assert_allclose(result.equity["equity"], oracle["equity"], atol=1e-10)
-        self._assert_nested_close(
-            [json.loads(value) for value in result.signals["metadata_json"]],
-            oracle["signal_metadata"],
-        )
-        self._assert_trades_match_oracle(result, oracle)
+        golden = json.loads(self.GOLDEN_PATH.read_text(encoding="utf-8"))[strategy_type]
+        self._assert_pattern_golden(result, golden)
 
     def test_split_between_pattern_stages_preserves_setup_and_entry_history(self) -> None:
         strategy_type, bars, params = self._staged_pattern_cases()[0]
@@ -1208,7 +841,7 @@ class NativeBacktestKernelTests(unittest.TestCase):
         )
         days = self._pattern_days(bars)
         runtime = self._pattern_runtime(strategy_type, guarded_params)
-        result = self._assert_summary_matches_oracle(days, runtime)
+        result = self._run_native(days, runtime)
 
         signal_setup_ids = [
             json.loads(value).get("setup", {}).get("setup_id")
@@ -1262,6 +895,48 @@ class NativeBacktestKernelTests(unittest.TestCase):
             max_positions=200,
             position_size_pct=0.001,
         )
+        begin = threading.Event()
+        ready = threading.Event()
+        stop = threading.Event()
+        observations = [0]
+
+        def observe() -> None:
+            ready.set()
+            begin.wait()
+            while not stop.is_set():
+                observations[0] += 1
+
+        observer = threading.Thread(target=observe)
+        observer.start()
+        ready.wait()
+        begin.set()
+        result = quant_kernel.run_backtest(dataset, runtime, {"initial_cash": 1_000.0})
+        stop.set()
+        observer.join(timeout=2.0)
+
+        self.assertFalse(observer.is_alive())
+        self.assertGreater(observations[0], 0)
+        self.assertEqual(result.summary["trading_days"], 400)
+
+    def test_support_resistance_backtest_without_callback_releases_gil(self) -> None:
+        days = self._pattern_matrix_days(
+            [self._pattern_bar(0, 100.0, 101.0, 99.0, 100.0, 100.0)],
+            symbol_count=100,
+            session_count=400,
+        )
+        dataset = self._dataset(days)
+        runtime = {
+            "strategy_id": "native-support-resistance-gil",
+            "strategy_type": "support_resistance",
+            "params": normalize_strategy_params(
+                "support_resistance",
+                {
+                    "signal": {"min_strength_score": 0.0},
+                    "risk": {"max_positions": 100, "position_size_pct": 0.001},
+                },
+            ),
+            "engine_ready": True,
+        }
         begin = threading.Event()
         ready = threading.Event()
         stop = threading.Event()
@@ -1480,6 +1155,142 @@ class NativeBacktestKernelTests(unittest.TestCase):
                 runtime,
                 {"initial_cash": 1_000.0},
             )
+
+    def test_support_resistance_full_ledger_replays_hydration_and_trades_t_plus_one(self) -> None:
+        def snapshot(
+            trade_day: date,
+            open_price: float,
+            high: float,
+            low: float,
+            close: float,
+        ) -> dict[str, object]:
+            return {
+                "instrument_id": 1,
+                "symbol": "TEST",
+                "asset_type": "CS",
+                "exchange": "XNAS",
+                "dt_ny": trade_day,
+                "ts": datetime(
+                    trade_day.year, trade_day.month, trade_day.day, 21,
+                    tzinfo=timezone.utc,
+                ),
+                "open": open_price,
+                "high": high,
+                "low": low,
+                "close": close,
+                "close_unadjusted": close,
+                "volume": 100.0,
+                "volume_sma_20": 100.0,
+                "atr_14": 1.0,
+                "dollar_volume_20": 100_000_000.0,
+            }
+
+        days = [
+            (date(2025, 1, 1), {"TEST": snapshot(date(2025, 1, 1), 102.5, 103, 102, 102.5)}),
+            (date(2025, 1, 2), {"TEST": snapshot(date(2025, 1, 2), 102, 103, 100.5, 102)}),
+            (date(2025, 1, 3), {"TEST": snapshot(date(2025, 1, 3), 102, 104, 101, 103)}),
+        ]
+        dataset = self._dataset(days)
+
+        def zone(
+            zone_key: str,
+            role: str,
+            center: float,
+            lower: float,
+            upper: float,
+        ) -> dict[str, object]:
+            return {
+                "zone_key": zone_key,
+                "effective_from": "2024-12-01",
+                "effective_to": None,
+                "source_kind": "low" if role == "support" else "high",
+                "role": role,
+                "status": "active",
+                "center": center,
+                "lower": lower,
+                "upper": upper,
+                "atr": 2.0,
+                "anchor_session_index": 0,
+                "anchor_center": center,
+                "anchor_lower": lower,
+                "anchor_upper": upper,
+                "slope_per_session": 0.0,
+                "fit_residual_atr": 0.0,
+                "recency_weight": 0.0,
+                "last_inside": False,
+                "pivot_keys": [f"{zone_key}:1", f"{zone_key}:2"],
+                "pivot_count": 2,
+                "touch_count": 2,
+                "first_pivot_date": "2024-12-01",
+                "last_pivot_date": "2024-12-20",
+                "valid_from": "2024-12-23",
+            }
+
+        dataset.sidecar["support_resistance_hydration"] = {
+            "1": {
+                "zone_timeline": [
+                    zone("support", "support", 100.0, 99.0, 101.0),
+                    zone("resistance", "resistance", 106.0, 105.0, 107.0),
+                ],
+                "regime_timeline": [
+                    {
+                        "version": 1,
+                        "effective_from": "2024-01-01",
+                        "regime": "uptrend",
+                        "lower_zone_key": "support",
+                        "upper_zone_key": "resistance",
+                        "reason_code": "test_fixture",
+                        "evidence": {"reason_code": "test_fixture"},
+                    }
+                ],
+            }
+        }
+        runtime = {
+            "strategy_id": "native-support-resistance",
+            "strategy_type": "support_resistance",
+            "params": normalize_strategy_params(
+                "support_resistance",
+                {
+                    "signal": {"min_strength_score": 0.0},
+                    "universe": {"symbols": ["TEST"], "selection_mode": "manual"},
+                },
+            ),
+            "engine_ready": True,
+        }
+        callbacks: list[tuple[int, int]] = []
+
+        result = quant_kernel.run_backtest(
+            dataset,
+            runtime,
+            {
+                "initial_cash": 10_000.0,
+                "start_date": date(2025, 1, 2),
+                "end_date": date(2025, 1, 3),
+            },
+            lambda completed, total: callbacks.append((completed, total)) or False,
+        )
+
+        self._assert_prepared_day_matches_backtest(
+            self._dataset(days[:2]),
+            runtime,
+            result,
+            1,
+            hydration=dataset.sidecar["support_resistance_hydration"],
+        )
+
+        self.assertEqual(callbacks, [(1, 2), (2, 2)])
+        self.assertEqual(result.signals["action"].tolist(), [1])
+        self.assertEqual(result.trades["side"].tolist(), [1])
+        self.assertEqual(result.trades["signal_session_index"].tolist(), [1])
+        self.assertEqual(result.trades["session_index"].tolist(), [2])
+        support = result.support_resistance
+        self.assertIsNotNone(support)
+        self.assertGreater(len(support["events"]["payload_json"]), 0)
+        first_signal = json.loads(result.signals["metadata_json"][0])
+        self.assertEqual(
+            first_signal["support_resistance"]["selected_setup"],
+            "support_bounce",
+        )
 
 
 if __name__ == "__main__":

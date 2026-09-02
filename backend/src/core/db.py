@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker, Session
 # 密码和完整的部署连接串不得写入源码。
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+psycopg2://localhost:5432/hzy",
+    "postgresql+psycopg://localhost:5432/hzy",
 )
 
 # === 2) 引擎与连接池 ===

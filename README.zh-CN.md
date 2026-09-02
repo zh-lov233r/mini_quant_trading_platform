@@ -16,10 +16,11 @@
   - 从 `/strategies/new` 引导中心开始：可用五步向导手工配置已有引擎策略，也可转入 Agent 的已有大类研究或新算法研究
   - 手工创建在落库前完成校验和标准化，并且始终保存为 `draft`；不会激活 portfolio、创建 allocation、启动调度或提交订单
   - 可从策略列表或详情页“基于此策略新建”：向导预填并锁定原策略类型，保存为名称唯一、独立 `strategy_key`、从 `v1` 开始的 Draft；不会复制回测、allocation、运行记录或持仓
-  - 获取策略 catalog 和 normalized runtime payload
+  - 获取策略 catalog 和 normalized runtime payload；共享 C++ descriptor registry 是默认值、JSON Schema、所需特征、历史窗口、校验和算法 revision 的唯一来源
   - 当前策略类型包含 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`、`head_shoulders_bottom`、`rounded_bottom`、`v_reversal`、`support_resistance`、`custom`
   - 五类底部反转策略使用 20% / 50% / 100% 累计目标分批建仓；详见 [底部反转策略](docs/bottom-reversal-strategies.zh-CN.md)
   - 当前 engine-ready 的执行型策略包含 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`、`head_shoulders_bottom`、`rounded_bottom`、`v_reversal`、`support_resistance`
+  - 九个 engine-ready 策略全部只由共享 C++ 内核执行；`custom` 继续 stored-only，不是可执行 DSL
   - `momentum_breakout` 只使用现有优先前复权的日线收盘价、SMA20、20 日收益和成交量特征；T 日收盘信号继续在下一交易日开盘成交
 
 - 市场数据与特征工程
@@ -32,9 +33,9 @@
   - 在 PostgreSQL 中排队手动与研究回测，并由独立 worker 执行
   - 支持 `summary`、`trades`、`full` 三种持久化级别；手动回测默认 `full`
   - 使用 `make benchmark-backtests BENCHMARK_ARGS="plan"` 只读规划 correctness/screening 漏斗；写入基准必须显式增加 `--apply` 并满足性能指南的安全门禁
-  - research trial 复用按数据指纹寻址的只读 v3 列式 PreparedDataset；手动回测继续使用数据库 loader
+  - 手动、研究和验证回测统一解析稳定 instrument identity，并复用按数据指纹寻址的只读 v3 列式 PreparedDataset；损坏或漂移的缓存会原子重建，不回退到 Python 逐日循环
   - 通过增量接口加载摘要、下采样权益、signals 和 transactions
-  - v1 继续作为默认引擎，v2 的 instrument 身份与批量持久化在验收后受控切换
+  - 所有 engine-ready 运行由进程内 C++20 内核执行，并用同一事务中的 psycopg3 `COPY` 持久化 typed 结果；Python 只保留队列、数据库、进度/取消和结果编排
   - 按 T 日冻结的信号强度对同策略 BUY 排名，再于 T+1 尝试成交；详见[信号强度](docs/signal-strength.zh-CN.md)
 
 - Paper trading
@@ -42,6 +43,7 @@
   - 支持一个 account 下挂多个 strategy portfolio
   - 支持 strategy allocation、capital base、是否允许碎股、是否参与 auto-run
   - 支持单策略和多策略 paper trading
+  - 将 Paper 历史转换为内存 PreparedDataset v3，并调用原生 `evaluate_day(dataset_day, strategy, portfolio_state)`，与回测共享规则和 canonical metadata；券商查询、幂等订单、策略资金隔离和下一交易日实时报价校验继续留在 Python
   - 支持向 Alpaca 提交真实 paper order
 
 - 每日 scheduler
@@ -51,7 +53,7 @@
   - 可以配置为 dry run，也可以配置为直接提交 Alpaca paper orders
 
 - Agent 辅助策略研究
-  - 通过 AgentOps 工作流生成策略草案、执行有界研究实验，并为新策略代码准备 Draft PR
+  - 通过 AgentOps 工作流生成策略草案、执行有界研究实验，并为 C++ 策略模块、descriptor、golden 差分和 wheel 验证准备 Draft PR
   - 支持 engine-ready 的 `support_resistance` 大类研究；反弹/回踩 BUY 只允许在支撑上沿与压力下沿组成的有效通道内，直接压力突破只保留审计
   - 提供 `pivot-slope-regime-v3` 四状态互斥时间分区、状态约束交易和生命周期图背景，以及独立预注册的 v3 有效性研究；旧 v1/v2 只保留审计且结论不继承
   - 持久化实验规格、确定性的 trial 展开、进度、token 用量、终止证据和稳健性报告
@@ -64,7 +66,8 @@
   - FastAPI
   - SQLAlchemy 2.x
   - PostgreSQL
-  - Requests / Psycopg
+  - C++20 / pybind11 / NumPy buffer protocol
+  - Requests / Psycopg 3
 
 - Frontend
   - Next.js 15

@@ -1,140 +1,43 @@
 from __future__ import annotations
 
-import copy
-import sys
+from datetime import date
 import unittest
-import uuid
-from datetime import UTC, date, datetime
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from src.models.tables import Strategy, StrategyRun
-from src.services.backtest_engine import ExecutionStats, run_backtest
-from src.services.strategy_engine import SignalEvent
-from src.services.strategy_registry import MEAN_REVERSION_DEFAULTS
-
-
-class BacktestSession:
-    def __init__(self, strategy):
-        self.strategy = strategy
-        self.run = None
-
-    def get(self, model, object_id):
-        if model is Strategy and str(object_id) == str(self.strategy.id):
-            return self.strategy
-        if model is StrategyRun and self.run is not None and str(object_id) == str(self.run.id):
-            return self.run
-        return None
-
-    def add(self, item):
-        if isinstance(item, StrategyRun):
-            self.run = item
-
-    def commit(self):
-        return None
-
-    def rollback(self):
-        return None
-
-    def refresh(self, item):
-        if isinstance(item, StrategyRun) and item.id is None:
-            item.id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+from src.services.backtest_engine import BacktestResult, run_backtest
 
 
 class BacktestRuntimeOverrideTests(unittest.TestCase):
-    def test_override_is_snapshotted_without_mutating_strategy_and_fills_next_open(self):
-        base_params = copy.deepcopy(MEAN_REVERSION_DEFAULTS)
-        strategy = SimpleNamespace(
-            id=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
-            strategy_key="mean-reversion",
-            name="Mean Reversion",
-            version=3,
-            status="draft",
-            strategy_type="mean_reversion",
-            params=base_params,
+    def test_public_entrypoint_forwards_runtime_override_to_native_runner(self) -> None:
+        db = MagicMock()
+        override = {"risk": {"position_size_pct": 0.07}}
+        expected = BacktestResult(
+            run_id="run",
+            strategy_id="strategy",
+            status="completed",
+            initial_cash=100_000.0,
+            final_equity=101_000.0,
+            total_return=0.01,
+            max_drawdown=0.0,
+            signal_count=1,
+            trade_count=1,
+            total_fees=0.0,
+            total_slippage=0.0,
         )
-        override = copy.deepcopy(base_params)
-        override["risk"]["position_size_pct"] = 0.07
-        snapshots = {
-            date(2026, 1, 5): {
-                "AAPL": {
-                    "dt_ny": date(2026, 1, 5),
-                    "ts": datetime(2026, 1, 5, 21, tzinfo=UTC),
-                    "open": 100.0,
-                    "close": 105.0,
-                }
-            },
-            date(2026, 1, 6): {
-                "AAPL": {
-                    "dt_ny": date(2026, 1, 6),
-                    "ts": datetime(2026, 1, 6, 21, tzinfo=UTC),
-                    "open": 110.0,
-                    "close": 112.0,
-                }
-            },
-        }
-        signal = SignalEvent(
-            strategy_id=str(strategy.id),
-            ts=snapshots[date(2026, 1, 5)]["AAPL"]["ts"],
-            symbol="AAPL",
-            action="BUY",
-            reason="explicit timing regression",
-            metadata={"position": 0, "strength_inputs": {"absolute_zscore": 3.0}},
-        )
-        handler_calls = 0
-        observed_fills = []
-        progress_updates = []
-
-        def handler(_runtime, _snapshots):
-            nonlocal handler_calls
-            handler_calls += 1
-            return [signal] if handler_calls == 1 else []
-
-        def record_buy(**kwargs):
-            if kwargs["signals"]:
-                observed_fills.append(
-                    (kwargs["signals"][0].ts, kwargs["trade_day"], kwargs["execution_prices"]["AAPL"])
-                )
-            return ExecutionStats()
-
-        db = BacktestSession(strategy)
-        with (
-            patch("src.services.backtest_engine._load_feature_snapshots_by_date", return_value=snapshots),
-            patch("src.services.backtest_engine._load_split_adjustments_by_date", return_value={}),
-            patch("src.services.backtest_engine._load_close_maps_by_symbol", return_value={}),
-            patch("src.services.backtest_engine._apply_split_adjustments"),
-            patch("src.services.backtest_engine._inject_backtest_positions"),
-            patch("src.services.backtest_engine._attach_recent_history"),
-            patch("src.services.backtest_engine._apply_sell_signals", return_value=ExecutionStats()),
-            patch("src.services.backtest_engine._apply_buy_signals", side_effect=record_buy),
-            patch.dict("src.services.backtest_engine.STRATEGY_HANDLERS", {"mean_reversion": handler}),
-        ):
-            result = run_backtest(
+        with patch(
+            "src.services.native_backtest_service.run_backtest_native",
+            return_value=expected,
+        ) as native:
+            actual = run_backtest(
                 db,
-                strategy.id,
+                "strategy",
                 date(2026, 1, 5),
                 date(2026, 1, 6),
                 universe_symbols=["AAPL"],
                 runtime_params_override=override,
-                progress_callback=progress_updates.append,
             )
-
-        self.assertEqual("next_session_open", db.run.summary_metrics["execution_lag"])
-        self.assertEqual([(signal.ts, date(2026, 1, 6), 110.0)], observed_fills)
-        self.assertEqual(0.07, db.run.config_snapshot["risk"]["position_size_pct"])
-        self.assertEqual(base_params, strategy.params)
-        self.assertEqual("completed", result.status)
-        running = [item for item in progress_updates if item["phase"] == "running"]
-        finalizing = [item for item in progress_updates if item["phase"] == "finalizing"]
-        self.assertEqual(running[-1]["percent"], 85.0)
-        self.assertEqual(finalizing[0]["finalizing_stage"], "backtest_details")
-        self.assertEqual(finalizing[0]["percent"], 85.0)
-        self.assertEqual(finalizing[-1]["finalizing_stage"], "committing")
-        self.assertEqual(finalizing[-1]["percent"], 99.0)
-        self.assertIn("total_ms", db.run.summary_metrics["performance"])
+        self.assertIs(expected, actual)
+        self.assertEqual(override, native.call_args.kwargs["runtime_params_override"])
 
 
 if __name__ == "__main__":

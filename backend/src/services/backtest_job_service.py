@@ -687,7 +687,6 @@ def execute_backtest_job(
             persist_level=payload.get("persist_level") or "full",
             cancel_check=lambda: _job_cancel_requested(job.id),
             progress_callback=report,
-            engine_version=payload.get("engine_version"),
             prepared_dataset=payload.get("prepared_dataset") if job.source == "research" else None,
         )
         job = db.get(BacktestJob, job.id)

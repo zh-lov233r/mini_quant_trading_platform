@@ -861,7 +861,6 @@ def create_backtest(
                 else None
             ),
             "persist_level": payload.persist_level,
-            "engine_version": "v2" if payload.universe_policy else None,
         },
     )
     db.commit()

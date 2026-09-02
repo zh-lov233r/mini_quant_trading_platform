@@ -35,7 +35,6 @@ from src.services.stock_basket_service import (
     load_default_common_stock_symbols,
 )
 from src.services.signal_strength_service import (
-    annotate_and_rank_signals,
     get_signal_strength,
     ordered_entry_buy_signals,
     passes_strength_threshold,
@@ -54,12 +53,14 @@ from src.services.strategy_allocation_service import (
     validate_portfolio_allocations,
 )
 from src.services.strategy_engine import (
-    STRATEGY_HANDLERS,
     SignalEvent,
-    generate_support_resistance_replay_signals,
+    evaluate_native_day,
+    evaluate_native_signals,
     load_feature_market_data,
     required_recent_bar_count_for_runtime,
     required_recent_bar_lookback_days,
+    support_resistance_hydration_payload,
+    support_resistance_state_from_native_day,
 )
 from src.services.strategy_registry import build_runtime_payload
 from src.services.support_resistance_persistence_service import (
@@ -200,8 +201,6 @@ def run_paper_trading(
     )
     if not runtime["engine_ready"]:
         raise ValueError("strategy is not engine-ready")
-
-    handler = STRATEGY_HANDLERS[runtime["strategy_type"]]
 
     symbols = runtime["params"]["universe"]["symbols"]
     if not symbols:
@@ -345,11 +344,11 @@ def run_paper_trading(
                 if reusable is not None
                 else SupportResistanceState()
             )
-            signals = generate_support_resistance_replay_signals(
-                runtime,
-                snapshots,
-                replay_state,
-            )
+            for symbol, payload in support_resistance_hydration_payload(replay_state).items():
+                if symbol in snapshots:
+                    snapshots[symbol]["support_resistance_hydration"] = payload
+            signals, native_audit = evaluate_native_day(runtime, snapshots)
+            replay_state = support_resistance_state_from_native_day(native_audit, snapshots)
             # Materialization and run-event audit must succeed before the first
             # possible broker order is submitted.
             support_resistance_materialization = persist_support_resistance_run(
@@ -363,8 +362,7 @@ def run_paper_trading(
                 expected_data_fingerprint=support_resistance_source_fingerprint,
             )
         else:
-            signals = handler(runtime, snapshots)
-        annotate_and_rank_signals(runtime, signals)
+            signals = evaluate_native_signals(runtime, snapshots)
         _prepare_support_resistance_paper_entries(
             signals,
             strategy=strategy,

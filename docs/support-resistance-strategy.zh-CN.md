@@ -4,6 +4,8 @@
 
 `support_resistance` 是 engine-ready、long-only 的日线策略。新执行统一使用“已确认 Pivot + ATR 倾斜区 + 四状态分区”因果检测器 `pivot-slope-regime-v3`。旧 `pivot-slope-atr-v2` 只保留用于读取历史策略、回测和物化证据，不能用于创建新执行。注册或创建策略不会创建 allocation、激活 portfolio、开启 scheduler 或提交订单。
 
+共享 C++ 内核是唯一可执行实现。descriptor 统一拥有默认值、校验、特征/历史声明和算法 revision；原生状态对象统一管理 Pivot 成员、区域、状态、pending outcome、posterior 证据、入场通道、信号、退出和审计事件。Python 只加载并指纹化数据、查询/锁定缓存表、把 typed 结果适配为持久化行，以及执行另行授权的 Paper 券商操作。回测调用原生 `run_backtest`；Paper 把有界历史转换为内存 PreparedDataset v3，并调用 `evaluate_day(dataset_day, strategy, portfolio_state)`。
+
 ## 时序与价格语义
 
 T 日只能使用 T-1 日收盘后冻结的区域。T 日判断结束后才追加当前 K 线；Pivot 必须等配置的右侧 K 线完整后才能确认，更新后的区域最早在 T+1 可见。因此当前或未来 K 线不能反向确认历史信号。
@@ -62,6 +64,8 @@ T 日只能使用 T-1 日收盘后冻结的区域。T 日判断结束后才追�
 - `support_resistance_run_events`：触碰、突破、回踩、候选、选择、通道起止、信号/成交拒绝、评分结果、角色转换和失效事件。
 
 缓存身份包含 v3 算法、检测器 revision、regime-logic revision、规范化检测参数、价格语义、标的集合哈希、覆盖区间和源数据指纹，不能复用 v2 materialization。只有覆盖起止与请求完全相同的物化可复用，避免交易日序号偏移改变投影价格。系统在读取行情前冻结指纹并在持久化前再次校验；若运行中数据变化或状态完整性检查失败，整个构建失败，不能保存为 completed 缓存。区域和状态版本均不可回写；未来数据只能追加版本或生成新 materialization。
+
+首个明细写入前，持久化层会完整校验 typed 列长/顺序、枚举与 JSON、稳定 instrument 引用、有限数/数据库数值边界、完整状态时间线和投影后的 zone/event 几何。PostgreSQL 使用当前事务的 psycopg3 `COPY FROM STDIN` connection，以每批 5,000 行写入 zone version、regime version 和 run event，并在每批前检查取消。批次不独立提交；校验、COPY、取消或物化任一失败都会回滚整次运行结果。
 
 paper trading 会先完成缓存物化和运行事件持久化。支撑/压力 BUY 在夜间仅写入 `paper_execution=pending`，下一券商交易日开盘后以当前时段最新卖价校验投影通道；通过后提交以压力内沿为上限的普通时段 day 限价单，并在报价离开通道或纽约时间 09:35 时取消余量。限价单无法保证最低成交价；低于支撑内沿的成交会记录 `channel_fill_violation`、取消余量，并在持仓归零前禁止加仓，但不会自动卖出。SELL 仍优先且不受通道限制。构建失败会把策略运行标记为 failed，并且不会提交订单。
 

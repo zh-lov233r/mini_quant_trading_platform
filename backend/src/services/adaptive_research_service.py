@@ -861,7 +861,6 @@ def promote_candidates(
                 "universe_policy": universe.get("universePolicy"),
                 "runtime_params_override": base_oos.params,
                 "persist_level": "full",
-                "engine_version": "v2",
                 "expected_data_fingerprint": base_oos.data_fingerprint,
                 "expected_metrics": dict(base_oos.metrics or {}),
                 "metric_tolerance": VERIFICATION_METRIC_TOLERANCE,
