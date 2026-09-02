@@ -4,6 +4,7 @@
 #include <pybind11/stl.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
@@ -11,6 +12,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -107,6 +109,9 @@ struct DatasetView {
     MatrixView<std::int64_t> integers;
     MatrixView<double> floats;
     std::vector<std::string> symbols;
+    std::vector<std::string> asset_types;
+    std::vector<std::string> exchanges;
+    std::vector<std::int32_t> history_sessions;
     std::map<std::int64_t, std::map<std::int64_t, double>> split_adjustments;
 };
 
@@ -122,6 +127,25 @@ struct CostConfig {
     double commission_bps = 1.0;
     double commission_min = 1.0;
     double slippage_bps = 5.0;
+};
+
+struct UniversePolicy {
+    std::set<std::string> asset_types;
+    std::set<std::string> exchanges;
+    double minimum_unadjusted_close;
+    double minimum_dollar_volume_20;
+    std::int32_t minimum_history_sessions;
+};
+
+enum class UniverseExclusion {
+    None,
+    AssetType,
+    Exchange,
+    BeforeListing,
+    AfterDelisting,
+    Price,
+    Liquidity,
+    History,
 };
 
 struct StrategyConfig {
@@ -221,6 +245,18 @@ struct KernelResult {
     std::vector<double> position_average_entry_price;
     std::vector<double> position_close;
     std::vector<double> position_market_value;
+
+    bool has_universe_membership = false;
+    std::vector<std::int64_t> universe_session_index;
+    std::vector<std::int64_t> universe_date_ordinal;
+    std::vector<std::int32_t> universe_eligible_count;
+    std::vector<std::int32_t> universe_excluded_asset_type;
+    std::vector<std::int32_t> universe_excluded_exchange;
+    std::vector<std::int32_t> universe_excluded_before_listing;
+    std::vector<std::int32_t> universe_excluded_after_delisting;
+    std::vector<std::int32_t> universe_excluded_price;
+    std::vector<std::int32_t> universe_excluded_liquidity;
+    std::vector<std::int32_t> universe_excluded_history;
 };
 
 py::dict required_dict(const py::dict& parent, const char* key) {
@@ -236,6 +272,96 @@ double number_or(const py::dict& value, const char* key, double fallback) {
 
 int integer_or(const py::dict& value, const char* key, int fallback) {
     return value.contains(key) && !value[key].is_none() ? py::cast<int>(value[key]) : fallback;
+}
+
+std::string upper_trimmed(std::string value) {
+    const auto first = std::find_if_not(value.begin(), value.end(), [](unsigned char character) {
+        return std::isspace(character) != 0;
+    });
+    const auto last = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char character) {
+        return std::isspace(character) != 0;
+    }).base();
+    if (first >= last) return {};
+    std::string result(first, last);
+    std::transform(result.begin(), result.end(), result.begin(), [](unsigned char character) {
+        return static_cast<char>(std::toupper(character));
+    });
+    return result;
+}
+
+std::set<std::string> normalized_string_set(
+    const py::dict& value,
+    const char* key,
+    const std::vector<std::string>& fallback
+) {
+    std::set<std::string> result;
+    if (!value.contains(key)) {
+        result.insert(fallback.begin(), fallback.end());
+        return result;
+    }
+    for (const py::handle raw : py::reinterpret_borrow<py::iterable>(value[key])) {
+        const std::string normalized = upper_trimmed(py::cast<std::string>(py::str(raw)));
+        if (!normalized.empty()) result.insert(normalized);
+    }
+    return result;
+}
+
+std::optional<UniversePolicy> parse_universe_policy(const py::dict& runtime) {
+    const py::dict params = required_dict(runtime, "params");
+    if (!params.contains("universe") || !py::isinstance<py::dict>(params["universe"])) {
+        return std::nullopt;
+    }
+    const py::dict universe = py::cast<py::dict>(params["universe"]);
+    if (!universe.contains("policy") || universe["policy"].is_none()) return std::nullopt;
+    if (!py::isinstance<py::dict>(universe["policy"])) {
+        throw std::invalid_argument("universe.policy must be an object");
+    }
+    const py::dict value = py::cast<py::dict>(universe["policy"]);
+    const std::string type = value.contains("type") && !value["type"].is_none()
+        ? py::cast<std::string>(py::str(value["type"])) : "point_in_time_liquid";
+    const std::string membership_as_of = value.contains("membershipAsOf")
+        && !value["membershipAsOf"].is_none()
+        ? py::cast<std::string>(py::str(value["membershipAsOf"])) : "signal_close";
+    const std::string existing_position_policy = value.contains("existingPositionPolicy")
+        && !value["existingPositionPolicy"].is_none()
+        ? py::cast<std::string>(py::str(value["existingPositionPolicy"])) : "exit_only";
+    const std::string delisting_value_policy = value.contains("delistingValuePolicy")
+        && !value["delistingValuePolicy"].is_none()
+        ? py::cast<std::string>(py::str(value["delistingValuePolicy"]))
+        : "zero_with_last_close_sensitivity";
+    UniversePolicy policy{
+        normalized_string_set(value, "assetTypes", {"CS"}),
+        normalized_string_set(value, "exchanges", {"XNAS", "XNYS", "XASE"}),
+        number_or(value, "minUnadjustedClose", 5.0),
+        number_or(value, "minDollarVolume20", 10'000'000.0),
+        static_cast<std::int32_t>(integer_or(value, "minHistorySessions", 200)),
+    };
+    if (type != "point_in_time_liquid") {
+        throw std::invalid_argument("unsupported universePolicy type");
+    }
+    if (policy.asset_types.empty() || policy.exchanges.empty()) {
+        throw std::invalid_argument("universePolicy assetTypes and exchanges must be non-empty");
+    }
+    if (!std::isfinite(policy.minimum_unadjusted_close)
+        || !std::isfinite(policy.minimum_dollar_volume_20)
+        || policy.minimum_unadjusted_close <= 0.0 || policy.minimum_dollar_volume_20 <= 0.0) {
+        throw std::invalid_argument("universePolicy price and liquidity thresholds must be positive");
+    }
+    if (policy.minimum_history_sessions < 20 || policy.minimum_history_sessions > 252) {
+        throw std::invalid_argument("universePolicy minHistorySessions must be between 20 and 252");
+    }
+    if (membership_as_of != "signal_close") {
+        throw std::invalid_argument("universePolicy membershipAsOf must be signal_close");
+    }
+    if (existing_position_policy != "exit_only") {
+        throw std::invalid_argument("universePolicy existingPositionPolicy must be exit_only");
+    }
+    if (delisting_value_policy != "zero_with_last_close_sensitivity") {
+        throw std::invalid_argument(
+            "universePolicy delistingValuePolicy must be zero_with_last_close_sensitivity"
+        );
+    }
+    return policy;
 }
 
 std::size_t float_column(const std::string& name) {
@@ -367,6 +493,14 @@ DatasetView parse_dataset(const py::object& dataset) {
     }
     const py::dict sidecar = py::cast<py::dict>(dataset.attr("sidecar"));
     if (sidecar.contains("symbols")) view.symbols = py::cast<std::vector<std::string>>(sidecar["symbols"]);
+    if (sidecar.contains("asset_types")) {
+        view.asset_types = py::cast<std::vector<std::string>>(sidecar["asset_types"]);
+        for (std::string& value : view.asset_types) value = upper_trimmed(std::move(value));
+    }
+    if (sidecar.contains("exchanges")) {
+        view.exchanges = py::cast<std::vector<std::string>>(sidecar["exchanges"]);
+        for (std::string& value : view.exchanges) value = upper_trimmed(std::move(value));
+    }
     if (view.symbols.empty() && view.integers.rows > 0) {
         throw std::invalid_argument("prepared dataset symbol mapping is missing");
     }
@@ -422,8 +556,106 @@ std::vector<SessionRange> session_ranges(
     return sessions;
 }
 
+void attach_history_sessions(
+    DatasetView& dataset,
+    const std::vector<SessionRange>& sessions
+) {
+    dataset.history_sessions.assign(static_cast<std::size_t>(dataset.integers.rows), 0);
+    std::unordered_map<std::int64_t, std::int32_t> history_by_instrument;
+    for (const SessionRange& session : sessions) {
+        for (py::ssize_t row = session.begin; row < session.end; ++row) {
+            const std::int64_t instrument = dataset.integers.at(row, kInstrumentId);
+            dataset.history_sessions[static_cast<std::size_t>(row)] =
+                ++history_by_instrument[instrument];
+        }
+    }
+}
+
 std::optional<double> finite(double value) {
     return std::isfinite(value) ? std::optional<double>(value) : std::nullopt;
+}
+
+const std::string& dictionary_value(
+    const std::vector<std::string>& values,
+    std::int64_t index
+) {
+    static const std::string empty;
+    if (index < 0 || static_cast<std::size_t>(index) >= values.size()) return empty;
+    return values[static_cast<std::size_t>(index)];
+}
+
+UniverseExclusion universe_exclusion(
+    const DatasetView& dataset,
+    py::ssize_t row,
+    const UniversePolicy& policy
+) {
+    const std::string& asset_type = dictionary_value(
+        dataset.asset_types, dataset.integers.at(row, kAssetTypeId)
+    );
+    if (!policy.asset_types.contains(asset_type)) return UniverseExclusion::AssetType;
+    const std::string& exchange = dictionary_value(
+        dataset.exchanges, dataset.integers.at(row, kExchangeId)
+    );
+    if (!policy.exchanges.contains(exchange)) return UniverseExclusion::Exchange;
+    const std::int64_t trade_date = dataset.integers.at(row, kDateOrdinal);
+    const std::int64_t listed = dataset.integers.at(row, kListedOrdinal);
+    if (listed != kDateSentinel && trade_date < listed) return UniverseExclusion::BeforeListing;
+    const std::int64_t delisted = dataset.integers.at(row, kDelistedOrdinal);
+    if (delisted != kDateSentinel && trade_date > delisted) {
+        return UniverseExclusion::AfterDelisting;
+    }
+    const double unadjusted_close = dataset.floats.at(row, kCloseUnadjusted);
+    if (!std::isfinite(unadjusted_close)
+        || unadjusted_close < policy.minimum_unadjusted_close) {
+        return UniverseExclusion::Price;
+    }
+    const double dollar_volume = dataset.floats.at(row, kDollarVolume20);
+    if (!std::isfinite(dollar_volume)
+        || dollar_volume < policy.minimum_dollar_volume_20) {
+        return UniverseExclusion::Liquidity;
+    }
+    if (dataset.history_sessions[static_cast<std::size_t>(row)]
+        < policy.minimum_history_sessions) {
+        return UniverseExclusion::History;
+    }
+    return UniverseExclusion::None;
+}
+
+void append_universe_membership(
+    KernelResult& result,
+    const SessionRange& session,
+    const std::vector<UniverseExclusion>& exclusions
+) {
+    std::int32_t eligible = 0;
+    std::int32_t asset_type = 0;
+    std::int32_t exchange = 0;
+    std::int32_t before_listing = 0;
+    std::int32_t after_delisting = 0;
+    std::int32_t price = 0;
+    std::int32_t liquidity = 0;
+    std::int32_t history = 0;
+    for (const UniverseExclusion exclusion : exclusions) {
+        switch (exclusion) {
+            case UniverseExclusion::None: ++eligible; break;
+            case UniverseExclusion::AssetType: ++asset_type; break;
+            case UniverseExclusion::Exchange: ++exchange; break;
+            case UniverseExclusion::BeforeListing: ++before_listing; break;
+            case UniverseExclusion::AfterDelisting: ++after_delisting; break;
+            case UniverseExclusion::Price: ++price; break;
+            case UniverseExclusion::Liquidity: ++liquidity; break;
+            case UniverseExclusion::History: ++history; break;
+        }
+    }
+    result.universe_session_index.push_back(session.session_index);
+    result.universe_date_ordinal.push_back(session.date_ordinal);
+    result.universe_eligible_count.push_back(eligible);
+    result.universe_excluded_asset_type.push_back(asset_type);
+    result.universe_excluded_exchange.push_back(exchange);
+    result.universe_excluded_before_listing.push_back(before_listing);
+    result.universe_excluded_after_delisting.push_back(after_delisting);
+    result.universe_excluded_price.push_back(price);
+    result.universe_excluded_liquidity.push_back(liquidity);
+    result.universe_excluded_history.push_back(history);
 }
 
 double rounded_two(double value) {
@@ -702,6 +934,7 @@ double gross_exposure(
 std::shared_ptr<KernelResult> run_native_backtest(
     const DatasetView& dataset,
     const StrategyConfig& strategy,
+    const std::optional<UniversePolicy>& universe_policy,
     const std::vector<SessionRange>& sessions,
     double initial_cash,
     const CostConfig& costs,
@@ -711,6 +944,7 @@ std::shared_ptr<KernelResult> run_native_backtest(
     result->initial_cash = initial_cash;
     result->symbols = dataset.symbols;
     result->trading_days = static_cast<std::int64_t>(sessions.size());
+    result->has_universe_membership = universe_policy.has_value();
     double cash = initial_cash;
     double peak_equity = initial_cash;
     std::map<std::int64_t, Position> positions;
@@ -731,6 +965,14 @@ std::shared_ptr<KernelResult> run_native_backtest(
             std::map<std::int64_t, py::ssize_t> rows;
             for (py::ssize_t row = session.begin; row < session.end; ++row) {
                 rows.emplace(dataset.integers.at(row, kInstrumentId), row);
+            }
+            std::vector<UniverseExclusion> universe_exclusions;
+            if (universe_policy) {
+                universe_exclusions.reserve(static_cast<std::size_t>(session.end - session.begin));
+                for (py::ssize_t row = session.begin; row < session.end; ++row) {
+                    universe_exclusions.push_back(universe_exclusion(dataset, row, *universe_policy));
+                }
+                append_universe_membership(*result, session, universe_exclusions);
             }
 
             const auto split_day = dataset.split_adjustments.find(session.date_ordinal);
@@ -843,7 +1085,13 @@ std::shared_ptr<KernelResult> run_native_backtest(
                     position == positions.end() ? nullptr : &position->second,
                     static_cast<std::int64_t>(day)
                 );
-                if (decision) current.push_back(*decision);
+                if (!decision) continue;
+                const std::size_t session_row = static_cast<std::size_t>(row - session.begin);
+                if (decision->action == Action::Buy && universe_policy
+                    && universe_exclusions[session_row] != UniverseExclusion::None) {
+                    continue;
+                }
+                current.push_back(*decision);
             }
             std::vector<SignalRecord*> entries;
             for (SignalRecord& signal : current) {
@@ -922,6 +1170,12 @@ std::shared_ptr<KernelResult> run_backtest_binding(
 ) {
     DatasetView view = parse_dataset(dataset);
     const StrategyConfig config = parse_strategy(strategy);
+    const std::optional<UniversePolicy> universe_policy = parse_universe_policy(strategy);
+    if (universe_policy && (view.asset_types.empty() || view.exchanges.empty())) {
+        throw std::invalid_argument(
+            "dynamic universe requires prepared dataset asset/exchange mappings"
+        );
+    }
     const double initial_cash = number_or(options, "initial_cash", 100'000.0);
     CostConfig costs{
         number_or(options, "commission_bps", 1.0),
@@ -944,7 +1198,10 @@ std::shared_ptr<KernelResult> run_backtest_binding(
     );
     if (end < start) throw std::invalid_argument("end_date must be on or after start_date");
     const std::vector<SessionRange> sessions = session_ranges(view, start, end);
-    return run_native_backtest(view, config, sessions, initial_cash, costs, control_callback);
+    attach_history_sessions(view, sessions);
+    return run_native_backtest(
+        view, config, universe_policy, sessions, initial_cash, costs, control_callback
+    );
 }
 
 template <typename T>
@@ -1032,6 +1289,26 @@ void bind_backtest(py::module_& module) {
             result["average_entry_price"] = vector_view(owner, value.position_average_entry_price);
             result["close"] = vector_view(owner, value.position_close);
             result["market_value"] = vector_view(owner, value.position_market_value);
+            return result;
+        })
+        .def_property_readonly("universe_membership", [](py::object owner) -> py::object {
+            KernelResult& value = owner.cast<KernelResult&>();
+            if (!value.has_universe_membership) return py::none();
+            py::dict result;
+            result["session_index"] = vector_view(owner, value.universe_session_index);
+            result["date_ordinal"] = vector_view(owner, value.universe_date_ordinal);
+            result["eligible_count"] = vector_view(owner, value.universe_eligible_count);
+            result["excluded_asset_type"] = vector_view(owner, value.universe_excluded_asset_type);
+            result["excluded_exchange"] = vector_view(owner, value.universe_excluded_exchange);
+            result["excluded_before_listing"] = vector_view(
+                owner, value.universe_excluded_before_listing
+            );
+            result["excluded_after_delisting"] = vector_view(
+                owner, value.universe_excluded_after_delisting
+            );
+            result["excluded_price"] = vector_view(owner, value.universe_excluded_price);
+            result["excluded_liquidity"] = vector_view(owner, value.universe_excluded_liquidity);
+            result["excluded_history"] = vector_view(owner, value.universe_excluded_history);
             return result;
         });
     module.def(

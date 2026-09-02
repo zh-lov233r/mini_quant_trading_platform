@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import gc
 import math
 import unittest
@@ -26,6 +26,7 @@ from src.services.prepared_dataset_service import (
 from src.services.signal_strength_service import annotate_and_rank_signals
 from src.services.strategy_engine import STRATEGY_HANDLERS
 from src.services.strategy_registry import normalize_strategy_params
+from src.services.backtest_universe_service import point_in_time_entry_eligible
 
 
 @dataclass
@@ -126,6 +127,61 @@ class NativeBacktestKernelTests(unittest.TestCase):
                 },
             ),
             "engine_ready": True,
+        }
+
+    def _universe_policy(self) -> dict[str, object]:
+        return {
+            "type": "point_in_time_liquid",
+            "assetTypes": ["CS"],
+            "exchanges": ["XASE", "XNAS", "XNYS"],
+            "minUnadjustedClose": 5.0,
+            "minDollarVolume20": 10_000_000.0,
+            "minHistorySessions": 20,
+            "membershipAsOf": "signal_close",
+            "existingPositionPolicy": "exit_only",
+            "delistingValuePolicy": "zero_with_last_close_sensitivity",
+        }
+
+    def _momentum_snapshot(
+        self,
+        trade_day: date,
+        instrument_id: int,
+        *,
+        signal: bool = False,
+    ) -> dict[str, object]:
+        close = 11.0 if signal else 9.0
+        return {
+            "instrument_id": instrument_id,
+            "symbol": f"S{instrument_id:02d}",
+            "asset_type": "CS",
+            "exchange": "XNAS",
+            "listed_at": date(2020, 1, 1),
+            "delisted_at": None,
+            "dt_ny": trade_day,
+            "ts": datetime(
+                trade_day.year,
+                trade_day.month,
+                trade_day.day,
+                21,
+                tzinfo=timezone.utc,
+            ),
+            "open": 10.0,
+            "high": 12.0,
+            "low": 8.0,
+            "close": close,
+            "close_unadjusted": 10.0,
+            "volume": 200.0 if signal else 100.0,
+            "volume_sma_20": 100.0,
+            "dollar_volume_20": 20_000_000.0,
+            "ret_20d": 0.10 if signal else 0.0,
+            "sma_20": 10.0,
+            "atr_14": 1.0,
+            "position": 0.0,
+            "avg_entry_price": None,
+            "entry_trade_date": None,
+            "entry_signal_features": None,
+            "position_holding_days": None,
+            "recent_bars": [],
         }
 
     def _single_symbol_days(
@@ -516,6 +572,157 @@ class NativeBacktestKernelTests(unittest.TestCase):
             quant_kernel.run_backtest(
                 self._dataset(self._market_days(), order="C"),
                 self._runtime(),
+                {"initial_cash": 1_000.0},
+            )
+
+    def test_dynamic_universe_matches_python_exclusion_order_and_filters_only_buys(self) -> None:
+        first_day = date(2025, 3, 1)
+        days: list[tuple[date, dict[str, dict[str, object]]]] = []
+        for offset in range(20):
+            trade_day = first_day + timedelta(days=offset)
+            days.append(
+                (
+                    trade_day,
+                    {
+                        f"S{instrument_id:02d}": self._momentum_snapshot(
+                            trade_day, instrument_id
+                        )
+                        for instrument_id in range(1, 8)
+                    },
+                )
+            )
+        trade_day = first_day + timedelta(days=20)
+        snapshots = {
+            f"S{instrument_id:02d}": self._momentum_snapshot(
+                trade_day, instrument_id, signal=True
+            )
+            for instrument_id in range(1, 9)
+        }
+        snapshots["S02"].update({"asset_type": "ETF", "exchange": "OTC"})
+        snapshots["S03"].update({"exchange": "OTC", "listed_at": trade_day + timedelta(days=1)})
+        snapshots["S04"]["listed_at"] = trade_day + timedelta(days=1)
+        snapshots["S05"]["delisted_at"] = trade_day - timedelta(days=1)
+        snapshots["S06"].update({"close_unadjusted": None, "dollar_volume_20": None})
+        snapshots["S07"]["dollar_volume_20"] = None
+        days.append((trade_day, snapshots))
+        policy = self._universe_policy()
+        runtime = self._runtime()
+        runtime["params"]["universe"]["policy"] = policy  # type: ignore[index]
+
+        expected = {
+            "eligible_count": 0,
+            "excluded_asset_type": 0,
+            "excluded_exchange": 0,
+            "excluded_before_listing": 0,
+            "excluded_after_delisting": 0,
+            "excluded_price": 0,
+            "excluded_liquidity": 0,
+            "excluded_history": 0,
+        }
+        reason_columns = {
+            "asset_type": "excluded_asset_type",
+            "exchange": "excluded_exchange",
+            "before_listing": "excluded_before_listing",
+            "after_delisting": "excluded_after_delisting",
+            "price": "excluded_price",
+            "liquidity": "excluded_liquidity",
+            "history": "excluded_history",
+        }
+        for instrument_id, snapshot in enumerate(snapshots.values(), start=1):
+            oracle_snapshot = dict(snapshot)
+            oracle_snapshot["history_sessions"] = 21 if instrument_id < 8 else 1
+            eligible, reason = point_in_time_entry_eligible(oracle_snapshot, policy)
+            if eligible:
+                expected["eligible_count"] += 1
+            else:
+                expected[reason_columns[str(reason)]] += 1
+
+        result = quant_kernel.run_backtest(
+            self._dataset(days),
+            runtime,
+            {
+                "initial_cash": 1_000.0,
+                "start_date": first_day,
+                "end_date": trade_day,
+            },
+        )
+        membership = result.universe_membership
+        self.assertIsNotNone(membership)
+        for column, count in expected.items():
+            self.assertEqual(int(membership[column][-1]), count)
+        self.assertEqual(result.signals["instrument_id"].tolist(), [1])
+        self.assertEqual(result.signals["action"].tolist(), [1])
+
+        window_only = quant_kernel.run_backtest(
+            self._dataset(days),
+            runtime,
+            {
+                "initial_cash": 1_000.0,
+                "start_date": trade_day,
+                "end_date": trade_day,
+            },
+        )
+        self.assertEqual(window_only.universe_membership["eligible_count"].tolist(), [0])
+        self.assertEqual(window_only.universe_membership["excluded_history"].tolist(), [2])
+        self.assertEqual(window_only.signals["instrument_id"].tolist(), [])
+
+    def test_dynamic_universe_keeps_ineligible_position_exit_only(self) -> None:
+        first_day = date(2025, 4, 1)
+        days: list[tuple[date, dict[str, dict[str, object]]]] = []
+        for offset in range(22):
+            trade_day = first_day + timedelta(days=offset)
+            snapshot = self._momentum_snapshot(
+                trade_day,
+                1,
+                signal=offset == 19,
+            )
+            if offset >= 20:
+                snapshot.update(
+                    {
+                        "open": 8.0 if offset == 21 else 10.0,
+                        "close": 8.0,
+                        "close_unadjusted": 4.0,
+                        "ret_20d": -0.10,
+                        "volume": 100.0,
+                    }
+                )
+            days.append((trade_day, {"S01": snapshot}))
+        policy = self._universe_policy()
+        runtime = self._runtime()
+        runtime["params"]["universe"]["policy"] = policy  # type: ignore[index]
+
+        result = quant_kernel.run_backtest(
+            self._dataset(days),
+            runtime,
+            {
+                "initial_cash": 1_000.0,
+                "commission_bps": 0.0,
+                "commission_min": 0.0,
+                "slippage_bps": 0.0,
+                "start_date": first_day,
+                "end_date": days[-1][0],
+            },
+        )
+
+        self.assertEqual(result.signals["action"].tolist(), [1, -1])
+        self.assertEqual(result.trades["side"].tolist(), [1, -1])
+        self.assertEqual(result.trades["session_index"].tolist(), [20, 21])
+        membership = result.universe_membership
+        self.assertEqual(membership["eligible_count"][-3:].tolist(), [1, 0, 0])
+        self.assertEqual(membership["excluded_price"][-3:].tolist(), [0, 1, 1])
+
+    def test_dynamic_universe_rejects_non_exit_only_position_policy(self) -> None:
+        runtime = self._runtime()
+        policy = self._universe_policy()
+        policy["existingPositionPolicy"] = "liquidate_immediately"
+        runtime["params"]["universe"]["policy"] = policy  # type: ignore[index]
+        with self.assertRaisesRegex(
+            ValueError,
+            "universePolicy existingPositionPolicy must be exit_only",
+        ):
+            quant_kernel.run_backtest(
+                self._dataset(self._market_days()),
+                runtime,
                 {"initial_cash": 1_000.0},
             )
 
