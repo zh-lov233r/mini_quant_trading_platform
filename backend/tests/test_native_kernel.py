@@ -61,7 +61,7 @@ class NativeKernelParityTests(unittest.TestCase):
             return
         self.assertEqual(actual, expected)
 
-    def test_native_abi_and_first_batch_catalog(self) -> None:
+    def test_native_abi_and_all_engine_ready_strategy_catalog(self) -> None:
         self.assertEqual(quant_kernel.KERNEL_VERSION, "cpp-v1")
         self.assertEqual(quant_kernel.ABI_VERSION, 1)
         self.assertTrue(quant_kernel.BUILD_ID)
@@ -76,7 +76,32 @@ class NativeKernelParityTests(unittest.TestCase):
                 "head_shoulders_bottom",
                 "rounded_bottom",
                 "v_reversal",
+                "support_resistance",
             ],
+        )
+
+    def test_support_resistance_replay_exit_matches_python(self) -> None:
+        bar = self._bar(0, 91, 92, 89, 90, 100, atr=2)
+        self._assert_day_parity(
+            "support_resistance",
+            {
+                "TEST": {
+                    **bar,
+                    "ts": datetime(2025, 1, 1, 21, tzinfo=timezone.utc),
+                    "position": 1.0,
+                    "avg_entry_price": 100.0,
+                    "position_holding_days": 1,
+                    "entry_signal_features": {
+                        "support_resistance": {
+                            "entry_close": 100.0,
+                            "entry_atr": 2.0,
+                            "target_price": 106.0,
+                            "zone": {"lower": 95.0},
+                        }
+                    },
+                    "recent_bars": [bar],
+                }
+            },
         )
 
     def test_trend_entry_exit_missing_and_stable_universe_order(self) -> None:

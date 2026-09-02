@@ -238,17 +238,14 @@ class SupportResistanceStrategyTests(unittest.TestCase):
             zones={old_key: zone},
         )
 
-        with patch(
-            "src.services.support_resistance_service._fit_pivot_line",
-            side_effect=[(pivots, 1.0, 0.0, 0.0, 1.0), None],
-        ):
-            advance_symbol(
-                state,
-                _bar(1, high=1.2, low=0.8, close=1.0),
-                self.signal,
-                self.risk,
-                emit_signals=False,
-            )
+        signal = {**self.signal, "min_line_span_sessions": 1}
+        advance_symbol(
+            state,
+            _bar(1, high=1.2, low=0.8, close=1.0),
+            signal,
+            self.risk,
+            emit_signals=False,
+        )
 
         same_day = [
             item for item in state.zone_versions if item["effective_from"] == "2025-01-02"
