@@ -90,6 +90,8 @@ worker 使用 `FOR UPDATE SKIP LOCKED` claim，维护 heartbeat/lease，每个�
 
 原生包使用 C++20、`pybind11==3.1.0`、`-O3` 和 `-DNDEBUG` 构建，并明确禁用 fast-math。本地开发执行 `.venv/bin/pip install -e backend/native`；Docker 在 Linux builder stage 生成 wheel，runtime stage 只安装该 wheel。
 
+原生 `run_backtest(dataset, strategy, options, control_callback)` 基础目前覆盖 Trend、Mean Reversion 和 Momentum Breakout。它零拷贝读取 PreparedDataset v3 的两个 NumPy buffer，在交易循环中释放 GIL，并且每个已完成 session 只为取消/进度回调重新获取一次。typed `KernelResult` 为 signals、trades、equity 和 positions 提供只读 NumPy views。共享原生账本已经保留 T 日收盘决策/T+1 开盘成交、SELL-first、共享现金、确定性强度排名与阈值、仓位上限、最低佣金、不利滑点、拆股数量与成本基准调整、稳定 instrument identity、缺失开盘价和退市写零语义；三个策略均有 Python/C++ 账本差分。生产 worker 尚未调用该入口：分阶段形态、动态 universe eligibility、完整 signal metadata/audit vectors 与 typed persistence 必须分别通过差分后，才执行一次性切换。
+
 支撑/压力策略现在以原生模块作为 detector cache identity、完整 Pivot zone identity、`NUMERIC(24,10)` half-up 价格规范化、确定性加权 Theil-Sen 拟合、冻结 zone 投影校验，以及跨交易日 candidate、regime、入场通道、退出和审计演进的唯一实现。因此，原生公共 catalog 和日线 evaluator 已覆盖全部九个 engine-ready 策略。现有 Python dataclass 暂时保留为传输与持久化结构，原生状态机在原对象上更新；将该边界替换为 typed native state 并在计算时释放 GIL，仍属于后续内核接入工作。已迁移行为不提供运行时引擎选择或 Python 算法 fallback。
 
 只读基准预检：
