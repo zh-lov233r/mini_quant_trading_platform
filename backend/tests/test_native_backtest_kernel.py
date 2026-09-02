@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import gc
+import json
 import math
 import unittest
 from unittest.mock import MagicMock
@@ -266,6 +268,7 @@ class NativeBacktestKernelTests(unittest.TestCase):
         transactions: list[dict[str, object]] = []
         collector = _TransactionCollector(transactions)
         signals: list[tuple[object, ...]] = []
+        signal_metadata: list[dict[str, object]] = []
         equities: list[float] = []
         peak = cash
         max_drawdown = 0.0
@@ -364,6 +367,7 @@ class NativeBacktestKernelTests(unittest.TestCase):
                         event.reason,
                     )
                 )
+                signal_metadata.append(copy.deepcopy(event.metadata))
             pending = current
             _update_last_marks(holdings, last_prices, identity, prices)
             equity = _portfolio_equity(cash, holdings, last_prices)
@@ -379,6 +383,7 @@ class NativeBacktestKernelTests(unittest.TestCase):
             "total_fees": total_fees,
             "total_slippage": total_slippage,
             "signals": signals,
+            "signal_metadata": signal_metadata,
             "transactions": transactions,
             "equity": equities,
         }
@@ -412,6 +417,10 @@ class NativeBacktestKernelTests(unittest.TestCase):
         ):
             self.assertAlmostEqual(float(result.summary[key]), float(oracle[key]), delta=1e-10)
         np.testing.assert_allclose(result.equity["equity"], oracle["equity"], atol=1e-10)
+        self.assertEqual(
+            [json.loads(value) for value in result.signals["metadata_json"]],
+            oracle["signal_metadata"],
+        )
         return result
 
     def test_momentum_t_plus_one_sell_first_and_shared_cash_match_python(self) -> None:
@@ -478,6 +487,64 @@ class NativeBacktestKernelTests(unittest.TestCase):
                 transaction["meta"]["slippage_cost"],
                 delta=1e-10,
             )
+            self.assertEqual(result.trades["reason"][index], transaction["meta"]["reason"])
+            self.assertEqual(
+                int(result.trades["execution_timestamp_us"][index]),
+                int(transaction["ts"].timestamp() * 1_000_000),
+            )
+            self.assertEqual(
+                int(result.trades["signal_timestamp_us"][index]),
+                int(datetime.fromisoformat(transaction["meta"]["signal_ts"]).timestamp() * 1_000_000),
+            )
+            self.assertEqual(
+                date.fromordinal(int(result.trades["execution_date_ordinal"][index])).isoformat(),
+                transaction["meta"]["execution_trade_date"],
+            )
+            self.assertAlmostEqual(
+                result.trades["gross_notional"][index],
+                transaction["meta"]["gross_notional"],
+                delta=1e-10,
+            )
+            self.assertAlmostEqual(
+                result.trades["net_cash_flow"][index],
+                transaction["meta"]["net_cash_flow"],
+                delta=1e-10,
+            )
+            self.assertAlmostEqual(
+                result.trades["slippage_bps"][index],
+                transaction["meta"]["slippage_bps"],
+                delta=1e-10,
+            )
+            entry_features = result.trades["entry_signal_features_json"][index]
+            if int(result.trades["side"][index]) == 1:
+                self.assertEqual(
+                    json.loads(entry_features),
+                    transaction["meta"]["entry_signal_features"],
+                )
+                self.assertEqual(float(result.trades["stage_target_pct"][index]), 1.0)
+                self.assertEqual(float(result.trades["position_quantity_before"][index]), 0.0)
+                self.assertAlmostEqual(
+                    result.trades["position_quantity_after"][index],
+                    transaction["qty"],
+                    delta=1e-10,
+                )
+                self.assertAlmostEqual(
+                    result.trades["position_average_entry_price_after"][index],
+                    transaction["meta"]["position_avg_entry_price_after"],
+                    delta=1e-10,
+                )
+            else:
+                self.assertEqual(entry_features, "")
+                self.assertTrue(math.isnan(result.trades["stage_target_pct"][index]))
+                self.assertAlmostEqual(
+                    result.trades["position_quantity_before"][index],
+                    transaction["qty"],
+                    delta=1e-10,
+                )
+                self.assertEqual(float(result.trades["position_quantity_after"][index]), 0.0)
+                self.assertTrue(
+                    math.isnan(result.trades["position_average_entry_price_after"][index])
+                )
 
     def test_delisted_missing_position_is_written_off(self) -> None:
         days = self._market_days()

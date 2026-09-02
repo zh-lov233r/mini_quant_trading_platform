@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <limits>
+#include <locale>
 #include <map>
 #include <memory>
 #include <optional>
@@ -161,6 +162,7 @@ struct StrategyConfig {
     std::string fast_key;
     std::string slow_key;
     double volume_multiplier = 0.0;
+    double atr_multiplier = 0.0;
     double stop_loss_pct = 0.0;
     double stop_loss_atr = 0.0;
     double take_profit_atr = 0.0;
@@ -184,6 +186,13 @@ struct Position {
     std::int32_t symbol_id;
 };
 
+struct StrengthComponentAudit {
+    std::string key;
+    double raw_value;
+    double normalized_score;
+    double weight;
+};
+
 struct SignalRecord {
     std::int64_t session_index;
     std::int64_t instrument_id;
@@ -195,6 +204,15 @@ struct SignalRecord {
     std::int32_t strength_rank = 0;
     bool passes_threshold = true;
     std::string reason;
+    py::ssize_t dataset_row = 0;
+    double position = 0.0;
+    double average_entry_price = std::numeric_limits<double>::quiet_NaN();
+    std::int64_t position_holding_days = -1;
+    bool trend_crossover = false;
+    std::string strength_model_version;
+    std::vector<StrengthComponentAudit> strength_components;
+    std::string metadata_json;
+    std::string entry_signal_features_json;
 };
 
 struct KernelResult {
@@ -218,6 +236,7 @@ struct KernelResult {
     std::vector<std::int32_t> signal_strength_rank;
     std::vector<std::uint8_t> signal_passes_threshold;
     std::vector<std::string> signal_reason;
+    std::vector<std::string> signal_metadata_json;
 
     std::vector<std::int64_t> trade_session_index;
     std::vector<std::int64_t> trade_signal_session_index;
@@ -229,6 +248,18 @@ struct KernelResult {
     std::vector<double> trade_fee;
     std::vector<double> trade_reference_price;
     std::vector<double> trade_slippage_cost;
+    std::vector<std::int64_t> trade_execution_timestamp_us;
+    std::vector<std::int64_t> trade_signal_timestamp_us;
+    std::vector<std::int64_t> trade_execution_date_ordinal;
+    std::vector<std::string> trade_reason;
+    std::vector<std::string> trade_entry_signal_features_json;
+    std::vector<double> trade_position_quantity_before;
+    std::vector<double> trade_position_quantity_after;
+    std::vector<double> trade_position_average_entry_price_after;
+    std::vector<double> trade_stage_target_pct;
+    std::vector<double> trade_slippage_bps;
+    std::vector<double> trade_gross_notional;
+    std::vector<double> trade_net_cash_flow;
 
     std::vector<std::int64_t> equity_session_index;
     std::vector<std::int64_t> equity_timestamp_us;
@@ -411,6 +442,7 @@ StrategyConfig parse_strategy(const py::dict& runtime) {
         config.previous_fast_column = float_column("prev_" + config.fast_key);
         config.previous_slow_column = float_column("prev_" + config.slow_key);
         config.volume_multiplier = py::cast<double>(signal["volume_multiplier"]);
+        config.atr_multiplier = py::cast<double>(signal["atr_multiplier"]);
         config.stop_loss_atr = py::cast<double>(risk["stop_loss_atr"]);
         config.take_profit_atr = py::cast<double>(risk["take_profit_atr"]);
     } else if (type == "mean_reversion") {
@@ -667,12 +699,24 @@ double rise_score(double value, double gate, double cap) {
     return rounded_two(100.0 * std::clamp((value - gate) / (cap - gate), 0.0, 1.0));
 }
 
-double weighted_strength(const std::vector<std::pair<double, double>>& components) {
+StrengthComponentAudit rise_component(
+    std::string key,
+    double raw_value,
+    double weight,
+    double gate,
+    double cap
+) {
+    return {
+        std::move(key), raw_value, rise_score(raw_value, gate, cap), weight
+    };
+}
+
+double weighted_strength(const std::vector<StrengthComponentAudit>& components) {
     double score = 0.0;
     double weight = 0.0;
-    for (const auto& [component, component_weight] : components) {
-        score += component * component_weight;
-        weight += component_weight;
+    for (const StrengthComponentAudit& component : components) {
+        score += component.normalized_score * component.weight;
+        weight += component.weight;
     }
     return rounded_two(score / weight);
 }
@@ -705,6 +749,10 @@ std::optional<SignalRecord> evaluate_signal(
     std::string reason;
     double raw_score = 0.0;
     double strength_score = std::numeric_limits<double>::quiet_NaN();
+    bool trend_crossover = false;
+    std::int64_t position_holding_days = -1;
+    std::string strength_model_version;
+    std::vector<StrengthComponentAudit> strength_components;
 
     if (config.kind == StrategyKind::Trend) {
         if (quantity > 0.0 && close && average_entry && *average_entry > 0.0
@@ -742,23 +790,30 @@ std::optional<SignalRecord> evaluate_signal(
             } else {
                 return std::nullopt;
             }
+            trend_crossover = true;
             raw_score = std::abs(fast - slow);
             if (*action == Action::Buy) {
                 if (!atr || *atr <= 0.0) throw std::invalid_argument("trend BUY signal is missing finite ATR strength input");
                 const double separation = (fast - slow) / *atr;
                 const double impulse = ((fast - slow) - (previous_fast - previous_slow)) / *atr;
                 const double volume_ratio = volume / average_volume;
-                strength_score = weighted_strength({
-                    {rise_score(separation, 0.0, 0.5), 0.60},
-                    {rise_score(impulse, 0.0, 0.5), 0.20},
-                    {rise_score(volume_ratio, config.volume_multiplier, config.volume_multiplier * 2.0), 0.20},
-                });
+                strength_model_version = "trend:v1";
+                strength_components = {
+                    rise_component("separation_atr", separation, 0.60, 0.0, 0.5),
+                    rise_component("crossover_impulse_atr", impulse, 0.20, 0.0, 0.5),
+                    rise_component(
+                        "volume_ratio", volume_ratio, 0.20,
+                        config.volume_multiplier, config.volume_multiplier * 2.0
+                    ),
+                };
+                strength_score = weighted_strength(strength_components);
             }
         }
     } else if (config.kind == StrategyKind::MeanReversion) {
         const std::optional<double> zscore = finite(dataset.floats.at(row, config.zscore_column));
         const std::int64_t holding_days = position == nullptr
             ? 0 : std::max<std::int64_t>(processed_session - position->entry_session, 0);
+        if (position != nullptr) position_holding_days = holding_days;
         if (quantity > 0.0 && close && average_entry && *average_entry > 0.0
             && *close <= *average_entry * (1.0 - config.stop_loss_pct)) {
             action = Action::Sell;
@@ -787,9 +842,14 @@ std::optional<SignalRecord> evaluate_signal(
         }
         raw_score = zscore ? std::abs(*zscore) : 0.0;
         if (*action == Action::Buy) {
-            strength_score = weighted_strength({
-                {rise_score(std::abs(*zscore), config.zscore_entry, config.zscore_entry * 2.0), 1.0}
-            });
+            strength_model_version = "mean_reversion:v1";
+            strength_components = {
+                rise_component(
+                    "absolute_zscore", std::abs(*zscore), 1.0,
+                    config.zscore_entry, config.zscore_entry * 2.0
+                )
+            };
+            strength_score = weighted_strength(strength_components);
         }
     } else {
         const std::optional<double> sma = finite(dataset.floats.at(row, kSma20));
@@ -822,11 +882,22 @@ std::optional<SignalRecord> evaluate_signal(
         const double extension = *close / *sma - 1.0;
         raw_score = *return_20d + extension + volume_ratio;
         if (*action == Action::Buy) {
-            strength_score = weighted_strength({
-                {rise_score(*return_20d, config.minimum_return_20d, config.minimum_return_20d * 2.0), 0.40},
-                {rise_score(extension, config.breakout_buffer_pct, config.breakout_buffer_pct * 2.0), 0.35},
-                {rise_score(volume_ratio, config.volume_multiplier, config.volume_multiplier * 2.0), 0.25},
-            });
+            strength_model_version = "momentum_breakout:v1";
+            strength_components = {
+                rise_component(
+                    "return_20d", *return_20d, 0.40,
+                    config.minimum_return_20d, config.minimum_return_20d * 2.0
+                ),
+                rise_component(
+                    "price_extension", extension, 0.35,
+                    config.breakout_buffer_pct, config.breakout_buffer_pct * 2.0
+                ),
+                rise_component(
+                    "volume_ratio", volume_ratio, 0.25,
+                    config.volume_multiplier, config.volume_multiplier * 2.0
+                ),
+            };
+            strength_score = weighted_strength(strength_components);
         }
     }
 
@@ -834,10 +905,278 @@ std::optional<SignalRecord> evaluate_signal(
         session, instrument, dataset.integers.at(row, kTimestampUs), symbol,
         *action, raw_score, strength_score, 0, true, std::move(reason)
     };
+    result.dataset_row = row;
+    result.position = quantity;
+    result.average_entry_price = average_entry.value_or(
+        std::numeric_limits<double>::quiet_NaN()
+    );
+    result.position_holding_days = position_holding_days;
+    result.trend_crossover = trend_crossover;
+    result.strength_model_version = std::move(strength_model_version);
+    result.strength_components = std::move(strength_components);
     if (result.action == Action::Buy) {
         result.passes_threshold = result.strength_score >= config.minimum_strength;
     }
     return result;
+}
+
+void append_json_string(std::string& output, const std::string& value) {
+    static constexpr char hex[] = "0123456789abcdef";
+    output.push_back('"');
+    for (const unsigned char character : value) {
+        switch (character) {
+            case '"': output += "\\\""; break;
+            case '\\': output += "\\\\"; break;
+            case '\b': output += "\\b"; break;
+            case '\f': output += "\\f"; break;
+            case '\n': output += "\\n"; break;
+            case '\r': output += "\\r"; break;
+            case '\t': output += "\\t"; break;
+            default:
+                if (character < 0x20) {
+                    output += "\\u00";
+                    output.push_back(hex[character >> 4]);
+                    output.push_back(hex[character & 0x0f]);
+                } else {
+                    output.push_back(static_cast<char>(character));
+                }
+        }
+    }
+    output.push_back('"');
+}
+
+void append_json_number(std::string& output, double value) {
+    if (!std::isfinite(value)) {
+        output += "null";
+        return;
+    }
+    std::ostringstream encoded;
+    encoded.imbue(std::locale::classic());
+    encoded << std::setprecision(std::numeric_limits<double>::max_digits10) << value;
+    output += encoded.str();
+}
+
+void append_json_key(std::string& output, const std::string& key, bool& first) {
+    if (!first) output.push_back(',');
+    first = false;
+    append_json_string(output, key);
+    output.push_back(':');
+}
+
+void append_json_number_field(
+    std::string& output,
+    const std::string& key,
+    double value,
+    bool& first
+) {
+    append_json_key(output, key, first);
+    append_json_number(output, value);
+}
+
+std::string strength_level(double score) {
+    if (score < 50.0) return "weak";
+    if (score < 70.0) return "medium";
+    if (score < 85.0) return "strong";
+    return "very_strong";
+}
+
+std::string build_strength_json(
+    const SignalRecord& signal,
+    const StrategyConfig& config
+) {
+    if (signal.action != Action::Buy || signal.strength_model_version.empty()) return {};
+    std::string output = "{";
+    bool first = true;
+    append_json_number_field(output, "score", signal.strength_score, first);
+    append_json_key(output, "level", first);
+    append_json_string(output, strength_level(signal.strength_score));
+    append_json_number_field(output, "threshold", config.minimum_strength, first);
+    append_json_key(output, "passes_threshold", first);
+    output += signal.passes_threshold ? "true" : "false";
+    append_json_key(output, "rank", first);
+    output += std::to_string(signal.strength_rank);
+    append_json_key(output, "model_version", first);
+    append_json_string(output, signal.strength_model_version);
+    append_json_key(output, "components", first);
+    output.push_back('[');
+    bool first_component = true;
+    for (const StrengthComponentAudit& component : signal.strength_components) {
+        if (!first_component) output.push_back(',');
+        first_component = false;
+        output += "{";
+        bool first_field = true;
+        append_json_key(output, "key", first_field);
+        append_json_string(output, component.key);
+        append_json_number_field(output, "raw_value", component.raw_value, first_field);
+        append_json_number_field(
+            output, "normalized_score", component.normalized_score, first_field
+        );
+        append_json_number_field(output, "weight", component.weight, first_field);
+        output.push_back('}');
+    }
+    output += "]}";
+    return output;
+}
+
+std::string build_signal_metadata_json(
+    const DatasetView& dataset,
+    const SignalRecord& signal,
+    const StrategyConfig& config,
+    const std::string& strength_json
+) {
+    const py::ssize_t row = signal.dataset_row;
+    std::string output = "{";
+    bool first = true;
+    append_json_number_field(output, "close", dataset.floats.at(row, kClose), first);
+    if (config.kind != StrategyKind::MomentumBreakout) {
+        append_json_number_field(output, "atr_14", dataset.floats.at(row, kAtr14), first);
+    }
+    if (config.kind == StrategyKind::Trend) {
+        append_json_number_field(output, "position", signal.position, first);
+        append_json_number_field(
+            output, "avg_entry_price", signal.average_entry_price, first
+        );
+        append_json_key(output, "config", first);
+        output += "{";
+        bool config_first = true;
+        append_json_number_field(
+            output, "volume_multiplier", config.volume_multiplier, config_first
+        );
+        append_json_number_field(output, "atr_multiplier", config.atr_multiplier, config_first);
+        append_json_number_field(output, "stop_loss_pct", config.stop_loss_pct, config_first);
+        append_json_number_field(output, "stop_loss_atr", config.stop_loss_atr, config_first);
+        append_json_number_field(output, "take_profit_atr", config.take_profit_atr, config_first);
+        output.push_back('}');
+        if (signal.trend_crossover) {
+            const double fast = dataset.floats.at(row, config.fast_column);
+            const double slow = dataset.floats.at(row, config.slow_column);
+            const double previous_fast = dataset.floats.at(row, config.previous_fast_column);
+            const double previous_slow = dataset.floats.at(row, config.previous_slow_column);
+            const double atr = dataset.floats.at(row, kAtr14);
+            const double volume = dataset.floats.at(row, kVolume);
+            const double average_volume = dataset.floats.at(row, kVolumeSma20);
+            append_json_key(output, "strength_inputs", first);
+            output += "{";
+            bool inputs_first = true;
+            append_json_number_field(
+                output, "separation_atr", atr > 0.0 ? (fast - slow) / atr
+                    : std::numeric_limits<double>::quiet_NaN(), inputs_first
+            );
+            append_json_number_field(
+                output, "crossover_impulse_atr",
+                atr > 0.0 ? ((fast - slow) - (previous_fast - previous_slow)) / atr
+                    : std::numeric_limits<double>::quiet_NaN(),
+                inputs_first
+            );
+            append_json_number_field(
+                output, "volume_ratio", volume / average_volume, inputs_first
+            );
+            output.push_back('}');
+        }
+    } else if (config.kind == StrategyKind::MeanReversion) {
+        append_json_number_field(output, "rsi_14", dataset.floats.at(row, kRsi14), first);
+        append_json_number_field(
+            output,
+            "zscore_" + std::to_string(config.zscore_lookback),
+            dataset.floats.at(row, config.zscore_column),
+            first
+        );
+        append_json_number_field(output, "position", signal.position, first);
+        append_json_number_field(
+            output, "avg_entry_price", signal.average_entry_price, first
+        );
+        append_json_key(output, "position_holding_days", first);
+        output += signal.position_holding_days < 0
+            ? "null" : std::to_string(signal.position_holding_days);
+        append_json_key(output, "config", first);
+        output += "{";
+        bool config_first = true;
+        append_json_key(output, "lookback_window", config_first);
+        output += std::to_string(config.zscore_lookback);
+        append_json_number_field(output, "zscore_entry", config.zscore_entry, config_first);
+        append_json_number_field(output, "zscore_exit", config.zscore_exit, config_first);
+        append_json_number_field(output, "stop_loss_pct", config.stop_loss_pct, config_first);
+        append_json_number_field(output, "take_profit_pct", config.take_profit_pct, config_first);
+        append_json_key(output, "max_holding_days", config_first);
+        output += std::to_string(config.max_holding_days);
+        output.push_back('}');
+        append_json_key(output, "strength_inputs", first);
+        output += "{";
+        bool inputs_first = true;
+        const double zscore = dataset.floats.at(row, config.zscore_column);
+        append_json_number_field(
+            output, "absolute_zscore", std::isfinite(zscore) ? std::abs(zscore) : zscore,
+            inputs_first
+        );
+        output.push_back('}');
+    } else {
+        const double sma = dataset.floats.at(row, kSma20);
+        const double return_20d = dataset.floats.at(row, kReturn20d);
+        const double volume = dataset.floats.at(row, kVolume);
+        const double average_volume = dataset.floats.at(row, kVolumeSma20);
+        const double volume_ratio = volume / average_volume;
+        const double price_extension = dataset.floats.at(row, kClose) / sma - 1.0;
+        append_json_number_field(output, "sma_20", sma, first);
+        append_json_number_field(output, "ret_20d", return_20d, first);
+        append_json_number_field(output, "volume", volume, first);
+        append_json_number_field(output, "volume_sma_20", average_volume, first);
+        append_json_number_field(output, "volume_ratio", volume_ratio, first);
+        append_json_number_field(
+            output, "breakout_threshold", sma * (1.0 + config.breakout_buffer_pct), first
+        );
+        append_json_number_field(output, "position", signal.position, first);
+        append_json_number_field(
+            output, "avg_entry_price", signal.average_entry_price, first
+        );
+        append_json_key(output, "price_semantics", first);
+        append_json_string(output, "forward_adjusted_fallback_unadjusted");
+        append_json_key(output, "config", first);
+        output += "{";
+        bool config_first = true;
+        append_json_number_field(
+            output, "minimum_return_20d", config.minimum_return_20d, config_first
+        );
+        append_json_number_field(
+            output, "breakout_buffer_pct", config.breakout_buffer_pct, config_first
+        );
+        append_json_number_field(
+            output, "volume_multiplier", config.volume_multiplier, config_first
+        );
+        append_json_number_field(
+            output, "exit_return_20d", config.exit_return_20d, config_first
+        );
+        append_json_number_field(output, "stop_loss_pct", config.stop_loss_pct, config_first);
+        append_json_number_field(output, "take_profit_pct", config.take_profit_pct, config_first);
+        output.push_back('}');
+        append_json_key(output, "strength_inputs", first);
+        output += "{";
+        bool inputs_first = true;
+        append_json_number_field(output, "return_20d", return_20d, inputs_first);
+        append_json_number_field(output, "price_extension", price_extension, inputs_first);
+        append_json_number_field(output, "volume_ratio", volume_ratio, inputs_first);
+        output.push_back('}');
+    }
+    if (!strength_json.empty()) {
+        append_json_key(output, "strength", first);
+        output += strength_json;
+    }
+    output.push_back('}');
+    return output;
+}
+
+std::string build_entry_signal_features_json(
+    const std::string& metadata_json,
+    const std::string& strength_json
+) {
+    if (metadata_json.empty() || metadata_json.back() != '}') {
+        throw std::runtime_error("signal metadata JSON is invalid");
+    }
+    std::string output = metadata_json;
+    output.pop_back();
+    output += ",\"entry_history\":[{\"setup\":{},\"strength\":";
+    output += strength_json.empty() ? "{}" : strength_json;
+    output += "}]}";
+    return output;
 }
 
 double commission(double notional, const CostConfig& costs) {
@@ -894,6 +1233,7 @@ void append_signal(KernelResult& result, const SignalRecord& signal) {
     result.signal_strength_rank.push_back(signal.strength_rank);
     result.signal_passes_threshold.push_back(signal.passes_threshold ? 1U : 0U);
     result.signal_reason.push_back(signal.reason);
+    result.signal_metadata_json.push_back(signal.metadata_json);
 }
 
 void append_trade(
@@ -905,7 +1245,16 @@ void append_trade(
     double price,
     double fee,
     double reference,
-    double slippage
+    double slippage,
+    std::int64_t execution_timestamp_us,
+    double position_quantity_before,
+    double position_quantity_after,
+    double position_average_entry_price_after,
+    double stage_target_pct,
+    double slippage_bps,
+    double gross_notional,
+    double net_cash_flow,
+    const std::string& entry_signal_features_json
 ) {
     result.trade_session_index.push_back(session.session_index);
     result.trade_signal_session_index.push_back(signal.session_index);
@@ -917,6 +1266,20 @@ void append_trade(
     result.trade_fee.push_back(fee);
     result.trade_reference_price.push_back(reference);
     result.trade_slippage_cost.push_back(slippage);
+    result.trade_execution_timestamp_us.push_back(execution_timestamp_us);
+    result.trade_signal_timestamp_us.push_back(signal.timestamp_us);
+    result.trade_execution_date_ordinal.push_back(session.date_ordinal);
+    result.trade_reason.push_back(signal.reason);
+    result.trade_entry_signal_features_json.push_back(entry_signal_features_json);
+    result.trade_position_quantity_before.push_back(position_quantity_before);
+    result.trade_position_quantity_after.push_back(position_quantity_after);
+    result.trade_position_average_entry_price_after.push_back(
+        position_average_entry_price_after
+    );
+    result.trade_stage_target_pct.push_back(stage_target_pct);
+    result.trade_slippage_bps.push_back(slippage_bps);
+    result.trade_gross_notional.push_back(gross_notional);
+    result.trade_net_cash_flow.push_back(net_cash_flow);
 }
 
 double gross_exposure(
@@ -1024,7 +1387,12 @@ std::shared_ptr<KernelResult> run_native_backtest(
                 append_trade(
                     *result, session, signal,
                     static_cast<std::int32_t>(dataset.integers.at(row->second, kSymbolId)),
-                    position->second.quantity, price, fee, *mark, slippage
+                    position->second.quantity, price, fee, *mark, slippage,
+                    dataset.integers.at(row->second, kTimestampUs),
+                    position->second.quantity, 0.0,
+                    std::numeric_limits<double>::quiet_NaN(),
+                    std::numeric_limits<double>::quiet_NaN(),
+                    costs.slippage_bps, notional, proceeds, ""
                 );
                 positions.erase(position);
                 last_marks.erase(signal.instrument_id);
@@ -1071,7 +1439,11 @@ std::shared_ptr<KernelResult> run_native_backtest(
                 append_trade(
                     *result, session, *signal,
                     static_cast<std::int32_t>(dataset.integers.at(row->second, kSymbolId)),
-                    order.quantity, order.price, order.fee, *mark, slippage
+                    order.quantity, order.price, order.fee, *mark, slippage,
+                    dataset.integers.at(row->second, kTimestampUs),
+                    0.0, order.quantity, order.price, 1.0,
+                    costs.slippage_bps, order.notional, -cash_out,
+                    signal->entry_signal_features_json
                 );
             }
 
@@ -1111,7 +1483,18 @@ std::shared_ptr<KernelResult> run_native_backtest(
             for (std::size_t index = 0; index < entries.size(); ++index) {
                 entries[index]->strength_rank = static_cast<std::int32_t>(index + 1);
             }
-            for (const SignalRecord& signal : current) append_signal(*result, signal);
+            for (SignalRecord& signal : current) {
+                const std::string strength_json = build_strength_json(signal, strategy);
+                signal.metadata_json = build_signal_metadata_json(
+                    dataset, signal, strategy, strength_json
+                );
+                if (signal.action == Action::Buy) {
+                    signal.entry_signal_features_json = build_entry_signal_features_json(
+                        signal.metadata_json, strength_json
+                    );
+                }
+                append_signal(*result, signal);
+            }
             pending = std::move(current);
 
             for (auto& [instrument, position] : positions) {
@@ -1250,6 +1633,7 @@ void bind_backtest(py::module_& module) {
             result["strength_rank"] = vector_view(owner, value.signal_strength_rank);
             result["passes_threshold"] = vector_view(owner, value.signal_passes_threshold);
             result["reason"] = value.signal_reason;
+            result["metadata_json"] = value.signal_metadata_json;
             return result;
         })
         .def_property_readonly("trades", [](py::object owner) {
@@ -1265,6 +1649,28 @@ void bind_backtest(py::module_& module) {
             result["fee"] = vector_view(owner, value.trade_fee);
             result["reference_price"] = vector_view(owner, value.trade_reference_price);
             result["slippage_cost"] = vector_view(owner, value.trade_slippage_cost);
+            result["execution_timestamp_us"] = vector_view(
+                owner, value.trade_execution_timestamp_us
+            );
+            result["signal_timestamp_us"] = vector_view(owner, value.trade_signal_timestamp_us);
+            result["execution_date_ordinal"] = vector_view(
+                owner, value.trade_execution_date_ordinal
+            );
+            result["reason"] = value.trade_reason;
+            result["entry_signal_features_json"] = value.trade_entry_signal_features_json;
+            result["position_quantity_before"] = vector_view(
+                owner, value.trade_position_quantity_before
+            );
+            result["position_quantity_after"] = vector_view(
+                owner, value.trade_position_quantity_after
+            );
+            result["position_average_entry_price_after"] = vector_view(
+                owner, value.trade_position_average_entry_price_after
+            );
+            result["stage_target_pct"] = vector_view(owner, value.trade_stage_target_pct);
+            result["slippage_bps"] = vector_view(owner, value.trade_slippage_bps);
+            result["gross_notional"] = vector_view(owner, value.trade_gross_notional);
+            result["net_cash_flow"] = vector_view(owner, value.trade_net_cash_flow);
             return result;
         })
         .def_property_readonly("equity", [](py::object owner) {
