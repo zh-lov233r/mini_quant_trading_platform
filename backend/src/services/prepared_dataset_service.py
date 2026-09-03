@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 
 PREPARED_DATASET_SCHEMA_VERSION = "v4"
+PREPARED_READ_PATH_REVISION = "binary-shards-1"
 PREPARED_INTEGER_FIELDS = (
     "session_index", "instrument_id", "ts_us", "dt_ordinal", "symbol_id",
     "asset_type_id", "exchange_id", "listed_ordinal", "delisted_ordinal",
@@ -136,9 +137,8 @@ class PreparedDataset:
             row[PREPARED_INTEGER_INDEX[f"{name}_ordinal"]] = (
                 value.toordinal() if isinstance(value, date) else PREPARED_DATE_SENTINEL
             )
-        for name, column in PREPARED_FLOAT_INDEX.items():
-            value = snapshot.get(name)
-            self.floats[index, column] = float(value) if value is not None else np.nan
+        self.floats[index, :] = [snapshot.get(name) if snapshot.get(name) is not None else np.nan
+                                 for name in PREPARED_FLOAT_FIELDS]
 
 
 def prepared_dataset_key(manifest: dict[str, Any]) -> str:
@@ -157,6 +157,7 @@ def build_prepared_dataset_manifest(
 ) -> dict[str, Any]:
     return {
         "loader_schema_version": PREPARED_DATASET_SCHEMA_VERSION,
+        "read_path_revision": PREPARED_READ_PATH_REVISION,
         "instrument_ids": sorted(int(value) for value in instrument_ids),
         "date_range": [coverage_date_range[0].isoformat(), coverage_date_range[1].isoformat()],
         "requested_date_range": [
@@ -208,7 +209,7 @@ class PreparedDatasetCache:
     def _remove_directory(directory: Path) -> None:
         if not directory.exists():
             return
-        for name in ("integers.npy", "floats.npy", "metadata.json"):
+        for name in ("integers.npy", "floats.npy", "metadata.json", "wire.bin"):
             (directory / name).unlink(missing_ok=True)
         directory.rmdir()
 
@@ -237,8 +238,8 @@ class PreparedDatasetCache:
                 or floats.dtype != np.dtype("<f8")
                 or tuple(integers.shape) != (rows, len(PREPARED_INTEGER_FIELDS))
                 or tuple(floats.shape) != (rows, len(PREPARED_FLOAT_FIELDS))
-                or not np.isfortran(integers)
-                or not np.isfortran(floats)
+                or not integers.flags.f_contiguous
+                or not floats.flags.f_contiguous
                 or metadata.get("integer_fields") != list(PREPARED_INTEGER_FIELDS)
                 or metadata.get("float_fields") != list(PREPARED_FLOAT_FIELDS)
             ):
@@ -263,8 +264,9 @@ class PreparedDatasetCache:
         self,
         manifest: dict[str, Any],
         *,
-        row_count: int,
-        writer: Callable[[PreparedDataset], dict[str, Any] | None],
+        row_count: int | None = None,
+        writer: Callable[[PreparedDataset], dict[str, Any] | None] | None = None,
+        prepare: Callable[[Path], tuple[int, Callable]] | None = None,
         performance: dict[str, Any] | None = None,
     ) -> PreparedDataset:
         normalized = self._normalize_manifest(manifest)
@@ -277,6 +279,10 @@ class PreparedDatasetCache:
             temporary = self.root / f".{key}.{uuid4().hex}.{PREPARED_DATASET_SCHEMA_VERSION}"
             temporary.mkdir()
             try:
+                if prepare is not None:
+                    row_count, writer = prepare(temporary)
+                if row_count is None or row_count < 0 or writer is None:
+                    raise ValueError("prepared build requires a row count and complete writer")
                 write_started = perf_counter()
                 integers = np.lib.format.open_memmap(
                     temporary / "integers.npy", mode="w+", dtype="<i8",
@@ -286,8 +292,6 @@ class PreparedDatasetCache:
                     temporary / "floats.npy", mode="w+", dtype="<f8",
                     shape=(row_count, len(PREPARED_FLOAT_FIELDS)), fortran_order=True,
                 )
-                integers[:] = PREPARED_DATE_SENTINEL
-                floats[:] = np.nan
                 if performance is not None:
                     performance["array_write_ms"] = (
                         float(performance.get("array_write_ms", 0.0))
@@ -363,6 +367,9 @@ class PreparedDatasetCache:
         if not self.root.exists():
             return 0
         removed = 0
+        shards = self.root / "shards"
+        if shards.is_dir():
+            removed += PreparedDatasetCache(shards).invalidate_all()
         for directory in sorted(self.root.iterdir()):
             if not directory.is_dir() or directory.suffix not in {".v3", ".v4"}:
                 continue

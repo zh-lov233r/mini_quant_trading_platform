@@ -84,20 +84,41 @@ worker 使用 `FOR UPDATE SKIP LOCKED` claim，维护 heartbeat/lease，每个�
 
 ## 指标与验收
 
-已完成回测通过 `GET /api/backtests/{id}/summary` 的 `summary_metrics.performance` 返回四段准备耗时，详情接口也返回同一指标。单位均为墙钟毫秒：
+已完成回测的 summary/detail 接口在 `summary_metrics.performance` 返回墙钟毫秒。新读取链路使用下列不重叠的准备阶段；不要把旧版 `sql_fetch_ms` 与新分片阶段直接作逐项等价比较。
 
 | 字段 | 计时范围 |
 | --- | --- |
-| `sql_read_ms` | 冷缓存行数统计、特征查询执行/取数、公司行动加载。取数包含数据库执行、传输和驱动转换。 |
-| `row_conversion_ms` | 特征行字典解码和按交易日分组，为 `row_decode_ms` 与 `day_grouping_ms` 之和。 |
-| `array_write_ms` | 数组分配/初始化、逐日编码及日期/身份附属信息积累、数组文件刷盘。按日计时，不为每个编码单元额外调用时钟。 |
-| `native_warmup_ms` | 已有的原生策略状态预热耗时，范围在请求开始日期之前，不产生正式信号、成交或快照。 |
+| `sql_read_ms` | instrument/symbol 元数据和公司行动查询；不含分片 COPY。 |
+| `shard_load_ms` | 所有分片读取/构建的并行墙钟时间，含 COPY、临时文件、NumPy 解码、分片数组刷盘与发布；不是线程时间之和，也不是网络耗时。 |
+| `row_conversion_ms` | 原字典转换指标；新列式路径为零，解码计入分片阶段。 |
+| `array_write_ms` | 最终数组分配、分片拼装、按日排序、字典重映射、sidecar 和刷盘。 |
+| `native_warmup_ms` | 请求日期之前的策略状态预热；也包含在 `native_kernel_ms` 内，不可重复相加。 |
+| `universe_resolution_ms` | 股票池标准化和稳定 instrument identity 解析；独立于上述取数阶段。 |
 
-四段之间互不重叠，但不覆盖全部准备过程：股票池解析、锁等待、缓存校验/元数据发布、支撑压力缓存状态加载均不包含在内。它们与已有 SQL/解码诊断项或 `native_kernel_ms` 存在包含关系，不可重复相加。直接命中热缓存时前三项为零，原生预热仍可能耗时。若等待构建锁时另一进程已发布缓存，本次行数统计仍计时，但不会执行数组写入。指标在成功完成后保存，不会在 `preparing` 仍显示 0% 时实时推送；已运行的 worker 和已有结果不会被追补。不需要修改数据库结构。
+直接命中最终缓存时加载/拼装阶段为零，`shard_load_ms` 和分片计数可以缺省。股票池解析、锁等待和部分最终元数据工作仍不在上述阶段内；端到端比较以独立墙钟及 `engine_total_ms` 为准。分片数量通过 `shards_hit` / `shards_built` 返回。既有结果不会补写计时字段。原生计算线程、执行时序、成本、P&L 和持久化级别不变。
 
-`summary_metrics.performance` 使用互不重叠的阶段记录 `sql_execute_ms`、`sql_fetch_ms`、`row_decode_ms`、`day_grouping_ms`、历史状态、信号、成交、明细构造、明细/摘要持久化、响应构造和总耗时。它同时记录 rows/day/signals/trades 每秒、每输入行微秒数、阶段占比、`unaccounted_ms`、峰值 RSS、配置/有效/实际 run 内线程数、并行/串行交易日数、原生 warmup 耗时和正式信号生成耗时；worker 终态补充 queue wait、active 和 finalization overhead。支撑/压力区子阶段只作为诊断维度，不重复计入 `unaccounted_ms`。结构化日志记录同一映射。
+## 列式读取与分片缓存
 
-手动、研究和验证回测都使用 `run_manifest.preparedDataset` 中的稳定 key/manifest。v4 key 包含 loader/schema revision、稳定 instrument 集合、股票池规则、覆盖与请求日期范围、feature set、价格/公司行动、symbol identity 和 universe membership 语义，不包含普通策略参数或行情逐行摘要。热缓存会在任何源行查询前直接只读打开 memmap。冷缓存或损坏缓存先执行一次行数统计，再在文件锁内流式、原子构建相互独立且按 Fortran 顺序存储的 `int64` identity/date memmap 与 `float64` feature memmap，并写入 symbol/asset/exchange、日期 offset、公司行动和动态 universe sidecar；数值缺失统一使用 NaN。cleanup 会统计引用同一 key 的 queued/running job，存在 active lease 时拒绝删除。
+手动、研究和验证回测共用单一 COPY 读取实现，最终仍为原生 ABI 2 接受的 v4 Fortran-order int64/float64 数组。manifest 增加 `read_path_revision=binary-shards-1`，旧缓存不匹配新请求，无需数据库迁移或自动删除既有文件。
+
+读取按稳定的 `instrument_id // 256` 桶和完整日历年分片；分片键含实际 instrument 集合、年份、schema 和读取修订，不含策略或精确请求日期。增加一只股票只改变所属桶各年份的键，同年移动结束日期可直接复用分片。完整年份可能多读窗口外行情，但只按原 coverage 范围拼装输入；每个 instrument 的 LAG 精确补入年初之前最后一条 feature，且在关联 bars 之前计算，缺失 bar 不会跳过 feature 前值。所有价格仍优先前复权，缺失浮点为 NaN，符号区间使用包含边界和 valid_from/id 的原有优先级。
+
+COPY 使用固定 int8/float8 列，显式校验二进制头、列数、长度和结束标记。流式写入临时文件后按实际行数一次分配数组，不执行 COUNT 预飞，不预填全量 NaN，也不截断已分配的 Fortran 数组。NumPy 批量解码后物理重排为 session/instrument 顺序并校验同日身份冲突，再交给未修改的 C++ 内核；date_offsets 只作元数据。
+
+`BACKTEST_READ_WORKERS` 默认 4（1–4），`BACKTEST_READ_WORK_MEM_MB` 默认 128（4–512），按回测冷建读取。并行连接导入同一个 PostgreSQL snapshot，元数据解析使用导出连接；主回测保持现有行情维护共享锁。work_mem 是每节点/每进程预算，Hash 还受 hash_mem_multiplier 影响；多回测并发时应降低读取线程或内存预算，不按连接数简单计算上限。缺少 psycopg3 时沿用启动门禁拒绝执行，不回退旧 loader。
+
+无历史需求的三个无状态 descriptor 在固定股票池下不再加载 400 天原始历史；prev 指标仍由精确边界种子提供。状态策略以及 point-in-time 股票池继续保持 400 个日历日，不能把 descriptor 的交易日数直接当日历日数下调。原计划 C-1 的任意逐策略缩短尚未通过完整状态等价性验证，未开放不安全的热身开关。
+
+最终缓存和分片都在文件锁内原子发布。读取失败只移除本次未发布临时文件；空分片也可缓存。最终缓存 cleanup 仍保护 active lease，共享分片保留给其他窗口复用；每日排他行情维护会一并失效最终缓存和 shards。禁止绕过维护窗口直接更新源数据。此改动不重置数据库、不改 broker 状态；回滚使用此前代码提交，重新构建派生缓存即可。
+
+查询观察使用：
+
+```bash
+make explain-feature-query
+# 单个真实 instrument 桶/年份，重复 3 次，输出 EXPLAIN JSON 与 COPY+临时文件墙钟
+```
+
+该命令只查询源表并生成本地报告，不创建回测。EXPLAIN 与 COPY 的时间分别报告，不相减推断传输成本，不声称 shared read 等于物理冷盘。性能回归必须固定策略、股票池、成本、覆盖窗口、代码版本及数据输入，前后都使用独立空目录；原生 golden 之外还需真实旧/新数组和 sidecar 差分，以及停牌、缺失 bar、改名、首日 NULL 的 PostgreSQL 契约测试。
 
 ## 排他行情维护
 

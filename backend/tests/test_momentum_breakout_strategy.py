@@ -4,7 +4,7 @@ import copy
 from datetime import UTC, date, datetime, timedelta, timezone
 import unittest
 
-from src.services.backtest_engine import FEATURE_RANGE_SQL
+from src.services.columnar_market_data_loader import FEATURE_RANGE_SQL
 from src.services.strategy_engine import FEATURE_SNAPSHOT_SQL, evaluate_native_signals
 from src.services.strategy_registry import (
     MOMENTUM_BREAKOUT_DEFAULTS,
@@ -69,7 +69,7 @@ class MomentumBreakoutStrategyTests(unittest.TestCase):
         for query in (FEATURE_SNAPSHOT_SQL, FEATURE_RANGE_SQL):
             for price_field in ("open", "high", "low", "close"):
                 self.assertIn(
-                    f"COALESCE(bars.{price_field}_fa, bars.{price_field}_u) AS {price_field}",
+                    f"COALESCE(bars.{price_field}_fa, bars.{price_field}_u)",
                     query,
                 )
 

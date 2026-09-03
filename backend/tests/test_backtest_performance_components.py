@@ -50,7 +50,7 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
                 return_value=cache,
             ),
             patch(
-                "src.services.backtest_engine.MarketDataLoader",
+                "src.services.backtest_engine.build_market_dataset",
                 autospec=True,
             ) as loader_class,
         ):
@@ -77,72 +77,27 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
             "array_write_ms": 0.0,
         })
 
-    def test_cold_preparation_timers_include_count_and_actions_without_overlap(self) -> None:
-        performance: dict[str, object] = {
-            "sql_execute_ms": 2.0,
-            "sql_fetch_ms": 3.0,
-            "row_decode_ms": 7.0,
-            "day_grouping_ms": 11.0,
-        }
-        cache = MagicMock()
+    def test_cold_preparation_uses_columnar_builder_without_count(self) -> None:
+        db, cache = MagicMock(), MagicMock()
         cache.open.return_value = None
         dataset = SimpleNamespace(sidecar={})
-
-        def build(_manifest, *, row_count, writer, performance):
-            self.assertEqual(row_count, 1)
-            writer([None])
-            performance["array_write_ms"] = 6.0
-            return dataset
-
-        cache.build.side_effect = build
-        resolved_universe = SimpleNamespace(manifest=lambda: {}, instrument_ids=[1])
-        db = MagicMock()
-        db.execute.return_value.scalar_one.return_value = 1
-
+        performance = {}
         with (
-            patch(
-                "src.services.backtest_engine.perf_counter",
-                side_effect=[0.0, 0.005, 0.015, 0.055, 0.060, 0.070],
-            ),
-            patch(
-                "src.services.backtest_engine.PreparedDatasetCache",
-                return_value=cache,
-            ),
-            patch(
-                "src.services.backtest_engine.MarketDataLoader",
-                autospec=True,
-            ) as loader_class,
-            patch("src.services.backtest_engine.encode_prepared_snapshot"),
-            patch(
-                "src.services.backtest_engine._split_adjustments",
-                return_value=[],
-            ),
+            patch("src.services.backtest_engine.PreparedDatasetCache", return_value=cache),
+            patch("src.services.backtest_engine.build_market_dataset", return_value=dataset) as build,
+            patch("src.services.backtest_engine._split_adjustments", return_value=[]),
         ):
-            loader_class.return_value.iter_days.return_value = [
-                (
-                    date(2025, 1, 2),
-                    {"AAA": {"instrument_id": 1, "symbol": "AAA"}},
-                )
-            ]
-            loaded, _manifest, status, materialization = _load_prepared_dataset(
-                db,
-                runtime={"strategy_type": "trend"},
-                symbols=["AAA"],
-                resolved_universe=resolved_universe,
-                start_date=date(2025, 1, 2),
-                end_date=date(2025, 1, 2),
-                universe_policy=None,
-                supplied=None,
-                performance=performance,
+            loaded, manifest, status, _ = _load_prepared_dataset(
+                db, runtime={"strategy_type": "trend"}, symbols=["AAA"],
+                resolved_universe=SimpleNamespace(manifest=lambda: {}, instrument_ids=[1]),
+                start_date=date(2025, 1, 2), end_date=date(2025, 1, 2),
+                universe_policy=None, supplied=None, performance=performance,
             )
-
         self.assertIs(loaded, dataset)
         self.assertEqual(status, "cold")
-        self.assertIsNone(materialization)
-        self.assertIs(loader_class.call_args.kwargs["performance"], performance)
-        self.assertEqual(performance["sql_read_ms"], 20.0)
-        self.assertEqual(performance["row_conversion_ms"], 18.0)
-        self.assertEqual(performance["array_write_ms"], 46.0)
+        self.assertEqual(manifest["date_range"], ["2025-01-02", "2025-01-02"])
+        db.execute.assert_not_called()
+        build.assert_called_once()
 
     def test_benchmark_cases_use_exact_supplied_correctness_session_window(self) -> None:
         start = date(2024, 7, 1)

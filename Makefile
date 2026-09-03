@@ -21,7 +21,7 @@ help:
 	@echo "  make backfill-daily Run the daily market-data catch-up flow"
 	@echo "  make import-a-share Plan or import Tushare A-share daily/index data (A_SHARE_ARGS='plan --start-date ... --end-date ...')"
 	@echo "  make check-data     Run read-only market-data integrity checks"
-	@echo "  make explain-feature-query Time the cold backtest feature query (read-only; EXPLAIN_ARGS to override)"
+	@echo "  make explain-feature-query Observe one real COPY shard (read-only; EXPLAIN_ARGS to override)"
 	@echo "  make docker-build Build all Docker images"
 	@echo "  make docker-up    Start the full Docker stack in background"
 	@echo "  make docker-down  Stop the Docker stack"
@@ -71,7 +71,7 @@ check-data:
 	@cd "$(ROOT_DIR)" && "$(PYTHON)" backend/utils/check_market_data_quality.py $(CHECK_DATA_ARGS)
 
 explain-feature-query:
-	@cd "$(ROOT_DIR)" && "$(PYTHON)" backend/utils/explain_backtest_feature_query.py $(or $(EXPLAIN_ARGS),--basket "All A Shares (Tushare)" --start 2025-01-01 --end 2026-07-31 --measure-transport)
+	@cd "$(ROOT_DIR)" && "$(PYTHON)" backend/utils/explain_backtest_feature_query.py $(or $(EXPLAIN_ARGS),--basket "All A Shares (Tushare)" --start 2025-01-01 --end 2026-07-31 --measure-copy)
 
 docker-build:
 	@docker compose --env-file .env.docker build

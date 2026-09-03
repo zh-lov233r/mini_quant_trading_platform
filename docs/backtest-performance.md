@@ -84,20 +84,41 @@ If rollout fails, stop new job producers and the backtest worker, then redeploy 
 
 ## Telemetry and acceptance
 
-Completed runs expose four preparation timings under `summary_metrics.performance` in `GET /api/backtests/{id}/summary` (also in the detail response). Values are wall-clock milliseconds:
+Completed summary/detail responses expose wall-clock milliseconds in `summary_metrics.performance`. The following preparation phases are disjoint; old `sql_fetch_ms` and new shard timings are not like-for-like component measurements.
 
-| Field | Measured work |
+| Field | Timed boundary |
 | --- | --- |
-| `sql_read_ms` | Cold-cache row-count query, feature query execution/fetch, and corporate-action loading. Fetch includes database execution, transfer and driver conversion. |
-| `row_conversion_ms` | Feature-row dictionary decoding and trading-day grouping; sums `row_decode_ms` and `day_grouping_ms`. |
-| `array_write_ms` | Array allocation/initialization, per-day encoding with date/identity sidecars, and array-file flush. Timed by day rather than adding a clock call for every encoded cell. |
-| `native_warmup_ms` | Existing native strategy-state warmup before the requested start date; no formal signals, trades or snapshots. |
+| `sql_read_ms` | Instrument/symbol metadata and corporate-action queries, excluding shard COPY. |
+| `shard_load_ms` | Parallel wall time for all shard loads/builds: COPY, spool, NumPy decoding, shard flush and publication; neither summed worker time nor network time. |
+| `row_conversion_ms` | Former dictionary conversion metric; zero on the columnar path, whose decoding belongs to shard loading. |
+| `array_write_ms` | Final allocation, assembly, day-major ordering, dictionary remapping, sidecars and flush. |
+| `native_warmup_ms` | State warmup before the request; also included in `native_kernel_ms`, so do not add twice. |
+| `universe_resolution_ms` | Universe normalization and stable instrument identity resolution, separate from the loading phases. |
 
-These four measurements do not overlap each other. They are not a complete partition of preparation: universe resolution, lock waits, cache validation/metadata publication, and Support/Resistance cache hydration are excluded. Do not add them to the existing SQL/decode diagnostics or `native_kernel_ms`, which overlap these aggregates. Direct warm-cache hits report zero for the first three; native warmup can still take time. If another process publishes the cache while this run waits for its build lock, the row-count query remains measured but this run performs no array writes. Timings are saved on successful completion, not streamed while `preparing` remains at 0%; already-running workers and existing results are not retroactively updated. No database schema change is required.
+Direct final-cache hits skip loading/assembly; shard timing and counts may be absent. Universe resolution, lock waits and some final metadata work remain outside these phases; compare independent wall time and `engine_total_ms` end to end. `shards_hit` / `shards_built` expose reuse. Existing results are not backfilled. Native compute threads, execution timing, costs, P&L and persistence levels are unchanged.
 
-`summary_metrics.performance` uses non-overlapping phases for SQL execute/fetch, row decode, day grouping, history state, signals, execution, detail construction, detail/summary persistence, response construction, and engine total. It also records rows/days/signals/trades per second, microseconds per input row, phase shares, `unaccounted_ms`, peak RSS, configured/effective/actual intra-run threads, parallel/serial trading-day counts, native warmup time, and native formal signal-generation time. Worker terminalization adds queue wait, active, and finalization overhead. Support/Resistance subphases are diagnostic dimensions and are not double-counted in `unaccounted_ms`. Logs contain the same structured mapping.
+## Columnar reads and sharded caches
 
-Manual, research, and verification backtests use the stable key and manifest in `run_manifest.preparedDataset`. The v4 key includes loader/schema revision, stable instrument set, universe rule, coverage and requested ranges, feature set, price/corporate-action, symbol-identity, and universe-membership semantics; ordinary strategy parameters and market-row digests are excluded. A warm hit opens the read-only memmaps before any source-row query. A cold or corrupt cache performs one row-count query, then atomically streams separate Fortran-order `int64` identity/date and `float64` feature memmaps plus symbol/asset/exchange, date-offset, corporate-action, and dynamic-universe sidecars under a file lock. Missing numeric features are NaN. Cleanup counts queued/running jobs referencing the key and refuses deletion while an active lease exists.
+Manual, research and verification backtests share one COPY reader. Final output remains v4 Fortran-order int64/float64 arrays accepted by native ABI 2. Manifests add `read_path_revision=binary-shards-1`; previous caches do not match new requests. No database migration or automatic deletion of existing files is needed.
+
+Shards use stable `instrument_id // 256` buckets and full calendar years. Keys contain the actual instrument set, year, schema and reader revision, not strategy or exact requested dates. Adding an instrument changes only its bucket's yearly keys; moving the end date within a year reuses shards. Whole years can load extra data, but assembly selects only the original coverage range. LAG includes each instrument's exact last feature before January and runs before the bars join, so missing bars do not change predecessor semantics. Prices remain forward-adjusted-preferred, missing floats are NaN, and symbol resolution preserves inclusive bounds and valid_from/id precedence.
+
+COPY emits fixed int8/float8 columns, validating headers, column counts, lengths and trailers. Streaming to a temporary file determines exact allocation size: no COUNT preflight, full NaN prefill or truncation of allocated Fortran arrays. NumPy decodes in batches, physically restores session/instrument order and checks same-day identity conflicts before handing arrays to the unchanged C++ kernel; date_offsets are metadata only.
+
+`BACKTEST_READ_WORKERS` defaults to 4 (1–4), and `BACKTEST_READ_WORK_MEM_MB` to 128 (4–512), read at cold-build time. Parallel connections import one PostgreSQL snapshot; the exporter loads metadata, while the main backtest retains the existing maintenance shared lock. work_mem applies per operation/process, with Hash also affected by hash_mem_multiplier. Reduce read workers or memory under concurrent runs; connection count alone does not bound memory. The existing startup gate requires psycopg3, with no old-loader fallback.
+
+The three stateless descriptors with no history requirement omit the former 400-day raw-history prefix for fixed universes; exact boundary seeds still supply previous indicators. Stateful strategies and point-in-time universes retain 400 calendar days. Descriptor session counts are not calendar-day bounds. Arbitrary per-strategy shortening from original C-1 has not passed full state-equivalence validation, and no unsafe warmup override is exposed.
+
+Final caches and shards publish atomically under file locks. Failed reads remove only their unpublished temporary files; empty shards are cacheable. Final-cache cleanup protects active leases, while shared shards remain reusable by other windows. Exclusive daily maintenance invalidates both final caches and shards. Direct source updates outside that window are unsupported. This change neither resets the database nor changes broker state. Roll back with the previous code commit and rebuild derived caches.
+
+Observe queries with:
+
+```bash
+make explain-feature-query
+# One real instrument bucket/year, 3 repetitions, EXPLAIN JSON and COPY+spool wall time.
+```
+
+This reads source tables and writes a local report, not a backtest. EXPLAIN and COPY timings remain separate: never subtract them to infer transfer cost or equate shared reads with cold physical disk. Performance comparisons freeze strategy, universe, costs, coverage, code and data inputs, and use independent empty cache roots. Beyond native goldens, validate real old/new arrays and sidecars plus PostgreSQL cases for suspensions, missing bars, symbol changes and first-row NULLs.
 
 ## Exclusive market-data maintenance
 

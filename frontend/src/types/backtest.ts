@@ -120,6 +120,12 @@ export interface BacktestPerformance extends Record<string, unknown> {
   row_conversion_ms?: number;
   array_write_ms?: number;
   native_warmup_ms?: number;
+  shard_load_ms?: number;
+  shards_hit?: number;
+  shards_built?: number;
+  read_workers?: number;
+  read_work_mem_mb?: number;
+  universe_resolution_ms?: number;
 }
 
 export interface BacktestRunOut {

@@ -3147,26 +3147,33 @@ components:
       additionalProperties: true
       description: >-
         Completed-run telemetry in milliseconds, available from the summary/detail endpoints.
-        The four preparation timings are disjoint but do not cover all setup work.
-        The first three are zero on a direct warm-cache hit; native warmup can still run.
-        Aggregate timings overlap existing SQL/decode diagnostics and must not be added to them.
+        Preparation phases are disjoint but do not cover all setup work.
+        Direct warm-cache hits skip loading and assembly; native warmup can still run.
+        shard_load_ms is parallel wall time including COPY, spool, decode and shard publication,
+        not a sum of worker timings and not a pure network measurement.
       properties:
         sql_read_ms:
           type: number
           minimum: 0
-          description: Cold-cache row-count query, feature execute/fetch, and corporate-action loading wall time.
+          description: Instrument/symbol metadata and corporate-action SQL wall time; feature COPY is included in shard_load_ms.
         row_conversion_ms:
           type: number
           minimum: 0
-          description: Feature row decoding plus trading-day grouping.
+          description: Legacy dictionary conversion timing; zero for the columnar loader, whose decoding belongs to shard_load_ms.
         array_write_ms:
           type: number
           minimum: 0
-          description: Array allocation/initialization, per-day encoding and date/identity sidecar accumulation, and array file flush; excludes cache-lock waits and metadata publication.
+          description: Final array allocation, shard assembly, day-major reordering, dictionary remapping, sidecars and flush; excludes shard_load_ms.
         native_warmup_ms:
           type: number
           minimum: 0
           description: Native strategy state warmup before the requested start date; also included in native_kernel_ms.
+        shard_load_ms: {type: number, minimum: 0, description: Parallel shard loading/building wall time; absent on a direct final-cache hit}
+        shards_hit: {type: integer, minimum: 0}
+        shards_built: {type: integer, minimum: 0}
+        read_workers: {type: integer, minimum: 1, maximum: 4}
+        read_work_mem_mb: {type: integer, minimum: 4, maximum: 512}
+        universe_resolution_ms: {type: number, minimum: 0, description: Universe normalization and stable instrument resolution wall time}
 
     BacktestRun:
       allOf:

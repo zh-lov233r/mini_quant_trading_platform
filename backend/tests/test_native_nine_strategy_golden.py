@@ -281,6 +281,32 @@ class NativeNineStrategyGoldenTests(unittest.TestCase):
                     golden["strategies"][strategy_type],
                 )
 
+    def test_stateless_warmup_prefix_does_not_change_dated_ledgers(self) -> None:
+        import numpy as np
+        from src.services.prepared_dataset_service import PreparedDataset
+
+        first = date(2025, 1, 1) + timedelta(days=60)
+        for kind in ("trend", "mean_reversion", "momentum_breakout"):
+            with self.subTest(strategy=kind):
+                original = self.helper._dataset(self._stateless_days(kind))
+                selected = original.integers[:, 3] >= first.toordinal()
+                integers = np.array(original.integers[selected], order="F")
+                integers[:, 0] -= 60
+                shortened = PreparedDataset.opened(
+                    integers, np.array(original.floats[selected], order="F"), original.sidecar,
+                )
+                before = quant_kernel.run_backtest(original, self._runtime(kind), {"start_date": first})
+                after = quant_kernel.run_backtest(shortened, self._runtime(kind), {"start_date": first})
+                self.assertEqual(before.summary, after.summary)
+                for section in ("signals", "trades", "equity", "positions"):
+                    for field, old in dict(getattr(before, section)).items():
+                        new = dict(getattr(after, section))[field]
+                        # Indices are local to each dataset; timestamps and every
+                        # financial/metadata column must remain exactly equal.
+                        if field in ("session_index", "signal_session_index"):
+                            old = old - 60
+                        np.testing.assert_equal(old, new)
+
     def test_all_nine_accept_a_share_symbols_and_exchanges(self) -> None:
         for strategy_type, dataset, runtime in self._cases():
             with self.subTest(strategy_type=strategy_type):

@@ -26,8 +26,7 @@ from src.services.backtest_worker_config import (
     resolve_backtest_intra_run_threads,
     resolve_effective_backtest_intra_run_threads,
 )
-from src.services.feature_snapshot_sql import FEATURE_SNAPSHOT_PROJECTION_SQL
-from src.services.market_data_loader import MarketDataLoader
+from src.services.columnar_market_data_loader import build_market_dataset
 from src.services.market_data_maintenance_service import acquire_market_data_read_lock
 from src.services.native_result_repository import (
     NativePersistenceCancelledError,
@@ -38,7 +37,6 @@ from src.services.prepared_dataset_service import (
     PREPARED_INTEGER_INDEX,
     PreparedDatasetCache,
     build_prepared_dataset_manifest,
-    encode_prepared_snapshot,
     prepared_dataset_key,
 )
 from src.services.stock_basket_service import (
@@ -51,6 +49,7 @@ from src.services.strategy_registry import (
     extract_description,
     is_engine_ready,
     normalize_strategy_params,
+    strategy_data_requirements,
 )
 from src.services.support_resistance_persistence_service import (
     SupportResistancePersistenceCancelledError,
@@ -72,59 +71,6 @@ UTC = timezone.utc
 class BacktestCancelledError(RuntimeError):
     pass
 
-
-# One SQL query loads the full daily snapshot needed by the backtest loop:
-# adjusted close for pricing, volume, and all strategy features used by handlers.
-FEATURE_RANGE_SQL = f"""
-SELECT
-    curr.instrument_id,
-    COALESCE(identity_symbol.symbol, i.ticker_canonical) AS symbol,
-    curr.dt_ny,
-    bars.ts_utc AS ts,
-    bars.close_u AS close_unadjusted,
-    curr.dollar_volume_20,
-    i.asset_type,
-    i.exchange,
-    i.listed_at,
-    i.delisted_at,
-{FEATURE_SNAPSHOT_PROJECTION_SQL}
-FROM daily_features curr
-JOIN instruments i
-  ON i.id = curr.instrument_id
-JOIN eod_bars bars
-  ON bars.instrument_id = curr.instrument_id
- AND bars.dt_ny = curr.dt_ny
-LEFT JOIN LATERAL (
-    SELECT sh.symbol
-    FROM symbol_history sh
-    WHERE sh.instrument_id = curr.instrument_id
-      AND sh.is_primary = TRUE
-      AND sh.valid_from <= curr.dt_ny
-      AND (sh.valid_to IS NULL OR sh.valid_to >= curr.dt_ny)
-    ORDER BY sh.valid_from DESC, sh.id DESC
-    LIMIT 1
-) identity_symbol ON TRUE
-LEFT JOIN LATERAL (
-    SELECT *
-    FROM daily_features prev_df
-    WHERE prev_df.instrument_id = curr.instrument_id
-      AND prev_df.dt_ny < curr.dt_ny
-    ORDER BY prev_df.dt_ny DESC
-    LIMIT 1
-) prev ON TRUE
-WHERE curr.dt_ny BETWEEN :start_date AND :end_date
-  AND i.is_active = TRUE
-  AND i.ticker_canonical IN :symbols
-ORDER BY curr.dt_ny, COALESCE(identity_symbol.symbol, i.ticker_canonical), curr.instrument_id;
-"""
-
-FEATURE_RANGE_V2_SQL = FEATURE_RANGE_SQL.replace(
-    "  AND i.is_active = TRUE\n  AND i.ticker_canonical IN :symbols",
-    "  AND curr.instrument_id IN :instrument_ids",
-).replace(
-    "ORDER BY curr.dt_ny, COALESCE(identity_symbol.symbol, i.ticker_canonical), curr.instrument_id;",
-    "ORDER BY curr.dt_ny, curr.instrument_id;",
-)
 
 SPLIT_ACTION_RANGE_SQL = """
 SELECT
@@ -399,63 +345,6 @@ def _normalize_symbols(symbols: list[str | None] | None) -> list[str]:
     return normalized_symbols
 
 
-def _feature_snapshot_from_row(
-    row: dict[str, Any],
-) -> tuple[date, str, dict[str, Any]]:
-    symbol = str(row["symbol"]).upper()
-    trade_date = row["dt_ny"]
-    snapshot = {
-        "instrument_id": int(row["instrument_id"]),
-        "symbol": symbol,
-        "dt_ny": trade_date,
-        "ts": row["ts"] or datetime.now(timezone.utc),
-        "open": row["open"],
-        "high": row["high"],
-        "low": row["low"],
-        "close": row["close"],
-        "close_unadjusted": row.get("close_unadjusted"),
-        "volume": row["volume"],
-        "atr_14": row["atr_14"],
-        "volume_sma_20": row["volume_sma_20"],
-        "dollar_volume_20": row.get("dollar_volume_20"),
-        "asset_type": row.get("asset_type"),
-        "exchange": row.get("exchange"),
-        "listed_at": row.get("listed_at"),
-        "delisted_at": row.get("delisted_at"),
-        "ret_20d": row["ret_20d"],
-        "ret_60d": row["ret_60d"],
-        "sma_10": row["sma_10"],
-        "sma_20": row["sma_20"],
-        "sma_50": row["sma_50"],
-        "sma_100": row["sma_100"],
-        "sma_200": row["sma_200"],
-        "ema_12": row["ema_12"],
-        "ema_15": row["ema_15"],
-        "ema_20": row["ema_20"],
-        "ema_50": row["ema_50"],
-        "rsi_2": row["rsi_2"],
-        "rsi_5": row["rsi_5"],
-        "rsi_14": row["rsi_14"],
-        "zscore_5": row["zscore_5"],
-        "zscore_10": row["zscore_10"],
-        "zscore_20": row["zscore_20"],
-        "prev_sma_10": row["prev_sma_10"],
-        "prev_sma_20": row["prev_sma_20"],
-        "prev_sma_50": row["prev_sma_50"],
-        "prev_sma_100": row["prev_sma_100"],
-        "prev_sma_200": row["prev_sma_200"],
-        "prev_ema_12": row["prev_ema_12"],
-        "prev_ema_15": row["prev_ema_15"],
-        "prev_ema_20": row["prev_ema_20"],
-        "prev_ema_50": row["prev_ema_50"],
-        "position": 0.0,
-        "avg_entry_price": None,
-        "entry_trade_date": None,
-        "entry_signal_features": None,
-        "position_holding_days": None,
-        "recent_bars": [],
-    }
-    return trade_date, symbol, snapshot
 
 
 def _load_split_adjustments_by_date(
@@ -595,6 +484,12 @@ def _support_hydration(
     }, materialization
 
 
+def _coverage_start(strategy_type: str, start: date, policy: dict[str, Any] | None) -> date:
+    # Stateless descriptors consume precomputed features, including exact prev_*.
+    # Stateful warmup and PIT history eligibility retain the established window.
+    return start - timedelta(days=400 if policy or strategy_data_requirements(strategy_type).history_length else 0)
+
+
 def _load_prepared_dataset(
     db: Session,
     *,
@@ -608,13 +503,12 @@ def _load_prepared_dataset(
     performance: dict[str, Any],
 ) -> tuple[Any, dict[str, Any], str, Any | None]:
     sql_read_ms = 0.0
-    array_write_ms = 0.0
     if supplied is None:
         manifest = build_prepared_dataset_manifest(
             strategy_type=runtime["strategy_type"],
             universe=resolved_universe.manifest(),
             instrument_ids=resolved_universe.instrument_ids,
-            coverage_date_range=(start_date - timedelta(days=400), end_date),
+            coverage_date_range=(_coverage_start(runtime["strategy_type"], start_date, universe_policy), end_date),
             requested_date_range=(start_date, end_date),
             universe_policy=universe_policy,
         )
@@ -640,114 +534,26 @@ def _load_prepared_dataset(
     cache_status = "warm"
     if dataset is None:
         cache_status = "cold"
-        feature_statement = text(FEATURE_RANGE_V2_SQL).bindparams(
-            bindparam("instrument_ids", expanding=True)
-        )
         build_start = date.fromisoformat(str(manifest["date_range"][0]))
         build_end = date.fromisoformat(str(manifest["date_range"][1]))
-        count_started = perf_counter()
-        row_count = int(
-            db.execute(
-                text(
-                    """
-                    SELECT COUNT(*)
-                    FROM daily_features df
-                    JOIN eod_bars bars
-                      ON bars.instrument_id = df.instrument_id
-                     AND bars.dt_ny = df.dt_ny
-                    WHERE df.instrument_id IN :instrument_ids
-                      AND df.dt_ny BETWEEN :start_date AND :end_date
-                    """
-                ).bindparams(bindparam("instrument_ids", expanding=True)),
-                {
-                    "instrument_ids": manifest_instrument_ids,
-                    "start_date": build_start,
-                    "end_date": build_end,
-                },
-            ).scalar_one()
+        actions_started = perf_counter()
+        corporate_actions = _split_adjustments(
+            db, instrument_ids=manifest_instrument_ids, start_date=build_start, end_date=build_end,
         )
-        sql_read_ms += (perf_counter() - count_started) * 1000.0
-        if row_count <= 0:
-            raise ValueError("no daily feature data found for the backtest universe and window")
-
-        def writer(array: Any) -> dict[str, Any]:
-            nonlocal sql_read_ms, array_write_ms
-            loader = MarketDataLoader(
-                db,
-                statement=feature_statement,
-                params={
-                    "instrument_ids": manifest_instrument_ids,
-                    "start_date": build_start,
-                    "end_date": build_end,
-                },
-                row_factory=_feature_snapshot_from_row,
-                performance=performance,
-            )
-            index = 0
-            date_offsets: list[list[Any]] = []
-            identity_intervals: dict[tuple[int, str], list[str]] = {}
-            try:
-                for trade_day, snapshots in loader.iter_days():
-                    # Time the consumer separately from the loader's SQL/decode timers.
-                    write_started = perf_counter()
-                    date_offsets.append([trade_day.isoformat(), index, len(snapshots)])
-                    for snapshot in snapshots.values():
-                        if index >= len(array):
-                            raise RuntimeError(
-                                "prepared dataset contains more rows than its preflight count"
-                            )
-                        encode_prepared_snapshot(array, index, snapshot)
-                        identity = (int(snapshot["instrument_id"]), str(snapshot["symbol"]))
-                        interval = identity_intervals.setdefault(
-                            identity,
-                            [trade_day.isoformat(), trade_day.isoformat()],
-                        )
-                        interval[1] = trade_day.isoformat()
-                        index += 1
-                    array_write_ms += (perf_counter() - write_started) * 1000.0
-            finally:
-                loader.close()
-            if index != len(array):
-                raise RuntimeError(
-                    "prepared dataset row count differs from its preflight count"
-                )
-            actions_started = perf_counter()
-            corporate_actions = _split_adjustments(
-                db,
-                instrument_ids=manifest_instrument_ids,
-                start_date=build_start,
-                end_date=build_end,
-            )
-            sql_read_ms += (perf_counter() - actions_started) * 1000.0
-            return {
-                "date_offsets": date_offsets,
-                "instrument_symbol_intervals": [
-                    [instrument_id, symbol, interval[0], interval[1]]
-                    for (instrument_id, symbol), interval in sorted(identity_intervals.items())
-                ],
-                "corporate_actions": corporate_actions,
-            }
-
-        dataset = cache.build(
-            manifest,
-            row_count=row_count,
-            writer=writer,
-            performance=performance,
-        )
+        sql_read_ms += (perf_counter() - actions_started) * 1000.0
+        dataset = build_market_dataset(db, cache, manifest, performance, corporate_actions)
     performance.update(
         sql_read_ms=round(
             sql_read_ms
-            + float(performance.get("sql_execute_ms", 0.0))
-            + float(performance.get("sql_fetch_ms", 0.0)),
+            + float(performance.get("sql_read_ms", 0.0)),
             3,
         ),
         row_conversion_ms=round(
-            float(performance.get("row_decode_ms", 0.0))
-            + float(performance.get("day_grouping_ms", 0.0)),
+            float(performance.get("row_conversion_ms", 0.0)),
             3,
         ),
         array_write_ms=round(
-            array_write_ms + float(performance.get("array_write_ms", 0.0)), 3
+            float(performance.get("array_write_ms", 0.0)), 3
         ),
     )
     coverage_start = date.fromisoformat(str(manifest["date_range"][0]))
@@ -947,6 +753,7 @@ def run_backtest(
     if not runtime["engine_ready"]:
         raise ValueError("strategy is not engine-ready")
 
+    universe_started = perf_counter()
     policy = normalize_point_in_time_policy(universe_policy) if universe_policy else None
     if universe_symbols is not None and policy is not None:
         raise ValueError("provide universe_symbols or universe_policy, not both")
@@ -980,6 +787,7 @@ def run_backtest(
             db, symbols, start_date=start_date - timedelta(days=400), end_date=end_date
         )
 
+    performance["universe_resolution_ms"] = round((perf_counter() - universe_started) * 1000.0, 3)
     cost = _resolve_backtest_cost_config(
         runtime,
         commission_bps=commission_bps,
