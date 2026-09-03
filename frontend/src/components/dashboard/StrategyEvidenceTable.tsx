@@ -11,7 +11,7 @@ export function StrategyEvidenceTable({ rows }: { rows: DashboardStrategyEvidenc
   const { t, locale } = useI18n();
   const columns: DenseDataColumn<DashboardStrategyEvidence>[] = [
     { id: "strategy", header: t("dashboard.strategy"), accessor: r => r.name, width: 200, cell: (_, r) => <div className={styles.cell}><Link href={`/strategies/${r.strategy_id}`}>{r.name}</Link><span>v{r.version}{!r.engine_ready && ` · ${t("dashboard.engineUnavailable")}`}</span></div> },
-    { id: "type", header: t("dashboard.type"), accessor: r => r.strategy_type, width: 170, cell: (_, r) => <span>{isStrategyType(r.strategy_type) ? getStrategyCategoryPresentation(r.strategy_type, locale).label : r.strategy_type}<small className={styles.technical}>{r.strategy_type}</small></span> },
+    { id: "type", header: t("dashboard.type"), accessor: r => r.strategy_type, width: 170, cell: (_, r) => <span style={isStrategyType(r.strategy_type) ? { color: getStrategyCategoryPresentation(r.strategy_type, locale).accent } : undefined}>{isStrategyType(r.strategy_type) ? getStrategyCategoryPresentation(r.strategy_type, locale).label : r.strategy_type}<small className={styles.technical}>{r.strategy_type}</small></span> },
     ...(["total_return", "sharpe", "max_drawdown", "trade_count"] as const).map((key, i) => ({
       id: key, header: t(`dashboard.${["return", "sharpe", "drawdown", "trades"][i]}`), accessor: (r: DashboardStrategyEvidence) => r[key], width: 110,
       cell: (_: unknown, r: DashboardStrategyEvidence) => dashboardNumber(r[key], locale, key === "total_return" || key === "max_drawdown"),

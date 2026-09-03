@@ -65,6 +65,7 @@ import {
 } from "@/utils/backtestTransactions";
 import {
   buildEquityEventMarkers,
+  buildSupportResistancePivotMarkers,
   candleMarkerColor,
   isDisplayableSupportResistanceEventType,
   latestVisibleZoneOverlaysByRole,
@@ -77,7 +78,6 @@ import type {
   ChartRegimeOverlay,
   ChartZoneOverlay,
 } from "@/components/charts/chartModels";
-import { isLifecycleInteractiveTarget } from "@/utils/lifecycleInteraction";
 import {
   buildPatternLifecycleMarkers,
   earliestPatternAnchorDate,
@@ -2792,16 +2792,13 @@ function LifecycleDetailPanel({
   runId,
   row,
   signals,
-  onCollapse,
 }: {
   runId: string;
   row: PositionLifecycleRow;
   signals: BacktestSignalOut[];
-  onCollapse: () => void;
 }) {
   const { locale } = useI18n();
   const isZh = locale === "zh-CN";
-  const collapsePointerRef = useRef<{ x: number; y: number; dragged: boolean } | null>(null);
   const resolvedEntryTradeDate = row.entryTradeDate || toTradeDateKey(row.entryTs);
   const persistedEntrySignal: BacktestSignalOut | null = row.entrySignalFeatures
     ? {
@@ -2977,8 +2974,9 @@ function LifecycleDetailPanel({
       ...buildLifecycleChartMarkers(row, locale, isZh),
       ...buildPatternLifecycleMarkers(patternSelection, bars, locale),
       ...buildSupportResistanceMarkers(supportResistanceDetail?.events || [], locale, isZh),
+      ...buildSupportResistancePivotMarkers(supportResistanceDetail?.zone_versions || [], bars, locale),
     ],
-    [bars, isZh, locale, patternSelection, row, supportResistanceDetail?.events]
+    [bars, isZh, locale, patternSelection, row, supportResistanceDetail?.events, supportResistanceDetail?.zone_versions]
   );
   const visibleStartDate = bars[0]?.trade_date || fetchStartDate;
   const visibleEndDate = bars[bars.length - 1]?.trade_date || baseEndDate;
@@ -3148,41 +3146,6 @@ function LifecycleDetailPanel({
   return (
     <div
       style={{ paddingTop: 16 }}
-      title={isZh ? "点击生命周期详情可收起" : "Click the lifecycle detail to collapse"}
-      onPointerDownCapture={(event) => {
-        const target = event.target instanceof Element ? event.target : null;
-        if (isLifecycleInteractiveTarget(target)) {
-          collapsePointerRef.current = null;
-          return;
-        }
-        collapsePointerRef.current = {
-          x: event.clientX,
-          y: event.clientY,
-          dragged: false,
-        };
-      }}
-      onPointerMoveCapture={(event) => {
-        const pointer = collapsePointerRef.current;
-        if (!pointer || pointer.dragged) return;
-        if (Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) >= 6) {
-          pointer.dragged = true;
-        }
-      }}
-      onPointerCancelCapture={() => {
-        collapsePointerRef.current = null;
-      }}
-      onClick={(event) => {
-        const target = event.target instanceof Element ? event.target : null;
-        if (isLifecycleInteractiveTarget(target)) {
-          return;
-        }
-        const pointer = collapsePointerRef.current;
-        collapsePointerRef.current = null;
-        if (pointer?.dragged) {
-          return;
-        }
-        onCollapse();
-      }}
     >
       <div
         style={{
@@ -3971,7 +3934,6 @@ function PositionLifecycleCard({
                               runId={run.id}
                               row={row}
                               signals={run.signals}
-                              onCollapse={() => setExpandedRowKey(null)}
                             />
                           </td>
                         </tr>

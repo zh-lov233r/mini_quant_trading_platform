@@ -318,13 +318,15 @@ export default function StockCandleWidget() {
         type="button"
         aria-label={messages.marketViewer.title}
         title={messages.marketViewer.title}
+        className="workspace-market-trigger"
         onClick={() => setOpen((current) => !current)}
         style={{
           position: "fixed",
-          bottom: "var(--workspace-market-viewer-bottom, calc(var(--workspace-floating-bottom, 24px) + 58px))",
-          right: "var(--workspace-floating-right, 24px)",
+          bottom: "var(--workspace-floating-bottom, 24px)",
+          left: "var(--workspace-floating-right, 24px)",
           zIndex: BUTTON_Z_INDEX,
           display: "inline-flex",
+          minHeight: 44,
           alignItems: "center",
           gap: 10,
           padding: "11px 15px",
@@ -361,7 +363,7 @@ export default function StockCandleWidget() {
           <path d="M10.5 16h3" />
           <path d="M16.5 13h3" />
         </svg>
-        <span>{messages.marketViewer.trigger}</span>
+        <span className="workspace-market-trigger-label">{messages.marketViewer.trigger}</span>
       </button>
 
       {open && panelLayout ? (
@@ -1001,7 +1003,7 @@ function formatVolume(value: number | null | undefined, locale: string) {
 function getDefaultPanelLayout(): PanelLayout {
   const bounds = getWorkspaceBounds(window.innerWidth);
   return clampPanelLayout({
-    x: window.innerWidth - PANEL_DEFAULT_WIDTH - bounds.right,
+    x: bounds.left,
     y: 72,
     width: PANEL_DEFAULT_WIDTH,
     height: Math.min(PANEL_DEFAULT_HEIGHT, window.innerHeight - 88),

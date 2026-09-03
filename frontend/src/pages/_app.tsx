@@ -70,6 +70,12 @@ export default function App({ Component, pageProps }: AppProps) {
             line-height: 1.45;
           }
 
+          @media (min-width: 768px) and (max-width: 1599px) {
+            .workspace-market-trigger { width: 44px; height: 44px; padding: 0 !important; justify-content: center; left: 14px !important; }
+            .workspace-market-trigger-label { display: none; }
+          }
+          body:has([data-workspace-sidebar-collapsed="true"]) .workspace-market-trigger { width: 44px; height: 44px; padding: 0 !important; justify-content: center; left: 14px !important; }
+          body:has([data-workspace-sidebar-collapsed="true"]) .workspace-market-trigger-label { display: none; }
           @media (max-width: 767px) {
             :root {
               --workspace-control-height: 44px;

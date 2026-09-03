@@ -5,13 +5,14 @@ from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.db import get_db
 from src.models.tables import StockBasket
-from src.services.stock_basket_service import ensure_default_common_stock_basket
+from src.services.stock_basket_service import DEFAULT_COMMON_STOCK_BASKET_NAME, ensure_default_common_stock_basket
 
 
 class StockBasketCreate(BaseModel):
@@ -19,6 +20,14 @@ class StockBasketCreate(BaseModel):
     description: Optional[str] = Field(default=None, max_length=500, description="组合说明")
     symbols: list[str] = Field(..., min_length=1, description="股票代码列表")
     status: Literal["draft", "active", "archived"] = "active"
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("name must not be blank")
+        return value
 
 
 class StockBasketOut(BaseModel):
@@ -114,4 +123,33 @@ def get_stock_basket(basket_id: UUID, db: Session = Depends(get_db)):
     item = db.get(StockBasket, basket_id)
     if item is None:
         raise HTTPException(status_code=404, detail="stock basket not found")
+    return _to_stock_basket_out(item)
+
+
+@router.put("/{basket_id}", response_model=StockBasketOut)
+def update_stock_basket(basket_id: UUID, payload: StockBasketCreate, db: Session = Depends(get_db)):
+    item = db.get(StockBasket, basket_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="stock basket not found")
+    try:
+        symbols = _normalize_symbols(payload.symbols)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if item.name == DEFAULT_COMMON_STOCK_BASKET_NAME or payload.name == DEFAULT_COMMON_STOCK_BASKET_NAME:
+        raise HTTPException(status_code=409, detail="system-managed basket cannot be edited; create a separate basket")
+    duplicate = db.execute(select(StockBasket).where(
+        StockBasket.name == payload.name, StockBasket.id != basket_id,
+    )).scalars().first()
+    if duplicate:
+        raise HTTPException(status_code=409, detail="stock basket name already exists")
+    item.name = payload.name
+    item.description = (payload.description or "").strip() or None
+    item.symbols = symbols
+    item.status = payload.status
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="stock basket update conflicts with existing data") from exc
+    db.refresh(item)
     return _to_stock_basket_out(item)

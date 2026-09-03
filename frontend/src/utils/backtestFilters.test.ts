@@ -6,6 +6,7 @@ import { filterBacktestRuns } from "@/utils/backtestFilters";
 
 function run(overrides: Partial<BacktestRunOut>): BacktestRunOut {
   return {
+    market: "US",
     id: "run-1",
     strategy_id: "strategy-1",
     strategy_version: 1,
@@ -39,6 +40,11 @@ describe("backtest run filtering", () => {
   it("combines status and strategy-type filters", () => {
     expect(filterBacktestRuns(runs, strategyTypes, { query: "", status: "failed", strategyType: "mean_reversion" }))
       .toEqual([runs[1]]);
+  });
+
+  it("filters by persisted run market, independent of basket names", () => {
+    const cn = run({ id: "cn", market: "CN", basket_name: "Core Tech" });
+    expect(filterBacktestRuns([...runs, cn], strategyTypes, { query: "", status: "all", strategyType: "all", market: "CN" })).toEqual([cn]);
   });
 
   it("rejects a run whose strategy contract is missing", () => {

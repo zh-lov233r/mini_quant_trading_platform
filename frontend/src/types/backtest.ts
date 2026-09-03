@@ -123,6 +123,7 @@ export interface BacktestPerformance extends Record<string, unknown> {
 }
 
 export interface BacktestRunOut {
+  market: "US" | "CN";
   id: string;
   strategy_id: string;
   strategy_name?: string | null;

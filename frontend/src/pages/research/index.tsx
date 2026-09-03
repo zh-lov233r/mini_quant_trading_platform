@@ -8,6 +8,7 @@ import { listResearchExperiments } from "@/api/research";
 import { getStrategyCatalog, getStrategyFeatureSupport } from "@/api/strategies";
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
+import { getStrategyCategoryPresentation } from "@/utils/strategy";
 import { SelectControl } from "@/components/workspace/SelectControl";
 import { WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
@@ -125,10 +126,11 @@ export default function ResearchHomePage() {
                 onValueChange={setStrategyType}
                 options={catalog.map((item) => ({
                   value: item.strategy_type,
-                  label: `${item.label} · ${item.strategy_type}`,
+                  label: `${getStrategyCategoryPresentation(item.strategy_type, locale).label} · ${item.strategy_type}`,
+                  accent: getStrategyCategoryPresentation(item.strategy_type, locale).accent,
                 }))}
               />
-              {selectedCategory ? <div style={categorySummaryStyle}><strong>{selectedCategory.description}</strong><pre style={compactPreStyle}>{JSON.stringify({ signal: selectedCategory.defaults.signal, risk: selectedCategory.defaults.risk }, null, 2)}</pre></div> : null}
+              {selectedCategory ? <div style={{ ...categorySummaryStyle, borderColor: getStrategyCategoryPresentation(selectedCategory.strategy_type, locale).accent, background: `rgba(${getStrategyCategoryPresentation(selectedCategory.strategy_type, locale).accentRgb}, .12)` }}><strong>{selectedCategory.description}</strong><pre style={compactPreStyle}>{JSON.stringify({ signal: selectedCategory.defaults.signal, risk: selectedCategory.defaults.risk }, null, 2)}</pre></div> : null}
               <div style={resourceGridStyle}>
                 <NumberField label={isZh ? "最大轮数（1–5）" : "Max rounds (1–5)"} value={maxRounds} min={1} max={5} onChange={setMaxRounds} />
                 <NumberField label={isZh ? "实际 Backtest 上限（4–100）" : "Actual backtest limit (4–100)"} value={maxTrials} min={4} max={100} onChange={setMaxTrials} />

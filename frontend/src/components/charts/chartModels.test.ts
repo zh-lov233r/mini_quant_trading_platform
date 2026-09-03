@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildCandleSeriesMarkers,
+  buildSupportResistancePivotMarkers,
   buildLifecycleLeaderMarkers,
   buildEquityEventMarkers,
   candleTone,
@@ -442,4 +443,14 @@ describe("chart models", () => {
     expect(toChartTime("2025-08-29T20:00:00-04:00")).toBe("2025-08-29");
     expect(toChartTime("bad")).toBeNull();
   });
+});
+
+it("plots persisted high/low pivot members once and only within the loaded candle window", () => {
+  const versions = [{ symbol: "AAA", source_metadata: { pivot_keys: ["low:2025-01-02", "high:2025-01-02", "low:2024-12-01", "bad", null] } }];
+  const bars = [{ trade_date: "2025-01-02", open: 10, high: 12, low: 8, close: 11, volume: 100 }];
+  const markers = buildSupportResistancePivotMarkers([...versions, ...versions], bars, "zh-CN");
+  expect(markers).toHaveLength(2);
+  expect(markers.every(marker => marker.showText)).toBe(true);
+  expect(markers.map(marker => marker.price)).toEqual([12, 8]);
+  expect(markers[0].description).toContain("非当日信号");
 });

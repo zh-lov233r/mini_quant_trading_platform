@@ -521,3 +521,31 @@ function groupEquityEvents(
     };
   });
 }
+
+/** Mark only persisted zone-member pivots, never infer new signals from the visible window. */
+export function buildSupportResistancePivotMarkers(
+  versions: readonly { symbol: string; source_metadata: Record<string, unknown> }[],
+  bars: readonly CandleBarOut[],
+  locale: string,
+): ChartOverlayMarker[] {
+  const byDate = new Map(bars.map(bar => [bar.trade_date, bar]));
+  const markers = new Map<string, ChartOverlayMarker>();
+  for (const version of versions) {
+    const keys = version.source_metadata.pivot_keys;
+    if (!Array.isArray(keys)) continue;
+    for (const key of keys) {
+      if (typeof key !== "string") continue;
+      const match = /^(low|high):(\d{4}-\d{2}-\d{2})$/.exec(key);
+      if (!match) continue;
+      const [, kind, date] = match;
+      const bar = byDate.get(date);
+      if (!bar) continue;
+      const id = `sr-pivot-${version.symbol}-${key}`;
+      const label = kind === "low" ? (locale === "zh-CN" ? "低点 Pivot" : "Pivot low") : (locale === "zh-CN" ? "高点 Pivot" : "Pivot high");
+      markers.set(id, { key: id, date, showText: true, price: kind === "low" ? bar.low : bar.high,
+        label, tone: kind === "low" ? "left_bottom" : "neckline",
+        description: `${label} · ${date} · ${locale === "zh-CN" ? "区域拟合锚点（事后审计，非当日信号）" : "Zone fitting anchor (retrospective audit, not a same-day signal)"}` });
+    }
+  }
+  return [...markers.values()].sort((a, b) => a.date.localeCompare(b.date) || a.key.localeCompare(b.key));
+}

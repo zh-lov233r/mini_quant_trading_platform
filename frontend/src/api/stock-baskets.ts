@@ -11,3 +11,10 @@ export function createStockBasket(payload: StockBasketCreate): Promise<StockBask
     body: JSON.stringify(payload),
   });
 }
+
+export function updateStockBasket(id: string, payload: StockBasketCreate): Promise<StockBasketOut> {
+  return http<StockBasketOut>(`/api/stock-baskets/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}

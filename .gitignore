@@ -21,6 +21,9 @@ build/
 output/research/
 output/pdf/
 output/backups/
+output/backtest-timing-*/
+output/backtest-read-path-*/
+tmp/explain_feature_query.txt
 tmp/pdfs/
 *.egg-info/
 

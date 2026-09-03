@@ -172,6 +172,7 @@ class BacktestRunOut(BaseModel):
     initial_cash: Optional[float] = None
     final_equity: Optional[float] = None
     benchmark_symbol: Optional[str] = None
+    market: Literal["US", "CN"]
     summary_metrics: dict[str, Any]
     persist_level: Literal["summary", "trades", "full"] = "full"
     available_details: list[str] = Field(default_factory=list)
@@ -749,6 +750,7 @@ def _to_backtest_run_out(
         initial_cash=float(run.initial_cash) if run.initial_cash is not None else None,
         final_equity=float(run.final_equity) if run.final_equity is not None else None,
         benchmark_symbol=_benchmark_symbol_for_run(run),
+        market="CN" if _is_a_share_run(run) else "US",
         summary_metrics=_compact_summary_metrics(metrics) if compact_metrics else metrics,
         persist_level=persist_level,
         available_details=list(metrics.get("available_details") or _available_details(persist_level)),

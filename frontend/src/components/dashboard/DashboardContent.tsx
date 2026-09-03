@@ -6,7 +6,7 @@ import { KpiStrip, DensePanel } from "@/components/workspace/WorkspacePrimitives
 import { WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
 import type { DashboardOverview } from "@/types/dashboard";
-import { formatDateTime } from "@/utils/strategy";
+import { formatDateTime, getStrategyCategoryPresentation, isStrategyType } from "@/utils/strategy";
 import { dashboardNumber, healthPresentation, progressLinks } from "./presentation";
 import { StrategyEvidenceTable } from "./StrategyEvidenceTable";
 import styles from "./Dashboard.module.css";
@@ -81,10 +81,13 @@ export function DashboardContent({ data }: { data: DashboardOverview }) {
         </article>)}</div>
       </DensePanel>
       <DensePanel><h2>{t("dashboard.activity")}</h2><p className={styles.hint}>{t("dashboard.activityHint")}</p>
-        {data.activity.length === 0 ? <div className={styles.empty}><p>{t("dashboard.noActivity")}</p><Link href="/research">{t("dashboard.progress")} →</Link></div> : <ul className={styles.activity}>{data.activity.slice(0, 10).map(item => <li key={item.id}>
+        {data.activity.length === 0 ? <div className={styles.empty}><p>{t("dashboard.noActivity")}</p><Link href="/research">{t("dashboard.progress")} →</Link></div> : <ul className={styles.activity}>{data.activity.slice(0, 10).map(item => {
+          const category = item.strategy_type && isStrategyType(item.strategy_type) ? getStrategyCategoryPresentation(item.strategy_type, locale) : null;
+          return <li key={item.id} style={category ? { borderLeft: `3px solid ${category.accent}`, background: `rgba(${category.accentRgb}, .1)`, padding: 12 } : undefined}>
+          {category ? <span style={{ color: category.accent, fontSize: 12 }}>{category.label}</span> : null}
           <div className={styles.row}><Badge tone={item.status === "failed" || item.status === "partially_failed" ? "warning" : "neutral"}>{t(`dashboard.categories.${item.category}`)} · {t(`dashboard.statuses.${item.status}`)}</Badge></div>
           <Link href={item.href}>{item.name}</Link><time dateTime={item.occurred_at}>{formatDateTime(item.occurred_at, locale)}</time>
-        </li>)}</ul>}
+        </li>; })}</ul>}
       </DensePanel>
     </div>
   </div>;

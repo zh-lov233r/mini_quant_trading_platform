@@ -54,6 +54,7 @@ export interface DashboardAlert {
   href: string;
 }
 export interface DashboardActivity {
+  strategy_type?: string | null;
   id: string;
   category: "backtest" | "research" | "strategy" | "paper";
   status: string;

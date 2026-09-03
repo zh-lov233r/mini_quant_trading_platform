@@ -61,6 +61,13 @@ class DashboardTests(unittest.TestCase):
         self.assertTrue(all(s.lstrip().upper().startswith('SELECT') for s in self.sql), self.sql)
         return result
 
+    def test_activity_includes_strategy_category_for_backtest_colors(self):
+        strategy = self.strategy()
+        run = self.make_run(strategy)
+        activity = self.overview().activity
+        row = next(item for item in activity if item.id == f"run:{run.id}")
+        self.assertEqual(row.strategy_type, "trend")
+
     def test_empty_read_only_api_and_missing_maintenance(self):
         result = self.overview()
         self.assertEqual(result.research_kpis.active_strategies, 0)

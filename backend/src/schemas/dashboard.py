@@ -94,6 +94,7 @@ class DashboardAlert(BaseModel):
 
 
 class DashboardActivity(BaseModel):
+    strategy_type: str | None = None
     id: str
     category: Literal["backtest", "research", "strategy", "paper"]
     status: str

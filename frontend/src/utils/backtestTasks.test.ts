@@ -1,3 +1,4 @@
+import { backtestTaskDurationMs } from "./backtestTasks";
 import { describe, expect, it } from "vitest";
 
 import { backtestTaskStageLabel, isActiveBacktestTask, pageIndexAfterBacktestTaskDelete, shouldPollBacktestTasks, shouldShowBacktestTaskProgress } from "./backtestTasks";
@@ -30,4 +31,11 @@ describe("backtest task presentation", () => {
     expect(pageIndexAfterBacktestTaskDelete(2, 2)).toBe(2);
     expect(pageIndexAfterBacktestTaskDelete(0, 1)).toBe(0);
   });
+});
+
+it("shows completed execution duration including finalization, with missing timestamps unknown", () => {
+  expect(backtestTaskDurationMs({ stage: "completed", started_at: "2026-09-03T10:00:00Z", finished_at: "2026-09-03T11:02:03Z" })).toBe(3723000);
+  expect(backtestTaskDurationMs({ stage: "completed", started_at: null, finished_at: null })).toBeNull();
+  expect(backtestTaskDurationMs({ stage: "running", started_at: "2026-09-03T10:00:00Z", finished_at: null })).toBeNull();
+  expect(backtestTaskDurationMs({ stage: "completed", started_at: "invalid", finished_at: "invalid" })).toBeNull();
 });

@@ -1,4 +1,4 @@
-import type { BacktestTaskStage } from "@/types/backtest";
+import type { BacktestTask, BacktestTaskStage } from "@/types/backtest";
 
 export const ACTIVE_BACKTEST_TASK_STAGES = new Set<BacktestTaskStage>([
   "waiting_research",
@@ -38,4 +38,11 @@ export function backtestTaskStageLabel(stage: BacktestTaskStage, isZh: boolean):
     cancelled: ["已取消", "Cancelled"],
   };
   return labels[stage][isZh ? 0 : 1];
+}
+
+/** Execution through persistence completion; queue wait is not execution time. */
+export function backtestTaskDurationMs(task: Pick<BacktestTask, "stage" | "started_at" | "finished_at">): number | null {
+  if (task.stage !== "completed" || !task.started_at || !task.finished_at) return null;
+  const duration = Date.parse(task.finished_at) - Date.parse(task.started_at);
+  return Number.isFinite(duration) && duration >= 0 ? duration : null;
 }

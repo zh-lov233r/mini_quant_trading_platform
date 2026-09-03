@@ -23,7 +23,7 @@
 .quickCreate { justify-content: center; border-color: rgba(8,145,178,.4); background: #078cad; color: #f8fafc; }
 .quickCreate:hover { background: #0891b2; }
 .sidebarSpacer { flex: 1; }
-.sidebarFooter { flex-direction: column; align-items: stretch; gap: 8px; }
+.sidebarFooter { padding-bottom: 60px; flex-direction: column; align-items: stretch; gap: 8px; }
 .localeSwitch { justify-content: center; gap: 4px; padding: 3px; border: 1px solid rgba(71,85,105,.36); border-radius: 10px; background: rgba(8,15,24,.82); }
 .localeButton { flex: 1; min-width: 0; padding: 6px 7px; border: 0; border-radius: 7px; background: transparent; color: #94a3b8; cursor: pointer; font-size: 11px; font-weight: 800; }
 .localeButtonActive { background: rgba(8,145,178,.9); color: #f8fafc; }
@@ -57,7 +57,7 @@
   .shell { --workspace-sidebar-width: 72px; }
   .brand,.navLabel,.quickCreateLabel,.collapseDesktop,.localeLongLabel { display: none; }
   .brandRow,.navLink,.quickCreate { justify-content: center; }
-  .sidebarFooter { align-items: center; padding-bottom: 36px; }
+  .sidebarFooter { align-items: center; padding-bottom: 60px; }
   .sidebarFooter .localeSwitch { width: 44px; }
   .sidebarFooter .localeChoiceButton { display: none; }
   .sidebarFooter .localeToggleButton { display: inline-flex; }

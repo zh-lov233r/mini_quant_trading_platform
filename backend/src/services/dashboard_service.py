@@ -211,12 +211,12 @@ def _activity(db: Session) -> list[dict]:
     events = []
     # Four independently bounded sources; a run is represented once, never again as a job.
     for mode in ("backtest", "paper"):
-        rows = db.execute(select(StrategyRun.id, StrategyRun.status, StrategyRun.finished_at, Strategy.name)
+        rows = db.execute(select(StrategyRun.id, StrategyRun.status, StrategyRun.finished_at, Strategy.name, Strategy.strategy_type)
             .join(Strategy, Strategy.id == StrategyRun.strategy_id)
             .where(StrategyRun.mode == mode, StrategyRun.status.in_(["completed", "failed", "cancelled"]), StrategyRun.finished_at.is_not(None))
             .order_by(StrategyRun.finished_at.desc(), StrategyRun.id.desc()).limit(20))
         for r in rows:
-            events.append(dict(id=f"run:{r.id}", category=mode, status=r.status, name=r.name,
+            events.append(dict(id=f"run:{r.id}", category=mode, status=r.status, name=r.name, strategy_type=str(r.strategy_type),
                 occurred_at=_utc(r.finished_at), href=f"/backtests/{r.id}" if mode == "backtest" else "/paper-trading"))
     for r in db.execute(select(ResearchExperiment.id, ResearchExperiment.status, ResearchExperiment.finished_at)
         .where(ResearchExperiment.finished_at.is_not(None))

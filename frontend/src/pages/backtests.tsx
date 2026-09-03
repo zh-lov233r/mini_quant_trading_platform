@@ -240,6 +240,8 @@ export default function BacktestsPage() {
   const [deleteNotice, setDeleteNotice] = useState<DeleteNotice | null>(null);
 
   const [strategyId, setStrategyId] = useState("");
+  const [runMarketFilter, setRunMarketFilter] = useState("all");
+  const [basketMarketFilter, setBasketMarketFilter] = useState("all");
   const [basketId, setBasketId] = useState("");
   const [startDate, setStartDate] = useState(toDateInputValue(new Date("2024-01-01")));
   const [endDate, setEndDate] = useState(toDateInputValue(new Date("2024-12-31")));
@@ -458,8 +460,8 @@ export default function BacktestsPage() {
     [strategies, strategyId]
   );
   const activeBaskets = useMemo(
-    () => baskets.filter((item) => item.status === "active"),
-    [baskets]
+    () => baskets.filter((item) => item.status === "active" && (basketMarketFilter === "all" || (isAShareBasket(item) ? "CN" : "US") === basketMarketFilter)),
+    [baskets, basketMarketFilter]
   );
   const selectedBasket = useMemo(
     () => baskets.find((item) => item.id === basketId) || null,
@@ -495,8 +497,9 @@ export default function BacktestsPage() {
       query: runSearch,
       status: runStatusFilter,
       strategyType: runTypeFilter,
+      market: runMarketFilter,
     }),
-    [runSearch, runStatusFilter, runTypeFilter, runs, strategyTypesById]
+    [runSearch, runStatusFilter, runTypeFilter, runMarketFilter, runs, strategyTypesById]
   );
   const runStatuses = useMemo(
     () => Array.from(new Set(runs.map((run) => run.status))).sort(),
@@ -512,7 +515,7 @@ export default function BacktestsPage() {
     )).sort(),
     [runs, strategyTypesById]
   );
-  const hasRunFilters = Boolean(runSearch.trim()) || runStatusFilter !== "all" || runTypeFilter !== "all";
+  const hasRunFilters = Boolean(runSearch.trim()) || runStatusFilter !== "all" || runTypeFilter !== "all" || runMarketFilter !== "all";
   const runPageCount = pageCount(filteredRuns.length, runPageSize);
   const pagedRuns = useMemo(
     () => paginateItems(filteredRuns, runPageIndex, runPageSize),
@@ -818,6 +821,13 @@ export default function BacktestsPage() {
                       isZh
                         ? "可选。选择已创建的股票池或使用默认组合"
                         : "Optional. Choose an existing basket or keep the strategy's default universe.",
+                      <>
+                      <SelectControl aria-label={isZh ? "股票组合市场" : "Basket market"} value={basketMarketFilter} onValueChange={(value) => {
+                        setBasketMarketFilter(value);
+                        if (value !== "all" && selectedBasket && (isAShareBasket(selectedBasket) ? "CN" : "US") !== value) setBasketId("");
+                      }} options={[
+                        { value: "all", label: isZh ? "全部市场" : "All markets" }, { value: "CN", label: isZh ? "A 股" : "A-shares" }, { value: "US", label: isZh ? "美股" : "US stocks" },
+                      ]} />
                       <SearchableSelect
                         value={basketId}
                         onValueChange={setBasketId}
@@ -842,6 +852,7 @@ export default function BacktestsPage() {
                           })),
                         ]}
                       />
+                      </>
                     )}
 
                     <div style={responsiveTwoColGridStyle}>
@@ -1223,6 +1234,12 @@ export default function BacktestsPage() {
                       ]}
                     />
                   </label>
+                  <label style={runFilterFieldStyle}>
+                    <span style={runFilterLabelStyle}>{isZh ? "市场" : "Market"}</span>
+                    <SelectControl value={runMarketFilter} onValueChange={(value) => { setRunMarketFilter(value); setRunPageIndex(0); }} options={[
+                      { value: "all", label: isZh ? "全部市场" : "All markets" }, { value: "CN", label: isZh ? "A 股" : "A-shares" }, { value: "US", label: isZh ? "美股" : "US stocks" },
+                    ]} />
+                  </label>
                   <button
                     type="button"
                     disabled={!hasRunFilters}
@@ -1230,6 +1247,7 @@ export default function BacktestsPage() {
                       setRunSearch("");
                       setRunTypeFilter("all");
                       setRunStatusFilter("all");
+                      setRunMarketFilter("all");
                       setRunPageIndex(0);
                     }}
                     style={{ ...runFilterResetStyle, opacity: hasRunFilters ? 1 : 0.5 }}

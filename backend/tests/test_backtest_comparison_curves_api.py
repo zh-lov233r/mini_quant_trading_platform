@@ -10,10 +10,12 @@ from fastapi import HTTPException
 
 from src.api.backtests import (
     _benchmark_symbol_for_run,
+    _to_backtest_run_out,
     _load_comparison_curves_read_only,
     get_backtest_comparison_curves,
 )
 from src.services.data_service import HistoricalBar
+from src.models.tables import StrategyRun
 
 
 def curve(symbol: str, values: list[float]) -> list[dict[str, object]]:
@@ -30,6 +32,14 @@ def curve(symbol: str, values: list[float]) -> list[dict[str, object]]:
 
 
 class BacktestComparisonCurvesApiTests(unittest.TestCase):
+    def test_run_market_uses_frozen_universe_not_mutable_basket(self) -> None:
+        run = StrategyRun(id=uuid4(), strategy_id=uuid4(), strategy_version=1,
+            mode="backtest", status="completed", config_snapshot={},
+            summary_metrics={"symbols_loaded": ["600000.SH", "000001.SZ"]})
+        self.assertEqual(_to_backtest_run_out(run, "Test").market, "CN")
+        run.summary_metrics = {"symbols_loaded": ["AAPL"]}
+        self.assertEqual(_to_backtest_run_out(run, "Test").market, "US")
+
     def test_a_share_run_uses_domestic_indices_and_replaces_us_benchmark(self) -> None:
         db = MagicMock()
         run = SimpleNamespace(

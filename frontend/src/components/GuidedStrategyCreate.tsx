@@ -10,6 +10,9 @@ import {
   getStrategyFeatureSupport,
   validateStrategy,
 } from "@/api/strategies";
+import { listStockBaskets } from "@/api/stock-baskets";
+import type { StockBasketOut } from "@/types/stock-basket";
+import { SearchableSelect } from "@/components/workspace/SearchableSelect";
 import Badge from "@/components/Badge";
 import { SelectControl } from "@/components/workspace/SelectControl";
 import { useI18n } from "@/i18n/provider";
@@ -88,6 +91,9 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
   const [rawJson, setRawJson] = useState("{}");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [baskets, setBaskets] = useState<StockBasketOut[]>([]);
+  const [basketError, setBasketError] = useState<string | null>(null);
+  const [basketId, setBasketId] = useState("");
   const [symbolsText, setSymbolsText] = useState("");
   const [dirty, setDirty] = useState(false);
   const [showAdvancedSignal, setShowAdvancedSignal] = useState(false);
@@ -121,6 +127,7 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
 
   useEffect(() => {
     void loadCatalog();
+    void listStockBaskets().then(setBaskets).catch((error: Error) => setBasketError(error.message));
     // The loader is intentionally stable for this one-time request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -470,12 +477,23 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
           />
           <span style={counterStyle}>{description.length}/500</span>
         </FieldShell>
+        <FieldShell inputId="strategy-basket" label={isZh ? "现有股票组合" : "Saved stock basket"} hint={isZh ? "选中后复制股票代码；以后编辑组合不会改变此策略。" : "Copies symbols into this draft. Later basket edits do not change the strategy."} full>
+          <SearchableSelect id="strategy-basket" value={basketId} onValueChange={(id) => {
+            setBasketId(id);
+            const basket = baskets.find((item) => item.id === id);
+            if (basket) { setSymbolsText(basket.symbols.join(", ")); invalidate(); }
+          }} ariaLabel={isZh ? "选择现有股票组合" : "Choose a saved basket"} placeholder={isZh ? "选择组合" : "Choose basket"} searchPlaceholder={isZh ? "搜索组合" : "Search baskets"} emptyText={isZh ? "没有匹配组合" : "No matching baskets"} options={[
+            { value: "", label: isZh ? "手动输入股票" : "Manual symbols" },
+            ...baskets.filter((item) => item.status === "active").map((item) => ({ value: item.id, label: item.name, description: String(item.symbol_count) })),
+          ]} />
+          {basketError ? <span role="alert">{basketError}</span> : null}
+        </FieldShell>
         <FieldShell label={copy.basics.universe} hint={copy.basics.universeEmpty} inputId={fieldId("symbols")} full>
           <textarea
             id={fieldId("symbols")}
             value={symbolsText}
             rows={3}
-            onChange={(event) => { setSymbolsText(event.target.value); invalidate(); }}
+            onChange={(event) => { setBasketId(""); setSymbolsText(event.target.value); invalidate(); }}
             placeholder={copy.basics.universePlaceholder}
             style={{ ...inputStyle(false), resize: "vertical" }}
           />

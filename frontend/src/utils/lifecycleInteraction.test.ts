@@ -1,22 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { expect, it } from "vitest";
 
-import {
-  isLifecycleInteractiveTarget,
-  LIFECYCLE_INTERACTIVE_TARGET_SELECTOR,
-} from "@/utils/lifecycleInteraction";
-
-describe("lifecycle row interaction", () => {
-  it("keeps candlestick chart clicks inside the expanded lifecycle", () => {
-    const chart = {
-      closest: (selector: string) => selector.includes("[role='img']") ? chart : null,
-    } as unknown as Pick<Element, "closest">;
-
-    expect(LIFECYCLE_INTERACTIVE_TARGET_SELECTOR).toContain("[role='img']");
-    expect(isLifecycleInteractiveTarget(chart)).toBe(true);
-  });
-
-  it("allows non-interactive lifecycle content to collapse the row", () => {
-    const content = { closest: () => null } as unknown as Pick<Element, "closest">;
-    expect(isLifecycleInteractiveTarget(content)).toBe(false);
-  });
+it("keeps lifecycle collapse controls on the summary row, not the expanded detail panel", () => {
+  const source = readFileSync(new URL("../pages/backtests/[runId].tsx", import.meta.url), "utf8");
+  const detail = source.slice(source.indexOf("function LifecycleDetailPanel("), source.indexOf("function PositionLifecycleCard("));
+  expect(detail).not.toContain("onCollapse");
+  expect(detail).not.toContain("collapsePointer");
+  expect(source).toContain('aria-expanded={expanded}');
+  expect(source).toContain('event.key !== "Enter" && event.key !== " "');
 });

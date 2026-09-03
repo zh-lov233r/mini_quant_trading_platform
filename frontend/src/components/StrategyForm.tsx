@@ -1079,14 +1079,14 @@ export default function StrategyForm({
         if (!(Number(volMul) > 0)) throw new Error(isZh ? "成交量过滤倍数必须 > 0" : "Volume multiplier must be > 0");
         if (!(Number(atrMul) > 0)) throw new Error(isZh ? "ATR 乘数必须 > 0" : "ATR multiplier must be > 0");
         if (!(Number(trendStopLossPct) > 0 && Number(trendStopLossPct) <= 1)) {
-          throw new Error(isZh ? "固定止损比例必须在 (0, 1] 之间" : "Fixed stop loss pct must be within (0, 1]");
+          throw new Error(isZh ? "固定止损比例必须在 (0%, 100%] 之间" : "Fixed stop loss pct must be within (0%, 100%]");
         }
         if (!(Number(trendTakeProfitAtr) > 0)) {
           throw new Error(isZh ? "ATR 止盈倍数必须 > 0" : "ATR take profit must be > 0");
         }
         if (!(Number(maxPositions) > 0)) throw new Error(isZh ? "最大持仓数必须 > 0" : "Max positions must be > 0");
         if (!(Number(positionSizePct) > 0 && Number(positionSizePct) <= 1)) {
-          throw new Error(isZh ? "单票仓位比例必须在 (0, 1] 之间" : "Position size percentage must be within (0, 1]");
+          throw new Error(isZh ? "单票仓位比例必须在 (0%, 100%] 之间" : "Position size percentage must be within (0%, 100%]");
         }
         payload = {
           name: name.trim(),
@@ -1113,13 +1113,13 @@ export default function StrategyForm({
           throw new Error(isZh ? "最大持仓数必须 > 0" : "Max positions must be > 0");
         }
         if (!(Number(positionSizePct) > 0 && Number(positionSizePct) <= 1)) {
-          throw new Error(isZh ? "单票仓位比例必须在 (0, 1] 之间" : "Position size percentage must be within (0, 1]");
+          throw new Error(isZh ? "单票仓位比例必须在 (0%, 100%] 之间" : "Position size percentage must be within (0%, 100%]");
         }
         if (!(Number(meanReversionStopLossPct) > 0 && Number(meanReversionStopLossPct) <= 1)) {
-          throw new Error(isZh ? "止损比例必须在 (0, 1] 之间" : "Stop loss pct must be within (0, 1]");
+          throw new Error(isZh ? "止损比例必须在 (0%, 100%] 之间" : "Stop loss pct must be within (0%, 100%]");
         }
         if (!(Number(meanReversionTakeProfitPct) > 0 && Number(meanReversionTakeProfitPct) <= 1)) {
-          throw new Error(isZh ? "止盈比例必须在 (0, 1] 之间" : "Take profit pct must be within (0, 1]");
+          throw new Error(isZh ? "止盈比例必须在 (0%, 100%] 之间" : "Take profit pct must be within (0%, 100%]");
         }
         if (!(Number(meanReversionMaxHoldingDays) >= 0 && Number.isInteger(Number(meanReversionMaxHoldingDays)))) {
           throw new Error(isZh ? "最大持仓天数必须是大于等于 0 的整数" : "Max holding days must be a non-negative integer");
@@ -1136,13 +1136,13 @@ export default function StrategyForm({
           throw new Error(isZh ? "下跌回看窗口必须 > 0" : "Downtrend lookback must be > 0");
         }
         if (!(Number(islandDowntrendMinDropPct) > 0 && Number(islandDowntrendMinDropPct) <= 1)) {
-          throw new Error(isZh ? "最低下跌幅度必须在 (0, 1] 之间" : "Min downtrend drop must be within (0, 1]");
+          throw new Error(isZh ? "最低下跌幅度必须在 (0%, 100%] 之间" : "Min downtrend drop must be within (0%, 100%]");
         }
         if (!(Number(leftGapMinPct) > 0 && Number(leftGapMinPct) <= 1)) {
-          throw new Error(isZh ? "左侧缺口最小幅度必须在 (0, 1] 之间" : "Left gap min pct must be within (0, 1]");
+          throw new Error(isZh ? "左侧缺口最小幅度必须在 (0%, 100%] 之间" : "Left gap min pct must be within (0%, 100%]");
         }
         if (!(Number(rightGapMinPct) > 0 && Number(rightGapMinPct) <= 1)) {
-          throw new Error(isZh ? "右侧缺口最小幅度必须在 (0, 1] 之间" : "Right gap min pct must be within (0, 1]");
+          throw new Error(isZh ? "右侧缺口最小幅度必须在 (0%, 100%] 之间" : "Right gap min pct must be within (0%, 100%]");
         }
         if (!(Number(minIslandBars) > 0)) {
           throw new Error(isZh ? "最少岛区 K 线数必须 > 0" : "Min island bars must be > 0");
@@ -1163,19 +1163,19 @@ export default function StrategyForm({
           throw new Error(isZh ? "回踩缩量上限必须 > 0" : "Retest volume ratio max must be > 0");
         }
         if (!(Number(supportTolerancePct) > 0 && Number(supportTolerancePct) <= 1)) {
-          throw new Error(isZh ? "缺口支撑容差必须在 (0, 1] 之间" : "Support tolerance pct must be within (0, 1]");
+          throw new Error(isZh ? "缺口支撑容差必须在 (0%, 100%] 之间" : "Support tolerance pct must be within (0%, 100%]");
         }
         if (!(Number(maxPositions) > 0)) {
           throw new Error(isZh ? "最大持仓数必须 > 0" : "Max positions must be > 0");
         }
         if (!(Number(positionSizePct) > 0 && Number(positionSizePct) <= 1)) {
-          throw new Error(isZh ? "单票仓位比例必须在 (0, 1] 之间" : "Position size percentage must be within (0, 1]");
+          throw new Error(isZh ? "单票仓位比例必须在 (0%, 100%] 之间" : "Position size percentage must be within (0%, 100%]");
         }
         if (!(Number(islandStopLossAtr) > 0)) {
           throw new Error(isZh ? "ATR 止损倍数必须 > 0" : "ATR stop loss must be > 0");
         }
         if (!(Number(islandMaxLossPct) > 0 && Number(islandMaxLossPct) <= 1)) {
-          throw new Error(isZh ? "最大亏损强平比例必须在 (0, 1] 之间" : "Max loss pct must be within (0, 1]");
+          throw new Error(isZh ? "最大亏损强平比例必须在 (0%, 100%] 之间" : "Max loss pct must be within (0%, 100%]");
         }
         if (!(Number(islandTakeProfitAtr) > 0)) {
           throw new Error(isZh ? "ATR 止盈倍数必须 > 0" : "ATR take profit must be > 0");
@@ -1192,16 +1192,16 @@ export default function StrategyForm({
           throw new Error(isZh ? "下跌回看窗口必须 > 0" : "Downtrend lookback must be > 0");
         }
         if (!(Number(doubleBottomDowntrendMinDropPct) > 0 && Number(doubleBottomDowntrendMinDropPct) <= 1)) {
-          throw new Error(isZh ? "最低下跌幅度必须在 (0, 1] 之间" : "Min downtrend drop must be within (0, 1]");
+          throw new Error(isZh ? "最低下跌幅度必须在 (0%, 100%] 之间" : "Min downtrend drop must be within (0%, 100%]");
         }
         if (!(Number(doubleBottomDowntrendMaxUpDayRatio) > 0 && Number(doubleBottomDowntrendMaxUpDayRatio) <= 1)) {
           throw new Error(
-            isZh ? "下跌上涨天数占比上限必须在 (0, 1] 之间" : "Downtrend max up-day ratio must be within (0, 1]"
+            isZh ? "下跌上涨天数占比上限必须在 (0%, 100%] 之间" : "Downtrend max up-day ratio must be within (0%, 100%]"
           );
         }
         if (!(Number(doubleBottomDowntrendMinRSquared) > 0 && Number(doubleBottomDowntrendMinRSquared) <= 1)) {
           throw new Error(
-            isZh ? "下跌最小线性拟合度必须在 (0, 1] 之间" : "Downtrend min R-squared must be within (0, 1]"
+            isZh ? "下跌最小线性拟合度必须在 (0%, 100%] 之间" : "Downtrend min R-squared must be within (0%, 100%]"
           );
         }
         if (!(Number(minBottomSpacing) > 0)) {
@@ -1217,16 +1217,16 @@ export default function StrategyForm({
           throw new Error(isZh ? "左底后置 K 线数必须 > 0" : "Left-bottom bars after must be > 0");
         }
         if (!(Number(bottomTolerancePct) > 0 && Number(bottomTolerancePct) <= 1)) {
-          throw new Error(isZh ? "双底价差容忍度必须在 (0, 1] 之间" : "Bottom tolerance pct must be within (0, 1]");
+          throw new Error(isZh ? "双底价差容忍度必须在 (0%, 100%] 之间" : "Bottom tolerance pct must be within (0%, 100%]");
         }
         if (!(Number(necklineMinReboundPct) > 0 && Number(necklineMinReboundPct) <= 1)) {
-          throw new Error(isZh ? "颈线最小反弹幅度必须在 (0, 1] 之间" : "Neckline min rebound pct must be within (0, 1]");
+          throw new Error(isZh ? "颈线最小反弹幅度必须在 (0%, 100%] 之间" : "Neckline min rebound pct must be within (0%, 100%]");
         }
         if (!(Number(reboundUpDayRatioMin) > 0 && Number(reboundUpDayRatioMin) <= 1)) {
           throw new Error(
             isZh
-              ? "左底到右底上涨天数占比必须在 (0, 1] 之间"
-              : "Left-to-right-bottom up-day ratio must be within (0, 1]"
+              ? "左底到右底上涨天数占比必须在 (0%, 100%] 之间"
+              : "Left-to-right-bottom up-day ratio must be within (0%, 100%]"
           );
         }
         if (!(Number(secondBottomVolumeRatioMax) > 0)) {
@@ -1241,7 +1241,7 @@ export default function StrategyForm({
           );
         }
         if (!(Number(breakoutBufferPct) > 0 && Number(breakoutBufferPct) <= 1)) {
-          throw new Error(isZh ? "突破缓冲必须在 (0, 1] 之间" : "Breakout buffer pct must be within (0, 1]");
+          throw new Error(isZh ? "突破缓冲必须在 (0%, 100%] 之间" : "Breakout buffer pct must be within (0%, 100%]");
         }
         if (!(Number(doubleBottomRetestWindow) > 0)) {
           throw new Error(isZh ? "回踩观察窗口必须 > 0" : "Retest window must be > 0");
@@ -1250,19 +1250,19 @@ export default function StrategyForm({
           throw new Error(isZh ? "回踩缩量上限必须 > 0" : "Retest volume ratio max must be > 0");
         }
         if (!(Number(doubleBottomSupportTolerancePct) > 0 && Number(doubleBottomSupportTolerancePct) <= 1)) {
-          throw new Error(isZh ? "颈线支撑容差必须在 (0, 1] 之间" : "Support tolerance pct must be within (0, 1]");
+          throw new Error(isZh ? "颈线支撑容差必须在 (0%, 100%] 之间" : "Support tolerance pct must be within (0%, 100%]");
         }
         if (!(Number(maxPositions) > 0)) {
           throw new Error(isZh ? "最大持仓数必须 > 0" : "Max positions must be > 0");
         }
         if (!(Number(positionSizePct) > 0 && Number(positionSizePct) <= 1)) {
-          throw new Error(isZh ? "单票仓位比例必须在 (0, 1] 之间" : "Position size percentage must be within (0, 1]");
+          throw new Error(isZh ? "单票仓位比例必须在 (0%, 100%] 之间" : "Position size percentage must be within (0%, 100%]");
         }
         if (!(Number(doubleBottomStopLossAtr) > 0)) {
           throw new Error(isZh ? "ATR 止损倍数必须 > 0" : "ATR stop loss must be > 0");
         }
         if (!(Number(doubleBottomMaxLossPct) > 0 && Number(doubleBottomMaxLossPct) <= 1)) {
-          throw new Error(isZh ? "最大亏损强平比例必须在 (0, 1] 之间" : "Max loss pct must be within (0, 1]");
+          throw new Error(isZh ? "最大亏损强平比例必须在 (0%, 100%] 之间" : "Max loss pct must be within (0%, 100%]");
         }
         if (!(Number(doubleBottomTakeProfitAtr) > 0)) {
           throw new Error(isZh ? "ATR 止盈倍数必须 > 0" : "ATR take profit must be > 0");
@@ -1294,7 +1294,7 @@ export default function StrategyForm({
           throw new Error(isZh ? "检测窗口必须覆盖 Pivot 左右确认区间" : "Detection window must cover the full Pivot confirmation interval");
         }
         if (!(Number(srMaxLossPct) > 0 && Number(srMaxLossPct) <= 1) || Number(positionSizePct) > 1) {
-          throw new Error(isZh ? "比例参数必须在 (0, 1] 之间" : "Percentage parameters must be within (0, 1]");
+          throw new Error(isZh ? "比例参数必须在 (0%, 100%] 之间" : "Percentage parameters must be within (0%, 100%]");
         }
         payload = {
           name: name.trim(),
@@ -1418,11 +1418,11 @@ export default function StrategyForm({
     { labelZh: "评分目标（ATR）", labelEn: "Scoring Target (ATR)", value: srScoreTargetAtr, setValue: setSrScoreTargetAtr },
     { labelZh: "评分止损（ATR）", labelEn: "Scoring Stop (ATR)", value: srScoreStopAtr, setValue: setSrScoreStopAtr },
   ];
-  const srRiskFields: Array<{ labelZh: string; labelEn: string; value: number; setValue: (value: number) => void }> = [
+  const srRiskFields: Array<{ labelZh: string; labelEn: string; percent?: boolean; value: number; setValue: (value: number) => void }> = [
     { labelZh: "最大持仓数", labelEn: "Max Positions", value: maxPositions, setValue: setMaxPositions },
-    { labelZh: "单票仓位比例", labelEn: "Position Size Pct", value: positionSizePct, setValue: setPositionSizePct },
+    { labelZh: "单票仓位比例", labelEn: "Position Size Pct", value: positionSizePct, setValue: setPositionSizePct, percent: true },
     { labelZh: "ATR 止损", labelEn: "ATR Stop", value: srStopLossAtr, setValue: setSrStopLossAtr },
-    { labelZh: "最大亏损比例", labelEn: "Max Loss Pct", value: srMaxLossPct, setValue: setSrMaxLossPct },
+    { labelZh: "最大亏损比例", labelEn: "Max Loss Pct", value: srMaxLossPct, setValue: setSrMaxLossPct, percent: true },
     { labelZh: "无压力区目标（ATR）", labelEn: "Fallback Target (ATR)", value: srTakeProfitAtr, setValue: setSrTakeProfitAtr },
     { labelZh: "最低盈亏比", labelEn: "Minimum Reward / Risk", value: srMinRewardRisk, setValue: setSrMinRewardRisk },
     { labelZh: "最长持有交易日", labelEn: "Maximum Holding Days", value: srMaxHoldingDays, setValue: setSrMaxHoldingDays },
@@ -1705,15 +1705,15 @@ export default function StrategyForm({
                   />
                 </div>
                 <div style={boxStyle}>
-                  <label>{isZh ? "固定止损比例" : "Fixed Stop Loss Pct"}</label>
+                  <label>{isZh ? "固定止损比例" : "Fixed Stop Loss Pct"} (%)</label>
                   <input
                     type="number"
-                    min={0.001}
-                    max={1}
+                    min={0.1}
+                    max={100}
                     step="any"
                     style={inputStyle}
-                    value={trendStopLossPct}
-                    onChange={(e) => setTrendStopLossPct(Number(e.target.value))}
+                    value={Number((trendStopLossPct * 100).toFixed(8))}
+                    onChange={(e) => setTrendStopLossPct(Number(e.target.value) / 100)}
                   />
                 </div>
                 <div style={boxStyle}>
@@ -1760,15 +1760,15 @@ export default function StrategyForm({
                   />
                 </div>
                 <div style={boxStyle}>
-                  <label>{isZh ? "单票仓位比例" : "Position Size Pct"}</label>
+                  <label>{isZh ? "单票仓位比例" : "Position Size Pct"} (%)</label>
                   <input
                     type="number"
-                    min={0.01}
-                    max={1}
+                    min={1}
+                    max={100}
                     step="0.01"
                     style={inputStyle}
-                    value={positionSizePct}
-                    onChange={(e) => setPositionSizePct(Number(e.target.value))}
+                    value={Number((positionSizePct * 100).toFixed(8))}
+                    onChange={(e) => setPositionSizePct(Number(e.target.value) / 100)}
                   />
                 </div>
                 <div style={boxStyle}>
@@ -1795,8 +1795,8 @@ export default function StrategyForm({
               <h3 style={{ marginTop: 0 }}>{isZh ? "均值回归参数" : "Mean Reversion Parameters"}</h3>
               <div style={{ marginBottom: 14, color: "rgba(148, 163, 184, 0.88)", fontSize: 13, lineHeight: 1.6 }}>
                 {isZh
-                  ? "止盈止损字段都使用小数表示百分比，例如 0.1 = 10%。当前 z-score 窗口只支持 5 / 10 / 20。"
-                  : "Stop-loss and take-profit fields use decimal percentages, for example 0.1 = 10%. Supported z-score windows are 5 / 10 / 20."}
+                  ? "止盈止损字段以百分数输入，例如输入 10 表示 10%。当前 z-score 窗口只支持 5 / 10 / 20。"
+                  : "Stop-loss and take-profit fields use percentage inputs: enter 10 for 10%. Supported z-score windows are 5 / 10 / 20."}
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -1831,27 +1831,27 @@ export default function StrategyForm({
                   />
                 </div>
                 <div style={boxStyle}>
-                  <label>{isZh ? "止损比例" : "Stop Loss Pct"}</label>
+                  <label>{isZh ? "止损比例" : "Stop Loss Pct"} (%)</label>
                   <input
                     type="number"
-                    min={0.001}
-                    max={1}
+                    min={0.1}
+                    max={100}
                     step="any"
                     style={inputStyle}
-                    value={meanReversionStopLossPct}
-                    onChange={(e) => setMeanReversionStopLossPct(Number(e.target.value))}
+                    value={Number((meanReversionStopLossPct * 100).toFixed(8))}
+                    onChange={(e) => setMeanReversionStopLossPct(Number(e.target.value) / 100)}
                   />
                 </div>
                 <div style={boxStyle}>
-                  <label>{isZh ? "止盈比例" : "Take Profit Pct"}</label>
+                  <label>{isZh ? "止盈比例" : "Take Profit Pct"} (%)</label>
                   <input
                     type="number"
-                    min={0.001}
-                    max={1}
+                    min={0.1}
+                    max={100}
                     step="any"
                     style={inputStyle}
-                    value={meanReversionTakeProfitPct}
-                    onChange={(e) => setMeanReversionTakeProfitPct(Number(e.target.value))}
+                    value={Number((meanReversionTakeProfitPct * 100).toFixed(8))}
+                    onChange={(e) => setMeanReversionTakeProfitPct(Number(e.target.value) / 100)}
                   />
                 </div>
                 <div style={boxStyle}>
@@ -1901,15 +1901,15 @@ export default function StrategyForm({
                   />
                 </div>
                 <div style={boxStyle}>
-                  <label>{isZh ? "单票仓位比例" : "Position Size Pct"}</label>
+                  <label>{isZh ? "单票仓位比例" : "Position Size Pct"} (%)</label>
                   <input
                     type="number"
-                    min={0.01}
-                    max={1}
+                    min={1}
+                    max={100}
                     step="0.01"
                     style={inputStyle}
-                    value={positionSizePct}
-                    onChange={(e) => setPositionSizePct(Number(e.target.value))}
+                    value={Number((positionSizePct * 100).toFixed(8))}
+                    onChange={(e) => setPositionSizePct(Number(e.target.value) / 100)}
                   />
                 </div>
                 <div style={boxStyle}>
@@ -1936,8 +1936,8 @@ export default function StrategyForm({
               <h3 style={{ marginTop: 0 }}>{isZh ? "岛形反转参数" : "Island Reversal Parameters"}</h3>
               <div style={{ marginBottom: 14, color: "rgba(148, 163, 184, 0.88)", fontSize: 13, lineHeight: 1.6 }}>
                 {isZh
-                  ? "涉及幅度的字段都使用小数表示百分比，例如 0.02 = 2%，0.15 = 15%。"
-                  : "Percent-style thresholds use decimals, for example 0.02 = 2% and 0.15 = 15%."}
+                  ? "涉及幅度的字段以百分数输入，例如输入 2 表示 2%，15 表示 15%。"
+                  : "Percentage thresholds use percent inputs: enter 2 for 2% and 15 for 15%."}
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -1953,39 +1953,39 @@ export default function StrategyForm({
                   />
                 </div>
                 <div style={boxStyle}>
-                  <label>{isZh ? "最低下跌幅度" : "Min Downtrend Drop"}</label>
+                  <label>{isZh ? "最低下跌幅度" : "Min Downtrend Drop"} (%)</label>
                   <input
                     type="number"
-                    min={0.01}
-                    max={1}
+                    min={1}
+                    max={100}
                     step="any"
                     style={inputStyle}
-                    value={islandDowntrendMinDropPct}
-                    onChange={(e) => setIslandDowntrendMinDropPct(Number(e.target.value))}
+                    value={Number((islandDowntrendMinDropPct * 100).toFixed(8))}
+                    onChange={(e) => setIslandDowntrendMinDropPct(Number(e.target.value) / 100)}
                   />
                 </div>
                 <div style={boxStyle}>
-                  <label>{isZh ? "左侧缺口最小幅度" : "Left Gap Min Pct"}</label>
+                  <label>{isZh ? "左侧缺口最小幅度" : "Left Gap Min Pct"} (%)</label>
                   <input
                     type="number"
-                    min={0.001}
-                    max={1}
+                    min={0.1}
+                    max={100}
                     step="any"
                     style={inputStyle}
-                    value={leftGapMinPct}
-                    onChange={(e) => setLeftGapMinPct(Number(e.target.value))}
+                    value={Number((leftGapMinPct * 100).toFixed(8))}
+                    onChange={(e) => setLeftGapMinPct(Number(e.target.value) / 100)}
                   />
                 </div>
                 <div style={boxStyle}>
-                  <label>{isZh ? "右侧缺口最小幅度" : "Right Gap Min Pct"}</label>
+                  <label>{isZh ? "右侧缺口最小幅度" : "Right Gap Min Pct"} (%)</label>
                   <input
                     type="number"
-                    min={0.001}
-                    max={1}
+                    min={0.1}
+                    max={100}
                     step="any"
                     style={inputStyle}
-                    value={rightGapMinPct}
-                    onChange={(e) => setRightGapMinPct(Number(e.target.value))}
+                    value={Number((rightGapMinPct * 100).toFixed(8))}
+                    onChange={(e) => setRightGapMinPct(Number(e.target.value) / 100)}
                   />
                 </div>
                 <div style={boxStyle}>
@@ -2055,15 +2055,15 @@ export default function StrategyForm({
                   />
                 </div>
                 <div style={boxStyle}>
-                  <label>{isZh ? "缺口容差" : "Gap Tolerance Pct"}</label>
+                  <label>{isZh ? "缺口容差" : "Gap Tolerance Pct"} (%)</label>
                   <input
                     type="number"
-                    min={0.001}
-                    max={1}
+                    min={0.1}
+                    max={100}
                     step="any"
                     style={inputStyle}
-                    value={supportTolerancePct}
-                    onChange={(e) => setSupportTolerancePct(Number(e.target.value))}
+                    value={Number((supportTolerancePct * 100).toFixed(8))}
+                    onChange={(e) => setSupportTolerancePct(Number(e.target.value) / 100)}
                   />
                 </div>
                 <div style={boxStyle}>
@@ -2078,15 +2078,15 @@ export default function StrategyForm({
                   />
                 </div>
                 <div style={boxStyle}>
-                  <label>{isZh ? "最大亏损强平比例" : "Max Loss Exit Pct"}</label>
+                  <label>{isZh ? "最大亏损强平比例" : "Max Loss Exit Pct"} (%)</label>
                   <input
                     type="number"
-                    min={0.001}
-                    max={1}
+                    min={0.1}
+                    max={100}
                     step="any"
                     style={inputStyle}
-                    value={islandMaxLossPct}
-                    onChange={(e) => setIslandMaxLossPct(Number(e.target.value))}
+                    value={Number((islandMaxLossPct * 100).toFixed(8))}
+                    onChange={(e) => setIslandMaxLossPct(Number(e.target.value) / 100)}
                   />
                 </div>
                 <div style={boxStyle}>
@@ -2133,15 +2133,15 @@ export default function StrategyForm({
                   />
                 </div>
                 <div style={boxStyle}>
-                  <label>{isZh ? "单票仓位比例" : "Position Size Pct"}</label>
+                  <label>{isZh ? "单票仓位比例" : "Position Size Pct"} (%)</label>
                   <input
                     type="number"
-                    min={0.01}
-                    max={1}
+                    min={1}
+                    max={100}
                     step="0.01"
                     style={inputStyle}
-                    value={positionSizePct}
-                    onChange={(e) => setPositionSizePct(Number(e.target.value))}
+                    value={Number((positionSizePct * 100).toFixed(8))}
+                    onChange={(e) => setPositionSizePct(Number(e.target.value) / 100)}
                   />
                 </div>
                 <div style={boxStyle}>
@@ -2168,8 +2168,8 @@ export default function StrategyForm({
               <h3 style={{ marginTop: 0 }}>{isZh ? "双底形态参数" : "Double Bottom Parameters"}</h3>
               <div style={{ marginBottom: 14, color: "rgba(148, 163, 184, 0.88)", fontSize: 13, lineHeight: 1.6 }}>
                 {isZh
-                  ? "这是保守版双底：先用放量突破确认形态，再等待后续缩量回踩颈线时买入。左底前会额外检查下跌是否足够平滑。所有百分比字段均使用小数表示，例如 0.03 = 3%。"
-                  : "This is the conservative double-bottom setup: it uses the breakout to confirm the pattern, then waits for a later low-volume retest of the neckline before buying. The left bottom also requires a smooth downtrend. Percent-style fields use decimals, for example 0.03 = 3%."}
+                  ? "这是保守版双底：先用放量突破确认形态，再等待后续缩量回踩颈线时买入。左底前会额外检查下跌是否足够平滑。所有百分比字段以百分数输入，例如输入 3 表示 3%。"
+                  : "This is the conservative double-bottom setup: it uses the breakout to confirm the pattern, then waits for a later low-volume retest of the neckline before buying. The left bottom also requires a smooth downtrend. Percentage fields use percent inputs: enter 3 for 3%."}
               </div>
 
               <div style={{ display: "grid", gap: 14 }}>
@@ -2193,39 +2193,39 @@ export default function StrategyForm({
                       />
                     </div>
                     <div style={groupedBoxStyle}>
-                      <label>{isZh ? "最低下跌幅度" : "Min Downtrend Drop"}</label>
+                      <label>{isZh ? "最低下跌幅度" : "Min Downtrend Drop"} (%)</label>
                       <input
                         type="number"
-                        min={0.01}
-                        max={1}
+                        min={1}
+                        max={100}
                         step="any"
                         style={inputStyle}
-                        value={doubleBottomDowntrendMinDropPct}
-                        onChange={(e) => setDoubleBottomDowntrendMinDropPct(Number(e.target.value))}
+                        value={Number((doubleBottomDowntrendMinDropPct * 100).toFixed(8))}
+                        onChange={(e) => setDoubleBottomDowntrendMinDropPct(Number(e.target.value) / 100)}
                       />
                     </div>
                     <div style={groupedBoxStyle}>
-                      <label>{isZh ? "上涨天数占比上限" : "Downtrend Max Up-Day Ratio"}</label>
+                      <label>{isZh ? "上涨天数占比上限" : "Downtrend Max Up-Day Ratio"} (%)</label>
                       <input
                         type="number"
-                        min={0.001}
-                        max={1}
+                        min={0.1}
+                        max={100}
                         step="any"
                         style={inputStyle}
-                        value={doubleBottomDowntrendMaxUpDayRatio}
-                        onChange={(e) => setDoubleBottomDowntrendMaxUpDayRatio(Number(e.target.value))}
+                        value={Number((doubleBottomDowntrendMaxUpDayRatio * 100).toFixed(8))}
+                        onChange={(e) => setDoubleBottomDowntrendMaxUpDayRatio(Number(e.target.value) / 100)}
                       />
                     </div>
                     <div style={groupedBoxStyle}>
-                      <label>{isZh ? "下跌最小线性拟合度" : "Downtrend Min R-Squared"}</label>
+                      <label>{isZh ? "下跌最小线性拟合度" : "Downtrend Min R-Squared"} (%)</label>
                       <input
                         type="number"
-                        min={0.001}
-                        max={1}
+                        min={0.1}
+                        max={100}
                         step="any"
                         style={inputStyle}
-                        value={doubleBottomDowntrendMinRSquared}
-                        onChange={(e) => setDoubleBottomDowntrendMinRSquared(Number(e.target.value))}
+                        value={Number((doubleBottomDowntrendMinRSquared * 100).toFixed(8))}
+                        onChange={(e) => setDoubleBottomDowntrendMinRSquared(Number(e.target.value) / 100)}
                       />
                     </div>
                   </div>
@@ -2284,39 +2284,39 @@ export default function StrategyForm({
                       />
                     </div>
                     <div style={groupedBoxStyle}>
-                      <label>{isZh ? "双底容差" : "Bottom Tolerance Pct"}</label>
+                      <label>{isZh ? "双底容差" : "Bottom Tolerance Pct"} (%)</label>
                       <input
                         type="number"
-                        min={0.001}
-                        max={1}
+                        min={0.1}
+                        max={100}
                         step="any"
                         style={inputStyle}
-                        value={bottomTolerancePct}
-                        onChange={(e) => setBottomTolerancePct(Number(e.target.value))}
+                        value={Number((bottomTolerancePct * 100).toFixed(8))}
+                        onChange={(e) => setBottomTolerancePct(Number(e.target.value) / 100)}
                       />
                     </div>
                     <div style={groupedBoxStyle}>
-                      <label>{isZh ? "颈线最小反弹幅度" : "Neckline Min Rebound"}</label>
+                      <label>{isZh ? "颈线最小反弹幅度" : "Neckline Min Rebound"} (%)</label>
                       <input
                         type="number"
-                        min={0.001}
-                        max={1}
+                        min={0.1}
+                        max={100}
                         step="any"
                         style={inputStyle}
-                        value={necklineMinReboundPct}
-                        onChange={(e) => setNecklineMinReboundPct(Number(e.target.value))}
+                        value={Number((necklineMinReboundPct * 100).toFixed(8))}
+                        onChange={(e) => setNecklineMinReboundPct(Number(e.target.value) / 100)}
                       />
                     </div>
                     <div style={groupedBoxStyle}>
-                      <label>{isZh ? "左底到右底上涨天数占比下限" : "Left-to-Right Up-Day Ratio Min"}</label>
+                      <label>{isZh ? "左底到右底上涨天数占比下限" : "Left-to-Right Up-Day Ratio Min"} (%)</label>
                       <input
                         type="number"
-                        min={0.01}
-                        max={1}
+                        min={1}
+                        max={100}
                         step="any"
                         style={inputStyle}
-                        value={reboundUpDayRatioMin}
-                        onChange={(e) => setReboundUpDayRatioMin(Number(e.target.value))}
+                        value={Number((reboundUpDayRatioMin * 100).toFixed(8))}
+                        onChange={(e) => setReboundUpDayRatioMin(Number(e.target.value) / 100)}
                       />
                     </div>
                     <div style={groupedBoxStyle}>
@@ -2364,15 +2364,15 @@ export default function StrategyForm({
                       />
                     </div>
                     <div style={groupedBoxStyle}>
-                      <label>{isZh ? "突破缓冲" : "Breakout Buffer Pct"}</label>
+                      <label>{isZh ? "突破缓冲" : "Breakout Buffer Pct"} (%)</label>
                       <input
                         type="number"
-                        min={0.001}
-                        max={1}
+                        min={0.1}
+                        max={100}
                         step="any"
                         style={inputStyle}
-                        value={breakoutBufferPct}
-                        onChange={(e) => setBreakoutBufferPct(Number(e.target.value))}
+                        value={Number((breakoutBufferPct * 100).toFixed(8))}
+                        onChange={(e) => setBreakoutBufferPct(Number(e.target.value) / 100)}
                       />
                     </div>
                     <div style={groupedBoxStyle}>
@@ -2398,15 +2398,15 @@ export default function StrategyForm({
                       />
                     </div>
                     <div style={groupedBoxStyle}>
-                      <label>{isZh ? "颈线支撑容差" : "Support Tolerance Pct"}</label>
+                      <label>{isZh ? "颈线支撑容差" : "Support Tolerance Pct"} (%)</label>
                       <input
                         type="number"
-                        min={0.001}
-                        max={1}
+                        min={0.1}
+                        max={100}
                         step="any"
                         style={inputStyle}
-                        value={doubleBottomSupportTolerancePct}
-                        onChange={(e) => setDoubleBottomSupportTolerancePct(Number(e.target.value))}
+                        value={Number((doubleBottomSupportTolerancePct * 100).toFixed(8))}
+                        onChange={(e) => setDoubleBottomSupportTolerancePct(Number(e.target.value) / 100)}
                       />
                     </div>
                   </div>
@@ -2431,15 +2431,15 @@ export default function StrategyForm({
                       />
                     </div>
                     <div style={groupedBoxStyle}>
-                      <label>{isZh ? "单票仓位比例" : "Position Size Pct"}</label>
+                      <label>{isZh ? "单票仓位比例" : "Position Size Pct"} (%)</label>
                       <input
                         type="number"
-                        min={0.01}
-                        max={1}
+                        min={1}
+                        max={100}
                         step="0.01"
                         style={inputStyle}
-                        value={positionSizePct}
-                        onChange={(e) => setPositionSizePct(Number(e.target.value))}
+                        value={Number((positionSizePct * 100).toFixed(8))}
+                        onChange={(e) => setPositionSizePct(Number(e.target.value) / 100)}
                       />
                     </div>
                     <div style={groupedBoxStyle}>
@@ -2454,15 +2454,15 @@ export default function StrategyForm({
                       />
                     </div>
                     <div style={groupedBoxStyle}>
-                      <label>{isZh ? "最大亏损强平比例" : "Max Loss Exit Pct"}</label>
+                      <label>{isZh ? "最大亏损强平比例" : "Max Loss Exit Pct"} (%)</label>
                       <input
                         type="number"
-                        min={0.001}
-                        max={1}
+                        min={0.1}
+                        max={100}
                         step="any"
                         style={inputStyle}
-                        value={doubleBottomMaxLossPct}
-                        onChange={(e) => setDoubleBottomMaxLossPct(Number(e.target.value))}
+                        value={Number((doubleBottomMaxLossPct * 100).toFixed(8))}
+                        onChange={(e) => setDoubleBottomMaxLossPct(Number(e.target.value) / 100)}
                       />
                     </div>
                     <div style={groupedBoxStyle}>
@@ -2582,8 +2582,8 @@ export default function StrategyForm({
                   <div style={groupedGridStyle}>
                     {srRiskFields.map((field) => (
                       <div key={field.labelEn} style={groupedBoxStyle}>
-                        <label>{isZh ? field.labelZh : field.labelEn}</label>
-                        <input type="number" min={0.01} step="any" style={inputStyle} value={field.value} onChange={(event) => field.setValue(Number(event.target.value))} />
+                        <label>{isZh ? field.labelZh : field.labelEn}{field.percent ? " (%)" : ""}</label>
+                        <input type="number" min={0.01} max={field.percent ? 100 : undefined} step="any" style={inputStyle} value={field.percent ? Number((field.value * 100).toFixed(8)) : field.value} onChange={(event) => field.setValue(Number(event.target.value) / (field.percent ? 100 : 1))} />
                       </div>
                     ))}
                     <div style={groupedBoxStyle}>

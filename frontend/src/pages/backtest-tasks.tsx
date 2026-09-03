@@ -1,6 +1,8 @@
+import { formatDurationMs } from "@/utils/strategy";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { backtestTaskDurationMs } from "@/utils/backtestTasks";
 import type { PaginationState } from "@tanstack/react-table";
 
 import { cancelBacktest, deleteBacktest, getBacktestWorkerStatus, listBacktestTasks, retryBacktest } from "@/api/backtests";
@@ -166,6 +168,7 @@ export default function BacktestTasksPage() {
     { id: "source", header: isZh ? "来源" : "Source", accessor: (item) => item.source, cell: (_value, item) => <Badge tone={item.source === "manual" ? "info" : item.source === "verification" ? "warning" : "neutral"}>{sourceLabel(item.source, isZh)}</Badge>, width: 125 },
     { id: "identity", header: isZh ? "任务" : "Task", accessor: (item) => `${item.strategy_name || ""} ${item.experiment_name || ""}`, cell: (_value, item) => <TaskIdentity task={item} isZh={isZh} />, width: 300 },
     { id: "progress", header: isZh ? "阶段与进度" : "Stage & progress", accessor: (item) => item.stage, cell: (_value, item) => <TaskProgress task={item} isZh={isZh} />, width: 260 },
+    { id: "duration", header: isZh ? "总耗时" : "Total duration", accessor: backtestTaskDurationMs, cell: (_value, item) => formatDurationMs(backtestTaskDurationMs(item), locale), width: 150 },
     { id: "window", header: isZh ? "窗口 / 场景" : "Window / scenario", accessor: (item) => `${item.window_start || ""} ${item.sample_kind || ""} ${item.cost_scenario || ""}`, cell: (_value, item) => <TaskWindow task={item} />, width: 230 },
     { id: "attempt", header: isZh ? "尝试" : "Attempt", accessor: (item) => item.attempt, cell: (_value, item) => `${item.attempt}${item.max_attempts ? ` / ${item.max_attempts}` : ""}`, width: 90 },
     { id: "updated", header: isZh ? "更新时间" : "Updated", accessor: (item) => item.updated_at || "", cell: (_value, item) => formatDateTime(item.updated_at, locale), width: 180 },

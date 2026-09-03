@@ -6,7 +6,7 @@ FRONTEND_DIR := $(ROOT_DIR)/frontend
 PYTHON := $(ROOT_DIR)/.venv/bin/python
 SUPERVISE_BACKTEST_MANAGER = while true; do (cd "$(BACKEND_DIR)" && PAPER_TRADING_SCHEDULER_ENABLED=false PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false "$(PYTHON)" -m src.workers.backtest_worker_manager $(BACKTEST_WORKER_MANAGER_ARGS)); exit_code=$$?; echo "Backtest worker manager exited (code $$exit_code); restarting in 2 seconds." >&2; sleep 2; done
 
-.PHONY: help dev dev-agent-all dev-agent-safe dev-backend dev-frontend backtest-worker backtest-worker-manager benchmark-backtests backfill-daily import-a-share check-data docker-build docker-up docker-down docker-logs
+.PHONY: help dev dev-agent-all dev-agent-safe dev-backend dev-frontend backtest-worker backtest-worker-manager benchmark-backtests backfill-daily import-a-share check-data explain-feature-query docker-build docker-up docker-down docker-logs
 
 help:
 	@echo "Available targets:"
@@ -21,6 +21,7 @@ help:
 	@echo "  make backfill-daily Run the daily market-data catch-up flow"
 	@echo "  make import-a-share Plan or import Tushare A-share daily/index data (A_SHARE_ARGS='plan --start-date ... --end-date ...')"
 	@echo "  make check-data     Run read-only market-data integrity checks"
+	@echo "  make explain-feature-query Time the cold backtest feature query (read-only; EXPLAIN_ARGS to override)"
 	@echo "  make docker-build Build all Docker images"
 	@echo "  make docker-up    Start the full Docker stack in background"
 	@echo "  make docker-down  Stop the Docker stack"
@@ -68,6 +69,9 @@ import-a-share:
 
 check-data:
 	@cd "$(ROOT_DIR)" && "$(PYTHON)" backend/utils/check_market_data_quality.py $(CHECK_DATA_ARGS)
+
+explain-feature-query:
+	@cd "$(ROOT_DIR)" && "$(PYTHON)" backend/utils/explain_backtest_feature_query.py $(or $(EXPLAIN_ARGS),--basket "All A Shares (Tushare)" --start 2025-01-01 --end 2026-07-31 --measure-transport)
 
 docker-build:
 	@docker compose --env-file .env.docker build

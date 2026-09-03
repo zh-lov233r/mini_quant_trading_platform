@@ -43,6 +43,7 @@ describe("strategy clone draft", () => {
   });
 
   it("rejects historical strategy types that are not in the current catalog", () => {
+    // @ts-expect-error Exercise malformed external data outside the StrategyType union.
     expect(() => buildStrategyCloneDraft(strategy({ strategy_type: "retired_type" }))).toThrow(
       "unsupported strategy type",
     );

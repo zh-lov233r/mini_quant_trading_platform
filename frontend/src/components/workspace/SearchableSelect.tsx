@@ -14,6 +14,7 @@ import styles from "./SearchableSelect.module.css";
 export type { SearchableSelectOption } from "./searchableSelectUtils";
 
 export interface SearchableSelectProps {
+  id?: string;
   value: string;
   onValueChange: (value: string) => void;
   options: readonly SearchableSelectOption[];
@@ -28,6 +29,7 @@ export interface SearchableSelectProps {
 }
 
 export function SearchableSelect({
+  id,
   value,
   onValueChange,
   options,
@@ -105,6 +107,7 @@ export function SearchableSelect({
         <button
           type="button"
           role="combobox"
+          id={id}
           aria-label={ariaLabel}
           aria-haspopup="listbox"
           aria-expanded={open}
