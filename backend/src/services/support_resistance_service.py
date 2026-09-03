@@ -9,7 +9,7 @@ test fixtures; they are not a separately routable strategy engine.
 """
 
 from dataclasses import asdict, dataclass, field, replace
-from datetime import date, datetime
+from datetime import date
 from typing import Any, Literal
 
 from quant_kernel import support_resistance as native_support_resistance
@@ -215,38 +215,6 @@ def entry_price_is_inside_channel(
     return bool(inside), str(reason)
 
 
-def replay_latest(
-    snapshot: dict[str, Any],
-    signal_cfg: dict[str, Any],
-    risk_cfg: dict[str, Any],
-) -> tuple[dict[str, Any] | None, SupportResistanceSymbolState]:
-    """Replay available history for paper signal generation using the same state machine."""
-    state = SupportResistanceSymbolState()
-    history = list(snapshot.get("recent_bars") or [])
-    if not history or _bar_date(history[-1]) != _bar_date(snapshot):
-        history.append(snapshot)
-    for index, raw_bar in enumerate(history):
-        replay_snapshot = dict(raw_bar)
-        is_last = index == len(history) - 1
-        if is_last:
-            replay_snapshot.update(
-                {
-                    "position": snapshot.get("position"),
-                    "avg_entry_price": snapshot.get("avg_entry_price"),
-                    "position_holding_days": snapshot.get("position_holding_days"),
-                    "entry_signal_features": snapshot.get("entry_signal_features"),
-                }
-            )
-        decision = advance_symbol(
-            state,
-            replay_snapshot,
-            signal_cfg,
-            risk_cfg,
-            emit_signals=is_last,
-        )
-    return decision, state
-
-
 def classify_market_regime(
     state: SupportResistanceSymbolState,
     zones: list[Zone],
@@ -333,10 +301,6 @@ def _new_zone_key(source_kind: str, pivots: list[Pivot]) -> str:
     )
 
 
-def _revived_zone_key(zone_key: str, effective_date: date) -> str:
-    return str(native_support_resistance.revived_zone_key(zone_key, effective_date))
-
-
 def _record_zone_version(
     state: SupportResistanceSymbolState,
     zone: Zone,
@@ -349,40 +313,6 @@ def _record_zone_version(
         zone,
         effective_date,
         status,
-    )
-
-
-def _bar_date(bar: dict[str, Any]) -> date | None:
-    value = bar.get("dt_ny")
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    if isinstance(value, str):
-        try:
-            return date.fromisoformat(value[:10])
-        except ValueError:
-            return None
-    ts = bar.get("ts")
-    return ts.date() if isinstance(ts, datetime) else None
-
-
-def _valid_zone_values(
-    *,
-    center: float,
-    lower: float,
-    upper: float,
-    atr: float,
-    slope: float,
-) -> bool:
-    return bool(
-        native_support_resistance.valid_zone_values(
-            center,
-            lower,
-            upper,
-            atr,
-            slope,
-        )
     )
 
 

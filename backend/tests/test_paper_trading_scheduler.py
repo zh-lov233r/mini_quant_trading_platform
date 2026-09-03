@@ -25,7 +25,7 @@ class PaperTradingDailySchedulerTests(unittest.TestCase):
                 enabled=True,
                 run_time_ny=time(hour=23, minute=30),
                 poll_seconds=60.0,
-                submit_orders=True,
+                submit_orders=False,
                 continue_on_error=True,
             )
         )
@@ -37,12 +37,52 @@ class PaperTradingDailySchedulerTests(unittest.TestCase):
             "src.services.paper_trading_scheduler._load_schedulable_portfolios",
         ) as mock_targets, patch(
             "src.services.paper_trading_scheduler.run_multi_strategy_paper_trading",
-        ) as mock_run:
+        ) as mock_run, patch(
+            "src.services.paper_trading_scheduler.SessionLocal",
+            side_effect=AssertionError("readiness polling must not open a database session"),
+        ) as mock_session:
             scheduler._poll_once()
 
         mock_ready_date.assert_called_once()
         mock_targets.assert_not_called()
         mock_run.assert_not_called()
+        mock_session.assert_not_called()
+
+    def test_poll_once_processes_pending_entries_without_real_database_access(self) -> None:
+        scheduler = PaperTradingDailyScheduler(
+            PaperTradingSchedulerConfig(
+                enabled=True,
+                run_time_ny=time(hour=23, minute=30),
+                poll_seconds=60.0,
+                submit_orders=True,
+                continue_on_error=True,
+            )
+        )
+        now_ny = real_datetime(2026, 4, 10, 10, 0, tzinfo=NEW_YORK)
+        db = object()
+        session_context = MagicMock()
+        session_context.__enter__.return_value = db
+        session_context.__exit__.return_value = False
+
+        with patch(
+            "src.services.paper_trading_scheduler.datetime",
+        ) as mock_datetime, patch(
+            "src.services.paper_trading_scheduler.SessionLocal",
+            return_value=session_context,
+        ) as mock_session, patch(
+            "src.services.paper_trading_scheduler.process_pending_support_resistance_entries",
+        ) as mock_pending, patch(
+            "src.services.paper_trading_scheduler._latest_ready_daily_features_trade_date",
+            return_value=None,
+        ), patch(
+            "src.services.paper_trading_scheduler._load_schedulable_portfolios",
+        ) as mock_targets:
+            mock_datetime.now.return_value = now_ny
+            scheduler._poll_once()
+
+        mock_session.assert_called_once_with()
+        mock_pending.assert_called_once_with(db, now=now_ny)
+        mock_targets.assert_not_called()
 
     def test_poll_once_runs_latest_ready_trade_date_after_midnight(self) -> None:
         scheduler = PaperTradingDailyScheduler(

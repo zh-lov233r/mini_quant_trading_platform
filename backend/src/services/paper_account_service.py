@@ -123,26 +123,6 @@ def ensure_default_paper_account(db: Session) -> PaperTradingAccount:
     return account
 
 
-def ensure_default_strategy_portfolio(db: Session) -> StrategyPortfolio:
-    default_account = ensure_default_paper_account(db)
-    portfolio = db.execute(
-        select(StrategyPortfolio).where(
-            StrategyPortfolio.name == DEFAULT_PORTFOLIO_NAME
-        )
-    ).scalars().first()
-    if portfolio is None:
-        portfolio = StrategyPortfolio(
-            paper_account_id=default_account.id,
-            name=DEFAULT_PORTFOLIO_NAME,
-            description="Default virtual sleeve for paper trading",
-            status="active",
-        )
-        db.add(portfolio)
-        db.commit()
-        db.refresh(portfolio)
-    return portfolio
-
-
 def list_paper_accounts(
     db: Session,
     *,
@@ -617,7 +597,7 @@ def _build_local_broker_tracking_index(
             client_order_ids.add(client_order_id)
             client_order_id_to_portfolio[client_order_id] = portfolio_name
 
-        if not _transaction_fill_applied(transaction):
+        if not transaction_fill_applied(transaction):
             continue
 
         symbol = str(transaction.symbol or "").strip().upper()
@@ -1267,7 +1247,7 @@ def _transaction_portfolio_name(transaction: Transaction) -> str | None:
 
 
 def _transaction_net_cash_flow(transaction: Transaction) -> float:
-    if not _transaction_fill_applied(transaction):
+    if not transaction_fill_applied(transaction):
         return 0.0
 
     qty = float(transaction.qty)
@@ -1279,7 +1259,7 @@ def _transaction_net_cash_flow(transaction: Transaction) -> float:
     return -gross - fee
 
 
-def _transaction_fill_applied(transaction: Transaction) -> bool:
+def transaction_fill_applied(transaction: Transaction) -> bool:
     meta = transaction.meta or {}
     explicit = meta.get("paper_fill_applied")
     if isinstance(explicit, bool):
@@ -1303,7 +1283,7 @@ def _transaction_fill_applied(transaction: Transaction) -> bool:
     if broker_status == "filled":
         return True
 
-    return float(transaction.price or 0) > 0
+    return (_safe_float(transaction.price) or 0.0) > 0
 
 
 def _safe_float(value: Any) -> float | None:

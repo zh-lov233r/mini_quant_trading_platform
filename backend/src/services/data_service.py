@@ -226,8 +226,6 @@ class HistoricalBar:
     trades: int | None
 
 
-def subscribe_market_data():
-    pass
 
 
 def get_historical_data(

@@ -6,10 +6,8 @@ import type {
   PaperTradingAccountOverviewOut,
   PaperTradingAccountUpdate,
   PaperTradingWorkspaceOut,
-  StrategyPortfolioActivationOut,
   StrategyPortfolioCreate,
   StrategyPortfolioOut,
-  StrategyPortfolioRename,
 } from "@/types/paper-account";
 
 export function listPaperAccounts(
@@ -97,38 +95,6 @@ export function createStrategyPortfolio(
     method: "POST",
     body: JSON.stringify(payload),
   });
-}
-
-export function renameStrategyPortfolio(
-  portfolioId: string,
-  payload: StrategyPortfolioRename
-): Promise<StrategyPortfolioOut> {
-  return http<StrategyPortfolioOut>(`/api/strategy-portfolios/${portfolioId}`, {
-    method: "PATCH",
-    body: JSON.stringify(payload),
-  });
-}
-
-export function archiveStrategyPortfolio(
-  portfolioId: string
-): Promise<StrategyPortfolioOut> {
-  return http<StrategyPortfolioOut>(
-    `/api/strategy-portfolios/${portfolioId}/archive`,
-    {
-      method: "PATCH",
-    }
-  );
-}
-
-export function activateStrategyPortfolio(
-  portfolioId: string
-): Promise<StrategyPortfolioActivationOut> {
-  return http<StrategyPortfolioActivationOut>(
-    `/api/strategy-portfolios/${portfolioId}/activate`,
-    {
-      method: "PATCH",
-    }
-  );
 }
 
 export function deleteStrategyPortfolio(

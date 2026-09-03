@@ -7,7 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.core.db import get_db
@@ -199,20 +199,6 @@ def _to_strategy_out(obj: Strategy) -> StrategyOut:
         created_at=obj.created_at,
         updated_at=obj.updated_at,
     )
-
-
-def _load_supported_daily_feature_columns(db: Session) -> set[str]:
-    rows = db.execute(
-        text(
-            """
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_schema = current_schema()
-              AND table_name = 'daily_features'
-            """
-        )
-    ).all()
-    return {str(row[0]).strip().lower() for row in rows}
 
 
 def _build_feature_support_payload(db: Session) -> StrategyFeatureSupportOut:

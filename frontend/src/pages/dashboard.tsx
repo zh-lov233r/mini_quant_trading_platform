@@ -5,7 +5,7 @@ import { listBacktests } from "@/api/backtests";
 import { getPaperAccountOverview, listPaperAccounts } from "@/api/paper-accounts";
 import { listStrategyAllocations } from "@/api/strategy-allocations";
 import { getStrategyCatalog, listStrategies } from "@/api/strategies";
-import AppShell from "@/components/AppShell";
+import AppShell, { PageActionLink } from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
 import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogStack as ContextStack, DialogStat as ContextStat, DialogStats as ContextStats, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
@@ -25,25 +25,6 @@ import {
   summarizeStrategies,
 } from "@/utils/strategy";
 
-function actionLink(href: string, label: string, filled = false) {
-  return (
-    <Link
-      href={href}
-      style={{
-        padding: "11px 16px",
-        borderRadius: 14,
-        border: filled ? "none" : "1px solid rgba(148, 163, 184, 0.16)",
-        background: filled ? "#0891b2" : "rgba(15, 23, 42, 0.72)",
-        color: filled ? "#f8fafc" : "#dbeafe",
-        textDecoration: "none",
-        fontWeight: 700,
-        fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-      }}
-    >
-      {label}
-    </Link>
-  );
-}
 
 function getMetric(summary: Record<string, unknown>, key: string): number | null {
   const value = summary[key];
@@ -254,9 +235,9 @@ export default function DashboardPage() {
       title="Dashboard"
       actions={
         <>
-          {actionLink("/strategies/new", isZh ? "创建策略" : "Create Strategy", true)}
-          {actionLink("/backtests", isZh ? "开始回测" : "Start Backtests")}
-          {actionLink("/paper-trading", isZh ? "打开 Paper Trading" : "Open Paper Trading")}
+          <PageActionLink href="/strategies/new" primary>{isZh ? "创建策略" : "Create Strategy"}</PageActionLink>
+          <PageActionLink href="/backtests">{isZh ? "开始回测" : "Start Backtests"}</PageActionLink>
+          <PageActionLink href="/paper-trading">{isZh ? "打开 Paper Trading" : "Open Paper Trading"}</PageActionLink>
           <WorkspaceDialog triggerLabel={isZh ? "系统详情" : "System Details"} title={isZh ? "系统概览" : "System Overview"}>
             <ContextStack>
               <ContextGroup title={isZh ? "研究与回测" : "Research & Backtests"}><ContextStats><ContextStat label={isZh ? "Active 策略" : "Active strategies"} value={stats.active} /><ContextStat label="Engine ready" value={stats.engineReady} /><ContextStat label={isZh ? "完成回测" : "Completed runs"} value={completedRuns.length} /><ContextStat label={isZh ? "失败回测" : "Failed runs"} value={failedRuns.length} /></ContextStats></ContextGroup>

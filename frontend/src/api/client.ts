@@ -1,3 +1,5 @@
+import { detectLocale, translate, type Locale } from "@/i18n";
+
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
@@ -13,17 +15,17 @@ export class ApiError extends Error {
   }
 }
 
-function mapConflictMessage(detail: string, path: string): string {
+function mapConflictMessage(detail: string, path: string, locale: Locale): string {
   const normalized = detail.toLowerCase();
 
   if (normalized.includes("paper account name already exists")) {
-    return "这个 Paper Account 名称已经存在，请换一个新的账户名。";
+    return translate(locale, "apiErrors.paperAccountNameExists");
   }
   if (normalized.includes("strategy portfolio name already exists")) {
-    return "这个策略组合名称已经存在，请换一个新的组合名。当前第一版要求组合名全局唯一。";
+    return translate(locale, "apiErrors.portfolioNameExists");
   }
   if (normalized.includes("target strategy name already exists")) {
-    return "这个策略名称已经被占用，请换一个全新的名字。当前版本不支持直接并入另一个已有策略族。";
+    return translate(locale, "apiErrors.strategyNameExists");
   }
   if (
     normalized.includes("duplicate key") ||
@@ -31,34 +33,35 @@ function mapConflictMessage(detail: string, path: string): string {
     normalized.includes("unique constraint")
   ) {
     if (path.includes("/api/strategies")) {
-      return "检测到策略名称重复或版本冲突，请换一个名称，或确认是不是重复提交了同一条策略。";
+      return translate(locale, "apiErrors.strategyConflict");
     }
-    return "检测到名称重复或资源冲突，请修改后重试。";
+    return translate(locale, "apiErrors.resourceConflict");
   }
 
-  return `保存失败：${detail}`;
+  return translate(locale, "apiErrors.saveFailed", { detail });
 }
 
 function mapApiErrorMessage(status: number, detail: string, path: string): string {
   const normalizedDetail = detail.trim();
+  const locale = detectLocale();
 
   if (status === 409) {
-    return mapConflictMessage(normalizedDetail, path);
+    return mapConflictMessage(normalizedDetail, path, locale);
   }
 
   if (status === 404) {
-    return normalizedDetail || "请求的资源不存在。";
+    return normalizedDetail || translate(locale, "apiErrors.notFound");
   }
 
   if (status === 422) {
-    return normalizedDetail || "提交内容未通过校验，请检查输入。";
+    return normalizedDetail || translate(locale, "apiErrors.validationFailed");
   }
 
   if (normalizedDetail) {
     return normalizedDetail;
   }
 
-  return `${status} 请求失败`;
+  return translate(locale, "apiErrors.requestFailed", { status });
 }
 
 export async function readApiError(res: Response, path: string): Promise<ApiError> {

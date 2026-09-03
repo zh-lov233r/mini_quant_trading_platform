@@ -6,7 +6,7 @@ import unittest
 
 import numpy as np
 
-from src.services.native_backtest_service import _native_support_state
+from src.services.backtest_engine import _native_support_state
 from src.services.prepared_dataset_service import PREPARED_INTEGER_INDEX
 
 

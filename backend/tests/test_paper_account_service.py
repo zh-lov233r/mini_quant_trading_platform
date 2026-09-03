@@ -4,6 +4,7 @@ import sys
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 from sqlalchemy import create_engine
@@ -13,7 +14,10 @@ from sqlalchemy.orm import Session, sessionmaker
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.models.tables import Base, PaperTradingAccount, Strategy, StrategyPortfolio, Transaction  # noqa: E402
-from src.services.paper_account_service import build_broker_account_isolation_report  # noqa: E402
+from src.services.paper_account_service import (  # noqa: E402
+    build_broker_account_isolation_report,
+    transaction_fill_applied,
+)
 
 
 class PaperAccountIsolationServiceTests(unittest.TestCase):
@@ -212,6 +216,55 @@ class PaperAccountIsolationServiceTests(unittest.TestCase):
             )
         )
         self.db.commit()
+
+
+class TransactionFillAppliedTests(unittest.TestCase):
+    def transaction(self, *, meta: dict, price: object = 0) -> SimpleNamespace:
+        return SimpleNamespace(meta=meta, price=price)
+
+    def test_explicit_marker_takes_precedence(self) -> None:
+        transaction = self.transaction(
+            meta={"paper_fill_applied": False, "source": "manual_virtual"},
+            price=10,
+        )
+        self.assertFalse(transaction_fill_applied(transaction))
+
+    def test_applied_sources_are_accepted(self) -> None:
+        self.assertTrue(
+            transaction_fill_applied(self.transaction(meta={"source": "alpaca_live"}))
+        )
+        self.assertTrue(
+            transaction_fill_applied(self.transaction(meta={"source": "manual_virtual"}))
+        )
+
+    def test_paper_fill_evidence_and_status_are_respected(self) -> None:
+        self.assertTrue(
+            transaction_fill_applied(
+                self.transaction(meta={"source": "alpaca_paper", "filled_qty": "1"})
+            )
+        )
+        self.assertTrue(
+            transaction_fill_applied(
+                self.transaction(meta={"source": "alpaca_paper", "broker_status": "filled"})
+            )
+        )
+        self.assertFalse(
+            transaction_fill_applied(
+                self.transaction(meta={"source": "alpaca_paper", "broker_status": "accepted"}, price=10)
+            )
+        )
+
+    def test_paper_fill_falls_back_to_safe_positive_price(self) -> None:
+        self.assertTrue(
+            transaction_fill_applied(
+                self.transaction(meta={"source": "alpaca_paper"}, price="10.5")
+            )
+        )
+        self.assertFalse(
+            transaction_fill_applied(
+                self.transaction(meta={"source": "alpaca_paper"}, price="invalid")
+            )
+        )
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@ from src.services.native_result_repository import (
     NativeResultValidationError,
     persist_native_result,
 )
-from src.services.native_backtest_service import (
+from src.services.backtest_engine import (
     _native_research_metrics,
     _native_universe_membership,
 )

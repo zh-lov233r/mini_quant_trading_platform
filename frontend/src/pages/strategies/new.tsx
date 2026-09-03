@@ -3,31 +3,12 @@ import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 
 import { getStrategy } from "@/api/strategies";
-import AppShell from "@/components/AppShell";
+import AppShell, { PageActionLink } from "@/components/AppShell";
 import GuidedStrategyCreate from "@/components/GuidedStrategyCreate";
 import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogNote as ContextNote, DialogStack as ContextStack, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
 import type { StrategyOut } from "@/types/strategy";
 
-function actionLink(href: string, label: string, filled = false) {
-  return (
-    <Link
-      href={href}
-      style={{
-        padding: "11px 16px",
-        borderRadius: 14,
-        border: filled ? "none" : "1px solid rgba(148, 163, 184, 0.16)",
-        background: filled ? "#0891b2" : "rgba(15, 23, 42, 0.72)",
-        color: filled ? "#f8fafc" : "#dbeafe",
-        textDecoration: "none",
-        fontWeight: 700,
-        fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-      }}
-    >
-      {label}
-    </Link>
-  );
-}
 
 export default function NewStrategyPage() {
   const router = useRouter();
@@ -77,7 +58,7 @@ export default function NewStrategyPage() {
       subtitle={cloning ? copy.clone.pageSubtitle : copy.page.subtitle}
       actions={
         <>
-          {actionLink("/strategies", copy.page.back)}
+          <PageActionLink href="/strategies">{copy.page.back}</PageActionLink>
           <WorkspaceDialog triggerLabel={isZh ? "创建指引" : "Creation Guide"} title={isZh ? "创建指引" : "Creation Guide"}>
             <ContextStack>
               <ContextGroup title={isZh ? "安全边界" : "Safety Boundary"}><ContextNote>{isZh ? "新策略首先保存为 Draft。只有通过验证并明确发布为 engine-ready 后，回测引擎才会使用它。" : "New strategies are saved as drafts first. The backtest engine only uses them after validation and explicit engine-ready publication."}</ContextNote></ContextGroup>

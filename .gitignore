@@ -28,7 +28,9 @@ tmp/pdfs/
 frontend/node_modules/
 frontend/.next/
 frontend/.next-dev/
+frontend/.next-codex-*/
 
 # Local raw market-data downloads
 data/massive/
 data/backtest_prepared/
+data/reports/

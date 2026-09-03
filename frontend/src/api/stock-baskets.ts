@@ -11,9 +11,3 @@ export function createStockBasket(payload: StockBasketCreate): Promise<StockBask
     body: JSON.stringify(payload),
   });
 }
-
-export function getStockBasket(basketId: string): Promise<StockBasketOut> {
-  return http<StockBasketOut>(`/api/stock-baskets/${encodeURIComponent(basketId)}`, {
-    method: "GET",
-  });
-}

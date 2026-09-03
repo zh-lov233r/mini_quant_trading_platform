@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from src.core.db import SessionLocal
 from src.models.tables import PaperTradingAccount, StrategyPortfolio, StrategyRun
@@ -31,6 +31,9 @@ from src.services.paper_trading_service import (
     PAPER_TRADING_TRIGGER_SCHEDULER,
     process_pending_support_resistance_entries,
     run_multi_strategy_paper_trading,
+)
+from src.services.paper_portfolio_activation_service import (
+    latest_ready_paper_trading_trade_date,
 )
 from src.services.strategy_allocation_service import list_allocated_strategies, normalize_portfolio_name
 
@@ -279,26 +282,10 @@ def _latest_ready_daily_features_trade_date(max_trade_date: date) -> date | None
     partially populated feature snapshots.
     """
     with SessionLocal() as db:
-        row = db.execute(
-            text(
-                """
-                SELECT MAX(ready_dates.trade_date)
-                FROM (
-                    SELECT e.dt_ny AS trade_date
-                    FROM eod_bars e
-                    LEFT JOIN daily_features f
-                      ON f.instrument_id = e.instrument_id
-                     AND f.dt_ny = e.dt_ny
-                    WHERE e.dt_ny <= :max_trade_date
-                    GROUP BY e.dt_ny
-                    HAVING COUNT(*) > 0
-                       AND COUNT(f.instrument_id) = COUNT(*)
-                ) AS ready_dates
-                """
-            ),
-            {"max_trade_date": max_trade_date},
-        ).scalar()
-    return row
+        return latest_ready_paper_trading_trade_date(
+            db,
+            max_trade_date=max_trade_date,
+        )
 
 
 def _has_scheduler_run_for_trade_date(portfolio_name: str, trade_date: date) -> bool:

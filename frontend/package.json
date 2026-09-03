@@ -12,7 +12,6 @@
     "dependencies": {
         "@tanstack/react-table": "^9.2.4",
         "@tanstack/react-virtual": "^3.14.10",
-        "axios": "^1.6.8",
         "lightweight-charts": "5.2.1",
         "next": "^15.5.0",
         "radix-ui": "^1.6.7",

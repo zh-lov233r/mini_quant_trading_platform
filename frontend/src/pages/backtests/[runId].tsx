@@ -1,4 +1,3 @@
-import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/router";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -14,7 +13,7 @@ import {
   getBacktestWorkerStatus,
 } from "@/api/backtests";
 import { getCandleSeries } from "@/api/quotes";
-import AppShell from "@/components/AppShell";
+import AppShell, { PageActionLink } from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import BacktestProgressBar from "@/components/BacktestProgressBar";
 import BacktestWorkerCapacity from "@/components/BacktestWorkerCapacity";
@@ -99,25 +98,6 @@ const BacktestTransactionsDenseTable = dynamic(
   { ssr: false }
 );
 
-function actionLink(href: string, label: string, filled = false) {
-  return (
-    <Link
-      href={href}
-      style={{
-        padding: "11px 16px",
-        borderRadius: 14,
-        border: filled ? "none" : "1px solid rgba(148, 163, 184, 0.16)",
-        background: filled ? "#0891b2" : "rgba(15, 23, 42, 0.72)",
-        color: filled ? "#f8fafc" : "#dbeafe",
-        textDecoration: "none",
-        fontWeight: 700,
-        fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-      }}
-    >
-      {label}
-    </Link>
-  );
-}
 
 function metricNumber(summary: Record<string, unknown>, key: string): number | null {
   const value = summary[key];
@@ -4391,7 +4371,7 @@ export default function BacktestDetailPage() {
             ? "当前没有找到目标回测记录，可能 run id 不存在，或者后端尚未完成落库"
             : "The target backtest record could not be found. The run ID may not exist or the backend may not have finished persisting it yet."
         }
-        actions={actionLink("/backtests", isZh ? "返回回测列表" : "Back To Backtests")}
+        actions={<PageActionLink href="/backtests">{isZh ? "返回回测列表" : "Back To Backtests"}</PageActionLink>}
       >
         <p>{isZh ? "未找到回测记录。" : "Backtest not found."}</p>
       </AppShell>
@@ -4408,11 +4388,10 @@ export default function BacktestDetailPage() {
       }
       actions={
         <>
-          {actionLink("/backtests", isZh ? "返回回测列表" : "Back To Backtests")}
-          {actionLink(
-            run ? `/strategies/${encodeURIComponent(run.strategy_id)}` : "/strategies",
-            isZh ? "查看策略" : "View Strategy"
-          )}
+          <PageActionLink href="/backtests">{isZh ? "返回回测列表" : "Back To Backtests"}</PageActionLink>
+          <PageActionLink href={run ? `/strategies/${encodeURIComponent(run.strategy_id)}` : "/strategies"}>
+            {isZh ? "查看策略" : "View Strategy"}
+          </PageActionLink>
           {run ? (
             <WorkspaceDialog triggerLabel={isZh ? "运行配置" : "Run Configuration"} title={isZh ? "运行摘要" : "Run Summary"}>
               <ContextStack>

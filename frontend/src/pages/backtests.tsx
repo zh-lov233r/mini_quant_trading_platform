@@ -7,7 +7,7 @@ import { createPortal } from "react-dom";
 import { createBacktest, deleteBacktest, getBacktestWorkerStatus, listBacktests } from "@/api/backtests";
 import { listStockBaskets } from "@/api/stock-baskets";
 import { listStrategies } from "@/api/strategies";
-import AppShell from "@/components/AppShell";
+import AppShell, { PageActionLink } from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import BacktestProgressBar from "@/components/BacktestProgressBar";
 import BacktestWorkerCapacity from "@/components/BacktestWorkerCapacity";
@@ -31,25 +31,6 @@ import { clampPageIndex, pageCount, paginateItems } from "@/utils/pagination";
 import { filterBacktestRuns } from "@/utils/backtestFilters";
 import styles from "@/styles/BacktestsPage.module.css";
 
-function actionLink(href: string, label: string, filled = false) {
-  return (
-    <Link
-      href={href}
-      style={{
-        padding: "11px 16px",
-        borderRadius: 14,
-        border: filled ? "none" : "1px solid rgba(148, 163, 184, 0.16)",
-        background: filled ? "#078cad" : "rgba(15, 23, 42, 0.72)",
-        color: filled ? "#f8fafc" : "#dbeafe",
-        textDecoration: "none",
-        fontWeight: 700,
-        fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-      }}
-    >
-      {label}
-    </Link>
-  );
-}
 
 function actionButton(label: string, onClick: () => void) {
   return (
@@ -615,10 +596,10 @@ export default function BacktestsPage() {
       }
       actions={
         <>
-          {actionLink("/stock-baskets", isZh ? "管理股票库" : "Manage Baskets")}
-          {actionLink("/strategies", isZh ? "查看策略库" : "View Strategies")}
-          {actionLink("/strategies/new", isZh ? "创建策略" : "Create Strategy")}
-          {actionLink("/backtests", isZh ? "刷新回测页" : "Refresh Backtests")}
+          <PageActionLink href="/stock-baskets">{isZh ? "管理股票库" : "Manage Baskets"}</PageActionLink>
+          <PageActionLink href="/strategies">{isZh ? "查看策略库" : "View Strategies"}</PageActionLink>
+          <PageActionLink href="/strategies/new">{isZh ? "创建策略" : "Create Strategy"}</PageActionLink>
+          <PageActionLink href="/backtests">{isZh ? "刷新回测页" : "Refresh Backtests"}</PageActionLink>
           {actionButton(isZh ? "发起回测" : "Start Backtest", () => setBacktestDialogOpen(true))}
         </>
       }

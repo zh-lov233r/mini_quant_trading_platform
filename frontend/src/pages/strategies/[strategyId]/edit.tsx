@@ -1,33 +1,13 @@
-import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 
 import { getStrategy } from "@/api/strategies";
-import AppShell from "@/components/AppShell";
+import AppShell, { PageActionLink } from "@/components/AppShell";
 import StrategyForm from "@/components/StrategyForm";
 import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogNote as ContextNote, DialogStack as ContextStack, DialogStat as ContextStat, DialogStats as ContextStats, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
 import type { StrategyOut } from "@/types/strategy";
 
-function actionLink(href: string, label: string, filled = false) {
-  return (
-    <Link
-      href={href}
-      style={{
-        padding: "11px 16px",
-        borderRadius: 14,
-        border: filled ? "none" : "1px solid rgba(148, 163, 184, 0.16)",
-        background: filled ? "#0891b2" : "rgba(15, 23, 42, 0.72)",
-        color: filled ? "#f8fafc" : "#dbeafe",
-        textDecoration: "none",
-        fontWeight: 700,
-        fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-      }}
-    >
-      {label}
-    </Link>
-  );
-}
 
 export default function EditStrategyPage() {
   const router = useRouter();
@@ -80,11 +60,10 @@ export default function EditStrategyPage() {
       }
       actions={
         <>
-          {actionLink(
-            strategy ? `/strategies/${encodeURIComponent(strategy.id)}` : "/strategies",
-            isZh ? "返回详情" : "Back To Detail"
-          )}
-          {actionLink("/strategies", isZh ? "返回策略库" : "Back To Strategies")}
+          <PageActionLink href={strategy ? `/strategies/${encodeURIComponent(strategy.id)}` : "/strategies"}>
+            {isZh ? "返回详情" : "Back To Detail"}
+          </PageActionLink>
+          <PageActionLink href="/strategies">{isZh ? "返回策略库" : "Back To Strategies"}</PageActionLink>
           {strategy ? (
             <WorkspaceDialog triggerLabel={isZh ? "策略摘要" : "Strategy Summary"} title={isZh ? "策略上下文" : "Strategy Context"}>
               <ContextStack>

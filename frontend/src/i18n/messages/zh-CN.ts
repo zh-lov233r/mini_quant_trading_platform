@@ -8,6 +8,17 @@ export const zhCNMessages = {
     english: "English",
     backToTop: "返回顶部",
   },
+  apiErrors: {
+    paperAccountNameExists: "这个 Paper Account 名称已经存在，请换一个新的账户名。",
+    portfolioNameExists: "这个策略组合名称已经存在，请换一个新的组合名。当前第一版要求组合名全局唯一。",
+    strategyNameExists: "这个策略名称已经被占用，请换一个全新的名字。当前版本不支持直接并入另一个已有策略族。",
+    strategyConflict: "检测到策略名称重复或版本冲突，请换一个名称，或确认是不是重复提交了同一条策略。",
+    resourceConflict: "检测到名称重复或资源冲突，请修改后重试。",
+    saveFailed: "保存失败：{detail}",
+    notFound: "请求的资源不存在。",
+    validationFailed: "提交内容未通过校验，请检查输入。",
+    requestFailed: "{status} 请求失败",
+  },
   nav: {
     dashboard: "总览",
     strategies: "策略库",

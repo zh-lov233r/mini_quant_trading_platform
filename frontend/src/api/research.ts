@@ -63,13 +63,6 @@ export function listExperimentCandidates(id: string): Promise<ExperimentCandidat
   );
 }
 
-export function getExperimentReport(id: string): Promise<Record<string, unknown>> {
-  return http<Record<string, unknown>>(
-    `/api/research/experiments/${encodeURIComponent(id)}/report`,
-    { method: "GET" },
-  );
-}
-
 export function deleteResearchBacktest(
   experimentId: string,
   runId: string,

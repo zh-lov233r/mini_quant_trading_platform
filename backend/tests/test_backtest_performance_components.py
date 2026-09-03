@@ -14,13 +14,13 @@ from src.services.backtest_engine import (
     _available_details,
     _downsample_snapshots,
     _finalize_engine_performance,
+    _load_prepared_dataset,
     _load_split_adjustments_by_date,
 )
 from src.services.backtest_equity_service import (
     build_downsampled_chart_query,
     build_downsampled_snapshot_ids_query,
 )
-from src.services.native_backtest_service import _load_prepared_dataset
 from src.services.prepared_dataset_service import (
     PREPARED_DATASET_SCHEMA_VERSION,
     PreparedDatasetCache,
@@ -45,11 +45,11 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
 
         with (
             patch(
-                "src.services.native_backtest_service.PreparedDatasetCache",
+                "src.services.backtest_engine.PreparedDatasetCache",
                 return_value=cache,
             ),
             patch(
-                "src.services.native_backtest_service.MarketDataLoader",
+                "src.services.backtest_engine.MarketDataLoader",
                 autospec=True,
             ) as loader_class,
         ):
@@ -89,16 +89,16 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
 
         with (
             patch(
-                "src.services.native_backtest_service.PreparedDatasetCache",
+                "src.services.backtest_engine.PreparedDatasetCache",
                 return_value=cache,
             ),
             patch(
-                "src.services.native_backtest_service.MarketDataLoader",
+                "src.services.backtest_engine.MarketDataLoader",
                 autospec=True,
             ) as loader_class,
-            patch("src.services.native_backtest_service.encode_prepared_snapshot"),
+            patch("src.services.backtest_engine.encode_prepared_snapshot"),
             patch(
-                "src.services.native_backtest_service._split_adjustments",
+                "src.services.backtest_engine._split_adjustments",
                 return_value=[],
             ),
         ):

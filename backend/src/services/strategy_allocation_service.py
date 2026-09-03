@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Iterable
 from uuid import UUID
 
@@ -11,18 +10,6 @@ from src.models.tables import Strategy, StrategyAllocation
 
 
 DEFAULT_PORTFOLIO_NAME = "default"
-
-
-@dataclass(slots=True)
-class AllocationSummary:
-    strategy_id: str
-    strategy_name: str
-    portfolio_name: str
-    allocation_pct: float
-    capital_base: float | None
-    allow_fractional: bool
-    auto_run_enabled: bool
-    status: str
 
 
 def normalize_portfolio_name(portfolio_name: str | None) -> str:
@@ -45,18 +32,6 @@ def list_strategy_allocations(
     if status is not None:
         stmt = stmt.where(StrategyAllocation.status == status)
     return db.execute(stmt).scalars().all()
-
-
-def list_active_portfolio_allocations(
-    db: Session,
-    *,
-    portfolio_name: str | None = None,
-) -> list[StrategyAllocation]:
-    return list_strategy_allocations(
-        db,
-        portfolio_name=portfolio_name,
-        status="active",
-    )
 
 
 def get_strategy_allocation(
@@ -107,24 +82,3 @@ def validate_portfolio_allocations(
             f"active allocation_pct total exceeds 1.0 for portfolio: {total:.6f}"
         )
     return total
-
-
-def to_allocation_summary(
-    allocation: StrategyAllocation,
-    *,
-    strategy_name: str | None = None,
-) -> AllocationSummary:
-    return AllocationSummary(
-        strategy_id=str(allocation.strategy_id),
-        strategy_name=strategy_name or getattr(allocation.strategy, "name", "") or "",
-        portfolio_name=allocation.portfolio_name,
-        allocation_pct=float(allocation.allocation_pct or 0),
-        capital_base=(
-            float(allocation.capital_base)
-            if allocation.capital_base is not None
-            else None
-        ),
-        allow_fractional=bool(allocation.allow_fractional),
-        auto_run_enabled=bool(allocation.auto_run_enabled),
-        status=allocation.status,
-    )

@@ -26,8 +26,29 @@ interface AppShellProps {
   contentMode?: "workspace" | "wide" | "reading";
 }
 
+interface PageActionLinkProps {
+  href: string;
+  children: ReactNode;
+  primary?: boolean;
+}
+
 function cx(...values: Array<string | false | null | undefined>): string {
   return values.filter(Boolean).join(" ");
+}
+
+export function PageActionLink({
+  href,
+  children,
+  primary = false,
+}: PageActionLinkProps) {
+  return (
+    <Link
+      href={href}
+      className={cx(styles.pageActionLink, primary && styles.pageActionLinkPrimary)}
+    >
+      {children}
+    </Link>
+  );
 }
 
 export default function AppShell({

@@ -1,7 +1,6 @@
 import type {
   StrategyCatalogItem,
   StrategyOut,
-  StrategyRuntimeOut,
   StrategyType,
 } from "@/types/strategy";
 import { enUSMessages } from "@/i18n/messages/en-US";
@@ -293,26 +292,4 @@ export function formatDurationMs(
   }
   parts.push(`${seconds}s`);
   return parts.join(" ");
-}
-
-export function getRuntimeFieldText(
-  runtime: StrategyRuntimeOut | null,
-  section: string,
-  field: string
-): string | null {
-  if (!runtime) {
-    return null;
-  }
-
-  const sectionValue = (runtime.params as Record<string, unknown>)[section];
-  if (!sectionValue || typeof sectionValue !== "object") {
-    return null;
-  }
-
-  const raw = (sectionValue as Record<string, unknown>)[field];
-  if (typeof raw !== "string" || !raw.trim()) {
-    return null;
-  }
-
-  return raw.trim();
 }

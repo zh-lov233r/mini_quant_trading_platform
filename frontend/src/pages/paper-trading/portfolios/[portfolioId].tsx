@@ -7,7 +7,7 @@ import {
   getPaperAccountWorkspace,
   listStrategyPortfolios,
 } from "@/api/paper-accounts";
-import AppShell from "@/components/AppShell";
+import AppShell, { PageActionLink } from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
 import {
@@ -29,25 +29,6 @@ import type {
 } from "@/types/paper-account";
 import { formatDateTime, formatPercent } from "@/utils/strategy";
 
-function actionLink(href: string, label: string, filled = false) {
-  return (
-    <Link
-      href={href}
-      style={{
-        padding: "11px 16px",
-        borderRadius: 14,
-        border: filled ? "none" : "1px solid rgba(148, 163, 184, 0.16)",
-        background: filled ? "#0891b2" : "rgba(15, 23, 42, 0.72)",
-        color: filled ? "#f8fafc" : "#dbeafe",
-        textDecoration: "none",
-        fontWeight: 700,
-        fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-      }}
-    >
-      {label}
-    </Link>
-  );
-}
 
 function sectionCard(title: string, subtitle: string, children: ReactNode) {
   return (
@@ -248,7 +229,7 @@ export default function PortfolioDetailPage() {
       }
       actions={
         <>
-          {actionLink("/paper-trading#portfolios", txt("返回工作台", "Back To Workspace"))}
+          <PageActionLink href="/paper-trading#portfolios">{txt("返回工作台", "Back To Workspace")}</PageActionLink>
           <button
             type="button"
             onClick={() => router.reload()}

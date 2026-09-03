@@ -69,18 +69,6 @@ export interface ExperimentSpec {
   stopPolicy?: ExperimentStopPolicy | null;
 }
 
-export type ParetoObjectiveMetric =
-  | "oos_total_return"
-  | "oos_annualized_return"
-  | "oos_sharpe"
-  | "oos_sortino"
-  | "oos_excess_return"
-  | "oos_max_drawdown"
-  | "oos_turnover"
-  | "pnl_concentration"
-  | "cost_decay"
-  | "is_oos_abs_gap";
-
 export interface ExperimentRound {
   id: string;
   experimentId: string;

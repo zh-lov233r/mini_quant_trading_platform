@@ -13,7 +13,7 @@ import {
   isStrategyDeleteCloseRequired,
   renameStrategy,
 } from "@/api/strategies";
-import AppShell from "@/components/AppShell";
+import AppShell, { PageActionLink } from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
 import responsiveGridStyles from "@/components/workspace/ResponsivePageGrid.module.css";
@@ -35,25 +35,6 @@ import {
   getUniverseSymbols,
 } from "@/utils/strategy";
 
-function actionLink(href: string, label: string, filled = false) {
-  return (
-    <Link
-      href={href}
-      style={{
-        padding: "11px 16px",
-        borderRadius: 14,
-        border: filled ? "none" : "1px solid rgba(148, 163, 184, 0.16)",
-        background: filled ? "#0891b2" : "rgba(15, 23, 42, 0.72)",
-        color: filled ? "#f8fafc" : "#dbeafe",
-        textDecoration: "none",
-        fontWeight: 700,
-        fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-      }}
-    >
-      {label}
-    </Link>
-  );
-}
 
 function infoRow(label: string, value: string) {
   return (
@@ -385,7 +366,7 @@ export default function StrategyDetailPage() {
             ? "当前没有找到目标策略，可能是链接失效，或者后端里还不存在这个 ID"
             : "The target strategy could not be found. The link may be stale or the backend may not have this ID yet."
         }
-        actions={actionLink("/strategies", isZh ? "返回策略库" : "Back To Strategies")}
+        actions={<PageActionLink href="/strategies">{isZh ? "返回策略库" : "Back To Strategies"}</PageActionLink>}
       >
         <p>{isZh ? "未找到策略。" : "Strategy not found."}</p>
       </AppShell>
@@ -402,20 +383,16 @@ export default function StrategyDetailPage() {
       }
       actions={
         <>
-          {actionLink("/strategies", isZh ? "返回策略库" : "Back To Strategies")}
-          {actionLink(
-            strategy ? `/strategies/${encodeURIComponent(strategy.id)}/edit` : "/strategies",
-            isZh ? "编辑参数" : "Edit Params"
-          )}
-          {actionLink(
-            strategy ? `/backtests?strategyId=${encodeURIComponent(strategy.id)}` : "/backtests",
-            isZh ? "用它回测" : "Backtest It"
-          )}
-          {actionLink(
-            strategy ? `/strategies/new?cloneFrom=${encodeURIComponent(strategy.id)}` : "/strategies/new",
-            isZh ? "基于此策略新建" : "Create From This",
-            true
-          )}
+          <PageActionLink href="/strategies">{isZh ? "返回策略库" : "Back To Strategies"}</PageActionLink>
+          <PageActionLink href={strategy ? `/strategies/${encodeURIComponent(strategy.id)}/edit` : "/strategies"}>
+            {isZh ? "编辑参数" : "Edit Params"}
+          </PageActionLink>
+          <PageActionLink href={strategy ? `/backtests?strategyId=${encodeURIComponent(strategy.id)}` : "/backtests"}>
+            {isZh ? "用它回测" : "Backtest It"}
+          </PageActionLink>
+          <PageActionLink href={strategy ? `/strategies/new?cloneFrom=${encodeURIComponent(strategy.id)}` : "/strategies/new"} primary>
+            {isZh ? "基于此策略新建" : "Create From This"}
+          </PageActionLink>
           {strategy ? (
             <WorkspaceDialog triggerLabel={isZh ? "策略摘要" : "Strategy Summary"} title={isZh ? "策略上下文" : "Strategy Context"}>
               <ContextStack>
@@ -446,9 +423,9 @@ export default function StrategyDetailPage() {
           <h2 style={{ margin: "0 0 8px", fontSize: 20 }}>{clonedFromStrategy ? messages.strategyCreate.clone.successTitle : createCopy.title}</h2>
           <p style={{ margin: "0 0 14px", color: "#bbf7d0", lineHeight: 1.6 }}>{clonedFromStrategy ? messages.strategyCreate.clone.successDescription : createCopy.description}</p>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {actionLink(`/backtests?strategyId=${encodeURIComponent(strategy.id)}`, createCopy.backtest, true)}
-            {actionLink(`/strategies/${encodeURIComponent(strategy.id)}/edit`, createCopy.edit)}
-            {actionLink("/strategies", createCopy.library)}
+            <PageActionLink href={`/backtests?strategyId=${encodeURIComponent(strategy.id)}`} primary>{createCopy.backtest}</PageActionLink>
+            <PageActionLink href={`/strategies/${encodeURIComponent(strategy.id)}/edit`}>{createCopy.edit}</PageActionLink>
+            <PageActionLink href="/strategies">{createCopy.library}</PageActionLink>
           </div>
         </section>
       ) : null}
@@ -911,12 +888,12 @@ export default function StrategyDetailPage() {
                     </div>
 
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                      {actionLink(`/backtests/${encodeURIComponent(recentRuns[0].id)}`, isZh ? "查看本次回测" : "View This Backtest")}
-                      {actionLink(
-                        `/backtests?strategyId=${encodeURIComponent(strategy.id)}`,
-                        isZh ? "查看全部记录" : "View All Runs",
-                        true
-                      )}
+                      <PageActionLink href={`/backtests/${encodeURIComponent(recentRuns[0].id)}`}>
+                        {isZh ? "查看本次回测" : "View This Backtest"}
+                      </PageActionLink>
+                      <PageActionLink href={`/backtests?strategyId=${encodeURIComponent(strategy.id)}`} primary>
+                        {isZh ? "查看全部记录" : "View All Runs"}
+                      </PageActionLink>
                     </div>
                   </div>
 

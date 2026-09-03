@@ -1,9 +1,8 @@
 import type { CSSProperties, FormEvent } from "react";
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { createStockBasket, listStockBaskets } from "@/api/stock-baskets";
-import AppShell from "@/components/AppShell";
+import AppShell, { PageActionLink } from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
 import { SelectControl } from "@/components/workspace/SelectControl";
@@ -12,25 +11,6 @@ import { useI18n } from "@/i18n/provider";
 import type { StockBasketCreate, StockBasketOut } from "@/types/stock-basket";
 import { formatDateTime } from "@/utils/strategy";
 
-function actionLink(href: string, label: string, filled = false) {
-  return (
-    <Link
-      href={href}
-      style={{
-        padding: "11px 16px",
-        borderRadius: 14,
-        border: filled ? "none" : "1px solid rgba(148, 163, 184, 0.16)",
-        background: filled ? "#0891b2" : "rgba(15, 23, 42, 0.72)",
-        color: filled ? "#f8fafc" : "#dbeafe",
-        textDecoration: "none",
-        fontWeight: 700,
-        fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-      }}
-    >
-      {label}
-    </Link>
-  );
-}
 
 function parseSymbols(raw: string): string[] {
   return raw
@@ -141,8 +121,8 @@ export default function StockBasketsPage() {
       }
       actions={
         <>
-          {actionLink("/backtests", isZh ? "去回测" : "Open Backtests")}
-          {actionLink("/stock-baskets", isZh ? "刷新股票库" : "Refresh Baskets", true)}
+          <PageActionLink href="/backtests">{isZh ? "去回测" : "Open Backtests"}</PageActionLink>
+          <PageActionLink href="/stock-baskets" primary>{isZh ? "刷新股票库" : "Refresh Baskets"}</PageActionLink>
         </>
       }
     >

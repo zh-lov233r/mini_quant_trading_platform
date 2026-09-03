@@ -43,10 +43,6 @@ export interface StrategyPortfolioCreate {
   status?: string;
 }
 
-export interface StrategyPortfolioRename {
-  name: string;
-}
-
 export interface StrategyPortfolioOut {
   id: string;
   paper_account_id: string;
@@ -56,20 +52,6 @@ export interface StrategyPortfolioOut {
   status: string;
   created_at?: string | null;
   updated_at?: string | null;
-}
-
-export interface StrategyPortfolioActivationExecutionOut {
-  portfolio_name: string;
-  trade_date: string;
-  total_runs: number;
-  completed_runs: number;
-  failed_runs: number;
-  run_ids: string[];
-}
-
-export interface StrategyPortfolioActivationOut {
-  portfolio: StrategyPortfolioOut;
-  execution: StrategyPortfolioActivationExecutionOut;
 }
 
 export interface PortfolioStrategyOverviewOut {

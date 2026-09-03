@@ -9,23 +9,15 @@ import math
 from typing import Any, Dict, Literal
 
 import quant_kernel
-from sqlalchemy import bindparam, delete, select, text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
-from src.models.tables import Signal, Strategy, StrategyRun
+from src.services.feature_snapshot_sql import FEATURE_SNAPSHOT_PROJECTION_SQL
 from src.services.prepared_dataset_service import build_in_memory_prepared_dataset
 from src.services.support_resistance_service import (
     SupportResistanceState,
     SupportResistanceSymbolState,
 )
-from src.services.support_resistance_persistence_service import (
-    SupportResistanceMaterializationBuildError,
-    find_reusable_materialization,
-    hydrate_state_from_materialization,
-    persist_support_resistance_run,
-    record_failed_materialization_after_rollback,
-)
-from src.services.strategy_registry import build_runtime_payload
 from src.services.strategy_types import (
     HistoryBar,
     MarketDataBySymbol,
@@ -35,50 +27,14 @@ from src.services.strategy_types import (
 
 RECENT_BAR_COUNT = 40
 RECENT_BAR_LOOKBACK_DAYS = 90
-NATIVE_STRATEGY_TYPES = frozenset(
-    str(item["strategy_type"]) for item in quant_kernel.catalog()
-)
-
-FEATURE_SNAPSHOT_SQL = """
+FEATURE_SNAPSHOT_SQL = f"""
 SELECT
     i.id AS instrument_id,
     i.ticker_canonical AS symbol,
     i.asset_type,
     curr.dt_ny,
     bars.ts_utc AS ts,
-    COALESCE(bars.open_fa, bars.open_u) AS open,
-    COALESCE(bars.high_fa, bars.high_u) AS high,
-    COALESCE(bars.low_fa, bars.low_u) AS low,
-    COALESCE(bars.close_fa, bars.close_u) AS close,
-    bars.volume,
-    curr.atr_14,
-    curr.adv_20 AS volume_sma_20,
-    curr.ret_20d,
-    curr.ret_60d,
-    curr.sma_10,
-    curr.sma_20,
-    curr.sma_50,
-    curr.sma_100,
-    curr.sma_200,
-    curr.ema_12,
-    curr.ema_15,
-    curr.ema_20,
-    curr.ema_50,
-    curr.rsi_2,
-    curr.rsi_5,
-    curr.rsi_14,
-    curr.zscore_5,
-    curr.zscore_10,
-    curr.zscore_20,
-    prev.sma_10 AS prev_sma_10,
-    prev.sma_20 AS prev_sma_20,
-    prev.sma_50 AS prev_sma_50,
-    prev.sma_100 AS prev_sma_100,
-    prev.sma_200 AS prev_sma_200,
-    prev.ema_12 AS prev_ema_12,
-    prev.ema_15 AS prev_ema_15,
-    prev.ema_20 AS prev_ema_20,
-    prev.ema_50 AS prev_ema_50
+{FEATURE_SNAPSHOT_PROJECTION_SQL}
 FROM daily_features curr
 JOIN instruments i
   ON i.id = curr.instrument_id
@@ -136,31 +92,9 @@ class SignalEvent:
     instrument_id: int | None = None
 
 
-@dataclass(slots=True)
-class PersistedSignalRun:
-    """Summary of one strategy run that was written to the database."""
-
-    strategy_id: str
-    run_id: str
-    mode: str
-    trade_date: date
-    signal_count: int
-
-
 # ============================================================================
 # Public orchestration API
 # ============================================================================
-
-# Fetch strategies that are currently eligible to participate in signal runs.
-# Input: active SQLAlchemy session.
-# Output: active Strategy rows ordered deterministically by created_at/version.
-def list_active_strategies(db: Session) -> list[Strategy]:
-    return db.execute(
-        select(Strategy)
-        .where(Strategy.status == "active")
-        .order_by(Strategy.created_at.asc(), Strategy.version.asc())
-    ).scalars().all()
-
 
 # Build the runtime market snapshot map for one NY trade date.
 # Input: db session, trade date, and an optional canonical symbol filter.
@@ -201,176 +135,6 @@ def load_feature_market_data(
         if symbol in snapshots:
             snapshots[symbol]["recent_bars"] = bars
     return snapshots
-
-
-# Convenience entrypoint for in-memory signal generation on a single trade date.
-# Input: db session, trade date, and an optional canonical symbol filter.
-# Output: flat SignalEvent list across all active engine-ready strategies.
-def generate_signals_for_trade_date(
-    db: Session,
-    trade_date: date,
-    symbols: list[str] | None = None,
-) -> list[SignalEvent]:
-    active_runtimes = _list_engine_ready_runtimes(db)
-    recent_bar_count, recent_bar_lookback_days = _recent_history_window_for_runtimes(active_runtimes)
-    snapshots = load_feature_market_data(
-        db,
-        trade_date,
-        symbols,
-        recent_bar_count=recent_bar_count,
-        recent_bar_lookback_days=recent_bar_lookback_days,
-    )
-    return generate_signals(db, snapshots)
-
-
-# Run all active engine-ready strategies and persist one StrategyRun per strategy/date.
-# Input: db session, trade date, execution mode, and an optional canonical symbol filter.
-# Output: persisted run summaries for strategies that were executed and committed.
-def generate_and_persist_signals_for_trade_date(
-    db: Session,
-    trade_date: date,
-    *,
-    mode: Literal["paper", "live"] = "paper",
-    symbols: list[str] | None = None,
-) -> list[PersistedSignalRun]:
-    active_strategies = list_active_strategies(db)
-    active_runtimes = _list_engine_ready_runtimes_from_strategies(active_strategies)
-    recent_bar_count, recent_bar_lookback_days = _recent_history_window_for_runtimes(active_runtimes)
-    snapshots = load_feature_market_data(
-        db,
-        trade_date,
-        symbols,
-        recent_bar_count=recent_bar_count,
-        recent_bar_lookback_days=recent_bar_lookback_days,
-    )
-    results: list[PersistedSignalRun] = []
-    started_at = datetime.now(timezone.utc)
-
-    for strategy in active_strategies:
-        runtime = build_runtime_payload(strategy)
-        if not runtime["engine_ready"]:
-            continue
-
-        replay_state: SupportResistanceState | None = None
-        replay_symbols: list[str] = []
-        replay_dates: list[date] = []
-        if runtime["strategy_type"] == "support_resistance":
-            replay_symbols = _resolve_strategy_universe(runtime["params"]["universe"], snapshots)
-            for symbol in replay_symbols:
-                for bar in (snapshots.get(symbol) or {}).get("recent_bars") or []:
-                    value = bar.get("dt_ny")
-                    if value is not None:
-                        replay_dates.append(value)
-            coverage_start = min(replay_dates) if replay_dates else trade_date
-            reusable = find_reusable_materialization(
-                db,
-                runtime=runtime,
-                symbols=replay_symbols,
-                coverage_start=coverage_start,
-                coverage_end=trade_date,
-            )
-            replay_state = (
-                hydrate_state_from_materialization(db, reusable)
-                if reusable is not None
-                else SupportResistanceState()
-            )
-            for symbol, payload in support_resistance_hydration_payload(
-                replay_state,
-                snapshots,
-            ).items():
-                if symbol in snapshots:
-                    snapshots[symbol]["support_resistance_hydration"] = payload
-        strategy_signals, native_audit = evaluate_native_day(runtime, snapshots)
-        if runtime["strategy_type"] == "support_resistance":
-            replay_state = support_resistance_state_from_native_day(native_audit, snapshots)
-        run = _get_or_create_signal_run(
-            db=db,
-            strategy=strategy,
-            mode=mode,
-            trade_date=trade_date,
-            config_snapshot=runtime["params"],
-            started_at=started_at,
-        )
-        _replace_signals_for_run(db, run, strategy, strategy_signals)
-
-        support_resistance_materialization = None
-        if runtime["strategy_type"] == "support_resistance":
-            assert replay_state is not None
-            try:
-                support_resistance_materialization = persist_support_resistance_run(
-                    db,
-                    run=run,
-                    runtime=runtime,
-                    state=replay_state,
-                    symbols=replay_symbols,
-                    coverage_start=min(replay_dates) if replay_dates else trade_date,
-                    coverage_end=trade_date,
-                )
-            except SupportResistanceMaterializationBuildError as exc:
-                db.rollback()
-                record_failed_materialization_after_rollback(db, exc)
-                failed_run = _get_or_create_signal_run(
-                    db=db,
-                    strategy=strategy,
-                    mode=mode,
-                    trade_date=trade_date,
-                    config_snapshot=runtime["params"],
-                    started_at=started_at,
-                )
-                _replace_signals_for_run(db, failed_run, strategy, [])
-                failed_run.status = "failed"
-                failed_run.finished_at = datetime.now(timezone.utc)
-                failed_run.error_message = str(exc)
-                db.commit()
-                raise
-
-        run.status = "completed"
-        run.started_at = run.started_at or started_at
-        run.finished_at = datetime.now(timezone.utc)
-        run.summary_metrics = {
-            "signal_count": len(strategy_signals),
-            "symbols_requested": runtime["params"]["universe"].get("symbols", []),
-            "symbols_signaled": sorted({event.symbol for event in strategy_signals}),
-            "support_resistance_materialization_id": (
-                str(support_resistance_materialization.id)
-                if support_resistance_materialization is not None
-                else None
-            ),
-        }
-        db.flush()
-
-        results.append(
-            PersistedSignalRun(
-                strategy_id=str(strategy.id),
-                run_id=str(run.id),
-                mode=mode,
-                trade_date=trade_date,
-                signal_count=len(strategy_signals),
-            )
-        )
-
-    db.commit()
-    return results
-
-
-# Run all active engine-ready strategies against an already-built snapshot map.
-# Input: db session plus market_data_by_symbol snapshots that include indicators/position state.
-# Output: combined SignalEvent list without creating StrategyRun or Signal database records.
-def generate_signals(
-    db: Session,
-    market_data_by_symbol: MarketDataBySymbol,
-) -> list[SignalEvent]:
-    signals: list[SignalEvent] = []
-
-    for strategy in list_active_strategies(db):
-        runtime = build_runtime_payload(strategy)
-        if not runtime["engine_ready"]:
-            continue
-
-        strategy_signals = evaluate_native_signals(runtime, market_data_by_symbol)
-        signals.extend(strategy_signals)
-
-    return signals
 
 
 def evaluate_native_signals(
@@ -628,124 +392,6 @@ def required_recent_bar_lookback_days(recent_bar_count: int) -> int:
     return max(RECENT_BAR_LOOKBACK_DAYS, estimated_calendar_days)
 
 
-def _recent_history_window_for_runtimes(
-    runtimes: list[RuntimeStrategy],
-) -> tuple[int, int]:
-    if not runtimes:
-        return RECENT_BAR_COUNT, RECENT_BAR_LOOKBACK_DAYS
-
-    recent_bar_count = max(
-        required_recent_bar_count_for_runtime(runtime)
-        for runtime in runtimes
-    )
-    return recent_bar_count, required_recent_bar_lookback_days(recent_bar_count)
-
-
-def _list_engine_ready_runtimes_from_strategies(strategies: list[Strategy]) -> list[RuntimeStrategy]:
-    runtimes: list[RuntimeStrategy] = []
-    for strategy in strategies:
-        runtime = build_runtime_payload(strategy)
-        if not runtime["engine_ready"]:
-            continue
-        if runtime["strategy_type"] not in NATIVE_STRATEGY_TYPES:
-            raise ValueError(f"unsupported engine-ready strategy_type: {runtime['strategy_type']}")
-        runtimes.append(runtime)
-    return runtimes
-
-
-def _list_engine_ready_runtimes(db: Session) -> list[RuntimeStrategy]:
-    return _list_engine_ready_runtimes_from_strategies(list_active_strategies(db))
-
-
-# Reuse the existing one-day StrategyRun for this strategy/mode/date or create a fresh one.
-# Input: strategy ORM row, execution mode, trade date, config snapshot, and run start timestamp.
-# Output: StrategyRun ORM object left in "running" state inside the current transaction.
-def _get_or_create_signal_run(
-    db: Session,
-    strategy: Strategy,
-    mode: Literal["paper", "live"],
-    trade_date: date,
-    config_snapshot: Dict[str, Any],
-    started_at: datetime,
-) -> StrategyRun:
-    existing = db.execute(
-        select(StrategyRun)
-        .where(StrategyRun.strategy_id == strategy.id)
-        .where(StrategyRun.strategy_version == strategy.version)
-        .where(StrategyRun.mode == mode)
-        .where(StrategyRun.window_start == trade_date)
-        .where(StrategyRun.window_end == trade_date)
-        .order_by(StrategyRun.requested_at.desc())
-    ).scalars().first()
-
-    if existing is not None:
-        existing.status = "running"
-        existing.started_at = started_at
-        existing.finished_at = None
-        existing.config_snapshot = config_snapshot
-        existing.error_message = None
-        db.flush()
-        return existing
-
-    run = StrategyRun(
-        strategy_id=strategy.id,
-        strategy_version=strategy.version,
-        mode=mode,
-        status="running",
-        started_at=started_at,
-        window_start=trade_date,
-        window_end=trade_date,
-        config_snapshot=config_snapshot,
-    )
-    db.add(run)
-    db.flush()
-    return run
-
-
-# Replace all persisted Signal rows for one run with the current event list.
-# Input: StrategyRun row, owning Strategy row, and normalized SignalEvent objects.
-# Output: None; the current transaction is mutated via DELETE + INSERT side effects.
-def _replace_signals_for_run(
-    db: Session,
-    run: StrategyRun,
-    strategy: Strategy,
-    events: list[SignalEvent],
-) -> None:
-    db.execute(delete(Signal).where(Signal.run_id == run.id))
-    for event in events:
-        db.add(
-            Signal(
-                run_id=run.id,
-                strategy_id=strategy.id,
-                ts=event.ts,
-                symbol=event.symbol,
-                signal=event.action,
-                score=event.score,
-                reason=event.reason,
-                features=event.metadata,
-            )
-        )
-
-
-# Normalize a strategy's universe config into the concrete symbols to scan today.
-# Input: universe config and the current symbol -> snapshot market map.
-# Output: sorted symbol list based on explicit symbols or the configured stock universe.
-def _resolve_strategy_universe(
-    universe_cfg: Dict[str, Any],
-    market_data_by_symbol: MarketDataBySymbol,
-) -> list[str]:
-    if universe_cfg.get("selection_mode") == "all_common_stock" and not universe_cfg.get("symbols"):
-        return sorted(
-            symbol
-            for symbol, snapshot in market_data_by_symbol.items()
-            if str(snapshot.get("asset_type", "")).upper() == "CS"
-        )
-    return universe_cfg.get("symbols") or sorted(market_data_by_symbol.keys())
-
-
-# Convert one FEATURE_SNAPSHOT_SQL row into the runtime snapshot shape used by handlers.
-# Input: SQLAlchemy mapping row with current-day bars plus current/previous indicators.
-# Output: one per-symbol snapshot dict with empty recent_bars ready to be backfilled.
 def _build_feature_snapshot(row: Dict[str, Any]) -> MarketSnapshot:
     symbol = str(row["symbol"]).upper()
     return {

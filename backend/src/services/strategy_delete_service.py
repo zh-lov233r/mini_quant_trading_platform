@@ -13,7 +13,10 @@ from sqlalchemy.orm import Session
 
 from src.models.tables import PaperTradingAccount, StrategyAllocation, StrategyPortfolio, Transaction
 from src.services.alpaca_services import AlpacaClient, AlpacaClientError
-from src.services.paper_account_service import build_alpaca_client_for_account
+from src.services.paper_account_service import (
+    build_alpaca_client_for_account,
+    transaction_fill_applied,
+)
 from src.services.strategy_allocation_service import normalize_portfolio_name
 
 
@@ -71,7 +74,7 @@ def inspect_strategy_delete_broker_positions(
     ).scalars().all()
 
     for transaction in transactions:
-        if not _transaction_fill_applied(transaction):
+        if not transaction_fill_applied(transaction):
             continue
 
         portfolio_name = _transaction_portfolio_name(transaction)
@@ -357,33 +360,6 @@ def _format_broker_position(
     if include_reason and position.reason:
         return f"{summary} reason={position.reason}"
     return summary
-
-
-def _transaction_fill_applied(transaction: Transaction) -> bool:
-    meta = transaction.meta or {}
-    explicit = meta.get("paper_fill_applied")
-    if isinstance(explicit, bool):
-        return explicit
-
-    source = str(meta.get("source") or "").strip().lower()
-    if source in {"alpaca_live", "manual_virtual"}:
-        return True
-    if source != "alpaca_paper":
-        return source in {"alpaca_paper", "alpaca_live", "manual_virtual"} and source != "backtest"
-
-    filled_qty = _safe_float(meta.get("filled_qty")) or 0.0
-    if filled_qty > 0:
-        return True
-
-    broker_status = str(meta.get("broker_status") or "").strip().lower()
-    if broker_status in {"accepted", "new", "pending_new", "accepted_for_bidding"}:
-        return False
-    if broker_status in {"canceled", "cancelled", "expired", "rejected"}:
-        return False
-    if broker_status == "filled":
-        return True
-
-    return (_safe_float(transaction.price) or 0.0) > 0
 
 
 def _transaction_portfolio_name(transaction: Transaction) -> str | None:

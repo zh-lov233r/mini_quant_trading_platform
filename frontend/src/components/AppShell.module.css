@@ -38,6 +38,11 @@
 .subtitle { margin: 5px 0 0; color: rgba(203,213,225,.74); font-size: 13px; line-height: 1.5; }
 .headerControls { flex: 0 0 auto; justify-content: flex-end; gap: 10px; }
 .pageActions { justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.pageActionLink { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; padding: 10px 16px; border: 1px solid rgba(148,163,184,.16); border-radius: 14px; background: rgba(15,23,42,.72); color: #dbeafe; text-decoration: none; font-family: "Avenir Next","Segoe UI","Helvetica Neue",sans-serif; font-weight: 700; }
+.pageActionLink:hover { border-color: rgba(45,212,191,.48); color: #f8fafc; }
+.pageActionLink:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
+.pageActionLinkPrimary { border-color: #0891b2; background: #0891b2; color: #f8fafc; }
+.pageActionLinkPrimary:hover { border-color: #06b6d4; background: #06a4c7; }
 .contentGrid { min-width: 0; display: grid; grid-template-columns: minmax(0,1fr); gap: 14px; align-items: start; }
 .content { min-width: 0; }
 .contentReading { width: min(100%,1100px); margin: 0 auto; }

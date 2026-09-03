@@ -9,6 +9,17 @@ export const enUSMessages: MessageSchema = {
     english: "English",
     backToTop: "Back to top",
   },
+  apiErrors: {
+    paperAccountNameExists: "This Paper Account name already exists. Choose a new account name.",
+    portfolioNameExists: "This strategy portfolio name already exists. Choose a new globally unique name.",
+    strategyNameExists: "This strategy name is already in use. Choose a new name; merging into an existing strategy family is not supported.",
+    strategyConflict: "A strategy name or version conflict was detected. Choose another name or check for a duplicate submission.",
+    resourceConflict: "A duplicate name or resource conflict was detected. Update the request and try again.",
+    saveFailed: "Save failed: {detail}",
+    notFound: "The requested resource was not found.",
+    validationFailed: "The submitted content did not pass validation. Check the input.",
+    requestFailed: "Request failed with status {status}",
+  },
   nav: {
     dashboard: "Dashboard",
     strategies: "Strategies",

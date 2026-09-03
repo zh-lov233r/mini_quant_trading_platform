@@ -8,8 +8,7 @@ import json
 import logging
 import math
 import os
-import statistics
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
 
@@ -32,16 +31,8 @@ from src.models.tables import (
 )
 from src.schemas.research import ExperimentSpec, ExperimentTokenUsageUpdate
 from src.services.backtest_job_service import enqueue_backtest_job, request_backtest_cancel
-from src.services.backtest_universe_service import (
-    resolve_backtest_universe,
-    resolve_point_in_time_universe,
-)
+from src.services.backtest_universe_service import resolve_point_in_time_universe
 from src.services.strategy_registry import extract_description, is_engine_ready, normalize_strategy_params
-from src.services.prepared_dataset_service import (
-    build_prepared_dataset_manifest,
-    prepared_dataset_key,
-)
-from src.services.market_data_maintenance_service import assert_market_data_submission_allowed
 from src.services.strategy_service import validate_strategy_params
 
 
@@ -207,139 +198,6 @@ def expand_experiment(
     return definitions, symbols, universe
 
 
-def validate_experiment(db: Session, spec: ExperimentSpec) -> dict[str, Any]:
-    definitions, symbols, _universe = expand_experiment(db, spec)
-    return {
-        "valid": True,
-        "trialCount": len(definitions),
-        "normalizedSpec": spec.model_dump(mode="json", by_alias=True),
-        "universeSymbols": symbols,
-        "warnings": [],
-        "estimatedCost": {
-            "backtestRuns": len(definitions),
-            "maxConcurrentTrials": max(1, int(os.getenv("RESEARCH_WORKER_CONCURRENCY", "2"))),
-            "llmAnalysisCalls": 1,
-            "maxDurationSeconds": spec.stop_policy.max_duration_seconds if spec.stop_policy else None,
-            "tokenBudget": spec.stop_policy.token_budget if spec.stop_policy else None,
-        },
-    }
-
-
-def create_experiment(
-    db: Session,
-    *,
-    workflow_run_id: str,
-    spec: ExperimentSpec,
-    idempotency_key: str,
-) -> ResearchExperiment:
-    payload_hash = canonical_hash(
-        {"workflowRunId": workflow_run_id, "spec": spec.model_dump(mode="json", by_alias=True)}
-    )
-    existing = db.execute(
-        select(ResearchExperiment).where(ResearchExperiment.idempotency_key == idempotency_key)
-    ).scalar_one_or_none()
-    if existing is not None:
-        if existing.run_manifest.get("requestHash") != payload_hash:
-            raise ExperimentConflictError("idempotency key was already used with a different request")
-        return existing
-
-    definitions, symbols, universe = expand_experiment(db, spec)
-    assert_market_data_submission_allowed(db)
-    overall_start = min(spec.in_sample.start_date, spec.out_of_sample.start_date)
-    overall_end = max(spec.in_sample.end_date, spec.out_of_sample.end_date)
-    universe_policy = (
-        spec.universe_policy.model_dump(mode="json", by_alias=True)
-        if spec.universe_policy
-        else None
-    )
-    coverage_start = overall_start - timedelta(days=400)
-    resolved = (
-        resolve_point_in_time_universe(
-            db, universe_policy, start_date=coverage_start, end_date=overall_end
-        )
-        if universe_policy
-        else resolve_backtest_universe(
-            db, symbols, start_date=coverage_start, end_date=overall_end
-        )
-    )
-    strategy = db.get(Strategy, spec.strategy_id)
-    assert strategy is not None
-    prepared_manifest = build_prepared_dataset_manifest(
-        strategy_type=strategy.strategy_type,
-        universe=universe,
-        instrument_ids=resolved.instrument_ids,
-        coverage_date_range=(coverage_start, overall_end),
-        requested_date_range=(overall_start, overall_end),
-        universe_policy=universe_policy,
-    )
-    policy_started_at = datetime.now(UTC)
-    experiment = ResearchExperiment(
-        workflow_run_id=workflow_run_id,
-        idempotency_key=idempotency_key,
-        status="queued",
-        spec=spec.model_dump(mode="json", by_alias=True),
-        run_manifest={
-            "requestHash": payload_hash,
-            "specHash": canonical_hash(spec.model_dump(mode="json", by_alias=True)),
-            "strategyId": str(strategy.id),
-            "strategyVersion": strategy.version,
-            "strategyType": strategy.strategy_type,
-            "universe": universe,
-            "preparedDataset": {
-                "key": prepared_dataset_key(prepared_manifest),
-                "manifest": prepared_manifest,
-            },
-            "quantBuildVersion": os.getenv("APP_VERSION", "development"),
-            "createdAt": policy_started_at.isoformat(),
-            "policyStartedAt": policy_started_at.isoformat(),
-            "tokenUsage": {
-                "inputTokens": 0,
-                "cachedInputTokens": 0,
-                "outputTokens": 0,
-                "reasoningOutputTokens": 0,
-                "totalTokens": 0,
-            },
-        },
-        progress={"total": len(definitions), "queued": len(definitions), "running": 0, "completed": 0, "failed": 0, "cancelled": 0},
-    )
-    db.add(experiment)
-    db.flush()
-    for definition in definitions:
-        db.add(
-            ExperimentTrial(
-                experiment_id=experiment.id,
-                trial_key=definition["trialKey"],
-                ordinal=definition["ordinal"],
-                status="queued",
-                sample_kind=definition["sampleKind"],
-                cost_scenario=definition["costScenario"],
-                params=definition["params"],
-                params_hash=definition["paramsHash"],
-                window_start=definition["windowStart"],
-                window_end=definition["windowEnd"],
-                cost_config=definition["costConfig"],
-            )
-        )
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
-        concurrent = db.execute(
-            select(ResearchExperiment).where(ResearchExperiment.idempotency_key == idempotency_key)
-        ).scalar_one_or_none()
-        if concurrent is not None and concurrent.run_manifest.get("requestHash") == payload_hash:
-            return concurrent
-        raise
-    db.refresh(experiment)
-    log.info(
-        "Research experiment created workflow_run_id=%s experiment_id=%s trials=%s",
-        workflow_run_id,
-        experiment.id,
-        len(definitions),
-    )
-    return experiment
-
-
 def get_experiment(db: Session, experiment_id: UUID | str) -> ResearchExperiment:
     experiment = db.get(ResearchExperiment, experiment_id)
     if experiment is None:
@@ -461,117 +319,6 @@ def _refresh_progress(db: Session, experiment: ResearchExperiment) -> None:
         "failed": counts.get("failed", 0),
         "cancelled": counts.get("cancelled", 0),
     }
-
-
-def _portfolio_metrics(db: Session, run: StrategyRun) -> dict[str, Any]:
-    stored_metrics = dict(run.summary_metrics or {})
-    persist_level = str(stored_metrics.get("persist_level") or "full")
-    required_metrics = {
-        "annualized_return",
-        "sharpe",
-        "sortino",
-        "max_drawdown_duration_sessions",
-        "turnover",
-        "symbol_activity_share",
-        "symbol_return_contribution",
-    }
-    if persist_level != "full" and required_metrics.issubset(stored_metrics):
-        return stored_metrics
-
-    snapshots = list(
-        db.execute(
-            select(PortfolioSnapshot)
-            .where(PortfolioSnapshot.run_id == run.id)
-            .order_by(PortfolioSnapshot.ts)
-        ).scalars()
-    )
-    returns: list[float] = []
-    previous: float | None = None
-    max_drawdown_duration = 0
-    current_drawdown_duration = 0
-    for snapshot in snapshots:
-        equity = float(snapshot.equity)
-        if previous and previous > 0:
-            returns.append((equity / previous) - 1)
-        previous = equity
-        drawdown = float(snapshot.drawdown or 0)
-        if drawdown > 0:
-            current_drawdown_duration += 1
-            max_drawdown_duration = max(max_drawdown_duration, current_drawdown_duration)
-        else:
-            current_drawdown_duration = 0
-    sharpe = None
-    sortino = None
-    if len(returns) > 1:
-        deviation = statistics.pstdev(returns)
-        if deviation > 0:
-            sharpe = statistics.mean(returns) / deviation * math.sqrt(252)
-        downside = [value for value in returns if value < 0]
-        if len(downside) > 1:
-            downside_deviation = statistics.pstdev(downside)
-            if downside_deviation > 0:
-                sortino = statistics.mean(returns) / downside_deviation * math.sqrt(252)
-    annualized_return = None
-    if snapshots and run.initial_cash and float(run.initial_cash) > 0:
-        periods = max(len(snapshots) - 1, 1)
-        final_equity = float(snapshots[-1].equity)
-        annualized_return = (final_equity / float(run.initial_cash)) ** (252 / periods) - 1
-    transactions = list(
-        db.execute(
-            select(Transaction).where(Transaction.run_id == run.id).order_by(Transaction.ts, Transaction.symbol)
-        ).scalars()
-    )
-    notional_by_symbol: dict[str, float] = {}
-    net_cash_flow_by_symbol: dict[str, float] = {}
-    total_notional = 0.0
-    for transaction in transactions:
-        notional = abs(float(transaction.qty) * float(transaction.price))
-        total_notional += notional
-        notional_by_symbol[transaction.symbol] = notional_by_symbol.get(transaction.symbol, 0.0) + notional
-        metadata = transaction.meta if isinstance(transaction.meta, dict) else {}
-        net_cash_flow_by_symbol[transaction.symbol] = (
-            net_cash_flow_by_symbol.get(transaction.symbol, 0.0)
-            + float(metadata.get("net_cash_flow") or 0)
-        )
-    average_equity = statistics.mean(float(item.equity) for item in snapshots) if snapshots else None
-    turnover = total_notional / average_equity if average_equity and average_equity > 0 else None
-    symbol_activity = {
-        symbol: notional / total_notional
-        for symbol, notional in sorted(notional_by_symbol.items())
-    } if total_notional > 0 else {}
-    ending_positions = snapshots[-1].positions if snapshots and isinstance(snapshots[-1].positions, dict) else {}
-    symbols_with_pnl = sorted(set(net_cash_flow_by_symbol) | set(ending_positions))
-    pnl_by_symbol = {
-        symbol: net_cash_flow_by_symbol.get(symbol, 0.0)
-        + float((ending_positions.get(symbol) or {}).get("market_value") or 0)
-        for symbol in symbols_with_pnl
-    }
-    initial_cash = float(run.initial_cash or 0)
-    symbol_return_contribution = {
-        symbol: pnl / initial_cash
-        for symbol, pnl in pnl_by_symbol.items()
-        if initial_cash > 0
-    }
-    total_absolute_pnl = sum(abs(value) for value in pnl_by_symbol.values())
-    metrics = dict(run.summary_metrics or {})
-    metrics.update(
-        {
-            "annualized_return": annualized_return,
-            "sharpe": sharpe,
-            "sortino": sortino,
-            "max_drawdown_duration_sessions": max_drawdown_duration,
-            "turnover": turnover,
-            "symbol_activity_share": symbol_activity,
-            "activity_concentration": max(symbol_activity.values()) if symbol_activity else None,
-            "symbol_return_contribution": symbol_return_contribution,
-            "pnl_concentration": (
-                max(abs(value) for value in pnl_by_symbol.values()) / total_absolute_pnl
-                if total_absolute_pnl > 0
-                else None
-            ),
-        }
-    )
-    return metrics
 
 
 def build_experiment_report(db: Session, experiment: ResearchExperiment) -> dict[str, Any]:
