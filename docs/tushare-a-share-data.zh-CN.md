@@ -29,6 +29,12 @@ make import-a-share A_SHARE_ARGS="plan --start-date 2016-01-01 --end-date 2026-0
 make import-a-share A_SHARE_ARGS="apply --start-date 2016-01-01 --end-date 2026-09-02"
 ```
 
+正常全量导入也会维护上证指数（`000001.SH`）和深证成指（`399001.SZ`）。只修复或更新这两个指数时运行：
+
+```bash
+make import-a-share A_SHARE_ARGS="apply --indices-only --start-date 2016-01-01 --end-date 2026-09-02"
+```
+
 先验证单只股票或补一个小窗口时可重复传 `--ts-code`：
 
 ```bash
@@ -45,6 +51,7 @@ make import-a-share A_SHARE_ARGS="apply --start-date 2026-09-01 --end-date 2026-
 - 前复权采用 Tushare 官方公式 `原始价格 × 当日复权因子 / 数据库中该标的最新复权因子`，后复权采用 `原始价格 × 当日复权因子`。复权因子刷新会改变数据指纹并使 PreparedDataset 缓存失效。
 - 导入器会拒绝非有限、非正价格、倒置 OHLC、负成交量/成交额、缺失复权因子以及达到 6000 行上限的疑似截断响应。
 - `backfill_adjusted_prices.py` 不会覆盖 `vendor='tushare'` 的供应商复权字段。
+- 两个大盘指数以 `INDEX` 类型存储。指数日线不需要公司行动复权，因此前后复权因子均持久化为 `1.0`；仍生成日频特征以保持行情完整性约束。
 
 ## 九策略回测
 
@@ -52,7 +59,7 @@ make import-a-share A_SHARE_ARGS="apply --start-date 2026-09-01 --end-date 2026-
 
 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`、`head_shoulders_bottom`、`rounded_bottom`、`v_reversal`、`support_resistance`。
 
-回测继续遵守 T 日收盘产生信号、下一有效交易日开盘成交、SELL-first、共享现金和确定性排序。若不需要美股对比，提交时清空默认 `SPY` benchmark；也可填写已导入股票代码作为简单参照。
+回测继续遵守 T 日收盘产生信号、下一有效交易日开盘成交、SELL-first、共享现金和确定性排序。A 股股票池会把空值、`SPY` 或 `QQQ` 基准自动替换为上证指数；结果页显示上证指数与深证成指，不再显示 SPY 或 QQQ。非 A 股回测仍显示 SPY 和 QQQ。
 
 当前完成的是 A 股数据与九策略执行兼容，不是完整的 A 股交易所撮合仿真：100 股买入单位、涨跌停不可成交、停牌排队、印花税差异等尚未自动建模。可用手续费和滑点参数做保守成本压力，但不得把结果描述为实盘安全性或盈利证据。
 

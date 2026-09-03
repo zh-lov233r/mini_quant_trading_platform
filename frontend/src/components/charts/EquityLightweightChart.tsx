@@ -21,7 +21,7 @@ import type {
 import type { ChartEventMarker, EquityChartPoint } from "@/components/charts/chartModels";
 
 export interface EquityComparisonSeries {
-  key: "SPY" | "QQQ";
+  key: string;
   color: string;
   points: Array<{ time: string; value: number }>;
 }
@@ -31,7 +31,7 @@ interface Props {
   comparisons: EquityComparisonSeries[];
   markers: ChartEventMarker[];
   strategyVisible: boolean;
-  comparisonVisibility: Record<"SPY" | "QQQ", boolean>;
+  comparisonVisibility: Record<string, boolean>;
   markerVisibility: Record<ChartEventMarker["category"], boolean>;
   initialValue: number | null;
   locale: string;
@@ -109,21 +109,9 @@ export default function EquityLightweightChart({
       priceLineVisible: false,
       lastValueVisible: true,
     });
-    const spy = chart.addSeries(LineSeries, {
-      color: "#2563eb",
-      lineWidth: 2,
-      priceLineVisible: false,
-      lastValueVisible: false,
-    });
-    const qqq = chart.addSeries(LineSeries, {
-      color: "#f97316",
-      lineWidth: 2,
-      priceLineVisible: false,
-      lastValueVisible: false,
-    });
     chartRef.current = chart;
     strategyRef.current = strategy;
-    comparisonRefs.current = { SPY: spy, QQQ: qqq };
+    comparisonRefs.current = {};
     markerPluginRef.current = createSeriesMarkers(strategy, []);
 
     const onCrosshairMove = (param: MouseEventParams<Time>) => {
@@ -197,8 +185,23 @@ export default function EquityLightweightChart({
       },
     });
     strategy.setData(points.map((point) => ({ time: point.time, value: point.value })));
+    const activeKeys = new Set(comparisons.map((comparison) => comparison.key));
+    Object.entries(comparisonRefs.current).forEach(([key, series]) => {
+      if (!activeKeys.has(key)) {
+        chart.removeSeries(series);
+        delete comparisonRefs.current[key];
+      }
+    });
     comparisons.forEach((comparison) => {
-      comparisonRefs.current[comparison.key]?.setData(
+      const series = comparisonRefs.current[comparison.key] || chart.addSeries(LineSeries, {
+        color: comparison.color,
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+      comparisonRefs.current[comparison.key] = series;
+      series.applyOptions({ color: comparison.color });
+      series.setData(
         comparison.points.map((point) => ({ time: point.time, value: point.value } as LineData<Time>)),
       );
     });
@@ -224,9 +227,10 @@ export default function EquityLightweightChart({
 
   useEffect(() => {
     strategyRef.current?.applyOptions({ visible: strategyVisible });
-    comparisonRefs.current.SPY?.applyOptions({ visible: comparisonVisibility.SPY });
-    comparisonRefs.current.QQQ?.applyOptions({ visible: comparisonVisibility.QQQ });
-  }, [comparisonVisibility.QQQ, comparisonVisibility.SPY, strategyVisible]);
+    Object.entries(comparisonRefs.current).forEach(([key, series]) => {
+      series.applyOptions({ visible: comparisonVisibility[key] ?? true });
+    });
+  }, [comparisonVisibility, strategyVisible]);
 
   useEffect(() => {
     const visibleMarkers = markers.filter((marker) => markerVisibility[marker.category]);

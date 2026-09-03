@@ -29,6 +29,12 @@ Then import explicitly:
 make import-a-share A_SHARE_ARGS="apply --start-date 2016-01-01 --end-date 2026-09-02"
 ```
 
+The normal full import also maintains the Shanghai Composite (`000001.SH`) and Shenzhen Component (`399001.SZ`). To repair or update only those indices:
+
+```bash
+make import-a-share A_SHARE_ARGS="apply --indices-only --start-date 2016-01-01 --end-date 2026-09-02"
+```
+
 For a one-symbol smoke test or a narrow repair, repeat `--ts-code` as needed:
 
 ```bash
@@ -45,6 +51,7 @@ The importer iterates Shanghai Stock Exchange open dates and commits EOD data pe
 - Forward adjustment follows Tushare's documented formula: `raw price × date factor / latest factor`; backward adjustment is `raw price × date factor`. Factor refreshes change the data fingerprint and invalidate the PreparedDataset cache.
 - The importer rejects non-finite/non-positive prices, inverted OHLC, negative volume/amount, missing adjustment factors, and a response at the 6,000-row limit that may have been truncated.
 - `backfill_adjusted_prices.py` excludes `vendor='tushare'`, preserving provider-supplied factors.
+- The two broad-market indices are stored as `INDEX` instruments. Their daily bars need no corporate-action adjustment, so forward/backward factors are persisted as `1.0`; daily features are still generated to preserve market-data completeness.
 
 ## Nine-strategy backtesting
 
@@ -52,7 +59,7 @@ Each completed import synchronizes the active `All A Shares (Tushare)` basket. I
 
 `trend`, `mean_reversion`, `momentum_breakout`, `island_reversal`, `double_bottom`, `head_shoulders_bottom`, `rounded_bottom`, `v_reversal`, and `support_resistance`.
 
-Backtests preserve day-T close signals, next-valid-session open fills, SELL-first ordering, shared cash, and deterministic ranking. Clear the default `SPY` benchmark when a US comparison is not useful, or use an imported A-share symbol as a simple reference.
+Backtests preserve day-T close signals, next-valid-session open fills, SELL-first ordering, shared cash, and deterministic ranking. An A-share basket automatically replaces an omitted, `SPY`, or `QQQ` benchmark with the Shanghai Composite. The result page shows Shanghai Composite and Shenzhen Component comparison curves and does not show SPY or QQQ; non-A-share runs retain SPY and QQQ.
 
 This change provides A-share data and strategy-execution compatibility, not a complete China-exchange microstructure simulator. Board-lot purchases, price-limit fill rejection, suspended-order queues, and stamp-duty differences are not automatically modeled. Commission and slippage inputs can provide conservative cost stress, but results are not evidence of live-trading safety or profitability.
 

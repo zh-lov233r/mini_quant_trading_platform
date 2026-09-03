@@ -2458,6 +2458,7 @@ components:
           type: string
           nullable: true
           example: SPY
+          description: A-share baskets replace an omitted, SPY, or QQQ benchmark with the Shanghai Composite (000001.SH).
         commission_bps:
           type: number
           minimum: 0
@@ -3288,7 +3289,7 @@ components:
   /api/backtests/{run_id}/comparison-curves:
     get:
       tags: [Backtests]
-      summary: Get lightweight SPY and QQQ comparison curves
+      summary: Get lightweight market comparison curves for the run's market
       operationId: getBacktestComparisonCurves
       x-implementation-status: implemented
       parameters:
@@ -3299,7 +3300,7 @@ components:
           schema: {type: integer, minimum: 2, maximum: 5000, default: 1500}
       responses:
         "200":
-          description: Cached or read-only reconstructed comparison curves with deterministic endpoint-preserving downsampling
+          description: A-share runs return Shanghai Composite and Shenzhen Component curves; other runs return SPY and QQQ, with deterministic endpoint-preserving downsampling.
           content:
             application/json:
               schema: {$ref: "#/components/schemas/BacktestComparisonCurves"}

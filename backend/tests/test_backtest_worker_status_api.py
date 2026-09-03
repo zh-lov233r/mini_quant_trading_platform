@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from src.api.backtests import BacktestCreate, create_backtest, get_backtest_worker_status
-from src.models.tables import BacktestJob, BacktestWorkerManager, Base, Strategy
+from src.models.tables import BacktestJob, BacktestWorkerManager, Base, StockBasket, Strategy
 
 
 class BacktestWorkerStatusApiTests(unittest.TestCase):
@@ -103,6 +103,38 @@ class BacktestWorkerStatusApiTests(unittest.TestCase):
         self.assertIsNotNone(result.progress)
         self.assertFalse(worker_status.automation_available)
         self.assertEqual(worker_status.queued_jobs, 1)
+
+    def test_a_share_basket_replaces_default_us_benchmark(self) -> None:
+        strategy = Strategy(
+            strategy_key="a-share-benchmark-test",
+            name="A-share benchmark test",
+            strategy_type="trend",
+            params={},
+            status="active",
+            version=1,
+        )
+        basket = StockBasket(
+            name="All A Shares (Tushare)",
+            symbols=["000001.SZ", "600000.SH"],
+            status="active",
+        )
+        self.db.add_all([strategy, basket])
+        self.db.commit()
+
+        result = create_backtest(
+            BacktestCreate(
+                strategy_id=strategy.id,
+                basket_id=basket.id,
+                start_date=date(2025, 1, 1),
+                end_date=date(2025, 1, 2),
+                benchmark_symbol="SPY",
+            ),
+            self.db,
+        )
+
+        self.assertEqual(result.benchmark_symbol, "000001.SH")
+        job = self.db.execute(select(BacktestJob).where(BacktestJob.run_id == result.id)).scalar_one()
+        self.assertEqual(job.payload["benchmark_symbol"], "000001.SH")
 
     def test_available_slots_follow_active_jobs_and_never_go_negative(self) -> None:
         strategy = Strategy(

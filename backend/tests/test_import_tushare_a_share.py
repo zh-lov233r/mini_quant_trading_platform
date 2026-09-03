@@ -8,6 +8,7 @@ from backend.utils.import_tushare_a_share import (
     TushareError,
     _daily_rows,
     normalize_bar,
+    normalize_index,
     normalize_instrument,
 )
 from backend.utils.backfill_adjusted_prices import IDENTITY_UPDATE_SQL
@@ -94,6 +95,23 @@ class TushareAShareImportTests(unittest.TestCase):
         self.assertEqual(row.exchange, "XSHE")
         self.assertEqual(row.currency, "CNY")
         self.assertEqual(row.listed_at, date(1991, 4, 3))
+        self.assertTrue(row.is_active)
+
+    def test_normalizes_a_share_benchmark_index(self) -> None:
+        row = normalize_index(
+            {
+                "ts_code": "000001.SH",
+                "name": "上证指数",
+                "market": "SSE",
+                "list_date": "19910715",
+                "exp_date": None,
+            }
+        )
+
+        self.assertEqual(row.vendor_key, "TUSHARE_INDEX:000001.SH")
+        self.assertEqual(row.exchange, "XSHG")
+        self.assertEqual(row.asset_type, "INDEX")
+        self.assertEqual(row.market, "indices")
         self.assertTrue(row.is_active)
 
     def test_normalizes_daily_units_timestamp_and_adjustment_factor(self) -> None:

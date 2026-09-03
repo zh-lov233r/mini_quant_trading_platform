@@ -27,6 +27,10 @@ TUSHARE_API_URL = "https://api.tushare.pro"
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 EXCHANGE_MIC = {"SSE": "XSHG", "SZSE": "XSHE", "BSE": "XBSE"}
 LIST_STATUSES = ("L", "D", "P")
+A_SHARE_INDEXES = {
+    "000001.SH": {"market": "SSE", "name": "上证指数"},
+    "399001.SZ": {"market": "SZSE", "name": "深证成指"},
+}
 A_SHARE_BASKET_NAME = "All A Shares (Tushare)"
 A_SHARE_BASKET_DESCRIPTION = "Tushare 导入的当前正常上市 A 股；仅用于本地研究和回测。"
 STOCK_BASIC_FIELDS = (
@@ -35,6 +39,10 @@ STOCK_BASIC_FIELDS = (
 )
 DAILY_FIELDS = "ts_code,trade_date,open,high,low,close,vol,amount"
 ADJ_FACTOR_FIELDS = "ts_code,trade_date,adj_factor"
+INDEX_BASIC_FIELDS = (
+    "ts_code,name,fullname,market,publisher,category,base_date,base_point,"
+    "list_date,exp_date"
+)
 REQUIRED_TABLES = ("instruments", "symbol_history", "eod_bars", "daily_features", "stock_baskets")
 
 
@@ -101,6 +109,8 @@ class InstrumentRow:
     exchange: str
     name: str | None
     currency: str
+    asset_type: str
+    market: str
     listed_at: date | None
     delisted_at: date | None
     is_active: bool
@@ -145,9 +155,36 @@ def normalize_instrument(item: dict[str, Any]) -> InstrumentRow:
         exchange=EXCHANGE_MIC[exchange_code],
         name=str(item.get("name") or "").strip() or None,
         currency=currency,
+        asset_type="CS",
+        market="stocks",
         listed_at=listed_at,
         delisted_at=delisted_at,
         is_active=list_status == "L",
+        vendor_payload=dict(item),
+    )
+
+
+def normalize_index(item: dict[str, Any]) -> InstrumentRow:
+    ts_code = str(item.get("ts_code") or "").strip().upper()
+    expected = A_SHARE_INDEXES.get(ts_code)
+    market = str(item.get("market") or "").strip().upper()
+    if expected is None or market != expected["market"]:
+        raise ValueError("Tushare index requires a supported ts_code and market")
+    listed_at = _parse_tushare_date(item.get("list_date"))
+    delisted_at = _parse_tushare_date(item.get("exp_date"))
+    if listed_at and delisted_at and delisted_at < listed_at:
+        raise ValueError(f"Tushare index {ts_code} has an invalid listing window")
+    return InstrumentRow(
+        vendor_key=f"TUSHARE_INDEX:{ts_code}",
+        ts_code=ts_code,
+        exchange=EXCHANGE_MIC[market],
+        name=str(item.get("name") or expected["name"]).strip(),
+        currency="CNY",
+        asset_type="INDEX",
+        market="indices",
+        listed_at=listed_at,
+        delisted_at=delisted_at,
+        is_active=delisted_at is None,
         vendor_payload=dict(item),
     )
 
@@ -255,6 +292,21 @@ def _fetch_instruments(client: TushareClient, selected: set[str]) -> list[Instru
     return [by_code[key] for key in sorted(by_code)]
 
 
+def _fetch_indices(client: TushareClient) -> list[InstrumentRow]:
+    indices: list[InstrumentRow] = []
+    for ts_code, expected in A_SHARE_INDEXES.items():
+        rows = client.query(
+            "index_basic",
+            params={"ts_code": ts_code, "market": expected["market"]},
+            fields=INDEX_BASIC_FIELDS,
+        )
+        matching = [row for row in rows if str(row.get("ts_code") or "").upper() == ts_code]
+        if len(matching) != 1:
+            raise TushareError(f"Tushare index_basic did not uniquely resolve {ts_code}")
+        indices.append(normalize_index(matching[0]))
+    return indices
+
+
 def _upsert_instruments(
     conn: psycopg.Connection,
     instruments: list[InstrumentRow],
@@ -265,16 +317,18 @@ def _upsert_instruments(
       currency, country, locale, market, listed_at, delisted_at, is_active,
       vendor_source, vendor_payload
     ) VALUES (
-      %(vendor_key)s, %(ts_code)s, %(exchange)s, %(exchange)s, 'CS', %(name)s,
-      %(currency)s, 'CN', 'cn', 'stocks', %(listed_at)s, %(delisted_at)s,
+      %(vendor_key)s, %(ts_code)s, %(exchange)s, %(exchange)s, %(asset_type)s, %(name)s,
+      %(currency)s, 'CN', 'cn', %(market)s, %(listed_at)s, %(delisted_at)s,
       %(is_active)s, 'tushare', %(vendor_payload)s
     )
     ON CONFLICT (share_class_figi) DO UPDATE SET
       ticker_canonical = EXCLUDED.ticker_canonical,
       exchange = EXCLUDED.exchange,
       mic = EXCLUDED.mic,
+      asset_type = EXCLUDED.asset_type,
       name = EXCLUDED.name,
       currency = EXCLUDED.currency,
+      market = EXCLUDED.market,
       listed_at = EXCLUDED.listed_at,
       delisted_at = EXCLUDED.delisted_at,
       is_active = EXCLUDED.is_active,
@@ -393,6 +447,32 @@ def _daily_rows(
             f"adj_factor missing for {len(missing)} daily rows on {trade_date}; first={missing[0]}"
         )
     return daily, factor_by_code
+
+
+def _index_daily_rows(
+    client: TushareClient,
+    instrument_ids: dict[str, int],
+    start_date: date,
+    end_date: date,
+) -> list[BarRow]:
+    bars: list[BarRow] = []
+    for ts_code in A_SHARE_INDEXES:
+        rows = client.query(
+            "index_daily",
+            params={
+                "ts_code": ts_code,
+                "start_date": start_date.strftime("%Y%m%d"),
+                "end_date": end_date.strftime("%Y%m%d"),
+            },
+            fields=DAILY_FIELDS,
+        )
+        if len(rows) >= 6000:
+            raise TushareError(f"Tushare row limit reached for index {ts_code}")
+        bars.extend(
+            normalize_bar(row, instrument_id=instrument_ids[ts_code], adj_factor=1.0)
+            for row in rows
+        )
+    return bars
 
 
 def _upsert_bars(conn: psycopg.Connection, bars: Iterable[BarRow]) -> int:
@@ -540,9 +620,39 @@ def _sync_a_share_basket(conn: psycopg.Connection) -> int:
     return len(symbols)
 
 
+def _import_indices(
+    client: TushareClient,
+    database_url: str,
+    start_date: date,
+    end_date: date,
+    *,
+    skip_features: bool,
+) -> None:
+    indices = _fetch_indices(client)
+    with psycopg.connect(_psycopg_dsn(database_url)) as conn:
+        instrument_ids = _upsert_instruments(conn, indices)
+        bars = _index_daily_rows(client, instrument_ids, start_date, end_date)
+        imported_rows = _upsert_bars(conn, bars)
+        adjusted_rows = _refresh_forward_adjustment(conn, list(instrument_ids.values()))
+
+    feature_rows = 0
+    if not skip_features:
+        _, feature_rows = backfill_daily_features(
+            database_url,
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+            instrument_ids=list(instrument_ids.values()),
+        )
+    print(
+        f"Tushare index import completed. instruments={len(indices)} bars={imported_rows} "
+        f"adjusted_rows={adjusted_rows} feature_rows={feature_rows}",
+        flush=True,
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Plan or import Tushare A-share daily bars into PostgreSQL for backtesting."
+        description="Plan or import Tushare A-share daily bars and indices into PostgreSQL for backtesting."
     )
     parser.add_argument("mode", choices=("plan", "apply"))
     parser.add_argument("--start-date", required=True, help="Inclusive YYYY-MM-DD start date.")
@@ -568,6 +678,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Import bars without rebuilding daily_features (not backtest-ready).",
     )
+    parser.add_argument(
+        "--indices-only",
+        action="store_true",
+        help="Import only the Shanghai Composite and Shenzhen Component indices.",
+    )
     return parser.parse_args()
 
 
@@ -583,6 +698,8 @@ def main() -> None:
     if args.request_interval_seconds < 0:
         raise SystemExit("request interval must be non-negative")
     selected = {str(value).strip().upper() for value in args.ts_code if str(value).strip()}
+    if args.indices_only and selected:
+        raise SystemExit("--indices-only cannot be combined with --ts-code")
 
     with psycopg.connect(_psycopg_dsn(args.database_url)) as conn:
         counts = _validate_schema(conn)
@@ -593,7 +710,7 @@ def main() -> None:
     )
     print(
         f"Requested window: {start_date.isoformat()}..{end_date.isoformat()} "
-        f"universe={'all A shares' if not selected else ','.join(sorted(selected))}"
+        f"universe={'A-share indices' if args.indices_only else ('all A shares' if not selected else ','.join(sorted(selected)))}"
     )
     if args.mode == "plan":
         print("Plan only: no network request or database write was performed.")
@@ -606,6 +723,16 @@ def main() -> None:
         token,
         request_interval_seconds=args.request_interval_seconds,
     )
+    if args.indices_only:
+        _import_indices(
+            client,
+            args.database_url,
+            start_date,
+            end_date,
+            skip_features=args.skip_features,
+        )
+        return
+
     instruments = _fetch_instruments(client, selected)
     with psycopg.connect(_psycopg_dsn(args.database_url)) as conn:
         instrument_ids = _upsert_instruments(conn, instruments)
@@ -648,6 +775,13 @@ def main() -> None:
         f"Tushare import completed. instruments={len(instruments)} bars={imported_rows} "
         f"adjusted_rows={adjusted_rows} feature_instruments={feature_instruments} "
         f"feature_rows={feature_rows} basket_symbols={basket_symbols}"
+    )
+    _import_indices(
+        client,
+        args.database_url,
+        start_date,
+        end_date,
+        skip_features=args.skip_features,
     )
 
 

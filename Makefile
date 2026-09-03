@@ -19,7 +19,7 @@ help:
 	@echo "  make backtest-worker-manager Run and supervise the manager (inherits BACKTEST_WORKER_CONCURRENCY and BACKTEST_INTRA_RUN_THREADS)"
 	@echo "  make benchmark-backtests Plan or run the controlled benchmark funnel (BENCHMARK_ARGS='plan')"
 	@echo "  make backfill-daily Run the daily market-data catch-up flow"
-	@echo "  make import-a-share Plan or import Tushare A-share daily data (A_SHARE_ARGS='plan --start-date ... --end-date ...')"
+	@echo "  make import-a-share Plan or import Tushare A-share daily/index data (A_SHARE_ARGS='plan --start-date ... --end-date ...')"
 	@echo "  make check-data     Run read-only market-data integrity checks"
 	@echo "  make docker-build Build all Docker images"
 	@echo "  make docker-up    Start the full Docker stack in background"

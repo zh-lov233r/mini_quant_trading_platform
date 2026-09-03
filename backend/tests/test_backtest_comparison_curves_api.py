@@ -9,6 +9,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from src.api.backtests import (
+    _benchmark_symbol_for_run,
     _load_comparison_curves_read_only,
     get_backtest_comparison_curves,
 )
@@ -29,6 +30,29 @@ def curve(symbol: str, values: list[float]) -> list[dict[str, object]]:
 
 
 class BacktestComparisonCurvesApiTests(unittest.TestCase):
+    def test_a_share_run_uses_domestic_indices_and_replaces_us_benchmark(self) -> None:
+        db = MagicMock()
+        run = SimpleNamespace(
+            id=uuid4(),
+            initial_cash=100_000,
+            benchmark_symbol="SPY",
+            config_snapshot={},
+            summary_metrics={
+                "symbols_loaded": ["000001.SZ", "600000.SH"],
+                "comparison_curves": {
+                    "SPY": curve("SPY", [100, 101]),
+                    "000001.SH": curve("000001.SH", [3000, 3030]),
+                    "399001.SZ": curve("399001.SZ", [10000, 10200]),
+                },
+            },
+        )
+
+        result = _load_comparison_curves_read_only(db, run, max_points=1500)
+
+        self.assertEqual(set(result), {"000001.SH", "399001.SZ"})
+        self.assertEqual(_benchmark_symbol_for_run(run), "000001.SH")
+        db.execute.assert_not_called()
+
     def test_cached_curves_are_downsampled_and_preserve_endpoints(self) -> None:
         db = MagicMock()
         run = SimpleNamespace(

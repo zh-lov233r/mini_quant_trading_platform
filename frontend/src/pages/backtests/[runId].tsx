@@ -38,7 +38,7 @@ import type { CandleBarOut, CandleSeriesOut } from "@/types/quote";
 import { formatDateTime, formatDurationMs, formatPercent } from "@/utils/strategy";
 import { compactBacktestPositions } from "@/utils/backtestPositions";
 import { lifecycleChartDisplayState } from "@/utils/backtestLifecycleView";
-import { comparisonCurveReturn } from "@/utils/comparisonCurves";
+import { comparisonCurveLabel, comparisonCurveReturn } from "@/utils/comparisonCurves";
 import { shouldLoadBacktestDetails } from "@/utils/backtestProgress";
 import {
   BACKTEST_REVIEW_TABS,
@@ -286,7 +286,7 @@ function detailErrorMessage(error: string, isZh: boolean): string {
     return isZh ? "加载权益曲线失败" : "Failed to load equity curve";
   }
   if (error === BACKTEST_COMPARISON_CURVES_LOAD_FAILED) {
-    return isZh ? "加载 SPY / QQQ 对比曲线失败" : "Failed to load SPY / QQQ comparison curves";
+    return isZh ? "加载大盘对比曲线失败" : "Failed to load market comparison curves";
   }
   if (error === BACKTEST_SIGNALS_LOAD_FAILED) {
     return isZh ? "加载信号失败" : "Failed to load signals";
@@ -582,11 +582,7 @@ type OpenLifecycleLot = {
   txId: string;
 };
 
-type CurveVisibility = {
-  strategy: boolean;
-  SPY: boolean;
-  QQQ: boolean;
-};
+type CurveVisibility = Record<string, boolean> & { strategy: boolean };
 
 const LIFECYCLE_PRE_ENTRY_LOOKBACK_TRADING_DAYS = 30;
 const LIFECYCLE_POST_EXIT_LOOKAHEAD_DAYS = 0;
@@ -1553,7 +1549,7 @@ function EquityCurveCard({
       Number.isFinite(point.equity)
   );
   const values = normalizedPoints.map((point) => point.equity);
-  const comparisonCurves = run.comparison_curves || {};
+  const comparisonCurves = useMemo(() => run.comparison_curves || {}, [run.comparison_curves]);
   const normalizedComparisonCurves = useMemo(() => {
     const buildMap = (pointsInput: BacktestComparisonCurvePoint[] | undefined) =>
       new Map(
@@ -2208,8 +2204,6 @@ function EquityCurveCardLightweight({
   const isZh = locale === "zh-CN";
   const [curveVisibility, setCurveVisibility] = useState<CurveVisibility>({
     strategy: true,
-    SPY: true,
-    QQQ: true,
   });
   const [markerVisibility, setMarkerVisibility] = useState<MarkerVisibility>({
     buy_signal: false,
@@ -2219,35 +2213,21 @@ function EquityCurveCardLightweight({
   });
   const normalizedPoints = useMemo(() => normalizeEquityPoints(points), [points]);
   const values = normalizedPoints.map((point) => point.value);
-  const comparisonCurves = run.comparison_curves || {};
+  const comparisonCurves = useMemo(() => run.comparison_curves || {}, [run.comparison_curves]);
+  const comparisonSymbols = useMemo(
+    () => Object.keys(comparisonCurves).slice(0, 2),
+    [comparisonCurves],
+  );
   const comparisons = useMemo(
-    () => ([
-      {
-        key: "SPY" as const,
-        color: "#2563eb",
-        points: ((comparisonCurves.SPY || []).length > 0
-          ? comparisonCurves.SPY || []
-          : points
-              .filter((point) => point.benchmark_symbol?.toUpperCase() === "SPY")
-              .map((point) => ({ ts: point.ts, equity: point.benchmark_equity })))
-          .map((point) => ({ time: toChartTime(point.ts), value: point.equity }))
-          .filter((point): point is { time: string; value: number } =>
-            Boolean(point.time) && typeof point.value === "number" && Number.isFinite(point.value)),
-      },
-      {
-        key: "QQQ" as const,
-        color: "#f97316",
-        points: ((comparisonCurves.QQQ || []).length > 0
-          ? comparisonCurves.QQQ || []
-          : points
-              .filter((point) => point.benchmark_symbol?.toUpperCase() === "QQQ")
-              .map((point) => ({ ts: point.ts, equity: point.benchmark_equity })))
-          .map((point) => ({ time: toChartTime(point.ts), value: point.equity }))
-          .filter((point): point is { time: string; value: number } =>
-            Boolean(point.time) && typeof point.value === "number" && Number.isFinite(point.value)),
-      },
-    ]),
-    [comparisonCurves.QQQ, comparisonCurves.SPY, points],
+    () => comparisonSymbols.map((symbol, index) => ({
+      key: symbol,
+      color: index === 0 ? "#2563eb" : "#f97316",
+      points: (comparisonCurves[symbol] || [])
+        .map((point) => ({ time: toChartTime(point.ts), value: point.equity }))
+        .filter((point): point is { time: string; value: number } =>
+          Boolean(point.time) && typeof point.value === "number" && Number.isFinite(point.value)),
+    })),
+    [comparisonCurves, comparisonSymbols],
   );
   const markers = useMemo(
     () => buildEquityEventMarkers(
@@ -2290,8 +2270,8 @@ function EquityCurveCardLightweight({
   const benchmarkSymbol = run.benchmark_symbol || points.find((point) => point.benchmark_symbol)?.benchmark_symbol || null;
   const benchmarkTotalReturn = metricNumber(run.summary_metrics || {}, "benchmark_total_return");
   const excessReturn = metricNumber(run.summary_metrics || {}, "excess_return");
-  const comparisonReturn = (key: "SPY" | "QQQ") => {
-    return comparisonCurveReturn(comparisonCurves[key]);
+  const comparisonReturn = (symbol: string) => {
+    return comparisonCurveReturn(comparisonCurves[symbol]);
   };
 
   if (normalizedPoints.length < 2) {
@@ -2313,9 +2293,9 @@ function EquityCurveCardLightweight({
         <button type="button" style={markerToggleChipStyle(curveVisibility.strategy, "#0f766e")} onClick={() => setCurveVisibility((current) => ({ ...current, strategy: !current.strategy }))}>
           {isZh ? "策略曲线" : "Strategy Curve"}
         </button>
-        {(["SPY", "QQQ"] as const).map((key) => (
-          <button key={key} type="button" style={markerToggleChipStyle(curveVisibility[key], key === "SPY" ? "#2563eb" : "#f97316")} onClick={() => setCurveVisibility((current) => ({ ...current, [key]: !current[key] }))}>
-            {key}
+        {comparisons.map((comparison) => (
+          <button key={comparison.key} type="button" style={markerToggleChipStyle(curveVisibility[comparison.key] ?? true, comparison.color)} onClick={() => setCurveVisibility((current) => ({ ...current, [comparison.key]: !(current[comparison.key] ?? true) }))}>
+            {comparisonCurveLabel(comparison.key, locale)}
           </button>
         ))}
         <button type="button" style={markerToggleButtonStyle(true)} onClick={() => setAllMarkers(true)}>{isZh ? "全部开启" : "Enable All"}</button>
@@ -2336,7 +2316,7 @@ function EquityCurveCardLightweight({
         comparisons={comparisons}
         markers={markers}
         strategyVisible={curveVisibility.strategy}
-        comparisonVisibility={{ SPY: curveVisibility.SPY, QQQ: curveVisibility.QQQ }}
+        comparisonVisibility={curveVisibility}
         markerVisibility={markerVisibility}
         initialValue={startValue}
         locale={locale}
@@ -2345,8 +2325,12 @@ function EquityCurveCardLightweight({
         <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "快照点数" : "Snapshots"}</div><div style={miniMetricValueStyle}>{normalizedPoints.length}</div></div>
         <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "曲线峰值" : "Peak Equity"}</div><div style={miniMetricValueStyle}>{formatCurrency(peakValue, locale)}</div></div>
         <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "曲线谷值" : "Lowest Equity"}</div><div style={miniMetricValueStyle}>{formatCurrency(troughValue, locale)}</div></div>
-        <div style={miniMetricStyle}><div style={labelStyle}>SPY {isZh ? "收益" : "Return"}</div><div style={miniMetricValueStyle}>{formatPercent(comparisonReturn("SPY"), 2)}</div></div>
-        <div style={miniMetricStyle}><div style={labelStyle}>QQQ {isZh ? "收益" : "Return"}</div><div style={miniMetricValueStyle}>{formatPercent(comparisonReturn("QQQ"), 2)}</div></div>
+        {comparisons.map((comparison) => (
+          <div key={`${comparison.key}-return`} style={miniMetricStyle}>
+            <div style={labelStyle}>{comparisonCurveLabel(comparison.key, locale)} {isZh ? "收益" : "Return"}</div>
+            <div style={miniMetricValueStyle}>{formatPercent(comparisonReturn(comparison.key), 2)}</div>
+          </div>
+        ))}
         {benchmarkSymbol ? <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "基准收益" : "Benchmark Return"} ({benchmarkSymbol})</div><div style={miniMetricValueStyle}>{formatPercent(benchmarkTotalReturn, 2)}</div></div> : null}
         {benchmarkSymbol ? <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "超额收益" : "Excess Return"}</div><div style={miniMetricValueStyle}>{formatPercent(excessReturn, 2)}</div></div> : null}
         <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "最后快照" : "Last Snapshot"}</div><div style={miniMetricValueStyle}>{formatDateTime(latestPoint?.sourceTs || null, locale)}</div></div>

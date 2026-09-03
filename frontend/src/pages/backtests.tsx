@@ -80,6 +80,15 @@ const BACKTEST_FORM_DRAFT_STORAGE_KEY = "backtests-page-form-draft-v1";
 const DEFAULT_RUN_PAGE_SIZE = 10;
 const RUN_PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
 const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const A_SHARE_DEFAULT_BENCHMARK = "000001.SH";
+const US_DEFAULT_BENCHMARKS = new Set(["SPY", "QQQ"]);
+
+function isAShareBasket(basket: StockBasketOut | null): boolean {
+  return Boolean(
+    basket?.symbols.length &&
+    basket.symbols.every((symbol) => symbol.endsWith(".SH") || symbol.endsWith(".SZ") || symbol.endsWith(".BJ"))
+  );
+}
 
 type DeleteNotice = {
   tone: "success" | "error";
@@ -475,6 +484,16 @@ export default function BacktestsPage() {
     () => baskets.find((item) => item.id === basketId) || null,
     [baskets, basketId]
   );
+  const selectedBasketIsAShare = isAShareBasket(selectedBasket);
+
+  useEffect(() => {
+    if (!selectedBasketIsAShare) return;
+    setBenchmarkSymbol((current) =>
+      !current.trim() || US_DEFAULT_BENCHMARKS.has(current.trim().toUpperCase())
+        ? A_SHARE_DEFAULT_BENCHMARK
+        : current
+    );
+  }, [selectedBasketIsAShare]);
 
   const runStats = useMemo(() => {
     const completed = runs.filter((run) => run.status === "completed");
@@ -904,13 +923,17 @@ export default function BacktestsPage() {
                     {fieldBlock(
                       isZh ? "基准标的" : "Benchmark Symbol",
                       isZh
-                        ? "用于做横向比较的 benchmark，例如 `SPY`。当前它主要是被记录在 run 配置里，后续很适合继续接基准收益曲线"
-                        : "Benchmark used for comparison, for example `SPY`. Right now it is mainly recorded into the run config and is ready for future benchmark curve work.",
+                        ? selectedBasketIsAShare
+                          ? "A 股回测默认以上证指数为收益基准，结果页同时显示上证指数和深证成指"
+                          : "用于横向比较的收益基准；美股默认使用 SPY"
+                        : selectedBasketIsAShare
+                          ? "A-share backtests default to the Shanghai Composite and also show the Shenzhen Component."
+                          : "Return benchmark used for comparison; US backtests default to SPY.",
                       <input
                         value={benchmarkSymbol}
                         onChange={(e) => setBenchmarkSymbol(e.target.value.toUpperCase())}
                         style={inputStyle}
-                        placeholder={isZh ? "基准，如 SPY" : "Benchmark, for example SPY"}
+                        placeholder={selectedBasketIsAShare ? A_SHARE_DEFAULT_BENCHMARK : "SPY"}
                       />,
                       isZh ? "表现参照物" : "Reference"
                     )}

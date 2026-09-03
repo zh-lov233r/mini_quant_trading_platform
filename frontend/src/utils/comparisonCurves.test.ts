@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { comparisonCurveReturn } from "./comparisonCurves";
+import { comparisonCurveLabel, comparisonCurveReturn } from "./comparisonCurves";
 
 describe("comparisonCurveReturn", () => {
+  it("labels A-share market indices without renaming US proxies", () => {
+    expect(comparisonCurveLabel("000001.SH", "zh-CN")).toBe("上证指数 (000001.SH)");
+    expect(comparisonCurveLabel("399001.SZ", "en-US")).toBe("Shenzhen Component (399001.SZ)");
+    expect(comparisonCurveLabel("SPY", "zh-CN")).toBe("SPY");
+  });
+
   it("returns the final finite QQQ return", () => {
     expect(comparisonCurveReturn([
       { ts: "2024-01-02T00:00:00Z", return: 0 },

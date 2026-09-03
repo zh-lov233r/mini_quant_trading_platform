@@ -52,7 +52,10 @@ from src.schemas.research import PointInTimeUniversePolicy
 from src.services.stock_basket_service import DEFAULT_COMMON_STOCK_BASKET_NAME
 
 NEW_YORK = ZoneInfo("America/New_York")
-DISPLAY_COMPARISON_SYMBOLS = ("SPY", "QQQ")
+US_COMPARISON_SYMBOLS = ("SPY", "QQQ")
+A_SHARE_COMPARISON_SYMBOLS = ("000001.SH", "399001.SZ")
+A_SHARE_EXCHANGES = {"XSHG", "XSHE", "XBSE"}
+A_SHARE_BASKET_NAME = "All A Shares (Tushare)"
 log = logging.getLogger(__name__)
 
 
@@ -66,7 +69,10 @@ class BacktestCreate(BaseModel):
     start_date: date = Field(..., description="回测开始日期")
     end_date: date = Field(..., description="回测结束日期")
     initial_cash: float = Field(default=100_000.0, gt=0, description="初始资金")
-    benchmark_symbol: Optional[str] = Field(default=None, description="对标基准，如 SPY")
+    benchmark_symbol: Optional[str] = Field(
+        default=None,
+        description="对标基准；A 股股票池的空值、SPY 或 QQQ 自动使用上证指数",
+    )
     commission_bps: Optional[float] = Field(default=None, ge=0)
     commission_min: Optional[float] = Field(default=None, ge=0)
     slippage_bps: Optional[float] = Field(default=None, ge=0)
@@ -259,6 +265,54 @@ def _normalize_symbols(symbols: list[str | None]) -> list[str]:
     return normalized_symbols
 
 
+def _symbols_are_a_share(symbols: list[Any]) -> bool:
+    normalized = _normalize_symbols([str(symbol) for symbol in symbols])
+    return bool(normalized) and all(
+        symbol.endswith((".SH", ".SZ", ".BJ")) for symbol in normalized
+    )
+
+
+def _is_a_share_run(run: StrategyRun) -> bool:
+    config = dict(getattr(run, "config_snapshot", None) or {})
+    universe = config.get("universe") or {}
+    basket = universe.get("basket") if isinstance(universe, dict) else {}
+    submit_payload = config.get("submit_payload") or {}
+    basket_name = (
+        basket.get("name") if isinstance(basket, dict) else None
+    ) or (submit_payload.get("basket_name") if isinstance(submit_payload, dict) else None)
+    if basket_name == A_SHARE_BASKET_NAME:
+        return True
+
+    resolution = config.get("universe_resolution") or {}
+    policy = resolution.get("policy") if isinstance(resolution, dict) else {}
+    exchanges = set(policy.get("exchanges") or []) if isinstance(policy, dict) else set()
+    if exchanges and exchanges <= A_SHARE_EXCHANGES:
+        return True
+
+    instruments = resolution.get("instruments") if isinstance(resolution, dict) else []
+    resolved_symbols = [
+        item.get("canonical_symbol")
+        for item in instruments or []
+        if isinstance(item, dict)
+    ]
+    if _symbols_are_a_share(resolved_symbols):
+        return True
+    metrics = dict(getattr(run, "summary_metrics", None) or {})
+    return _symbols_are_a_share(list(metrics.get("symbols_loaded") or []))
+
+
+def _comparison_symbols_for_run(run: StrategyRun) -> tuple[str, str]:
+    return A_SHARE_COMPARISON_SYMBOLS if _is_a_share_run(run) else US_COMPARISON_SYMBOLS
+
+
+def _benchmark_symbol_for_run(run: StrategyRun) -> str | None:
+    normalized = _normalize_symbols([getattr(run, "benchmark_symbol", None)])
+    benchmark_symbol = normalized[0] if normalized else None
+    if _is_a_share_run(run) and benchmark_symbol in {None, *US_COMPARISON_SYMBOLS}:
+        return A_SHARE_COMPARISON_SYMBOLS[0]
+    return benchmark_symbol
+
+
 def _extract_cached_comparison_curves(summary_metrics: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     raw_curves = summary_metrics.get("comparison_curves")
     if not isinstance(raw_curves, dict):
@@ -362,8 +416,9 @@ def _load_comparison_curves_read_only(
     max_points: int,
 ) -> dict[str, list[dict[str, Any]]]:
     """Return display comparison curves without mutating the run cache."""
+    display_symbols = _comparison_symbols_for_run(run)
     cached_curves = _extract_cached_comparison_curves(dict(run.summary_metrics or {}))
-    missing_symbols = [symbol for symbol in DISPLAY_COMPARISON_SYMBOLS if symbol not in cached_curves]
+    missing_symbols = [symbol for symbol in display_symbols if symbol not in cached_curves]
     computed_curves: dict[str, list[dict[str, Any]]] = {}
 
     if missing_symbols and run.initial_cash is not None and float(run.initial_cash) > 0:
@@ -392,7 +447,7 @@ def _load_comparison_curves_read_only(
 
     all_curves = {**cached_curves, **computed_curves}
     result: dict[str, list[dict[str, Any]]] = {}
-    for symbol in DISPLAY_COMPARISON_SYMBOLS:
+    for symbol in display_symbols:
         valid_points = [
             point
             for point in all_curves.get(symbol, [])
@@ -491,8 +546,9 @@ def _resolve_comparison_curves_and_summary(
     cache_updated = False
 
     cached_comparison_curves = _extract_cached_comparison_curves(updated_summary_metrics)
-    benchmark_symbol_normalized = _normalize_symbols([run.benchmark_symbol])[0] if run.benchmark_symbol else None
-    display_symbols = list(DISPLAY_COMPARISON_SYMBOLS)
+    benchmark_symbol = _benchmark_symbol_for_run(run)
+    benchmark_symbol_normalized = _normalize_symbols([benchmark_symbol])[0] if benchmark_symbol else None
+    display_symbols = list(_comparison_symbols_for_run(run))
     required_symbols = _normalize_symbols([*display_symbols, benchmark_symbol_normalized])
     missing_symbols = [symbol for symbol in required_symbols if symbol not in cached_comparison_curves]
 
@@ -531,9 +587,9 @@ def _resolve_comparison_curves_and_summary(
         if symbol in all_comparison_curves
     }
 
-    if run.benchmark_symbol and not has_stored_benchmark:
+    if benchmark_symbol and not has_stored_benchmark:
         benchmark_overrides, benchmark_summary = _build_benchmark_snapshot_overrides(
-            run.benchmark_symbol,
+            benchmark_symbol,
             initial_cash,
             equity_curve,
             all_comparison_curves.get(benchmark_symbol_normalized),
@@ -691,7 +747,7 @@ def _to_backtest_run_out(
         window_end=run.window_end,
         initial_cash=float(run.initial_cash) if run.initial_cash is not None else None,
         final_equity=float(run.final_equity) if run.final_equity is not None else None,
-        benchmark_symbol=run.benchmark_symbol,
+        benchmark_symbol=_benchmark_symbol_for_run(run),
         summary_metrics=_compact_summary_metrics(metrics) if compact_metrics else metrics,
         persist_level=persist_level,
         available_details=list(metrics.get("available_details") or _available_details(persist_level)),
@@ -819,6 +875,15 @@ def create_backtest(
             "symbol_count": len(basket_symbols),
         }
 
+    requested_benchmark = _normalize_symbols([payload.benchmark_symbol])
+    benchmark_symbol = requested_benchmark[0] if requested_benchmark else None
+    strategy_symbols = list(((strategy.params or {}).get("universe") or {}).get("symbols") or [])
+    if _symbols_are_a_share(basket_symbols or strategy_symbols) and benchmark_symbol in {
+        None,
+        *US_COMPARISON_SYMBOLS,
+    }:
+        benchmark_symbol = A_SHARE_COMPARISON_SYMBOLS[0]
+
     run = StrategyRun(
         strategy_id=strategy.id,
         strategy_version=strategy.version,
@@ -827,7 +892,7 @@ def create_backtest(
         window_start=payload.start_date,
         window_end=payload.end_date,
         initial_cash=payload.initial_cash,
-        benchmark_symbol=payload.benchmark_symbol,
+        benchmark_symbol=benchmark_symbol,
         config_snapshot={
             "submit_payload": {
                 "basket_id": str(payload.basket_id) if payload.basket_id else None,
@@ -855,7 +920,7 @@ def create_backtest(
             "start_date": payload.start_date.isoformat(),
             "end_date": payload.end_date.isoformat(),
             "initial_cash": payload.initial_cash,
-            "benchmark_symbol": payload.benchmark_symbol,
+            "benchmark_symbol": benchmark_symbol,
             "commission_bps": payload.commission_bps,
             "commission_min": payload.commission_min,
             "slippage_bps": payload.slippage_bps,
