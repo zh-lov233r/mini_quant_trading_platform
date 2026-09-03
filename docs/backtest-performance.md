@@ -84,6 +84,17 @@ If rollout fails, stop new job producers and the backtest worker, then redeploy 
 
 ## Telemetry and acceptance
 
+Completed runs expose four preparation timings under `summary_metrics.performance` in `GET /api/backtests/{id}/summary` (also in the detail response). Values are wall-clock milliseconds:
+
+| Field | Measured work |
+| --- | --- |
+| `sql_read_ms` | Cold-cache row-count query, feature query execution/fetch, and corporate-action loading. Fetch includes database execution, transfer and driver conversion. |
+| `row_conversion_ms` | Feature-row dictionary decoding and trading-day grouping; sums `row_decode_ms` and `day_grouping_ms`. |
+| `array_write_ms` | Array allocation/initialization, per-day encoding with date/identity sidecars, and array-file flush. Timed by day rather than adding a clock call for every encoded cell. |
+| `native_warmup_ms` | Existing native strategy-state warmup before the requested start date; no formal signals, trades or snapshots. |
+
+These four measurements do not overlap each other. They are not a complete partition of preparation: universe resolution, lock waits, cache validation/metadata publication, and Support/Resistance cache hydration are excluded. Do not add them to the existing SQL/decode diagnostics or `native_kernel_ms`, which overlap these aggregates. Direct warm-cache hits report zero for the first three; native warmup can still take time. If another process publishes the cache while this run waits for its build lock, the row-count query remains measured but this run performs no array writes. Timings are saved on successful completion, not streamed while `preparing` remains at 0%; already-running workers and existing results are not retroactively updated. No database schema change is required.
+
 `summary_metrics.performance` uses non-overlapping phases for SQL execute/fetch, row decode, day grouping, history state, signals, execution, detail construction, detail/summary persistence, response construction, and engine total. It also records rows/days/signals/trades per second, microseconds per input row, phase shares, `unaccounted_ms`, peak RSS, configured/effective/actual intra-run threads, parallel/serial trading-day counts, native warmup time, and native formal signal-generation time. Worker terminalization adds queue wait, active, and finalization overhead. Support/Resistance subphases are diagnostic dimensions and are not double-counted in `unaccounted_ms`. Logs contain the same structured mapping.
 
 Manual, research, and verification backtests use the stable key and manifest in `run_manifest.preparedDataset`. The v4 key includes loader/schema revision, stable instrument set, universe rule, coverage and requested ranges, feature set, price/corporate-action, symbol-identity, and universe-membership semantics; ordinary strategy parameters and market-row digests are excluded. A warm hit opens the read-only memmaps before any source-row query. A cold or corrupt cache performs one row-count query, then atomically streams separate Fortran-order `int64` identity/date and `float64` feature memmaps plus symbol/asset/exchange, date-offset, corporate-action, and dynamic-universe sidecars under a file lock. Missing numeric features are NaN. Cleanup counts queued/running jobs referencing the key and refuses deletion while an active lease exists.

@@ -989,6 +989,20 @@ def process_next_trial() -> bool:
         db.close()
 
 
+def research_worker_snapshot(worker: ResearchExperimentWorker | None) -> dict[str, Any]:
+    """Shared read-only runtime observation for task center and dashboard."""
+    enabled = os.getenv("RESEARCH_WORKER_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+    if worker is not None:
+        return worker.status_snapshot(enabled=enabled)
+    return {
+        "enabled": enabled,
+        "state": "failed" if enabled else "disabled",
+        "configured_concurrency": max(1, int(os.getenv("RESEARCH_WORKER_CONCURRENCY", "2"))),
+        "active_trials": 0,
+        "available_slots": 0,
+    }
+
+
 class ResearchExperimentWorker:
     def __init__(self) -> None:
         self._loop_task: asyncio.Task[None] | None = None

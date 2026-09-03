@@ -68,8 +68,10 @@
   .main { margin-left: 0; padding: 0 12px 64px; }
   .mobileTopbar { position: sticky; top: 0; z-index: 35; display: flex; justify-content: space-between; min-height: 56px; margin: 0 -12px 12px; padding: 8px 12px; border-bottom: 1px solid rgba(71,85,105,.36); background: rgba(3,7,18,.94); backdrop-filter: blur(12px); }
   .mobileBrand { color: #f8fafc; text-decoration: none; font-size: 13px; font-weight: 800; letter-spacing: .06em; }
-  .mobileLocaleSwitch { display: flex; width: 72px; }
-  .mobileLocaleSwitch .localeButton { padding: 6px 4px; }
+  .mobileLocaleSwitch { display: flex; width: auto; flex: none; }
+  .mobileLocaleSwitch .localeButton { padding: 6px 4px; min-width: 44px; min-height: 44px; }
+  .mobileMenuButton { min-width: 44px; min-height: 44px; flex: none; }
+  .mobileBrand { min-width: 0; overflow-wrap: anywhere; padding: 0 8px; }
   .mobileNav .navLabel,.mobileNav .quickCreateLabel { display: inline; }
   .mobileNav .navLink,.mobileNav .quickCreate { min-height: 44px; justify-content: flex-start; }
   .pageHeader { padding: 13px 14px; }

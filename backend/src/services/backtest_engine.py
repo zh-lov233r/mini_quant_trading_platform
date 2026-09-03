@@ -607,6 +607,8 @@ def _load_prepared_dataset(
     supplied: dict[str, Any] | None,
     performance: dict[str, Any],
 ) -> tuple[Any, dict[str, Any], str, Any | None]:
+    sql_read_ms = 0.0
+    array_write_ms = 0.0
     if supplied is None:
         manifest = build_prepared_dataset_manifest(
             strategy_type=runtime["strategy_type"],
@@ -643,6 +645,7 @@ def _load_prepared_dataset(
         )
         build_start = date.fromisoformat(str(manifest["date_range"][0]))
         build_end = date.fromisoformat(str(manifest["date_range"][1]))
+        count_started = perf_counter()
         row_count = int(
             db.execute(
                 text(
@@ -663,10 +666,12 @@ def _load_prepared_dataset(
                 },
             ).scalar_one()
         )
+        sql_read_ms += (perf_counter() - count_started) * 1000.0
         if row_count <= 0:
             raise ValueError("no daily feature data found for the backtest universe and window")
 
         def writer(array: Any) -> dict[str, Any]:
+            nonlocal sql_read_ms, array_write_ms
             loader = MarketDataLoader(
                 db,
                 statement=feature_statement,
@@ -683,6 +688,8 @@ def _load_prepared_dataset(
             identity_intervals: dict[tuple[int, str], list[str]] = {}
             try:
                 for trade_day, snapshots in loader.iter_days():
+                    # Time the consumer separately from the loader's SQL/decode timers.
+                    write_started = perf_counter()
                     date_offsets.append([trade_day.isoformat(), index, len(snapshots)])
                     for snapshot in snapshots.values():
                         if index >= len(array):
@@ -697,31 +704,52 @@ def _load_prepared_dataset(
                         )
                         interval[1] = trade_day.isoformat()
                         index += 1
+                    array_write_ms += (perf_counter() - write_started) * 1000.0
             finally:
                 loader.close()
             if index != len(array):
                 raise RuntimeError(
                     "prepared dataset row count differs from its preflight count"
                 )
+            actions_started = perf_counter()
+            corporate_actions = _split_adjustments(
+                db,
+                instrument_ids=manifest_instrument_ids,
+                start_date=build_start,
+                end_date=build_end,
+            )
+            sql_read_ms += (perf_counter() - actions_started) * 1000.0
             return {
                 "date_offsets": date_offsets,
                 "instrument_symbol_intervals": [
                     [instrument_id, symbol, interval[0], interval[1]]
                     for (instrument_id, symbol), interval in sorted(identity_intervals.items())
                 ],
-                "corporate_actions": _split_adjustments(
-                    db,
-                    instrument_ids=manifest_instrument_ids,
-                    start_date=build_start,
-                    end_date=build_end,
-                ),
+                "corporate_actions": corporate_actions,
             }
 
         dataset = cache.build(
             manifest,
             row_count=row_count,
             writer=writer,
+            performance=performance,
         )
+    performance.update(
+        sql_read_ms=round(
+            sql_read_ms
+            + float(performance.get("sql_execute_ms", 0.0))
+            + float(performance.get("sql_fetch_ms", 0.0)),
+            3,
+        ),
+        row_conversion_ms=round(
+            float(performance.get("row_decode_ms", 0.0))
+            + float(performance.get("day_grouping_ms", 0.0)),
+            3,
+        ),
+        array_write_ms=round(
+            array_write_ms + float(performance.get("array_write_ms", 0.0)), 3
+        ),
+    )
     coverage_start = date.fromisoformat(str(manifest["date_range"][0]))
     coverage_end = date.fromisoformat(str(manifest["date_range"][1]))
     hydration, materialization = _support_hydration(

@@ -42,6 +42,7 @@ from src.services.adaptive_research_service import (
     validate_category_study,
 )
 from src.services.research_experiment_service import (
+    research_worker_snapshot,
     ExperimentConflictError,
     ExperimentDataIncompleteError,
     ExperimentNotFoundError,
@@ -344,15 +345,7 @@ def get_research_experiments(
 
 @router.get("/worker-status", response_model=ResearchWorkerStatusOut)
 def get_research_worker_status(request: Request, db: Session = Depends(get_db)):
-    enabled = os.getenv("RESEARCH_WORKER_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
-    worker = getattr(request.app.state, "research_experiment_worker", None)
-    snapshot = worker.status_snapshot(enabled=enabled) if worker is not None else {
-        "enabled": enabled,
-        "state": "failed" if enabled else "disabled",
-        "configured_concurrency": max(1, int(os.getenv("RESEARCH_WORKER_CONCURRENCY", "2"))),
-        "active_trials": 0,
-        "available_slots": 0,
-    }
+    snapshot = research_worker_snapshot(getattr(request.app.state, "research_experiment_worker", None))
     snapshot["queued_trials"] = int(
         db.execute(
             select(func.count()).select_from(ExperimentTrial).where(ExperimentTrial.status == "queued")

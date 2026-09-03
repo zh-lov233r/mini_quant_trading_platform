@@ -114,6 +114,14 @@ export interface BacktestTaskPage {
   counts: Record<string, number>;
 }
 
+// Milliseconds; emitted after completion. A warm cache skips the first three phases.
+export interface BacktestPerformance extends Record<string, unknown> {
+  sql_read_ms?: number;
+  row_conversion_ms?: number;
+  array_write_ms?: number;
+  native_warmup_ms?: number;
+}
+
 export interface BacktestRunOut {
   id: string;
   strategy_id: string;
@@ -132,7 +140,7 @@ export interface BacktestRunOut {
   initial_cash?: number | null;
   final_equity?: number | null;
   benchmark_symbol?: string | null;
-  summary_metrics: Record<string, unknown>;
+  summary_metrics: Record<string, unknown> & { performance?: BacktestPerformance };
   persist_level: BacktestPersistLevel;
   available_details: string[];
   progress?: BacktestProgress | null;

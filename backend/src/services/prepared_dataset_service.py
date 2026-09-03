@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from time import perf_counter
 import shutil
 from typing import Any, Callable, Iterator
 from uuid import uuid4
@@ -264,6 +265,7 @@ class PreparedDatasetCache:
         *,
         row_count: int,
         writer: Callable[[PreparedDataset], dict[str, Any] | None],
+        performance: dict[str, Any] | None = None,
     ) -> PreparedDataset:
         normalized = self._normalize_manifest(manifest)
         key = prepared_dataset_key(normalized)
@@ -275,6 +277,7 @@ class PreparedDatasetCache:
             temporary = self.root / f".{key}.{uuid4().hex}.{PREPARED_DATASET_SCHEMA_VERSION}"
             temporary.mkdir()
             try:
+                write_started = perf_counter()
                 integers = np.lib.format.open_memmap(
                     temporary / "integers.npy", mode="w+", dtype="<i8",
                     shape=(row_count, len(PREPARED_INTEGER_FIELDS)), fortran_order=True,
@@ -285,11 +288,22 @@ class PreparedDatasetCache:
                 )
                 integers[:] = PREPARED_DATE_SENTINEL
                 floats[:] = np.nan
+                if performance is not None:
+                    performance["array_write_ms"] = (
+                        float(performance.get("array_write_ms", 0.0))
+                        + (perf_counter() - write_started) * 1000.0
+                    )
                 dataset = PreparedDataset(integers, floats, {})
                 supplied_sidecar = writer(dataset) or {}
                 sidecar = {**dataset.mapping_sidecar(), **supplied_sidecar}
+                write_started = perf_counter()
                 integers.flush()
                 floats.flush()
+                if performance is not None:
+                    performance["array_write_ms"] = (
+                        float(performance["array_write_ms"])
+                        + (perf_counter() - write_started) * 1000.0
+                    )
                 (temporary / "metadata.json").write_text(
                     json.dumps(
                         {

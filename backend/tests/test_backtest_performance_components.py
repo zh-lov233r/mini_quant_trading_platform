@@ -37,6 +37,7 @@ from backend.utils.benchmark_backtests import (
 
 class BacktestPerformanceComponentTests(unittest.TestCase):
     def test_native_warm_dataset_opens_without_source_scan(self) -> None:
+        performance: dict[str, object] = {}
         cache = MagicMock()
         dataset = SimpleNamespace(sidecar={})
         cache.open.return_value = dataset
@@ -62,7 +63,7 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
                 end_date=date(2025, 1, 2),
                 universe_policy=None,
                 supplied=None,
-                performance={},
+                performance=performance,
             )
 
         self.assertIs(loaded, dataset)
@@ -70,16 +71,27 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
         self.assertIsNone(materialization)
         db.execute.assert_not_called()
         loader_class.assert_not_called()
+        self.assertEqual(performance, {
+            "sql_read_ms": 0.0,
+            "row_conversion_ms": 0.0,
+            "array_write_ms": 0.0,
+        })
 
-    def test_native_cold_dataset_build_supplies_loader_performance(self) -> None:
-        performance: dict[str, object] = {}
+    def test_cold_preparation_timers_include_count_and_actions_without_overlap(self) -> None:
+        performance: dict[str, object] = {
+            "sql_execute_ms": 2.0,
+            "sql_fetch_ms": 3.0,
+            "row_decode_ms": 7.0,
+            "day_grouping_ms": 11.0,
+        }
         cache = MagicMock()
         cache.open.return_value = None
         dataset = SimpleNamespace(sidecar={})
 
-        def build(_manifest, *, row_count, writer):
+        def build(_manifest, *, row_count, writer, performance):
             self.assertEqual(row_count, 1)
             writer([None])
+            performance["array_write_ms"] = 6.0
             return dataset
 
         cache.build.side_effect = build
@@ -88,6 +100,10 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
         db.execute.return_value.scalar_one.return_value = 1
 
         with (
+            patch(
+                "src.services.backtest_engine.perf_counter",
+                side_effect=[0.0, 0.005, 0.015, 0.055, 0.060, 0.070],
+            ),
             patch(
                 "src.services.backtest_engine.PreparedDatasetCache",
                 return_value=cache,
@@ -124,6 +140,9 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
         self.assertEqual(status, "cold")
         self.assertIsNone(materialization)
         self.assertIs(loader_class.call_args.kwargs["performance"], performance)
+        self.assertEqual(performance["sql_read_ms"], 20.0)
+        self.assertEqual(performance["row_conversion_ms"], 18.0)
+        self.assertEqual(performance["array_write_ms"], 46.0)
 
     def test_benchmark_cases_use_exact_supplied_correctness_session_window(self) -> None:
         start = date(2024, 7, 1)
@@ -353,7 +372,16 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
                         },
                     )
 
-            built = cache.build(manifest, row_count=3, writer=writer)
+            performance = {}
+            with patch(
+                "src.services.prepared_dataset_service.perf_counter",
+                side_effect=[0.0, 0.002, 10.0, 10.003],
+            ):
+                built = cache.build(
+                    manifest, row_count=3, writer=writer, performance=performance
+                )
+            # Initialization and flush exclude the intervening writer/SQL time.
+            self.assertAlmostEqual(performance["array_write_ms"], 5.0)
             self.assertFalse(built.writeable)
             self.assertEqual(built.floats[2, 3], 12.0)
             reopened = cache.open({**manifest, "loader_schema_version": PREPARED_DATASET_SCHEMA_VERSION})

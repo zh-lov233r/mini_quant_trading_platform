@@ -84,6 +84,17 @@ worker 使用 `FOR UPDATE SKIP LOCKED` claim，维护 heartbeat/lease，每个�
 
 ## 指标与验收
 
+已完成回测通过 `GET /api/backtests/{id}/summary` 的 `summary_metrics.performance` 返回四段准备耗时，详情接口也返回同一指标。单位均为墙钟毫秒：
+
+| 字段 | 计时范围 |
+| --- | --- |
+| `sql_read_ms` | 冷缓存行数统计、特征查询执行/取数、公司行动加载。取数包含数据库执行、传输和驱动转换。 |
+| `row_conversion_ms` | 特征行字典解码和按交易日分组，为 `row_decode_ms` 与 `day_grouping_ms` 之和。 |
+| `array_write_ms` | 数组分配/初始化、逐日编码及日期/身份附属信息积累、数组文件刷盘。按日计时，不为每个编码单元额外调用时钟。 |
+| `native_warmup_ms` | 已有的原生策略状态预热耗时，范围在请求开始日期之前，不产生正式信号、成交或快照。 |
+
+四段之间互不重叠，但不覆盖全部准备过程：股票池解析、锁等待、缓存校验/元数据发布、支撑压力缓存状态加载均不包含在内。它们与已有 SQL/解码诊断项或 `native_kernel_ms` 存在包含关系，不可重复相加。直接命中热缓存时前三项为零，原生预热仍可能耗时。若等待构建锁时另一进程已发布缓存，本次行数统计仍计时，但不会执行数组写入。指标在成功完成后保存，不会在 `preparing` 仍显示 0% 时实时推送；已运行的 worker 和已有结果不会被追补。不需要修改数据库结构。
+
 `summary_metrics.performance` 使用互不重叠的阶段记录 `sql_execute_ms`、`sql_fetch_ms`、`row_decode_ms`、`day_grouping_ms`、历史状态、信号、成交、明细构造、明细/摘要持久化、响应构造和总耗时。它同时记录 rows/day/signals/trades 每秒、每输入行微秒数、阶段占比、`unaccounted_ms`、峰值 RSS、配置/有效/实际 run 内线程数、并行/串行交易日数、原生 warmup 耗时和正式信号生成耗时；worker 终态补充 queue wait、active 和 finalization overhead。支撑/压力区子阶段只作为诊断维度，不重复计入 `unaccounted_ms`。结构化日志记录同一映射。
 
 手动、研究和验证回测都使用 `run_manifest.preparedDataset` 中的稳定 key/manifest。v4 key 包含 loader/schema revision、稳定 instrument 集合、股票池规则、覆盖与请求日期范围、feature set、价格/公司行动、symbol identity 和 universe membership 语义，不包含普通策略参数或行情逐行摘要。热缓存会在任何源行查询前直接只读打开 memmap。冷缓存或损坏缓存先执行一次行数统计，再在文件锁内流式、原子构建相互独立且按 Fortran 顺序存储的 `int64` identity/date memmap 与 `float64` feature memmap，并写入 symbol/asset/exchange、日期 offset、公司行动和动态 universe sidecar；数值缺失统一使用 NaN。cleanup 会统计引用同一 key 的 queued/running job，存在 active lease 时拒绝删除。

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 """Daily scheduler for portfolio-level paper trading runs.
 
 This module is responsible for turning the paper-trading service into a
@@ -92,6 +94,15 @@ class PaperTradingDailyScheduler:
         self._stop_event = asyncio.Event()
         self._last_no_data_log_date: date | None = None
         self._last_summary_log_date: date | None = None
+
+    def status_snapshot(self) -> dict[str, Any]:
+        """Observe the local loop without polling, broker requests or state changes."""
+        alive = self._task is not None and not self._task.done()
+        return {
+            "enabled": self.config.enabled,
+            "submit_orders": self.config.submit_orders,
+            "status": "disabled" if not self.config.enabled else "healthy" if alive else "failed",
+        }
 
     async def start(self) -> None:
         """Start the background polling task if the scheduler is enabled."""

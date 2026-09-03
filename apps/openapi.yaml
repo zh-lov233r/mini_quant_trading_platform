@@ -17,6 +17,8 @@ servers:
     description: Local development
 
 tags:
+  - name: Dashboard
+    description: Read-only research and operations overview.
   - name: Health
     description: Service health and root endpoints.
   - name: Strategies
@@ -37,6 +39,26 @@ tags:
     description: Manual and scheduled Alpaca paper-strategy execution.
 
 paths:
+  /api/dashboard/overview:
+    get:
+      tags: [Dashboard]
+      summary: Read-only research and operations overview
+      operationId: getDashboardOverview
+      x-implementation-status: implemented
+      description: >
+        Local aggregation without broker calls or database writes. Counts cover
+        all matching records, evidence is limited to 10 strategies, paper summaries
+        to 10 portfolios, and activity to 20 events. Null means unavailable, not zero.
+        Maintenance readiness does not establish market-data freshness. Current-rule
+        manual backtest evidence and historical promotion lineage are separate.
+      responses:
+        "200":
+          description: Current observations, counts, evidence, alerts and activity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardOverview'
+
   /:
     get:
       tags: [Health]
@@ -1427,6 +1449,458 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
 
   schemas:
+    DashboardActivity:
+      properties:
+        id:
+          title: Id
+          type: string
+        category:
+          enum:
+            - backtest
+            - research
+            - strategy
+            - paper
+          title: Category
+          type: string
+        status:
+          title: Status
+          type: string
+        name:
+          title: Name
+          type: string
+        occurred_at:
+          format: date-time
+          title: Occurred At
+          type: string
+        href:
+          title: Href
+          type: string
+      required:
+        - id
+        - category
+        - status
+        - name
+        - occurred_at
+        - href
+      title: DashboardActivity
+      type: object
+    DashboardAlert:
+      properties:
+        id:
+          title: Id
+          type: string
+        code:
+          title: Code
+          type: string
+        severity:
+          enum:
+            - critical
+            - warning
+            - info
+          title: Severity
+          type: string
+        count:
+          title: Count
+          type: integer
+        occurred_at:
+          anyOf:
+            - format: date-time
+              type: string
+            - type: 'null'
+          title: Occurred At
+        href:
+          title: Href
+          type: string
+      required:
+        - id
+        - code
+        - severity
+        - count
+        - occurred_at
+        - href
+      title: DashboardAlert
+      type: object
+    DashboardKpis:
+      properties:
+        active_strategies:
+          title: Active Strategies
+          type: integer
+        running_experiments:
+          title: Running Experiments
+          type: integer
+        running_backtests:
+          title: Running Backtests
+          type: integer
+        queued_backtests:
+          title: Queued Backtests
+          type: integer
+      required:
+        - active_strategies
+        - running_experiments
+        - running_backtests
+        - queued_backtests
+      title: DashboardKpis
+      type: object
+    DashboardPaperPortfolio:
+      properties:
+        portfolio_id:
+          title: Portfolio Id
+          type: string
+        account_name:
+          title: Account Name
+          type: string
+        name:
+          title: Name
+          type: string
+        allocation_count:
+          title: Allocation Count
+          type: integer
+        allocation_total:
+          title: Allocation Total
+          type: number
+        auto_run_eligible:
+          title: Auto Run Eligible
+          type: boolean
+        latest_run_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          default: null
+          title: Latest Run Id
+        latest_strategy_name:
+          anyOf:
+            - type: string
+            - type: 'null'
+          default: null
+          title: Latest Strategy Name
+        latest_run_status:
+          anyOf:
+            - type: string
+            - type: 'null'
+          default: null
+          title: Latest Run Status
+        latest_run_at:
+          anyOf:
+            - format: date-time
+              type: string
+            - type: 'null'
+          default: null
+          title: Latest Run At
+        submit_orders:
+          anyOf:
+            - type: boolean
+            - type: 'null'
+          default: null
+          title: Submit Orders
+      required:
+        - portfolio_id
+        - account_name
+        - name
+        - allocation_count
+        - allocation_total
+        - auto_run_eligible
+      title: DashboardPaperPortfolio
+      type: object
+    DashboardPaperSummary:
+      properties:
+        account_count:
+          title: Account Count
+          type: integer
+        portfolio_count:
+          title: Portfolio Count
+          type: integer
+        portfolios:
+          items:
+            $ref: '#/components/schemas/DashboardPaperPortfolio'
+          title: Portfolios
+          type: array
+      required:
+        - account_count
+        - portfolio_count
+        - portfolios
+      title: DashboardPaperSummary
+      type: object
+    DashboardResearchProgress:
+      properties:
+        experiments:
+          title: Experiments
+          type: integer
+        evaluated_candidates:
+          title: Evaluated Candidates
+          type: integer
+        verified_candidates:
+          title: Verified Candidates
+          type: integer
+        promoted_strategies:
+          title: Promoted Strategies
+          type: integer
+        paper_strategies:
+          title: Paper Strategies
+          type: integer
+      required:
+        - experiments
+        - evaluated_candidates
+        - verified_candidates
+        - promoted_strategies
+        - paper_strategies
+      title: DashboardResearchProgress
+      type: object
+    DashboardStrategyEvidence:
+      properties:
+        strategy_id:
+          title: Strategy Id
+          type: string
+        name:
+          title: Name
+          type: string
+        strategy_type:
+          title: Strategy Type
+          type: string
+        version:
+          title: Version
+          type: integer
+        engine_ready:
+          title: Engine Ready
+          type: boolean
+        backtest_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          default: null
+          title: Backtest Id
+        evidence_status:
+          enum:
+            - available
+            - missing
+            - configuration_changed
+            - invalid
+          title: Evidence Status
+          type: string
+        total_return:
+          anyOf:
+            - type: number
+            - type: 'null'
+          default: null
+          title: Total Return
+        sharpe:
+          anyOf:
+            - type: number
+            - type: 'null'
+          default: null
+          title: Sharpe
+        max_drawdown:
+          anyOf:
+            - type: number
+            - type: 'null'
+          default: null
+          title: Max Drawdown
+        trade_count:
+          anyOf:
+            - type: integer
+            - type: 'null'
+          default: null
+          title: Trade Count
+        window_start:
+          anyOf:
+            - type: string
+            - type: 'null'
+          default: null
+          title: Window Start
+        window_end:
+          anyOf:
+            - type: string
+            - type: 'null'
+          default: null
+          title: Window End
+        finished_at:
+          anyOf:
+            - format: date-time
+              type: string
+            - type: 'null'
+          default: null
+          title: Finished At
+        experiment_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          default: null
+          title: Experiment Id
+        candidate_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          default: null
+          title: Candidate Id
+        verification_status:
+          anyOf:
+            - enum:
+                - queued
+                - running
+                - completed
+                - failed
+                - cancelled
+              type: string
+            - type: 'null'
+          default: null
+          title: Verification Status
+        issues:
+          items:
+            type: string
+          title: Issues
+          type: array
+      required:
+        - strategy_id
+        - name
+        - strategy_type
+        - version
+        - engine_ready
+        - evidence_status
+      title: DashboardStrategyEvidence
+      type: object
+    DashboardSystemItem:
+      properties:
+        key:
+          enum:
+            - market_data
+            - backtest
+            - research
+            - scheduler
+            - broker
+          title: Key
+          type: string
+        status:
+          enum:
+            - healthy
+            - degraded
+            - failed
+            - unknown
+            - disabled
+          title: Status
+          type: string
+        reason:
+          title: Reason
+          type: string
+        checked_at:
+          format: date-time
+          title: Checked At
+          type: string
+        observed_at:
+          anyOf:
+            - format: date-time
+              type: string
+            - type: 'null'
+          default: null
+          title: Observed At
+        enabled:
+          anyOf:
+            - type: boolean
+            - type: 'null'
+          default: null
+          title: Enabled
+        submit_orders:
+          anyOf:
+            - type: boolean
+            - type: 'null'
+          default: null
+          title: Submit Orders
+        active:
+          anyOf:
+            - type: integer
+            - type: 'null'
+          default: null
+          title: Active
+        capacity:
+          anyOf:
+            - type: integer
+            - type: 'null'
+          default: null
+          title: Capacity
+        queued:
+          anyOf:
+            - type: integer
+            - type: 'null'
+          default: null
+          title: Queued
+        last_run_status:
+          anyOf:
+            - type: string
+            - type: 'null'
+          default: null
+          title: Last Run Status
+      required:
+        - key
+        - status
+        - reason
+        - checked_at
+      title: DashboardSystemItem
+      type: object
+    DashboardTaskSummary:
+      properties:
+        waiting_research:
+          title: Waiting Research
+          type: integer
+        completed_last_24h:
+          title: Completed Last 24H
+          type: integer
+        failed_backtests_last_24h:
+          title: Failed Backtests Last 24H
+          type: integer
+        failed_research_last_24h:
+          title: Failed Research Last 24H
+          type: integer
+      required:
+        - waiting_research
+        - completed_last_24h
+        - failed_backtests_last_24h
+        - failed_research_last_24h
+      title: DashboardTaskSummary
+      type: object
+    DashboardOverview:
+      properties:
+        generated_at:
+          format: date-time
+          title: Generated At
+          type: string
+        system:
+          items:
+            $ref: '#/components/schemas/DashboardSystemItem'
+          title: System
+          type: array
+        research_kpis:
+          $ref: '#/components/schemas/DashboardKpis'
+        task_summary:
+          $ref: '#/components/schemas/DashboardTaskSummary'
+        research_progress:
+          $ref: '#/components/schemas/DashboardResearchProgress'
+        strategy_evidence:
+          items:
+            $ref: '#/components/schemas/DashboardStrategyEvidence'
+          title: Strategy Evidence
+          type: array
+        paper_summary:
+          $ref: '#/components/schemas/DashboardPaperSummary'
+        alerts:
+          items:
+            $ref: '#/components/schemas/DashboardAlert'
+          title: Alerts
+          type: array
+        activity:
+          items:
+            $ref: '#/components/schemas/DashboardActivity'
+          title: Activity
+          type: array
+      required:
+        - generated_at
+        - system
+        - research_kpis
+        - task_summary
+        - research_progress
+        - strategy_evidence
+        - paper_summary
+        - alerts
+        - activity
+      title: DashboardOverview
+      type: object
     PaperTradingRunRequest:
       type: object
       required: [strategy_id, trade_date, portfolio_name]
@@ -2587,6 +3061,32 @@ components:
           type: object
           additionalProperties: {type: integer, minimum: 0}
 
+    BacktestPerformance:
+      type: object
+      additionalProperties: true
+      description: >-
+        Completed-run telemetry in milliseconds, available from the summary/detail endpoints.
+        The four preparation timings are disjoint but do not cover all setup work.
+        The first three are zero on a direct warm-cache hit; native warmup can still run.
+        Aggregate timings overlap existing SQL/decode diagnostics and must not be added to them.
+      properties:
+        sql_read_ms:
+          type: number
+          minimum: 0
+          description: Cold-cache row-count query, feature execute/fetch, and corporate-action loading wall time.
+        row_conversion_ms:
+          type: number
+          minimum: 0
+          description: Feature row decoding plus trading-day grouping.
+        array_write_ms:
+          type: number
+          minimum: 0
+          description: Array allocation/initialization, per-day encoding and date/identity sidecar accumulation, and array file flush; excludes cache-lock waits and metadata publication.
+        native_warmup_ms:
+          type: number
+          minimum: 0
+          description: Native strategy state warmup before the requested start date; also included in native_kernel_ms.
+
     BacktestRun:
       allOf:
         - $ref: "#/components/schemas/StrategyRunSummary"
@@ -2601,6 +3101,12 @@ components:
             available_details:
               type: array
               items: {type: string}
+            summary_metrics:
+              type: object
+              additionalProperties: true
+              properties:
+                performance:
+                  $ref: "#/components/schemas/BacktestPerformance"
             progress:
               allOf:
                 - $ref: "#/components/schemas/BacktestProgress"

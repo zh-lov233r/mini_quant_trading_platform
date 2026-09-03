@@ -1,7 +1,9 @@
+import { dashboardEnUS } from "./dashboard/en-US";
 import type { MessageSchema } from "./zh-CN";
 import { strategyCreateEnUS } from "./strategy-create/en-US";
 
 export const enUSMessages: MessageSchema = {
+  dashboard: dashboardEnUS,
   common: {
     appName: "Quant Strategy Workspace",
     language: "Language",

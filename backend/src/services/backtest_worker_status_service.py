@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from src.models.tables import BacktestJob, BacktestWorkerManager
@@ -34,23 +33,19 @@ def load_backtest_worker_status(
     oldest_queued_at = db.execute(
         select(func.min(BacktestJob.created_at)).where(BacktestJob.status == "queued")
     ).scalar_one_or_none()
-    try:
-        live_managers = list(
-            db.execute(
-                select(BacktestWorkerManager)
-                .where(
-                    BacktestWorkerManager.heartbeat_at
-                    >= observed_at - timedelta(seconds=HEARTBEAT_STALE_AFTER_SECONDS)
-                )
-                .order_by(
-                    BacktestWorkerManager.is_leader.desc(),
-                    BacktestWorkerManager.heartbeat_at.desc(),
-                )
-            ).scalars()
-        )
-    except SQLAlchemyError:
-        db.rollback()
-        live_managers = []
+    live_managers = list(
+        db.execute(
+            select(BacktestWorkerManager)
+            .where(
+                BacktestWorkerManager.heartbeat_at
+                >= observed_at - timedelta(seconds=HEARTBEAT_STALE_AFTER_SECONDS)
+            )
+            .order_by(
+                BacktestWorkerManager.is_leader.desc(),
+                BacktestWorkerManager.heartbeat_at.desc(),
+            )
+        ).scalars()
+    )
     manager = live_managers[0] if live_managers else None
     configured_concurrency = resolve_backtest_worker_concurrency()
     configured_intra_run_threads = resolve_backtest_intra_run_threads()

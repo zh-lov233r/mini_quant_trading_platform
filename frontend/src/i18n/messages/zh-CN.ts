@@ -1,6 +1,8 @@
+import { dashboardZhCN } from "./dashboard/zh-CN";
 import { strategyCreateZhCN } from "./strategy-create/zh-CN";
 
 export const zhCNMessages = {
+  dashboard: dashboardZhCN,
   common: {
     appName: "量化策略工作台",
     language: "语言",

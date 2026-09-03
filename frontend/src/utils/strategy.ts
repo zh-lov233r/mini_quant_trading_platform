@@ -155,6 +155,10 @@ const STRATEGY_CATEGORY_VISUALS: Record<
   custom: { accent: "#94a3b8", accentRgb: "148, 163, 184" },
 };
 
+export function isStrategyType(value: string): value is StrategyType {
+  return Object.prototype.hasOwnProperty.call(STRATEGY_CATEGORY_VISUALS, value);
+}
+
 export function getStrategyCategoryPresentation(
   strategyType: StrategyType,
   locale: string = "zh-CN",
