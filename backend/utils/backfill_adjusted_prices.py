@@ -28,7 +28,8 @@ SET
   close_ba = close_u
 WHERE
   (%(start_date)s::date IS NULL OR dt_ny >= %(start_date)s::date)
-  AND (%(end_date)s::date IS NULL OR dt_ny <= %(end_date)s::date);
+  AND (%(end_date)s::date IS NULL OR dt_ny <= %(end_date)s::date)
+  AND COALESCE(vendor, '') <> 'tushare';
 """
 
 ACTION_INSTRUMENTS_SQL = """

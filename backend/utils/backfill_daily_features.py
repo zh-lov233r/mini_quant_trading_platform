@@ -617,16 +617,19 @@ def _flush_stage(conn: psycopg.Connection, stage_rows: list[tuple]) -> None:
     conn.commit()
 
 
-def main() -> None:
-    load_dotenv(REPO_ROOT / ".env")
-    args = parse_args()
-    if not args.database_url:
-        raise SystemExit("Missing DATABASE_URL or SQLALCHEMY_DATABASE_URL")
+def backfill_daily_features(
+    database_url: str,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    batch_rows: int = 50_000,
+    instrument_ids: list[int] | None = None,
+    instrument_limit: int | None = None,
+) -> tuple[int, int]:
+    start_bound = date.fromisoformat(start_date) if start_date else None
+    end_bound = date.fromisoformat(end_date) if end_date else None
 
-    start_bound = date.fromisoformat(args.start_date) if args.start_date else None
-    end_bound = date.fromisoformat(args.end_date) if args.end_date else None
-
-    with psycopg.connect(_psycopg_dsn(args.database_url)) as read_conn, psycopg.connect(_psycopg_dsn(args.database_url)) as write_conn:
+    with psycopg.connect(_psycopg_dsn(database_url)) as read_conn, psycopg.connect(_psycopg_dsn(database_url)) as write_conn:
         with write_conn.cursor() as cur:
             cur.execute(CREATE_STAGE_SQL)
         write_conn.commit()
@@ -638,13 +641,13 @@ def main() -> None:
         bar_groups = _group_by_instrument(
             _iter_bars(
                 read_conn,
-                args.start_date,
-                args.end_date,
-                args.instrument_id,
+                start_date,
+                end_date,
+                instrument_ids,
             )
         )
         for bars in bar_groups:
-            if args.instrument_limit is not None and processed_instruments >= args.instrument_limit:
+            if instrument_limit is not None and processed_instruments >= instrument_limit:
                 break
             processed_instruments += 1
 
@@ -656,7 +659,7 @@ def main() -> None:
             staged_rows.extend(feature_rows)
             upserted_rows += len(feature_rows)
 
-            if len(staged_rows) >= args.batch_rows:
+            if len(staged_rows) >= batch_rows:
                 _flush_stage(write_conn, staged_rows)
                 staged_rows.clear()
                 print(
@@ -671,6 +674,23 @@ def main() -> None:
                 flush=True,
             )
 
+    return processed_instruments, upserted_rows
+
+
+def main() -> None:
+    load_dotenv(REPO_ROOT / ".env")
+    args = parse_args()
+    if not args.database_url:
+        raise SystemExit("Missing DATABASE_URL or SQLALCHEMY_DATABASE_URL")
+
+    processed_instruments, upserted_rows = backfill_daily_features(
+        args.database_url,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        batch_rows=args.batch_rows,
+        instrument_ids=args.instrument_id,
+        instrument_limit=args.instrument_limit,
+    )
     print(
         f"Daily feature backfill completed. instruments={processed_instruments} "
         f"upserted_rows={upserted_rows}",

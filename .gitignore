@@ -31,3 +31,4 @@ frontend/.next-dev/
 
 # Local raw market-data downloads
 data/massive/
+data/backtest_prepared/

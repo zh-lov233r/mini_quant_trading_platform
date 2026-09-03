@@ -6,7 +6,7 @@ FRONTEND_DIR := $(ROOT_DIR)/frontend
 PYTHON := $(ROOT_DIR)/.venv/bin/python
 SUPERVISE_BACKTEST_MANAGER = while true; do (cd "$(BACKEND_DIR)" && PAPER_TRADING_SCHEDULER_ENABLED=false PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false "$(PYTHON)" -m src.workers.backtest_worker_manager $(BACKTEST_WORKER_MANAGER_ARGS)); exit_code=$$?; echo "Backtest worker manager exited (code $$exit_code); restarting in 2 seconds." >&2; sleep 2; done
 
-.PHONY: help dev dev-agent-all dev-agent-safe dev-backend dev-frontend backtest-worker backtest-worker-manager benchmark-backtests backfill-daily check-data docker-build docker-up docker-down docker-logs
+.PHONY: help dev dev-agent-all dev-agent-safe dev-backend dev-frontend backtest-worker backtest-worker-manager benchmark-backtests backfill-daily import-a-share check-data docker-build docker-up docker-down docker-logs
 
 help:
 	@echo "Available targets:"
@@ -19,6 +19,7 @@ help:
 	@echo "  make backtest-worker-manager Run and supervise the manager (inherits BACKTEST_WORKER_CONCURRENCY and BACKTEST_INTRA_RUN_THREADS)"
 	@echo "  make benchmark-backtests Plan or run the controlled benchmark funnel (BENCHMARK_ARGS='plan')"
 	@echo "  make backfill-daily Run the daily market-data catch-up flow"
+	@echo "  make import-a-share Plan or import Tushare A-share daily data (A_SHARE_ARGS='plan --start-date ... --end-date ...')"
 	@echo "  make check-data     Run read-only market-data integrity checks"
 	@echo "  make docker-build Build all Docker images"
 	@echo "  make docker-up    Start the full Docker stack in background"
@@ -61,6 +62,9 @@ benchmark-backtests:
 
 backfill-daily:
 	@cd "$(ROOT_DIR)" && "$(PYTHON)" backend/utils/run_daily_market_backfill.py $(BACKFILL_ARGS)
+
+import-a-share:
+	@cd "$(ROOT_DIR)" && "$(PYTHON)" backend/utils/import_tushare_a_share.py $(A_SHARE_ARGS)
 
 check-data:
 	@cd "$(ROOT_DIR)" && "$(PYTHON)" backend/utils/check_market_data_quality.py $(CHECK_DATA_ARGS)

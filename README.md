@@ -26,6 +26,7 @@ The repository currently has two main parts:
 - Market data and feature engineering
   - Maintain instruments, EOD bars, adjusted prices, and daily features
   - Backfill historical and missing market data from Massive
+  - Idempotently import Shanghai, Shenzhen, and Beijing A-share daily bars, adjustment factors, and backtest features from Tushare into PostgreSQL; see [Tushare A-share data](docs/tushare-a-share-data.md)
   - Provide a daily market-data catch-up pipeline
 
 - Backtesting
@@ -78,6 +79,7 @@ The repository currently has two main parts:
 - Broker / Data
   - Alpaca paper trading API
   - Massive market data
+  - Tushare A-share daily bars and adjustment factors
 
 ## Project Structure
 
@@ -205,6 +207,7 @@ SQLALCHEMY_DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/dbname
 FRONTEND_ORIGIN=http://localhost:3000
 
 MASSIVE_API_KEY=
+TUSHARE_TOKEN=
 
 ALPACA_API_KEY=
 ALPACA_SECRET_KEY=
@@ -214,6 +217,7 @@ ALPACA_BASE_URL=https://paper-api.alpaca.markets
 Notes:
 
 - `DATABASE_URL` / `SQLALCHEMY_DATABASE_URL` are used by the backend
+- `TUSHARE_TOKEN` is read only by the A-share import command and must never be committed
 - Alpaca features can use `ALPACA_API_KEY` / `ALPACA_SECRET_KEY`
 - Paper accounts can also map credentials to custom env var names such as `ALPACA_API_KEY_MAIN`
 
@@ -339,6 +343,7 @@ make dev-backend
 make dev-frontend
 make backtest-worker-manager
 make backfill-daily
+make import-a-share A_SHARE_ARGS="plan --start-date 2024-01-01 --end-date 2024-12-31"
 make check-data
 make docker-build
 make docker-up
@@ -378,12 +383,18 @@ make docker-logs
 - `backfill_daily_features.py`
   - Recompute and upsert `daily_features` from `eod_bars`
 
+- `import_tushare_a_share.py`
+  - Import Shanghai, Shenzhen, and Beijing A-share identities, unadjusted daily bars, forward/backward-adjusted OHLC, and `daily_features`
+  - Synchronize the `All A Shares (Tushare)` basket for all nine engine-ready strategies in the Backtests workbench
+
 - `check_market_data_quality.py`
   - Read-only checks for price/feature gaps, invalid VWAP/short-interest values, ticker-event consistency, duplicate identities, symbol-history overlaps, stale instruments, and partial latest sessions
 
 Apply `backend/utils/create_stock_enrichment.sql` before the first enrichment run. It is additive and idempotent, but this repository has no Alembic migration workflow; back up and verify the target database before applying it. The schema adds SIC snapshot columns, `stock_short_interest`, `security_ticker_events`, and per-instrument vendor sync state.
 
 Massive VWAP is stored unadjusted (`adjusted=false`). The current plan boundary begins on 2016-08-29; older null VWAP remains an expected warning. SIC is a snapshot, not point-in-time industry history. Short interest is keyed by settlement date and is not treated as known on every daily bar because the endpoint does not provide a reliable publication timestamp. Ticker Events is experimental: raw events are always auditable, while incomplete chains, FIGI/exchange mismatches, ticker reuse, and interval conflicts remain `unresolved` and never trigger a guessed repair.
+
+The Tushare A-share flow requires a `plan` run before an explicit `apply`. It does not start the backend, paper scheduler, or any broker operation. See [Tushare A-share data](docs/tushare-a-share-data.md) for commands, field semantics, recovery, and backtest limitations.
 
 Run the daily backfill flow through Make:
 

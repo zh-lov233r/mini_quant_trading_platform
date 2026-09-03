@@ -26,6 +26,7 @@
 - 市场数据与特征工程
   - 维护 instruments、EOD bars、adjusted prices、daily features
   - 支持通过 Massive 补历史行情、补缺失行情、回刷特征
+  - 支持通过 Tushare 将沪深北 A 股日线、复权因子和回测特征幂等导入 PostgreSQL；详见 [Tushare A 股数据](docs/tushare-a-share-data.zh-CN.md)
   - 内置每日市场数据 catch-up 脚本
 
 - 回测
@@ -78,6 +79,7 @@
 - Broker / Data
   - Alpaca paper trading API
   - Massive market data
+  - Tushare A 股日线与复权因子
 
 ## 项目结构
 
@@ -205,6 +207,7 @@ SQLALCHEMY_DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/dbname
 FRONTEND_ORIGIN=http://localhost:3000
 
 MASSIVE_API_KEY=
+TUSHARE_TOKEN=
 
 ALPACA_API_KEY=
 ALPACA_SECRET_KEY=
@@ -214,6 +217,7 @@ ALPACA_BASE_URL=https://paper-api.alpaca.markets
 说明：
 
 - `DATABASE_URL` / `SQLALCHEMY_DATABASE_URL` 供 backend 使用
+- `TUSHARE_TOKEN` 只由 A 股导入命令读取，不得提交到 Git
 - Alpaca 相关功能可用 `ALPACA_API_KEY` / `ALPACA_SECRET_KEY`
 - paper account 也支持把凭证映射到自定义环境变量名，例如 `ALPACA_API_KEY_MAIN`
 
@@ -339,6 +343,7 @@ make dev-backend
 make dev-frontend
 make backtest-worker-manager
 make backfill-daily
+make import-a-share A_SHARE_ARGS="plan --start-date 2024-01-01 --end-date 2024-12-31"
 make check-data
 make docker-build
 make docker-up
@@ -378,12 +383,18 @@ make docker-logs
 - `backfill_daily_features.py`
   - 基于 `eod_bars` 计算并回写 `daily_features`
 
+- `import_tushare_a_share.py`
+  - 导入沪深北 A 股证券主数据、未复权日线、前/后复权 OHLC 和 `daily_features`
+  - 同步 `All A Shares (Tushare)` 股票组合，供九个 engine-ready 策略从回测工作台选择
+
 - `check_market_data_quality.py`
   - 只读检查价格/特征缺口、非法 VWAP/short interest、代码事件一致性、重复证券身份、代码历史重叠、数据陈旧和最新交易日是否完整
 
 首次运行增强数据同步前，应先应用 `backend/utils/create_stock_enrichment.sql`。该 SQL 为增量且可幂等执行，但仓库没有 Alembic 迁移流程；应用前需要备份并核对目标数据库。它会新增 SIC 快照字段、`stock_short_interest`、`security_ticker_events` 和按证券记录的供应商同步状态。
 
 Massive VWAP 以未复权口径保存（`adjusted=false`）。当前套餐历史边界从 2016-08-29 开始，更早的空 VWAP 属于预期 warning。SIC 是快照而非 point-in-time 行业历史。Short interest 以结算日为键；由于接口没有可靠发布日期，不能视为每个日线交易日当时已知。Ticker Events 仍是 experimental：原始事件始终可审计；不完整事件链、FIGI/交易所不一致、ticker 复用和区间冲突保持 `unresolved`，绝不猜测修复。
+
+Tushare A 股导入必须先运行 `plan`，再显式运行 `apply`；它不启动 backend、paper scheduler 或任何券商操作。完整命令、字段口径、恢复方式和回测限制见 [Tushare A 股数据](docs/tushare-a-share-data.zh-CN.md)。
 
 通过 Makefile 触发每日回填：
 

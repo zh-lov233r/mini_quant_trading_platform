@@ -281,6 +281,31 @@ class NativeNineStrategyGoldenTests(unittest.TestCase):
                     golden["strategies"][strategy_type],
                 )
 
+    def test_all_nine_accept_a_share_symbols_and_exchanges(self) -> None:
+        for strategy_type, dataset, runtime in self._cases():
+            with self.subTest(strategy_type=strategy_type):
+                symbols = [
+                    f"{index + 1:06d}.SZ"
+                    for index in range(len(dataset.sidecar["symbols"]))
+                ]
+                dataset.sidecar["symbols"] = symbols
+                dataset.sidecar["exchanges"] = ["XSHE"]
+                runtime["params"]["universe"] = {
+                    "symbols": symbols,
+                    "selection_mode": "manual",
+                }
+                result = quant_kernel.run_backtest(
+                    dataset,
+                    runtime,
+                    {
+                        "initial_cash": 100_000.0,
+                        "commission_bps": 0.0,
+                        "commission_min": 0.0,
+                        "slippage_bps": 0.0,
+                    },
+                )
+                self.assertEqual(list(result.symbols), symbols)
+
     def test_all_nine_ledgers_match_between_one_and_four_threads(self) -> None:
         original_symbol_count = self.SYMBOL_COUNT
         self.SYMBOL_COUNT = 256
