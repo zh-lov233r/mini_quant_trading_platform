@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import type { PaginationState } from "@tanstack/react-table";
 
-import { cancelBacktest, getBacktestWorkerStatus, listBacktestTasks } from "@/api/backtests";
+import { cancelBacktest, deleteBacktest, getBacktestWorkerStatus, listBacktestTasks, retryBacktest } from "@/api/backtests";
 import { cancelResearchTrial, getResearchWorkerStatus } from "@/api/research";
 import AppShell from "@/components/AppShell";
 import BacktestProgressBar from "@/components/BacktestProgressBar";
@@ -19,10 +20,12 @@ import type {
   BacktestWorkerStatus,
 } from "@/types/backtest";
 import type { ResearchWorkerStatus } from "@/types/research";
-import { backtestTaskStageLabel, isActiveBacktestTask, shouldPollBacktestTasks, shouldShowBacktestTaskProgress } from "@/utils/backtestTasks";
+import { backtestTaskStageLabel, isActiveBacktestTask, pageIndexAfterBacktestTaskDelete, shouldPollBacktestTasks, shouldShowBacktestTaskProgress } from "@/utils/backtestTasks";
+import { formatBacktestWorkerExecutionModel } from "@/utils/backtestWorkerStatus";
 import styles from "@/styles/BacktestTasksPage.module.css";
 
 const EMPTY_PAGE: BacktestTaskPage = { items: [], total: 0, counts: {} };
+type DeleteNotice = { tone: "success" | "error"; message: string };
 
 export default function BacktestTasksPage() {
   const { locale } = useI18n();
@@ -37,6 +40,11 @@ export default function BacktestTasksPage() {
   const [error, setError] = useState<string | null>(null);
   const [pendingCancel, setPendingCancel] = useState<BacktestTask | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [pendingRetry, setPendingRetry] = useState<BacktestTask | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<BacktestTask | null>(null);
+  const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+  const [deleteNotice, setDeleteNotice] = useState<DeleteNotice | null>(null);
 
   const refresh = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
@@ -72,6 +80,12 @@ export default function BacktestTasksPage() {
     return () => window.clearInterval(timer);
   }, [page.items, refresh]);
 
+  useEffect(() => {
+    if (!deleteNotice) return;
+    const timer = window.setTimeout(() => setDeleteNotice(null), 3200);
+    return () => window.clearTimeout(timer);
+  }, [deleteNotice]);
+
   const changeSource = (value: string) => {
     setSource(value as BacktestTaskSource | "all");
     setPagination((current) => ({ ...current, pageIndex: 0 }));
@@ -102,6 +116,52 @@ export default function BacktestTasksPage() {
     }
   };
 
+  const retryTask = async () => {
+    const task = pendingRetry;
+    if (!task?.run_id) return;
+    setRetrying(true);
+    try {
+      await retryBacktest(task.run_id);
+      setPendingRetry(null);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  const deleteTask = () => {
+    const task = pendingDelete;
+    if (!task?.deletable || !task.run_id) return;
+    const runId = task.run_id;
+    const taskLabel = task.strategy_name || task.task_key;
+    const nextPageIndex = pageIndexAfterBacktestTaskDelete(pagination.pageIndex, page.items.length);
+    setPendingDelete(null);
+    setDeletingRunId(runId);
+    setDeleteNotice(null);
+    void deleteBacktest(runId)
+      .then(() => {
+        setDeleteNotice({
+          tone: "success",
+          message: isZh ? `已删除回测任务“${taskLabel}”。` : `Deleted backtest task “${taskLabel}”.`,
+        });
+        if (nextPageIndex !== pagination.pageIndex) {
+          setPagination((current) => ({ ...current, pageIndex: nextPageIndex }));
+        } else {
+          void refresh();
+        }
+      })
+      .catch((err) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        setDeleteNotice({
+          tone: "error",
+          message: isZh ? `删除“${taskLabel}”失败：${detail}` : `Failed to delete “${taskLabel}”: ${detail}`,
+        });
+      })
+      .finally(() => setDeletingRunId(null));
+  };
+
   const columns = useMemo<DenseDataColumn<BacktestTask>[]>(() => [
     { id: "source", header: isZh ? "来源" : "Source", accessor: (item) => item.source, cell: (_value, item) => <Badge tone={item.source === "manual" ? "info" : item.source === "verification" ? "warning" : "neutral"}>{sourceLabel(item.source, isZh)}</Badge>, width: 125 },
     { id: "identity", header: isZh ? "任务" : "Task", accessor: (item) => `${item.strategy_name || ""} ${item.experiment_name || ""}`, cell: (_value, item) => <TaskIdentity task={item} isZh={isZh} />, width: 300 },
@@ -109,8 +169,8 @@ export default function BacktestTasksPage() {
     { id: "window", header: isZh ? "窗口 / 场景" : "Window / scenario", accessor: (item) => `${item.window_start || ""} ${item.sample_kind || ""} ${item.cost_scenario || ""}`, cell: (_value, item) => <TaskWindow task={item} />, width: 230 },
     { id: "attempt", header: isZh ? "尝试" : "Attempt", accessor: (item) => item.attempt, cell: (_value, item) => `${item.attempt}${item.max_attempts ? ` / ${item.max_attempts}` : ""}`, width: 90 },
     { id: "updated", header: isZh ? "更新时间" : "Updated", accessor: (item) => item.updated_at || "", cell: (_value, item) => formatDateTime(item.updated_at, locale), width: 180 },
-    { id: "actions", header: isZh ? "操作" : "Actions", accessor: (item) => item.task_key, cell: (_value, item) => <TaskActions task={item} isZh={isZh} onCancel={setPendingCancel} />, hideable: false, width: 190 },
-  ], [isZh, locale]);
+    { id: "actions", header: isZh ? "操作" : "Actions", accessor: (item) => item.task_key, cell: (_value, item) => <TaskActions task={item} isZh={isZh} deletingRunId={deletingRunId} onCancel={setPendingCancel} onRetry={setPendingRetry} onDelete={setPendingDelete} />, hideable: false, width: 300 },
+  ], [deletingRunId, isZh, locale]);
 
   return (
     <AppShell
@@ -133,6 +193,43 @@ export default function BacktestTasksPage() {
           : (isZh ? "排队任务会立即取消；运行中任务会在当前安全检查点协作停止。" : "Queued work is cancelled immediately. Running work stops cooperatively at the next safe checkpoint.")}
       </WorkspaceConfirmDialog>
 
+      <WorkspaceConfirmDialog
+        open={pendingRetry !== null}
+        onOpenChange={(open) => !open && setPendingRetry(null)}
+        title={isZh ? "确认重试任务" : "Retry task?"}
+        description={pendingRetry ? `${sourceLabel(pendingRetry.source, isZh)} · ${pendingRetry.strategy_name || pendingRetry.task_key}` : undefined}
+        cancelLabel={isZh ? "返回" : "Back"}
+        confirmLabel={retrying ? (isZh ? "正在重试…" : "Retrying…") : (isZh ? "创建重试任务" : "Create retry")}
+        confirming={retrying}
+        onConfirm={() => void retryTask()}
+      >
+        {isZh
+          ? "系统会用相同执行参数创建一个新的排队任务，并保留当前失败记录用于审计。"
+          : "A new queued task will be created with the same execution parameters, while this failed record remains available for audit."}
+      </WorkspaceConfirmDialog>
+
+      <WorkspaceConfirmDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => !open && setPendingDelete(null)}
+        title={isZh ? "删除回测任务" : "Delete backtest task?"}
+        description={pendingDelete ? `${sourceLabel(pendingDelete.source, isZh)} · ${pendingDelete.strategy_name || pendingDelete.task_key}` : undefined}
+        cancelLabel={isZh ? "返回" : "Back"}
+        confirmLabel={isZh ? "确认删除" : "Delete backtest"}
+        confirming={false}
+        onConfirm={deleteTask}
+      >
+        {isZh
+          ? "将永久删除所选回测及其交易、信号、净值快照和运行级数据。策略、行情数据、共享支撑/压力数据及其他重试任务会保留。"
+          : "This permanently deletes the selected run and its trades, signals, equity snapshots, and run-scoped data. The strategy, market data, shared support/resistance data, and other retry runs are retained."}
+      </WorkspaceConfirmDialog>
+
+      {deleteNotice && typeof document !== "undefined" ? createPortal((
+        <div className={`${styles.deleteNotice} ${deleteNotice.tone === "error" ? styles.deleteNoticeError : styles.deleteNoticeSuccess}`} role={deleteNotice.tone === "error" ? "alert" : "status"} aria-live={deleteNotice.tone === "error" ? "assertive" : "polite"}>
+          <span aria-hidden="true">{deleteNotice.tone === "error" ? "!" : "✓"}</span>
+          <span>{deleteNotice.message}</span>
+        </div>
+      ), document.body) : null}
+
       <section className={styles.healthGrid} aria-label={isZh ? "执行服务状态" : "Execution service status"}>
         <HealthCard
           title={isZh ? "研究调度" : "Research scheduler"}
@@ -144,7 +241,7 @@ export default function BacktestTasksPage() {
           title={isZh ? "回测执行" : "Backtest worker"}
           healthy={backtestWorker?.automation_available === true}
           state={backtestWorker?.manager_state || "unavailable"}
-          detail={backtestWorker ? (isZh ? `${backtestWorker.active_jobs} 个执行中 · ${backtestWorker.queued_jobs} 个已入队` : `${backtestWorker.active_jobs} active · ${backtestWorker.queued_jobs} queued`) : (isZh ? "状态接口不可用" : "Status unavailable")}
+          detail={backtestWorker ? (isZh ? `${backtestWorker.active_jobs} 个执行中 · ${backtestWorker.queued_jobs} 个已入队 · ${formatBacktestWorkerExecutionModel(backtestWorker, true)}` : `${backtestWorker.active_jobs} active · ${backtestWorker.queued_jobs} queued · ${formatBacktestWorkerExecutionModel(backtestWorker, false)}`) : (isZh ? "状态接口不可用" : "Status unavailable")}
         />
       </section>
 
@@ -177,7 +274,7 @@ export default function BacktestTasksPage() {
               />
             </div>
             <div className={styles.mobileCards}>
-              {page.items.length ? page.items.map((item) => <TaskCard key={item.task_key} task={item} isZh={isZh} locale={locale} onCancel={setPendingCancel} />) : <p className={styles.empty}>{isZh ? "没有匹配的回测任务。" : "No matching backtest tasks."}</p>}
+              {page.items.length ? page.items.map((item) => <TaskCard key={item.task_key} task={item} isZh={isZh} locale={locale} deletingRunId={deletingRunId} onCancel={setPendingCancel} onRetry={setPendingRetry} onDelete={setPendingDelete} />) : <p className={styles.empty}>{isZh ? "没有匹配的回测任务。" : "No matching backtest tasks."}</p>}
               {page.total > pagination.pageSize ? <MobilePager pagination={pagination} total={page.total} setPagination={setPagination} isZh={isZh} /> : null}
             </div>
           </>
@@ -203,12 +300,12 @@ function TaskWindow({ task }: { task: BacktestTask }) {
   return <div className={styles.window}><span>{task.window_start || "—"} → {task.window_end || "—"}</span>{task.sample_kind || task.cost_scenario ? <small>{[task.sample_kind, task.cost_scenario].filter(Boolean).join(" · ")}</small> : null}</div>;
 }
 
-function TaskActions({ task, isZh, onCancel }: { task: BacktestTask; isZh: boolean; onCancel: (task: BacktestTask) => void }) {
-  return <div className={styles.actions}>{task.run_id ? <Link href={`/backtests/${encodeURIComponent(task.run_id)}`}>{isZh ? "查看" : "View"}</Link> : null}{task.experiment_id ? <Link href={`/research/${encodeURIComponent(task.experiment_id)}`}>{isZh ? "实验" : "Experiment"}</Link> : null}{task.cancellable ? <button type="button" onClick={() => onCancel(task)}>{isZh ? "取消" : "Cancel"}</button> : null}</div>;
+function TaskActions({ task, isZh, deletingRunId, onCancel, onRetry, onDelete }: { task: BacktestTask; isZh: boolean; deletingRunId: string | null; onCancel: (task: BacktestTask) => void; onRetry: (task: BacktestTask) => void; onDelete: (task: BacktestTask) => void }) {
+  return <div className={styles.actions}>{task.run_id ? <Link href={`/backtests/${encodeURIComponent(task.run_id)}`}>{isZh ? "查看" : "View"}</Link> : null}{task.experiment_id ? <Link href={`/research/${encodeURIComponent(task.experiment_id)}`}>{isZh ? "实验" : "Experiment"}</Link> : null}{task.retryable ? <button type="button" className={styles.retryButton} onClick={() => onRetry(task)}>{isZh ? "重试" : "Retry"}</button> : null}{task.cancellable ? <button type="button" onClick={() => onCancel(task)}>{isZh ? "取消" : "Cancel"}</button> : null}{task.deletable ? <button type="button" disabled={deletingRunId === task.run_id} onClick={() => onDelete(task)}>{deletingRunId === task.run_id ? (isZh ? "删除中…" : "Deleting…") : (isZh ? "删除" : "Delete")}</button> : null}</div>;
 }
 
-function TaskCard({ task, isZh, locale, onCancel }: { task: BacktestTask; isZh: boolean; locale: string; onCancel: (task: BacktestTask) => void }) {
-  return <article className={styles.taskCard}><div className={styles.cardTop}><Badge>{sourceLabel(task.source, isZh)}</Badge><Badge tone={isActiveBacktestTask(task.stage) ? "info" : task.stage === "failed" ? "warning" : "neutral"}>{backtestTaskStageLabel(task.stage, isZh)}</Badge></div><TaskIdentity task={task} isZh={isZh} /><TaskProgress task={task} isZh={isZh} /><TaskWindow task={task} /><div className={styles.cardFooter}><span>{formatDateTime(task.updated_at, locale)}</span><TaskActions task={task} isZh={isZh} onCancel={onCancel} /></div></article>;
+function TaskCard({ task, isZh, locale, deletingRunId, onCancel, onRetry, onDelete }: { task: BacktestTask; isZh: boolean; locale: string; deletingRunId: string | null; onCancel: (task: BacktestTask) => void; onRetry: (task: BacktestTask) => void; onDelete: (task: BacktestTask) => void }) {
+  return <article className={styles.taskCard}><div className={styles.cardTop}><Badge>{sourceLabel(task.source, isZh)}</Badge><Badge tone={isActiveBacktestTask(task.stage) ? "info" : task.stage === "failed" ? "warning" : "neutral"}>{backtestTaskStageLabel(task.stage, isZh)}</Badge></div><TaskIdentity task={task} isZh={isZh} /><TaskProgress task={task} isZh={isZh} /><TaskWindow task={task} /><div className={styles.cardFooter}><span>{formatDateTime(task.updated_at, locale)}</span><TaskActions task={task} isZh={isZh} deletingRunId={deletingRunId} onCancel={onCancel} onRetry={onRetry} onDelete={onDelete} /></div></article>;
 }
 
 function HealthCard({ title, healthy, state, detail }: { title: string; healthy: boolean; state: string; detail: string }) {

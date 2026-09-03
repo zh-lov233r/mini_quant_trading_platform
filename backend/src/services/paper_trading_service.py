@@ -344,7 +344,10 @@ def run_paper_trading(
                 if reusable is not None
                 else SupportResistanceState()
             )
-            for symbol, payload in support_resistance_hydration_payload(replay_state).items():
+            for symbol, payload in support_resistance_hydration_payload(
+                replay_state,
+                snapshots,
+            ).items():
                 if symbol in snapshots:
                     snapshots[symbol]["support_resistance_hydration"] = payload
             signals, native_audit = evaluate_native_day(runtime, snapshots)

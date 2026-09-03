@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createBacktest, deleteBacktest, getBacktestSupportResistance, listBacktestTasks } from "./backtests";
+import { createBacktest, deleteBacktest, getBacktestSupportResistance, listBacktestTasks, retryBacktest } from "./backtests";
 import { cancelResearchTrial, deleteResearchBacktest } from "./research";
 
 afterEach(() => {
@@ -90,6 +90,19 @@ describe("unified task center clients", () => {
     expect(String(fetchMock.mock.calls[0][0])).toContain(
       "/api/research/experiments/experiment%2Fid/trials/trial%2Fid/cancel",
     );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST" });
+  });
+
+  it("retries a failed backtest with an encoded run id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ id: "retry-run", status: "queued" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await retryBacktest("run/id");
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/api/backtests/run%2Fid/retry");
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST" });
   });
 });

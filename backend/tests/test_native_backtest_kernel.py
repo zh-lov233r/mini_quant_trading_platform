@@ -979,6 +979,41 @@ class NativeBacktestKernelTests(unittest.TestCase):
             )
         self.assertEqual(calls, [(1, 3), (2, 3)])
 
+    def test_parallel_control_callback_still_runs_once_per_day(self) -> None:
+        calls: list[tuple[int, int]] = []
+        days = []
+        for day_offset in range(3):
+            trade_day = date(2025, 3, day_offset + 1)
+            days.append(
+                (
+                    trade_day,
+                    {
+                        f"S{instrument_id:03d}": self._momentum_snapshot(
+                            trade_day,
+                            instrument_id,
+                            signal=day_offset == 0,
+                        )
+                        for instrument_id in range(1, 257)
+                    },
+                )
+            )
+
+        def control(completed: int, total: int) -> bool:
+            calls.append((completed, total))
+            return completed == 2
+
+        with self.assertRaisesRegex(
+            quant_kernel.BacktestCancelledError,
+            "native backtest cancellation requested",
+        ):
+            quant_kernel.run_backtest(
+                self._dataset(days),
+                self._runtime(),
+                {"initial_cash": 1_000.0, "thread_count": 4},
+                control,
+            )
+        self.assertEqual(calls, [(1, 3), (2, 3)])
+
     def test_result_columns_are_read_only_views_that_keep_owner_alive(self) -> None:
         result = quant_kernel.run_backtest(
             self._dataset(self._market_days()),

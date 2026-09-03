@@ -14,8 +14,19 @@ from src.models.tables import BacktestJob, BacktestWorkerManager, Base, Strategy
 
 class BacktestWorkerStatusApiTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.env_patcher = patch.dict(os.environ, {"BACKTEST_WORKER_CONCURRENCY": "2"})
+        self.env_patcher = patch.dict(
+            os.environ,
+            {
+                "BACKTEST_WORKER_CONCURRENCY": "2",
+                "BACKTEST_INTRA_RUN_THREADS": "4",
+            },
+        )
         self.env_patcher.start()
+        self.cpu_patcher = patch(
+            "src.services.backtest_worker_config.available_cpu_count",
+            return_value=8,
+        )
+        self.cpu_patcher.start()
         self.engine = create_engine("sqlite+pysqlite:///:memory:")
         Base.metadata.create_all(self.engine)
         self.db = Session(self.engine)
@@ -23,6 +34,7 @@ class BacktestWorkerStatusApiTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.db.close()
         self.engine.dispose()
+        self.cpu_patcher.stop()
         self.env_patcher.stop()
 
     def test_reports_live_leader_and_active_worker(self) -> None:
@@ -45,6 +57,9 @@ class BacktestWorkerStatusApiTests(unittest.TestCase):
         self.assertTrue(result.worker_active)
         self.assertEqual(result.execution_model, "process")
         self.assertEqual(result.configured_concurrency, 2)
+        self.assertEqual(result.intra_run_execution_model, "thread")
+        self.assertEqual(result.configured_intra_run_threads, 4)
+        self.assertEqual(result.effective_intra_run_threads, 4)
         self.assertEqual(result.available_slots, 2)
 
     def test_stale_manager_is_unavailable(self) -> None:

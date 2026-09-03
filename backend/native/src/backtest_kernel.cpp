@@ -8,18 +8,24 @@
 #include <algorithm>
 #include <bit>
 #include <cctype>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
+#include <exception>
+#include <functional>
 #include <iomanip>
 #include <limits>
 #include <locale>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
@@ -33,6 +39,144 @@ namespace {
 constexpr std::int64_t kDateSentinel = std::numeric_limits<std::int64_t>::min();
 constexpr std::size_t kIntegerColumns = 9;
 constexpr std::size_t kFloatColumns = 35;
+constexpr std::size_t kRowsPerThreadThreshold = 64;
+constexpr int kMaximumThreadCount = 16;
+
+using SteadyClock = std::chrono::steady_clock;
+
+double elapsed_milliseconds(const SteadyClock::time_point started) {
+    return std::chrono::duration<double, std::milli>(SteadyClock::now() - started).count();
+}
+
+class DayParallelExecutor {
+public:
+    explicit DayParallelExecutor(const std::size_t thread_count)
+        : thread_count_(std::max<std::size_t>(thread_count, 1)) {
+        workers_.reserve(thread_count_ - 1);
+        try {
+            for (std::size_t worker = 1; worker < thread_count_; ++worker) {
+                workers_.emplace_back([this, worker] { worker_loop(worker); });
+            }
+        } catch (...) {
+            {
+                std::lock_guard lock(mutex_);
+                stopping_ = true;
+            }
+            work_ready_.notify_all();
+            for (std::thread& worker : workers_) {
+                if (worker.joinable()) worker.join();
+            }
+            throw;
+        }
+    }
+
+    DayParallelExecutor(const DayParallelExecutor&) = delete;
+    DayParallelExecutor& operator=(const DayParallelExecutor&) = delete;
+
+    ~DayParallelExecutor() {
+        {
+            std::lock_guard lock(mutex_);
+            stopping_ = true;
+        }
+        work_ready_.notify_all();
+        for (std::thread& worker : workers_) {
+            if (worker.joinable()) worker.join();
+        }
+    }
+
+    std::size_t thread_count() const { return thread_count_; }
+
+    template <typename Function>
+    bool for_each(const py::ssize_t begin, const py::ssize_t end, Function&& function) {
+        const py::ssize_t count = end - begin;
+        if (thread_count_ == 1
+            || count < static_cast<py::ssize_t>(thread_count_ * kRowsPerThreadThreshold)) {
+            for (py::ssize_t row = begin; row < end; ++row) function(row);
+            return false;
+        }
+
+        std::vector<std::exception_ptr> errors(static_cast<std::size_t>(count));
+        std::function<void(py::ssize_t)> safe_function = [&, begin](const py::ssize_t row) {
+            try {
+                function(row);
+            } catch (...) {
+                errors[static_cast<std::size_t>(row - begin)] = std::current_exception();
+            }
+        };
+        {
+            std::lock_guard lock(mutex_);
+            begin_ = begin;
+            end_ = end;
+            function_ = safe_function;
+            unfinished_workers_ = workers_.size();
+            ++generation_;
+        }
+        work_ready_.notify_all();
+        run_chunk(0, begin, end, safe_function);
+        {
+            std::unique_lock lock(mutex_);
+            work_done_.wait(lock, [this] { return unfinished_workers_ == 0; });
+            function_ = {};
+        }
+        for (const std::exception_ptr& error : errors) {
+            if (error) std::rethrow_exception(error);
+        }
+        return true;
+    }
+
+private:
+    void run_chunk(
+        const std::size_t worker,
+        const py::ssize_t begin,
+        const py::ssize_t end,
+        const std::function<void(py::ssize_t)>& function
+    ) const {
+        const py::ssize_t count = end - begin;
+        const py::ssize_t first = begin + count * static_cast<py::ssize_t>(worker)
+            / static_cast<py::ssize_t>(thread_count_);
+        const py::ssize_t last = begin + count * static_cast<py::ssize_t>(worker + 1)
+            / static_cast<py::ssize_t>(thread_count_);
+        for (py::ssize_t row = first; row < last; ++row) function(row);
+    }
+
+    void worker_loop(const std::size_t worker) {
+        std::size_t observed_generation = 0;
+        while (true) {
+            py::ssize_t begin;
+            py::ssize_t end;
+            std::function<void(py::ssize_t)> function;
+            {
+                std::unique_lock lock(mutex_);
+                work_ready_.wait(lock, [this, observed_generation] {
+                    return stopping_ || generation_ != observed_generation;
+                });
+                if (stopping_) return;
+                observed_generation = generation_;
+                begin = begin_;
+                end = end_;
+                function = function_;
+            }
+            run_chunk(worker, begin, end, function);
+            {
+                std::lock_guard lock(mutex_);
+                --unfinished_workers_;
+                if (unfinished_workers_ == 0) work_done_.notify_one();
+            }
+        }
+    }
+
+    std::size_t thread_count_;
+    std::mutex mutex_;
+    std::condition_variable work_ready_;
+    std::condition_variable work_done_;
+    py::ssize_t begin_ = 0;
+    py::ssize_t end_ = 0;
+    std::function<void(py::ssize_t)> function_;
+    std::size_t unfinished_workers_ = 0;
+    std::size_t generation_ = 0;
+    bool stopping_ = false;
+    std::vector<std::thread> workers_;
+};
 
 enum IntegerColumn : std::size_t {
     kSessionIndex = 0,
@@ -259,6 +403,11 @@ struct KernelResult {
     double total_slippage = 0.0;
     double delisting_zero_write_off = 0.0;
     std::int64_t trading_days = 0;
+    std::int32_t intra_run_threads = 1;
+    std::int64_t parallel_sessions = 0;
+    std::int64_t serial_sessions = 0;
+    double warmup_ms = 0.0;
+    double signal_generation_ms = 0.0;
     std::vector<std::string> symbols;
 
     std::vector<std::int64_t> signal_session_index;
@@ -1853,6 +2002,7 @@ std::shared_ptr<KernelResult> run_native_backtest(
     const std::vector<SessionRange>& sessions,
     double initial_cash,
     const CostConfig& costs,
+    int requested_thread_count,
     const py::object& control_callback
 ) {
     auto result = std::make_shared<KernelResult>();
@@ -1877,6 +2027,7 @@ std::shared_ptr<KernelResult> run_native_backtest(
         );
         const std::int64_t delisted = dataset.integers.at(row, kDelistedOrdinal);
         if (delisted != kDateSentinel) delisted_ordinals[instrument] = delisted;
+        if (is_pattern_strategy(strategy)) pattern_states.try_emplace(instrument);
         if (strategy.kind == StrategyKind::SupportResistance
             && !support_states.contains(instrument)) {
             support_resistance::SymbolState state;
@@ -1902,32 +2053,63 @@ std::shared_ptr<KernelResult> run_native_backtest(
 
     {
         py::gil_scoped_release release;
+        py::ssize_t maximum_session_rows = 0;
+        for (const SessionRange& session : warmup_sessions) {
+            maximum_session_rows = std::max(maximum_session_rows, session.end - session.begin);
+        }
+        for (const SessionRange& session : sessions) {
+            maximum_session_rows = std::max(maximum_session_rows, session.end - session.begin);
+        }
+        const std::size_t actual_thread_count = maximum_session_rows
+                >= static_cast<py::ssize_t>(requested_thread_count * kRowsPerThreadThreshold)
+            ? static_cast<std::size_t>(requested_thread_count)
+            : 1;
+        DayParallelExecutor executor(actual_thread_count);
+        result->intra_run_threads = static_cast<std::int32_t>(executor.thread_count());
+        const SteadyClock::time_point warmup_started = SteadyClock::now();
         if (is_pattern_strategy(strategy)) {
             for (const SessionRange& session : warmup_sessions) {
+                std::vector<PatternState*> states(
+                    static_cast<std::size_t>(session.end - session.begin)
+                );
                 for (py::ssize_t row = session.begin; row < session.end; ++row) {
+                    states[static_cast<std::size_t>(row - session.begin)] = &pattern_states.at(
+                        dataset.integers.at(row, kInstrumentId)
+                    );
+                }
+                executor.for_each(session.begin, session.end, [&](const py::ssize_t row) {
                     append_pattern_bar(
-                        pattern_states[dataset.integers.at(row, kInstrumentId)],
+                        *states[static_cast<std::size_t>(row - session.begin)],
                         *strategy.pattern,
                         dataset_pattern_bar(dataset, row)
                     );
-                }
+                });
             }
         } else if (strategy.kind == StrategyKind::SupportResistance) {
             for (const SessionRange& session : warmup_sessions) {
+                std::vector<support_resistance::SymbolState*> states(
+                    static_cast<std::size_t>(session.end - session.begin)
+                );
                 for (py::ssize_t row = session.begin; row < session.end; ++row) {
                     const std::int64_t instrument = dataset.integers.at(row, kInstrumentId);
+                    states[static_cast<std::size_t>(row - session.begin)] = &support_states.at(
+                        instrument
+                    );
+                }
+                executor.for_each(session.begin, session.end, [&](const py::ssize_t row) {
                     static_cast<void>(evaluate_support_resistance_signal(
                         dataset,
                         row,
                         strategy,
                         nullptr,
                         -1,
-                        support_states.at(instrument),
+                        *states[static_cast<std::size_t>(row - session.begin)],
                         false
                     ));
-                }
+                });
             }
         }
+        result->warmup_ms = elapsed_milliseconds(warmup_started);
         for (std::size_t day = 0; day < sessions.size(); ++day) {
             const SessionRange& session = sessions[day];
             std::map<std::int64_t, py::ssize_t> rows;
@@ -2146,42 +2328,78 @@ std::shared_ptr<KernelResult> run_native_backtest(
             }
 
             std::vector<SignalRecord> current;
-            current.reserve(static_cast<std::size_t>(session.end - session.begin));
+            const std::size_t session_rows = static_cast<std::size_t>(
+                session.end - session.begin
+            );
+            current.reserve(session_rows);
+            std::vector<const Position*> position_views(session_rows, nullptr);
+            std::vector<PatternState*> day_pattern_states(session_rows, nullptr);
+            std::vector<support_resistance::SymbolState*> day_support_states(
+                session_rows,
+                nullptr
+            );
             for (py::ssize_t row = session.begin; row < session.end; ++row) {
                 const std::int64_t instrument = dataset.integers.at(row, kInstrumentId);
                 const auto position = positions.find(instrument);
-                std::optional<SignalRecord> decision;
+                const std::size_t offset = static_cast<std::size_t>(row - session.begin);
+                position_views[offset] = position == positions.end() ? nullptr : &position->second;
                 if (is_pattern_strategy(strategy)) {
-                    PatternState& state = pattern_states[instrument];
-                    append_pattern_bar(state, *strategy.pattern, dataset_pattern_bar(dataset, row));
-                    decision = evaluate_pattern_signal(
-                        dataset, row, strategy, state,
-                        position == positions.end() ? nullptr : &position->second
-                    );
+                    day_pattern_states[offset] = &pattern_states.at(instrument);
                 } else if (strategy.kind == StrategyKind::SupportResistance) {
-                    decision = evaluate_support_resistance_signal(
-                        dataset,
-                        row,
-                        strategy,
-                        position == positions.end() ? nullptr : &position->second,
-                        static_cast<std::int64_t>(day),
-                        support_states.at(instrument),
-                        true
-                    );
-                } else {
-                    decision = evaluate_signal(
-                        dataset, row, strategy,
-                        position == positions.end() ? nullptr : &position->second,
-                        static_cast<std::int64_t>(day)
-                    );
+                    day_support_states[offset] = &support_states.at(instrument);
                 }
-                if (!decision) continue;
-                const std::size_t session_row = static_cast<std::size_t>(row - session.begin);
-                if (decision->action == Action::Buy && universe_policy
-                    && universe_exclusions[session_row] != UniverseExclusion::None) {
-                    continue;
+            }
+            std::vector<std::optional<SignalRecord>> decisions(session_rows);
+            const SteadyClock::time_point signal_started = SteadyClock::now();
+            const bool parallel = executor.for_each(
+                session.begin,
+                session.end,
+                [&](const py::ssize_t row) {
+                    const std::size_t offset = static_cast<std::size_t>(
+                        row - session.begin
+                    );
+                    std::optional<SignalRecord> decision;
+                    if (is_pattern_strategy(strategy)) {
+                        PatternState& state = *day_pattern_states[offset];
+                        append_pattern_bar(
+                            state,
+                            *strategy.pattern,
+                            dataset_pattern_bar(dataset, row)
+                        );
+                        decision = evaluate_pattern_signal(
+                            dataset, row, strategy, state,
+                            position_views[offset]
+                        );
+                    } else if (strategy.kind == StrategyKind::SupportResistance) {
+                        decision = evaluate_support_resistance_signal(
+                            dataset,
+                            row,
+                            strategy,
+                            position_views[offset],
+                            static_cast<std::int64_t>(day),
+                            *day_support_states[offset],
+                            true
+                        );
+                    } else {
+                        decision = evaluate_signal(
+                            dataset, row, strategy,
+                            position_views[offset],
+                            static_cast<std::int64_t>(day)
+                        );
+                    }
+                    if (!decision) return;
+                    if (decision->action == Action::Buy && universe_policy
+                        && universe_exclusions[offset] != UniverseExclusion::None) {
+                        return;
+                    }
+                    decisions[offset] = std::move(decision);
                 }
-                current.push_back(*decision);
+            );
+            result->signal_generation_ms += elapsed_milliseconds(signal_started);
+            if (parallel) ++result->parallel_sessions;
+            else ++result->serial_sessions;
+            for (std::optional<SignalRecord>& decision : decisions) {
+                if (decision) current.push_back(std::move(*decision));
             }
             std::vector<SignalRecord*> entries;
             for (SignalRecord& signal : current) {
@@ -2333,6 +2551,10 @@ std::shared_ptr<KernelResult> run_backtest_binding(
         options, "end_ordinal", "end_date", std::numeric_limits<std::int64_t>::max()
     );
     if (end < start) throw std::invalid_argument("end_date must be on or after start_date");
+    const int thread_count = integer_or(options, "thread_count", 1);
+    if (thread_count < 1 || thread_count > kMaximumThreadCount) {
+        throw std::invalid_argument("thread_count must be between 1 and 16");
+    }
     const std::vector<SessionRange> all_sessions = session_ranges(
         view, std::numeric_limits<std::int64_t>::min(), end
     );
@@ -2348,7 +2570,7 @@ std::shared_ptr<KernelResult> run_backtest_binding(
     attach_history_sessions(view, all_sessions);
     return run_native_backtest(
         view, config, universe_policy, warmup_sessions, sessions,
-        initial_cash, costs, control_callback
+        initial_cash, costs, thread_count, control_callback
     );
 }
 
@@ -2382,6 +2604,15 @@ void bind_backtest(py::module_& module) {
             result["total_slippage"] = value.total_slippage;
             result["trading_days"] = value.trading_days;
             result["delisting_zero_write_off"] = value.delisting_zero_write_off;
+            return result;
+        })
+        .def_property_readonly("performance", [](const KernelResult& value) {
+            py::dict result;
+            result["thread_count"] = value.intra_run_threads;
+            result["parallel_sessions"] = value.parallel_sessions;
+            result["serial_sessions"] = value.serial_sessions;
+            result["warmup_ms"] = value.warmup_ms;
+            result["signal_generation_ms"] = value.signal_generation_ms;
             return result;
         })
         .def_property_readonly("symbols", [](const KernelResult& value) { return value.symbols; })

@@ -67,6 +67,8 @@ T 日只能使用 T-1 日收盘后冻结的区域。T 日判断结束后才追�
 
 首个明细写入前，持久化层会完整校验 typed 列长/顺序、枚举与 JSON、稳定 instrument 引用、有限数/数据库数值边界、完整状态时间线和投影后的 zone/event 几何。PostgreSQL 使用当前事务的 psycopg3 `COPY FROM STDIN` connection，以每批 5,000 行写入 zone version、regime version 和 run event，并在每批前检查取消。批次不独立提交；校验、COPY、取消或物化任一失败都会回滚整次运行结果。
 
+检测器状态和稀疏时间线按稳定的 `instrument_id` 分区，`symbol` 只作为展示元数据。原生回测结果会把该身份直接传入持久化；非原生调用方只可在请求覆盖区间内使用唯一的主代码历史映射。同一 ticker 在区间内属于多个 instrument 时，各自历史保持独立，不再合并，也不会用当前 canonical ticker 猜测。现有数据库需要在另行授权的 schema 上线中重新运行 `backend/utils/migrate_pivot_slope_regime_v3.sql`，把 regime 唯一性切换到 `instrument_id`；执行前仍须完成文档要求的只读预检和备份。
+
 paper trading 会先完成缓存物化和运行事件持久化。支撑/压力 BUY 在夜间仅写入 `paper_execution=pending`，下一券商交易日开盘后以当前时段最新卖价校验投影通道；通过后提交以压力内沿为上限的普通时段 day 限价单，并在报价离开通道或纽约时间 09:35 时取消余量。限价单无法保证最低成交价；低于支撑内沿的成交会记录 `channel_fill_violation`、取消余量，并在持仓归零前禁止加仓，但不会自动卖出。SELL 仍优先且不受通道限制。构建失败会把策略运行标记为 failed，并且不会提交订单。
 
 相关配置为 `ALPACA_DATA_BASE_URL`（默认 `https://data.alpaca.markets`）、`ALPACA_DATA_FEED`（`iex` 或 `sip`）、`PAPER_TRADING_OPEN_QUOTE_MAX_AGE_SECONDS`（默认 15 秒）和 `PAPER_TRADING_OPEN_ENTRY_CUTOFF_NY`（默认 `09:35`）。`submit_orders=false` 只记录 dry-run，不进入开盘执行队列。

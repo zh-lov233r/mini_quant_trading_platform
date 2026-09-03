@@ -28,7 +28,7 @@ namespace py = pybind11;
 namespace {
 
 constexpr const char* kKernelVersion = "cpp-v1";
-constexpr int kAbiVersion = 1;
+constexpr int kAbiVersion = 2;
 #ifndef QUANT_KERNEL_BUILD_ID
 #define QUANT_KERNEL_BUILD_ID "local"
 #endif

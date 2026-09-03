@@ -78,6 +78,12 @@ export function getBacktestWorkerStatus(): Promise<BacktestWorkerStatus> {
   });
 }
 
+export function retryBacktest(runId: string): Promise<BacktestRunOut> {
+  return http<BacktestRunOut>(`/api/backtests/${encodeURIComponent(runId)}/retry`, {
+    method: "POST",
+  });
+}
+
 export function listBacktestTasks(filters: {
   source?: BacktestTaskSource;
   stage?: BacktestTaskStage | "active";

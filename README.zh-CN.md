@@ -154,7 +154,7 @@
 
 `/api/agent/*` 路由要求 Bearer service token，只提供受控的策略草案和研究实验操作，不开放券商订单或组合激活能力。
 
-Web 进程不执行 CPU 回测。完整平台命令会监管轻量 manager；manager 意外退出后 2 秒自动重启，并且只在存在 durable queued 任务时启动基于 `spawn` 的多进程 worker。`BACKTEST_WORKER_CONCURRENCY` 默认为 `2`，仅支持 `1` 或 `2`，修改后需重启 backend 与 manager。`GET /api/backtests/worker-status` 返回自动执行健康状态与进程容量，列表页和详情页同时显示容量、结构化阶段、百分比和收尾条目进度。`/backtest-tasks` 工作台在不替换两层队列的前提下统一展示手动回测、研究 trial 和 verification job；并列的研究/回测健康卡可区分“尚未进入 durable queue”与“入队后暂停”。详见[回测性能与 worker 运维](docs/backtest-performance.zh-CN.md)。
+Web 进程不执行 CPU 回测。完整平台命令会监管轻量 manager；manager 意外退出后 2 秒自动重启，并且只在存在 durable queued 任务时启动基于 `spawn` 的多进程 worker。`BACKTEST_WORKER_CONCURRENCY` 默认为 `2`（`1|2`）；`BACKTEST_INTRA_RUN_THREADS` 默认为 `4`（`1..16`）并受可用 CPU 自动限额。交易日之间保持串行，只有超过文档阈值时才由可复用原生线程池并行评估同日标的。两个配置修改后都需重启 backend 与 manager。`GET /api/backtests/worker-status` 返回自动执行健康状态、进程容量及配置/有效 run 内线程数，任务中心显示“进程数 × 每个 run 线程数”；列表页和详情页继续显示结构化阶段、百分比和收尾条目进度。`/backtest-tasks` 工作台在不替换两层队列的前提下统一展示手动回测、研究 trial 和 verification job；并列的研究/回测健康卡可区分“尚未进入 durable queue”与“入队后暂停”。失败的普通回测和验证回测可在这里创建新的排队重试，同时保留原失败记录。普通回测的终态任务也可逐条删除；研究和验证证据仍归实验所有，只能从实验页删除。详见[回测性能与 worker 运维](docs/backtest-performance.zh-CN.md)。
 
 应用健康检查：
 

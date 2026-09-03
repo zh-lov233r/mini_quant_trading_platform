@@ -21,6 +21,10 @@ export function shouldShowBacktestTaskProgress(stage: BacktestTaskStage, hasProg
   return hasProgress && stage !== "completed";
 }
 
+export function pageIndexAfterBacktestTaskDelete(pageIndex: number, itemCount: number): number {
+  return pageIndex > 0 && itemCount === 1 ? pageIndex - 1 : pageIndex;
+}
+
 export function backtestTaskStageLabel(stage: BacktestTaskStage, isZh: boolean): string {
   const labels: Record<BacktestTaskStage, [string, string]> = {
     waiting_research: ["等待研究调度", "Waiting for research scheduler"],

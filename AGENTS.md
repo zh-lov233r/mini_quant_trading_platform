@@ -33,6 +33,8 @@ Apply Ponytail `full` mode to coding tasks in this repository: understand and tr
 
 - Ponytail does not override repository requirements for quant correctness, deterministic execution, end-to-end API synchronization, regression tests, bilingual maintained documentation, database safety, or broker-side safety.
 - Never simplify away trust-boundary validation, data-loss prevention, security controls, accessibility basics, or behavior explicitly requested by the user.
+- Avoid defensive programming for impossible internal states or data already validated at a trust boundary. Do not add redundant guards, fallback defaults, catch-all recovery, or compatibility branches; validate untrusted API, database JSON, market-data, broker, and file inputs at their boundaries, then fail fast on violated internal contracts.
+- Keep tests proportional to behavior and risk. Add the smallest focused regression test that would catch the changed behavior; do not duplicate the same assertion across layers or test trivial pass-through code, framework/library behavior, or guarantees already enforced by static types. Expand coverage only for distinct branches, high-risk boundaries, or demonstrated regressions.
 - Prefer deletion and direct code over speculative abstractions, compatibility-only layers, new dependencies, single-implementation interfaces, or configuration for values that do not vary.
 - A Ponytail review or audit reports over-engineering separately from correctness, security, and performance findings; it does not apply suggested deletions unless the user asks for implementation.
 

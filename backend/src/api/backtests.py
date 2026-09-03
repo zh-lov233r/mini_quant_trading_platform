@@ -43,6 +43,7 @@ from src.services.backtest_job_service import (
     enqueue_backtest_job,
     normalize_backtest_progress,
     request_backtest_cancel,
+    retry_failed_backtest_job,
 )
 from src.services.backtest_worker_status_service import load_backtest_worker_status
 from src.services.backtest_task_service import TaskSource, TaskStage, list_backtest_tasks
@@ -91,6 +92,9 @@ class BacktestProgressOut(BaseModel):
 class BacktestWorkerStatusOut(BaseModel):
     execution_model: Literal["process"]
     configured_concurrency: int = Field(ge=1, le=2)
+    intra_run_execution_model: Literal["thread"]
+    configured_intra_run_threads: int = Field(ge=1, le=16)
+    effective_intra_run_threads: int = Field(ge=1, le=16)
     available_slots: int = Field(ge=0)
     automation_available: bool
     manager_state: Literal["idle", "starting", "running", "backoff", "standby", "stopping", "unavailable"]
@@ -133,6 +137,8 @@ class BacktestTaskOut(BaseModel):
     error_code: Optional[str] = None
     error_message: Optional[str] = None
     cancellable: bool = False
+    retryable: bool = False
+    deletable: bool = False
 
 
 class BacktestTaskPageOut(BaseModel):
@@ -1169,6 +1175,17 @@ def cancel_backtest(run_id: UUID, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     db.refresh(run)
     return _to_backtest_run_out(run, strategy_name)
+
+
+@router.post("/{run_id}/retry", response_model=BacktestRunOut, status_code=status.HTTP_202_ACCEPTED)
+def retry_backtest(run_id: UUID, db: Session = Depends(get_db)):
+    _run, strategy_name = _get_run_with_strategy(db, run_id)
+    try:
+        retry_run = retry_failed_backtest_job(db, run_id)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _to_backtest_run_out(retry_run, strategy_name)
 
 
 @router.get("/{run_id}/support-resistance", response_model=SupportResistanceBacktestOut)

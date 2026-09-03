@@ -281,7 +281,10 @@ def generate_and_persist_signals_for_trade_date(
                 if reusable is not None
                 else SupportResistanceState()
             )
-            for symbol, payload in support_resistance_hydration_payload(replay_state).items():
+            for symbol, payload in support_resistance_hydration_payload(
+                replay_state,
+                snapshots,
+            ).items():
                 if symbol in snapshots:
                     snapshots[symbol]["support_resistance_hydration"] = payload
         strategy_signals, native_audit = evaluate_native_day(runtime, snapshots)
@@ -525,9 +528,14 @@ def support_resistance_state_from_native_day(
     state = SupportResistanceState()
     for symbol, raw_payload in audit.items():
         payload = dict(raw_payload or {})
-        symbol_state = state.symbols.setdefault(symbol, SupportResistanceSymbolState())
-        history = list((market_data_by_symbol.get(symbol) or {}).get("recent_bars") or [])
         snapshot = market_data_by_symbol.get(symbol)
+        raw_instrument_id = snapshot.get("instrument_id") if snapshot else None
+        instrument_id = int(raw_instrument_id) if raw_instrument_id is not None else None
+        symbol_state = state.symbols.setdefault(
+            symbol,
+            SupportResistanceSymbolState(instrument_id=instrument_id, symbol=symbol),
+        )
+        history = list((market_data_by_symbol.get(symbol) or {}).get("recent_bars") or [])
         if snapshot and (not history or history[-1].get("dt_ny") != snapshot.get("dt_ny")):
             history.append(snapshot)
         symbol_state.history.extend(history)
@@ -543,17 +551,27 @@ def support_resistance_state_from_native_day(
 
 def support_resistance_hydration_payload(
     state: SupportResistanceState,
+    market_data_by_symbol: MarketDataBySymbol | None = None,
 ) -> dict[str, dict[str, Any]]:
-    return {
-        symbol: {
+    payloads: dict[str, dict[str, Any]] = {}
+    for state_key, symbol_state in state.symbols.items():
+        symbol = str(symbol_state.symbol or state_key).upper()
+        snapshot = (market_data_by_symbol or {}).get(symbol)
+        snapshot_instrument_id = snapshot.get("instrument_id") if snapshot else None
+        if (
+            snapshot_instrument_id is not None
+            and symbol_state.instrument_id is not None
+            and int(snapshot_instrument_id) != symbol_state.instrument_id
+        ):
+            continue
+        payloads[symbol] = {
             "zone_timeline": list(symbol_state.cached_zone_timeline),
             "regime_timeline": list(symbol_state.cached_regime_timeline),
             "lifecycle_events": [
                 list(item) for item in sorted(symbol_state.cached_lifecycle_events)
             ],
         }
-        for symbol, symbol_state in state.symbols.items()
-    }
+    return payloads
 
 
 # ============================================================================

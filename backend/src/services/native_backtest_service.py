@@ -16,6 +16,10 @@ from src.services.backtest_universe_service import (
     resolve_backtest_universe,
     resolve_point_in_time_universe,
 )
+from src.services.backtest_worker_config import (
+    resolve_backtest_intra_run_threads,
+    resolve_effective_backtest_intra_run_threads,
+)
 from src.services.market_data_loader import MarketDataLoader
 from src.services.native_result_repository import (
     NativePersistenceCancelledError,
@@ -133,6 +137,7 @@ def _load_prepared_dataset(
     end_date: date,
     universe_policy: dict[str, Any] | None,
     supplied: dict[str, Any] | None,
+    performance: dict[str, Any],
 ) -> tuple[Any, dict[str, Any], str, Any | None]:
     from src.services.backtest_engine import FEATURE_RANGE_V2_SQL, _feature_snapshot_from_row
     from src.services.research_experiment_service import calculate_data_fingerprint
@@ -199,6 +204,7 @@ def _load_prepared_dataset(
                     "end_date": build_end,
                 },
                 row_factory=_feature_snapshot_from_row,
+                performance=performance,
             )
             index = 0
             date_offsets: list[list[Any]] = []
@@ -267,24 +273,49 @@ def _load_prepared_dataset(
 def _native_support_state(result: Any, dataset: Any) -> SupportResistanceState:
     state = SupportResistanceState()
     symbols = list(result.symbols)
-    support = result.support_resistance or {}
-    for collection, target in (
-        (support.get("events") or {}, "events"),
-        (support.get("zone_versions") or {}, "zone_versions"),
-        (support.get("regime_versions") or {}, "regime_versions"),
+    support = result.support_resistance
+    support = {} if support is None else support
+    for key, target in (
+        ("events", "events"),
+        ("zone_versions", "zone_versions"),
+        ("regime_versions", "regime_versions"),
     ):
-        for symbol_id, payload in zip(
-            collection.get("symbol_id") or [],
-            collection.get("payload_json") or [],
+        collection = support.get(key)
+        if collection is None:
+            continue
+        # Native numeric columns are read-only numpy views, so they must never
+        # be used in a boolean context (``x or []`` would raise an ambiguous
+        # truth-value error). Normalize explicitly.
+        instrument_ids = collection.get("instrument_id")
+        symbol_ids = collection.get("symbol_id")
+        payloads = collection.get("payload_json")
+        instrument_ids = [] if instrument_ids is None else list(instrument_ids)
+        symbol_ids = [] if symbol_ids is None else list(symbol_ids)
+        payloads = [] if payloads is None else list(payloads)
+        for instrument_id, symbol_id, payload in zip(
+            instrument_ids,
+            symbol_ids,
+            payloads,
             strict=True,
         ):
+            instrument_id = int(instrument_id)
             symbol = symbols[int(symbol_id)]
-            symbol_state = state.symbols.setdefault(symbol, SupportResistanceSymbolState())
+            symbol_state = state.symbols.setdefault(
+                str(instrument_id),
+                SupportResistanceSymbolState(instrument_id=instrument_id, symbol=symbol),
+            )
+            symbol_state.symbol = symbol
             getattr(symbol_state, target).append(json.loads(payload))
     integer_index = PREPARED_INTEGER_INDEX
     for row in dataset.integers:
+        instrument_id = int(row[integer_index["instrument_id"]])
         symbol = symbols[int(row[integer_index["symbol_id"]])]
-        state.symbols.setdefault(symbol, SupportResistanceSymbolState()).history.append(
+        symbol_state = state.symbols.setdefault(
+            str(instrument_id),
+            SupportResistanceSymbolState(instrument_id=instrument_id, symbol=symbol),
+        )
+        symbol_state.symbol = symbol
+        symbol_state.history.append(
             {"dt_ny": date.fromordinal(int(row[integer_index["dt_ordinal"]]))}
         )
     return state
@@ -405,6 +436,11 @@ def run_backtest_native(
     )
 
     started = perf_counter()
+    performance: dict[str, Any] = {}
+    configured_intra_run_threads = resolve_backtest_intra_run_threads()
+    effective_intra_run_threads = resolve_effective_backtest_intra_run_threads(
+        configured_intra_run_threads
+    )
     level = _normalize_persist_level(persist_level)
     strategy = db.get(Strategy, strategy_id)
     if strategy is None:
@@ -471,6 +507,7 @@ def run_backtest_native(
         **dict(runtime["params"]),
         "run_options": {
             "persist_level": level,
+            "intra_run_threads": effective_intra_run_threads,
             "universe_membership_semantics": resolved.membership_semantics,
             "survivorship_bias_warning": resolved.membership_semantics == "current_active_snapshot",
         },
@@ -521,6 +558,7 @@ def run_backtest_native(
             end_date=end_date,
             universe_policy=policy,
             supplied=prepared_dataset,
+            performance=performance,
         )
         session_dates = sorted(
             {
@@ -546,6 +584,7 @@ def run_backtest_native(
             return cancelled
 
         try:
+            native_started = perf_counter()
             native_result = quant_kernel.run_backtest(
                 dataset,
                 runtime,
@@ -554,10 +593,15 @@ def run_backtest_native(
                     "commission_bps": cost.commission_bps,
                     "commission_min": cost.commission_min,
                     "slippage_bps": cost.slippage_bps,
+                    "thread_count": effective_intra_run_threads,
                     "start_date": start_date,
                     "end_date": end_date,
                 },
                 control,
+            )
+            performance["native_kernel_ms"] = round(
+                (perf_counter() - native_started) * 1000.0,
+                3,
             )
         except quant_kernel.BacktestCancelledError as exc:
             raise BacktestCancelledError(str(exc)) from exc
@@ -600,6 +644,7 @@ def run_backtest_native(
                 cancel_check=cancel_check,
             )
         summary = dict(native_result.summary)
+        native_performance = dict(native_result.performance)
         research_metrics = _native_research_metrics(native_result, initial_cash)
         final_equity = float(summary["final_equity"])
         run.status = "completed"
@@ -634,6 +679,17 @@ def run_backtest_native(
                 "strategy_revision": descriptor["algorithm_revision"],
             },
             "performance": {
+                **performance,
+                "configured_intra_run_threads": configured_intra_run_threads,
+                "effective_intra_run_threads": effective_intra_run_threads,
+                "intra_run_threads": int(native_performance["thread_count"]),
+                "parallel_trading_days": int(native_performance["parallel_sessions"]),
+                "serial_trading_days": int(native_performance["serial_sessions"]),
+                "native_warmup_ms": round(float(native_performance["warmup_ms"]), 3),
+                "native_signal_generation_ms": round(
+                    float(native_performance["signal_generation_ms"]),
+                    3,
+                ),
                 "prepared_dataset_status": cache_status,
                 "prepared_dataset_key": prepared_dataset_key(manifest),
                 "rows_loaded": len(dataset),

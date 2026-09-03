@@ -89,9 +89,9 @@ CREATE TABLE IF NOT EXISTS support_resistance_regime_versions (
   evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_support_resistance_regime_versions_identity
-    UNIQUE (materialization_id, symbol, version),
+    UNIQUE (materialization_id, instrument_id, version),
   CONSTRAINT uq_support_resistance_regime_versions_effective_from
-    UNIQUE (materialization_id, symbol, effective_from),
+    UNIQUE (materialization_id, instrument_id, effective_from),
   CONSTRAINT ck_support_resistance_regime
     CHECK (regime IN ('uptrend', 'downtrend', 'range', 'transition')),
   CONSTRAINT ck_support_resistance_regime_version

@@ -16,9 +16,9 @@ CREATE TABLE IF NOT EXISTS support_resistance_regime_versions (
   evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_support_resistance_regime_versions_identity
-    UNIQUE (materialization_id, symbol, version),
+    UNIQUE (materialization_id, instrument_id, version),
   CONSTRAINT uq_support_resistance_regime_versions_effective_from
-    UNIQUE (materialization_id, symbol, effective_from),
+    UNIQUE (materialization_id, instrument_id, effective_from),
   CONSTRAINT ck_support_resistance_regime
     CHECK (regime IN ('uptrend', 'downtrend', 'range', 'transition')),
   CONSTRAINT ck_support_resistance_regime_version
@@ -29,16 +29,16 @@ CREATE INDEX IF NOT EXISTS idx_support_resistance_regime_versions_timeline
   ON support_resistance_regime_versions
   (materialization_id, symbol, effective_from);
 
--- The first local v3 draft used nullable instrument_id in these unique
--- constraints. Rebuild them idempotently so missing instrument mappings cannot
--- weaken the append-only timeline invariant.
+-- A ticker can be reused by another security inside one coverage range. Rebuild
+-- the constraints around the stable instrument identity so those independent
+-- timelines do not collide. Persistence rejects new rows without an identity.
 ALTER TABLE support_resistance_regime_versions
   DROP CONSTRAINT IF EXISTS uq_support_resistance_regime_versions_identity;
 ALTER TABLE support_resistance_regime_versions
   ADD CONSTRAINT uq_support_resistance_regime_versions_identity
-  UNIQUE (materialization_id, symbol, version);
+  UNIQUE (materialization_id, instrument_id, version);
 ALTER TABLE support_resistance_regime_versions
   DROP CONSTRAINT IF EXISTS uq_support_resistance_regime_versions_effective_from;
 ALTER TABLE support_resistance_regime_versions
   ADD CONSTRAINT uq_support_resistance_regime_versions_effective_from
-  UNIQUE (materialization_id, symbol, effective_from);
+  UNIQUE (materialization_id, instrument_id, effective_from);

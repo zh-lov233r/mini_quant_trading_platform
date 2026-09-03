@@ -47,6 +47,9 @@ export interface BacktestProgress {
 export interface BacktestWorkerStatus {
   execution_model: "process";
   configured_concurrency: number;
+  intra_run_execution_model: "thread";
+  configured_intra_run_threads: number;
+  effective_intra_run_threads: number;
   available_slots: number;
   automation_available: boolean;
   manager_state: "idle" | "starting" | "running" | "backoff" | "standby" | "stopping" | "unavailable";
@@ -101,6 +104,8 @@ export interface BacktestTask {
   error_code?: string | null;
   error_message?: string | null;
   cancellable: boolean;
+  retryable: boolean;
+  deletable: boolean;
 }
 
 export interface BacktestTaskPage {

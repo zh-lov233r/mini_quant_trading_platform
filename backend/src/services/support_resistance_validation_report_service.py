@@ -395,15 +395,15 @@ def regime_audit(db: Session, run_id: Any) -> dict[str, Any]:
                   WHERE link.run_id = :run_id
                 ), duplicate_starts AS (
                   SELECT count(*) AS value FROM (
-                    SELECT materialization_id, symbol, effective_from
-                    FROM scoped GROUP BY materialization_id, symbol, effective_from
+                    SELECT materialization_id, instrument_id, effective_from
+                    FROM scoped GROUP BY materialization_id, instrument_id, effective_from
                     HAVING count(*) > 1
                   ) rows
                 ), adjacent_same AS (
                   SELECT count(*) AS value FROM (
                     SELECT regime,
                            lag(regime) OVER (
-                             PARTITION BY materialization_id, symbol
+                             PARTITION BY materialization_id, instrument_id
                              ORDER BY effective_from, version
                            ) AS previous_regime
                     FROM scoped
@@ -416,14 +416,14 @@ def regime_audit(db: Session, run_id: Any) -> dict[str, Any]:
                    AND bar.dt_ny = scoped.effective_from
                   WHERE scoped.instrument_id IS NOT NULL AND bar.instrument_id IS NULL
                 ), first_sessions AS (
-                  SELECT scoped.materialization_id, scoped.symbol,
+                  SELECT scoped.materialization_id, scoped.instrument_id,
                          min(scoped.effective_from) AS first_regime,
                          min(bar.dt_ny) AS first_session
                   FROM scoped
                   JOIN eod_bars bar
                     ON bar.instrument_id = scoped.instrument_id
                    AND bar.dt_ny BETWEEN scoped.coverage_start AND scoped.coverage_end
-                  GROUP BY scoped.materialization_id, scoped.symbol
+                  GROUP BY scoped.materialization_id, scoped.instrument_id
                 ), missing_first AS (
                   SELECT count(*) AS value FROM first_sessions WHERE first_regime <> first_session
                 )

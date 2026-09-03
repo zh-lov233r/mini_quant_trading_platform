@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from src.api.backtests import get_backtest_tasks
+from src.api.backtests import get_backtest_tasks, retry_backtest
 from src.api.research import cancel_research_trial, get_research_worker_status
 from src.models.tables import (
     BacktestJob,
@@ -163,6 +163,36 @@ class BacktestTaskApiTests(unittest.TestCase):
         self.assertEqual(history.total, 3)
         self.assertEqual(len(history.items), 2)
 
+    def test_only_terminal_manual_tasks_are_deletable(self) -> None:
+        deletable_ids = set()
+        for status in ("completed", "failed", "cancelled"):
+            run = self.make_run(status=status)
+            deletable_ids.add(run.id)
+            self.db.add(BacktestJob(run_id=run.id, source="manual", status=status, payload={}, progress={}))
+
+        legacy = self.make_run(status="completed")
+        deletable_ids.add(legacy.id)
+        active = self.make_run(status="running")
+        terminal_run_active_job = self.make_run(status="completed")
+        research = self.make_run(status="completed")
+        verification = self.make_run(status="failed")
+        self.db.add_all([
+            BacktestJob(run_id=active.id, source="manual", status="running", payload={}, progress={}),
+            BacktestJob(run_id=terminal_run_active_job.id, source="manual", status="running", payload={}, progress={}),
+            BacktestJob(run_id=research.id, source="research", status="completed", payload={}, progress={}),
+            BacktestJob(run_id=verification.id, source="verification", status="failed", payload={}, progress={}),
+        ])
+        self.db.commit()
+
+        page = get_backtest_tasks(self.db, source=None, stage=None, limit=25, offset=0)
+        by_run_id = {item.run_id: item for item in page.items}
+
+        self.assertEqual({run_id for run_id, item in by_run_id.items() if item.deletable}, deletable_ids)
+        self.assertFalse(by_run_id[active.id].deletable)
+        self.assertFalse(by_run_id[terminal_run_active_job.id].deletable)
+        self.assertFalse(by_run_id[research.id].deletable)
+        self.assertFalse(by_run_id[verification.id].deletable)
+
     def test_cancel_queued_trial_is_immediate_and_idempotent(self) -> None:
         experiment = self.make_experiment()
         trial = self.make_trial(experiment, ordinal=1)
@@ -215,6 +245,31 @@ class BacktestTaskApiTests(unittest.TestCase):
         self.db.refresh(candidate)
 
         self.assertEqual(candidate.aggregate_metrics["verification"]["status"], "cancelled")
+
+    def test_failed_verification_is_retryable_and_points_candidate_to_new_run(self) -> None:
+        experiment = self.make_experiment()
+        round_row = ExperimentRound(experiment_id=experiment.id, ordinal=1, status="completed", proposal={}, validation_issues=[], result_summary={})
+        self.db.add(round_row)
+        self.db.flush()
+        candidate = ExperimentCandidate(experiment_id=experiment.id, round_id=round_row.id, ordinal=1, parameter_overrides={}, params={}, params_hash="b" * 64, aggregate_metrics={})
+        self.db.add(candidate)
+        self.db.flush()
+        run = self.make_run(status="failed")
+        candidate.aggregate_metrics = {"verification": {"status": "failed", "runId": str(run.id), "error": "boom"}}
+        self.db.add(BacktestJob(run_id=run.id, source="verification", status="failed", payload={"candidate_id": str(candidate.id)}, progress={}))
+        self.db.commit()
+
+        before = get_backtest_tasks(self.db, source="verification", stage="failed", limit=25, offset=0)
+        retry = retry_backtest(run.id, self.db)
+        self.db.refresh(candidate)
+        after = get_backtest_tasks(self.db, source="verification", stage=None, limit=25, offset=0)
+
+        self.assertTrue(before.items[0].retryable)
+        self.assertNotEqual(retry.id, run.id)
+        self.assertEqual(retry.status, "queued")
+        self.assertEqual(candidate.aggregate_metrics["verification"]["status"], "queued")
+        self.assertEqual(candidate.aggregate_metrics["verification"]["runId"], str(retry.id))
+        self.assertFalse(next(item for item in after.items if item.run_id == run.id).retryable)
 
     def test_research_worker_status_reports_queue_and_capacity(self) -> None:
         experiment = self.make_experiment()

@@ -565,13 +565,13 @@ class SupportResistanceRegimeVersion(Base):
     __table_args__ = (
         UniqueConstraint(
             "materialization_id",
-            "symbol",
+            "instrument_id",
             "version",
             name="uq_support_resistance_regime_versions_identity",
         ),
         UniqueConstraint(
             "materialization_id",
-            "symbol",
+            "instrument_id",
             "effective_from",
             name="uq_support_resistance_regime_versions_effective_from",
         ),

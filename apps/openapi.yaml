@@ -1204,6 +1204,27 @@ paths:
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
+  /api/backtests/{run_id}/retry:
+    post:
+      tags: [Backtests]
+      summary: Retry one failed manual or verification backtest as a new run
+      description: >
+        Creates a new queued StrategyRun and durable job from the failed job payload while retaining
+        the original failed run for audit. A failed run can create at most one direct retry. Research
+        trials remain owned by their experiment workflow and cannot be retried through this endpoint.
+      operationId: retryBacktest
+      x-implementation-status: implemented
+      parameters:
+        - $ref: "#/components/parameters/RunIdPath"
+      responses:
+        "202":
+          description: New retry run queued
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BacktestRun"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+
 components:
   securitySchemes:
     AgentServiceToken:
@@ -2479,12 +2500,16 @@ components:
     BacktestWorkerStatus:
       type: object
       required:
-        [execution_model, configured_concurrency, available_slots, automation_available,
+        [execution_model, configured_concurrency, intra_run_execution_model,
+         configured_intra_run_threads, effective_intra_run_threads, available_slots, automation_available,
          manager_state, live_managers, worker_active, active_jobs, queued_jobs,
          heartbeat_stale_after_seconds, checked_at]
       properties:
         execution_model: {type: string, enum: [process]}
         configured_concurrency: {type: integer, minimum: 1, maximum: 2}
+        intra_run_execution_model: {type: string, enum: [thread]}
+        configured_intra_run_threads: {type: integer, minimum: 1, maximum: 16}
+        effective_intra_run_threads: {type: integer, minimum: 1, maximum: 16}
         available_slots: {type: integer, minimum: 0}
         automation_available: {type: boolean}
         manager_state:
@@ -2514,7 +2539,7 @@ components:
 
     BacktestTask:
       type: object
-      required: [task_key, source, stage, attempt, cancellable]
+      required: [task_key, source, stage, attempt, cancellable, retryable, deletable]
       properties:
         task_key: {type: string}
         source: {type: string, enum: [manual, research, verification]}
@@ -2547,6 +2572,8 @@ components:
         error_code: {type: [string, "null"]}
         error_message: {type: [string, "null"]}
         cancellable: {type: boolean}
+        retryable: {type: boolean}
+        deletable: {type: boolean}
 
     BacktestTaskPage:
       type: object

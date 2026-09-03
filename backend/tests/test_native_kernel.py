@@ -93,7 +93,7 @@ class NativeKernelParityTests(unittest.TestCase):
 
     def test_native_abi_and_all_engine_ready_strategy_catalog(self) -> None:
         self.assertEqual(quant_kernel.KERNEL_VERSION, "cpp-v1")
-        self.assertEqual(quant_kernel.ABI_VERSION, 1)
+        self.assertEqual(quant_kernel.ABI_VERSION, 2)
         self.assertTrue(quant_kernel.BUILD_ID)
         self.assertEqual(
             [entry["strategy_type"] for entry in quant_kernel.catalog()],

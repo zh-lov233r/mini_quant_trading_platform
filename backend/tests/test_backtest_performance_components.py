@@ -4,8 +4,9 @@ from datetime import date, datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 
@@ -19,6 +20,7 @@ from src.services.backtest_equity_service import (
     build_downsampled_chart_query,
     build_downsampled_snapshot_ids_query,
 )
+from src.services.native_backtest_service import _load_prepared_dataset
 from src.services.prepared_dataset_service import (
     PREPARED_DATASET_SCHEMA_VERSION,
     PreparedDatasetCache,
@@ -35,6 +37,70 @@ from backend.utils.benchmark_backtests import (
 
 
 class BacktestPerformanceComponentTests(unittest.TestCase):
+    def test_native_cold_dataset_build_supplies_loader_performance(self) -> None:
+        performance: dict[str, object] = {}
+        fingerprint = {
+            "sha256": "a" * 64,
+            "rowCount": 1,
+            "instrumentIds": [1],
+            "startDate": "2025-01-02",
+            "endDate": "2025-01-02",
+            "universePolicy": None,
+        }
+        cache = MagicMock()
+        cache.open.return_value = None
+        dataset = SimpleNamespace(sidecar={})
+
+        def build(_manifest, *, row_count, writer):
+            self.assertEqual(row_count, 1)
+            writer([None])
+            return dataset
+
+        cache.build.side_effect = build
+        resolved_universe = SimpleNamespace(manifest=lambda: {})
+
+        with (
+            patch(
+                "src.services.research_experiment_service.calculate_data_fingerprint",
+                return_value=fingerprint,
+            ),
+            patch(
+                "src.services.native_backtest_service.PreparedDatasetCache",
+                return_value=cache,
+            ),
+            patch(
+                "src.services.native_backtest_service.MarketDataLoader",
+                autospec=True,
+            ) as loader_class,
+            patch("src.services.native_backtest_service.encode_prepared_snapshot"),
+            patch(
+                "src.services.native_backtest_service._split_adjustments",
+                return_value=[],
+            ),
+        ):
+            loader_class.return_value.iter_days.return_value = [
+                (
+                    date(2025, 1, 2),
+                    {"AAA": {"instrument_id": 1, "symbol": "AAA"}},
+                )
+            ]
+            loaded, _manifest, status, materialization = _load_prepared_dataset(
+                MagicMock(),
+                runtime={"strategy_type": "trend"},
+                symbols=["AAA"],
+                resolved_universe=resolved_universe,
+                start_date=date(2025, 1, 2),
+                end_date=date(2025, 1, 2),
+                universe_policy=None,
+                supplied=None,
+                performance=performance,
+            )
+
+        self.assertIs(loaded, dataset)
+        self.assertEqual(status, "cold")
+        self.assertIsNone(materialization)
+        self.assertIs(loader_class.call_args.kwargs["performance"], performance)
+
     def test_benchmark_cases_use_exact_supplied_correctness_session_window(self) -> None:
         start = date(2024, 7, 1)
         end = date(2025, 1, 2)

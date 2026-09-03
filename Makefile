@@ -10,13 +10,13 @@ SUPERVISE_BACKTEST_MANAGER = while true; do (cd "$(BACKEND_DIR)" && PAPER_TRADIN
 
 help:
 	@echo "Available targets:"
-	@echo "  make dev          Start backend, frontend, and manager (BACKTEST_WORKER_CONCURRENCY=1|2, default 2)"
+	@echo "  make dev          Start backend, frontend, and manager (2 processes x up to 4 threads/run by default)"
 	@echo "  make dev-agent-all Start AgentOps DB/API and Quant backend/frontend safely"
 	@echo "  make dev-agent-safe Start Quant for AgentOps with all paper order automation disabled"
 	@echo "  make dev-backend  Start FastAPI backend only (partial stack; no automatic backtest worker)"
 	@echo "  make dev-frontend Start Next.js frontend only (partial stack)"
 	@echo "  make backtest-worker Run the independent durable backtest worker"
-	@echo "  make backtest-worker-manager Run and supervise the on-demand manager (inherits BACKTEST_WORKER_CONCURRENCY)"
+	@echo "  make backtest-worker-manager Run and supervise the manager (inherits BACKTEST_WORKER_CONCURRENCY and BACKTEST_INTRA_RUN_THREADS)"
 	@echo "  make benchmark-backtests Plan or run the controlled benchmark funnel (BENCHMARK_ARGS='plan')"
 	@echo "  make backfill-daily Run the daily market-data catch-up flow"
 	@echo "  make check-data     Run read-only market-data integrity checks"

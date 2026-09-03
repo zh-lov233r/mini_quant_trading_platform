@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { backtestTaskStageLabel, isActiveBacktestTask, shouldPollBacktestTasks, shouldShowBacktestTaskProgress } from "./backtestTasks";
+import { backtestTaskStageLabel, isActiveBacktestTask, pageIndexAfterBacktestTaskDelete, shouldPollBacktestTasks, shouldShowBacktestTaskProgress } from "./backtestTasks";
 
 describe("backtest task presentation", () => {
   it("keeps scheduler waiting and cancellation requests active", () => {
@@ -23,5 +23,11 @@ describe("backtest task presentation", () => {
     expect(shouldShowBacktestTaskProgress("completed", true)).toBe(false);
     expect(shouldShowBacktestTaskProgress("failed", true)).toBe(true);
     expect(shouldShowBacktestTaskProgress("cancelled", true)).toBe(true);
+  });
+
+  it("returns to the previous page after deleting its last task", () => {
+    expect(pageIndexAfterBacktestTaskDelete(2, 1)).toBe(1);
+    expect(pageIndexAfterBacktestTaskDelete(2, 2)).toBe(2);
+    expect(pageIndexAfterBacktestTaskDelete(0, 1)).toBe(0);
   });
 });

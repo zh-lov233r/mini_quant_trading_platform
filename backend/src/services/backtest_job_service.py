@@ -292,6 +292,82 @@ def enqueue_backtest_job(
     return job
 
 
+def retry_failed_backtest_job(db: Session, run_id: UUID) -> StrategyRun:
+    job = db.execute(
+        select(BacktestJob).where(BacktestJob.run_id == run_id).with_for_update()
+    ).scalar_one_or_none()
+    if job is None:
+        raise ValueError("backtest job not found")
+    if job.source == "research":
+        raise ValueError("research trials must be retried through their experiment workflow")
+    if job.source not in {"manual", "verification"}:
+        raise ValueError("backtest source cannot be retried")
+    if job.status != "failed":
+        raise ValueError("only failed backtests can be retried")
+    original_payload = dict(job.payload or {})
+    if original_payload.get("retried_by_run_id"):
+        raise ValueError("backtest has already been retried")
+
+    run = db.get(StrategyRun, run_id)
+    if run is None:
+        raise ValueError("backtest run not found")
+    candidate = None
+    verification: dict[str, Any] | None = None
+    aggregate: dict[str, Any] | None = None
+    if job.source == "verification":
+        candidate_id = original_payload.get("candidate_id")
+        candidate = db.get(ExperimentCandidate, UUID(str(candidate_id))) if candidate_id else None
+        if candidate is None:
+            raise ValueError("verification candidate no longer exists")
+        aggregate = dict(candidate.aggregate_metrics or {})
+        verification = dict(aggregate.get("verification") or {})
+        current_run_id = verification.get("runId")
+        if current_run_id and str(current_run_id) != str(run.id):
+            raise ValueError("verification has already been retried")
+
+    retry_run = StrategyRun(
+        strategy_id=run.strategy_id,
+        strategy_version=run.strategy_version,
+        mode="backtest",
+        status="queued",
+        window_start=run.window_start,
+        window_end=run.window_end,
+        initial_cash=run.initial_cash,
+        benchmark_symbol=run.benchmark_symbol,
+        config_snapshot=dict(run.config_snapshot or {}),
+        summary_metrics={},
+    )
+    db.add(retry_run)
+    db.flush()
+    enqueue_backtest_job(
+        db,
+        run=retry_run,
+        source=job.source,
+        priority=job.priority,
+        max_attempts=job.max_attempts,
+        payload={**original_payload, "retry_of_run_id": str(run.id)},
+    )
+    job.payload = {**original_payload, "retried_by_run_id": str(retry_run.id)}
+
+    if candidate is not None and aggregate is not None and verification is not None:
+        for key in ("error", "failedAt", "cancelledAt", "verifiedAt"):
+            verification.pop(key, None)
+        verification.update(
+            {
+                "status": "queued",
+                "runId": str(retry_run.id),
+                "previousRunId": str(run.id),
+                "retriedAt": datetime.now(UTC).isoformat(),
+            }
+        )
+        aggregate["verification"] = verification
+        candidate.aggregate_metrics = aggregate
+
+    db.commit()
+    db.refresh(retry_run)
+    return retry_run
+
+
 def request_backtest_cancel(db: Session, run_id: UUID) -> BacktestJob:
     job = db.execute(select(BacktestJob).where(BacktestJob.run_id == run_id)).scalar_one_or_none()
     if job is None:

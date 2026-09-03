@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from sqlalchemy import create_engine, event, func, insert, select
+from sqlalchemy import create_engine, event, func, insert, select, text
 from sqlalchemy.orm import sessionmaker
 from fastapi import HTTPException
 
@@ -34,9 +34,11 @@ from src.models.tables import (  # noqa: E402
 from src.services.support_resistance_persistence_service import (  # noqa: E402
     SupportResistanceMaterializationBuildError,
     _insert_in_batches,
+    _instrument_ids,
     _validate_regime_versions,
     _zone_version_rows,
     find_reusable_materialization,
+    hydrate_state_from_materialization,
     persist_support_resistance_run,
     record_failed_materialization_after_rollback,
 )
@@ -62,6 +64,7 @@ from src.services.support_resistance_service import (  # noqa: E402
 )
 from src.services.strategy_engine import (  # noqa: E402
     evaluate_native_signals,
+    support_resistance_hydration_payload,
 )
 from src.services.paper_trading_service import (  # noqa: E402
     VirtualPosition,
@@ -1064,6 +1067,7 @@ class SupportResistanceSchemaContractTests(unittest.TestCase):
         tables = (
             SupportResistanceMaterialization.__table__,
             SupportResistanceZoneVersion.__table__,
+            SupportResistanceRegimeVersion.__table__,
             SupportResistanceRunMaterialization.__table__,
             SupportResistanceRunEvent.__table__,
         )
@@ -1079,11 +1083,29 @@ class SupportResistanceSchemaContractTests(unittest.TestCase):
 
         for table in (
             SupportResistanceZoneVersion.__table__,
+            SupportResistanceRegimeVersion.__table__,
             SupportResistanceRunEvent.__table__,
         ):
             foreign_key = next(iter(table.c.instrument_id.foreign_keys))
             self.assertEqual(foreign_key.target_fullname, "instruments.id")
             self.assertEqual(foreign_key.ondelete, "SET NULL")
+
+        regime_unique_columns = {
+            tuple(column.name for column in constraint.columns)
+            for constraint in SupportResistanceRegimeVersion.__table__.constraints
+            if constraint.name
+            in {
+                "uq_support_resistance_regime_versions_identity",
+                "uq_support_resistance_regime_versions_effective_from",
+            }
+        }
+        self.assertEqual(
+            regime_unique_columns,
+            {
+                ("materialization_id", "instrument_id", "version"),
+                ("materialization_id", "instrument_id", "effective_from"),
+            },
+        )
 
         self.assertTrue(
             {"sic_code", "sic_description", "sic_source", "sic_asof"}
@@ -1176,6 +1198,140 @@ class SupportResistancePersistenceTests(unittest.TestCase):
         )
         state.symbols["TEST"] = symbol_state
         return state
+
+    def test_instrument_ids_use_unique_point_in_time_symbol_history(self) -> None:
+        with self.Session.begin() as db:
+            db.add_all(
+                [
+                    Instrument(
+                        id=2,
+                        share_class_figi="OLD-FIGI",
+                        ticker_canonical="NEW",
+                        exchange="XNYS",
+                    ),
+                    Instrument(
+                        id=3,
+                        share_class_figi="REUSED-FIGI",
+                        ticker_canonical="LATEST",
+                        exchange="XNYS",
+                    ),
+                ]
+            )
+            db.execute(
+                text(
+                    """
+                    CREATE TABLE symbol_history (
+                        instrument_id BIGINT NOT NULL,
+                        symbol TEXT NOT NULL,
+                        valid_from DATE NOT NULL,
+                        valid_to DATE,
+                        is_primary BOOLEAN NOT NULL
+                    )
+                    """
+                )
+            )
+            db.execute(
+                text(
+                    """
+                    INSERT INTO symbol_history (
+                        instrument_id, symbol, valid_from, valid_to, is_primary
+                    )
+                    VALUES
+                        (2, 'OLD', '2024-01-01', '2025-06-30', TRUE),
+                        (2, 'AMBIG', '2024-01-01', '2025-06-30', TRUE),
+                        (3, 'AMBIG', '2025-06-01', NULL, TRUE),
+                        (3, 'SECONDARY', '2024-01-01', NULL, FALSE)
+                    """
+                )
+            )
+
+        with self.Session() as db:
+            resolved = _instrument_ids(
+                db,
+                ["TEST", "OLD", "AMBIG", "SECONDARY"],
+                coverage_start=date(2025, 1, 1),
+                coverage_end=date(2025, 12, 31),
+            )
+
+        self.assertEqual(resolved, {"TEST": 1, "OLD": 2})
+
+    def test_reused_ticker_regime_rows_keep_native_instrument_identity(self) -> None:
+        state = SupportResistanceState()
+        for instrument_id in (11, 12):
+            state.symbols[str(instrument_id)] = SupportResistanceSymbolState(
+                instrument_id=instrument_id,
+                symbol="SAME",
+                history=[{"dt_ny": date(2025, 1, 1)}],
+                regime_versions=[
+                    {
+                        "version": 1,
+                        "effective_from": "2025-01-01",
+                        "regime": "transition",
+                        "reason_code": f"initial-{instrument_id}",
+                    }
+                ],
+            )
+
+        with self.Session() as db:
+            db.add_all(
+                [
+                    Instrument(
+                        id=11,
+                        share_class_figi="SAME-OLD-FIGI",
+                        ticker_canonical="SAME-OLD",
+                        exchange="XNYS",
+                    ),
+                    Instrument(
+                        id=12,
+                        share_class_figi="SAME-NEW-FIGI",
+                        ticker_canonical="SAME-NEW",
+                        exchange="XNYS",
+                    ),
+                ]
+            )
+            with (
+                patch(
+                    "src.services.support_resistance_persistence_service._instrument_ids",
+                    return_value={},
+                ),
+                patch(
+                    "src.services.support_resistance_persistence_service.source_data_fingerprint",
+                    return_value="reused-ticker-fingerprint",
+                ),
+            ):
+                materialization = persist_support_resistance_run(
+                    db,
+                    run=self._new_run(db),
+                    runtime=self.runtime,
+                    state=state,
+                    symbols=["SAME"],
+                    coverage_start=date(2025, 1, 1),
+                    coverage_end=date(2025, 1, 1),
+                )
+            db.commit()
+            rows = db.scalars(
+                select(SupportResistanceRegimeVersion)
+                .where(
+                    SupportResistanceRegimeVersion.materialization_id
+                    == materialization.id
+                )
+                .order_by(SupportResistanceRegimeVersion.instrument_id)
+            ).all()
+            hydrated = hydrate_state_from_materialization(db, materialization)
+
+        self.assertEqual(
+            [(row.instrument_id, row.symbol, row.version) for row in rows],
+            [(11, "SAME", 1), (12, "SAME", 1)],
+        )
+        self.assertEqual(set(hydrated.symbols), {"11", "12"})
+        current_payload = support_resistance_hydration_payload(
+            hydrated,
+            {"SAME": {"instrument_id": 12}},
+        )
+        self.assertEqual(
+            current_payload["SAME"]["regime_timeline"][0]["reason_code"],
+            "initial-12",
+        )
 
     def test_postgres_batches_use_psycopg_copy_with_canonical_json(self) -> None:
         db = MagicMock()
@@ -2108,9 +2264,17 @@ class SupportResistancePersistenceTests(unittest.TestCase):
                 )
             )
             db.add(
+                Instrument(
+                    id=2,
+                    share_class_figi="OTHER-FIGI",
+                    ticker_canonical="OTHER",
+                    exchange="XNYS",
+                )
+            )
+            db.add(
                 SupportResistanceRegimeVersion(
                     materialization_id=linked.materialization_id,
-                    instrument_id=1,
+                    instrument_id=2,
                     symbol="OTHER",
                     version=1,
                     effective_from=date(2025, 1, 1),

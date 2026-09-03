@@ -10,10 +10,11 @@ from time import perf_counter
 from typing import Any, Callable, Iterable
 from uuid import uuid4
 
-from sqlalchemy import delete, insert, select, text
+from sqlalchemy import bindparam, delete, insert, select, text
 from sqlalchemy.orm import Session
 
 from src.models.tables import (
+    Instrument,
     StrategyRun,
     SupportResistanceMaterialization,
     SupportResistanceRegimeVersion,
@@ -178,7 +179,18 @@ def hydrate_state_from_materialization(
     ).scalars().all()
     for version in versions:
         metadata = version.source_metadata or {}
-        symbol_state = state.symbols.setdefault(version.symbol, SupportResistanceSymbolState())
+        state_key = (
+            str(version.instrument_id)
+            if version.instrument_id is not None
+            else version.symbol
+        )
+        symbol_state = state.symbols.setdefault(
+            state_key,
+            SupportResistanceSymbolState(
+                instrument_id=version.instrument_id,
+                symbol=version.symbol,
+            ),
+        )
         symbol_state.cached_zone_timeline.append(
             {
                 "zone_key": version.zone_key,
@@ -217,7 +229,18 @@ def hydrate_state_from_materialization(
         )
     ).scalars().all()
     for version in regime_versions:
-        symbol_state = state.symbols.setdefault(version.symbol, SupportResistanceSymbolState())
+        state_key = (
+            str(version.instrument_id)
+            if version.instrument_id is not None
+            else version.symbol
+        )
+        symbol_state = state.symbols.setdefault(
+            state_key,
+            SupportResistanceSymbolState(
+                instrument_id=version.instrument_id,
+                symbol=version.symbol,
+            ),
+        )
         symbol_state.cached_regime_timeline.append(
             {
                 "id": str(version.id),
@@ -359,9 +382,39 @@ def persist_support_resistance_run(
             )
 
     try:
-        instrument_ids = _instrument_ids(db, normalized_symbols)
+        instrument_ids = _instrument_ids(
+            db,
+            normalized_symbols,
+            coverage_start=coverage_start,
+            coverage_end=coverage_end,
+        )
+        state_instrument_ids = {
+            symbol_state.instrument_id
+            for symbol_state in state.symbols.values()
+            if symbol_state.instrument_id is not None
+        }
+        existing_state_instrument_ids = set(
+            db.scalars(select(Instrument.id).where(Instrument.id.in_(state_instrument_ids)))
+            if state_instrument_ids
+            else []
+        )
+        missing_state_instrument_ids = sorted(
+            state_instrument_ids - existing_state_instrument_ids
+        )
+        if missing_state_instrument_ids:
+            raise ValueError(
+                "support/resistance persistence received unknown instrument identities: "
+                + ", ".join(str(value) for value in missing_state_instrument_ids[:10])
+            )
         missing_instruments = sorted(
-            (set(normalized_symbols) | set(state.symbols)) - set(instrument_ids)
+            {
+                symbol
+                for state_key, symbol_state in state.symbols.items()
+                for symbol, instrument_id in [
+                    _state_identity(state_key, symbol_state, instrument_ids)
+                ]
+                if instrument_id is None
+            }
         )
         if missing_instruments:
             raise ValueError(
@@ -603,7 +656,8 @@ def _regime_version_rows(
     state: SupportResistanceState,
     instrument_ids: dict[str, int],
 ) -> Iterable[dict[str, Any]]:
-    for symbol, symbol_state in sorted(state.symbols.items()):
+    for state_key, symbol_state in sorted(state.symbols.items()):
+        symbol, instrument_id = _state_identity(state_key, symbol_state, instrument_ids)
         session_dates = sorted(
             {
                 item["dt_ny"]
@@ -620,7 +674,7 @@ def _regime_version_rows(
         for payload in versions:
             yield {
                 "materialization_id": materialization.id,
-                "instrument_id": instrument_ids.get(symbol),
+                "instrument_id": instrument_id,
                 "symbol": symbol,
                 "version": int(payload["version"]),
                 "effective_from": date.fromisoformat(str(payload["effective_from"])),
@@ -668,7 +722,8 @@ def _zone_version_rows(
     state: SupportResistanceState,
     instrument_ids: dict[str, int],
 ) -> Iterable[dict[str, Any]]:
-    for symbol, symbol_state in sorted(state.symbols.items()):
+    for state_key, symbol_state in sorted(state.symbols.items()):
+        symbol, instrument_id = _state_identity(state_key, symbol_state, instrument_ids)
         grouped: dict[str, list[dict[str, Any]]] = {}
         for payload in symbol_state.zone_versions:
             grouped.setdefault(str(payload["zone_key"]), []).append(payload)
@@ -714,7 +769,7 @@ def _zone_version_rows(
                 )
                 row = {
                     "materialization_id": materialization.id,
-                    "instrument_id": instrument_ids.get(symbol),
+                    "instrument_id": instrument_id,
                     "symbol": symbol,
                     "zone_key": zone_key,
                     "version": index + 1,
@@ -840,7 +895,8 @@ def _run_event_rows(
     state: SupportResistanceState,
     instrument_ids: dict[str, int],
 ) -> Iterable[dict[str, Any]]:
-    for symbol, symbol_state in sorted(state.symbols.items()):
+    for state_key, symbol_state in sorted(state.symbols.items()):
+        symbol, instrument_id = _state_identity(state_key, symbol_state, instrument_ids)
         for payload in symbol_state.events:
             zone = payload.get("zone") or {}
             score_evidence = payload.get("score_evidence") or {}
@@ -850,7 +906,7 @@ def _run_event_rows(
             yield {
                 "run_id": run.id,
                 "materialization_id": materialization.id,
-                "instrument_id": instrument_ids.get(symbol),
+                "instrument_id": instrument_id,
                 "symbol": symbol,
                 "event_date": date.fromisoformat(str(payload["event_date"])),
                 "event_type": str(payload["event_type"]),
@@ -979,17 +1035,63 @@ def _elapsed_ms(started_at: float) -> float:
     return round((perf_counter() - started_at) * 1000.0, 3)
 
 
-def _instrument_ids(db: Session, symbols: list[str]) -> dict[str, int]:
+def _state_identity(
+    state_key: str,
+    symbol_state: SupportResistanceSymbolState,
+    instrument_ids: dict[str, int],
+) -> tuple[str, int | None]:
+    symbol = str(symbol_state.symbol or state_key).upper()
+    instrument_id = symbol_state.instrument_id
+    return (
+        symbol,
+        instrument_id if instrument_id is not None else instrument_ids.get(symbol),
+    )
+
+
+def _instrument_ids(
+    db: Session,
+    symbols: list[str],
+    *,
+    coverage_start: date,
+    coverage_end: date,
+) -> dict[str, int]:
     if not symbols:
         return {}
-    rows = db.execute(
-        text(
-            "SELECT id, ticker_canonical FROM instruments "
-            "WHERE ticker_canonical = ANY(:symbols)"
-        ),
+    canonical_query = text(
+        "SELECT id, ticker_canonical FROM instruments WHERE ticker_canonical IN :symbols"
+    ).bindparams(bindparam("symbols", expanding=True))
+    canonical_rows = db.execute(
+        canonical_query,
         {"symbols": symbols},
     ).mappings().all()
-    return {str(row["ticker_canonical"]).upper(): int(row["id"]) for row in rows}
+    resolved = {
+        str(row["ticker_canonical"]).upper(): int(row["id"])
+        for row in canonical_rows
+    }
+    history_rows = db.execute(
+        text(
+            "SELECT symbol, instrument_id FROM symbol_history "
+            "WHERE symbol IN :symbols AND is_primary = TRUE "
+            "AND valid_from <= :coverage_end "
+            "AND (valid_to IS NULL OR valid_to >= :coverage_start)"
+        ).bindparams(bindparam("symbols", expanding=True)),
+        {
+            "symbols": symbols,
+            "coverage_start": coverage_start,
+            "coverage_end": coverage_end,
+        },
+    ).mappings().all()
+    history_ids: dict[str, set[int]] = {}
+    for row in history_rows:
+        history_ids.setdefault(str(row["symbol"]).upper(), set()).add(
+            int(row["instrument_id"])
+        )
+    for symbol, instrument_ids in history_ids.items():
+        if len(instrument_ids) == 1:
+            resolved[symbol] = next(iter(instrument_ids))
+        else:
+            resolved.pop(symbol, None)
+    return resolved
 
 
 def _hash_json(value: Any) -> str:

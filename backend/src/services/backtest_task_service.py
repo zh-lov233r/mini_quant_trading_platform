@@ -15,7 +15,7 @@ from src.models.tables import (
     Strategy,
     StrategyRun,
 )
-from src.services.backtest_job_service import normalize_backtest_progress
+from src.services.backtest_job_service import TERMINAL_BACKTEST_STATUSES, normalize_backtest_progress
 
 
 TaskSource = Literal["manual", "research", "verification"]
@@ -176,6 +176,8 @@ def list_backtest_tasks(
                 "error_code": trial.error_code,
                 "error_message": trial.error_message or (job.error_message if job is not None else None) or (run.error_message if run is not None else None),
                 "cancellable": trial.status in {"queued", "running"} and trial.cancel_requested_at is None,
+                "retryable": False,
+                "deletable": False,
             }
         )
 
@@ -229,6 +231,17 @@ def list_backtest_tasks(
                 "error_code": None,
                 "error_message": (job.error_message if job is not None else None) or run.error_message,
                 "cancellable": job is not None and job.status in {"queued", "running"} and job.cancel_requested_at is None,
+                "retryable": (
+                    job is not None
+                    and job.status == "failed"
+                    and task_source in {"manual", "verification"}
+                    and not (job.payload or {}).get("retried_by_run_id")
+                ),
+                "deletable": (
+                    task_source == "manual"
+                    and run.status in TERMINAL_BACKTEST_STATUSES
+                    and (job is None or job.status in TERMINAL_BACKTEST_STATUSES)
+                ),
             }
         )
 

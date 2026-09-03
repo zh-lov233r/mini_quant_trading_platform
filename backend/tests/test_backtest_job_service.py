@@ -15,6 +15,7 @@ from src.services.backtest_job_service import (
     progress_update_interval_seconds,
     recover_expired_jobs,
     request_backtest_cancel,
+    retry_failed_backtest_job,
 )
 
 
@@ -161,6 +162,53 @@ class BacktestJobServiceTests(unittest.TestCase):
         self.assertEqual(job.progress["phase"], "queued")
         self.assertEqual(job.progress["percent"], 0.0)
         self.assertIsNone(job.progress["completed_days"])
+
+    def test_manual_retry_creates_one_new_queued_run_and_preserves_failure(self) -> None:
+        run = self._run()
+        run.status = "failed"
+        run.finished_at = datetime.now(UTC)
+        run.error_message = "boom"
+        job = enqueue_backtest_job(
+            self.db,
+            run=run,
+            payload={"strategy_id": str(self.strategy.id)},
+        )
+        job.status = "failed"
+        job.attempt = 2
+        job.error_message = "boom"
+        self.db.commit()
+
+        retry_run = retry_failed_backtest_job(self.db, run.id)
+
+        self.db.refresh(run)
+        self.db.refresh(job)
+        retry_job = self.db.execute(
+            select(BacktestJob).where(BacktestJob.run_id == retry_run.id)
+        ).scalar_one()
+        self.assertEqual(run.status, "failed")
+        self.assertEqual(run.error_message, "boom")
+        self.assertEqual(job.status, "failed")
+        self.assertEqual(job.payload["retried_by_run_id"], str(retry_run.id))
+        self.assertEqual(retry_run.status, "queued")
+        self.assertEqual(retry_job.status, "queued")
+        self.assertEqual(retry_job.payload["retry_of_run_id"], str(run.id))
+        with self.assertRaisesRegex(ValueError, "already been retried"):
+            retry_failed_backtest_job(self.db, run.id)
+
+    def test_research_job_cannot_bypass_experiment_retry_workflow(self) -> None:
+        run = self._run()
+        run.status = "failed"
+        job = enqueue_backtest_job(
+            self.db,
+            run=run,
+            source="research",
+            payload={"strategy_id": str(self.strategy.id)},
+        )
+        job.status = "failed"
+        self.db.commit()
+
+        with self.assertRaisesRegex(ValueError, "experiment workflow"):
+            retry_failed_backtest_job(self.db, run.id)
 
     def test_progress_normalization_caps_phases_and_supports_legacy_rows(self) -> None:
         legacy = normalize_backtest_progress(

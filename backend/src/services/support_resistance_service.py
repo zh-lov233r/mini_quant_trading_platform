@@ -129,6 +129,8 @@ class SetupStats:
 
 @dataclass(slots=True)
 class SupportResistanceSymbolState:
+    instrument_id: int | None = None
+    symbol: str | None = None
     history: list[dict[str, Any]] = field(default_factory=list)
     pivots: list[Pivot] = field(default_factory=list)
     zones: dict[str, Zone] = field(default_factory=dict)

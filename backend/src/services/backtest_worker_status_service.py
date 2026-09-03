@@ -10,6 +10,9 @@ from sqlalchemy.orm import Session
 from src.models.tables import BacktestJob, BacktestWorkerManager
 from src.services.backtest_worker_config import (
     BACKTEST_EXECUTION_MODEL,
+    BACKTEST_INTRA_RUN_EXECUTION_MODEL,
+    resolve_backtest_intra_run_threads,
+    resolve_effective_backtest_intra_run_threads,
     resolve_backtest_worker_concurrency,
 )
 
@@ -50,9 +53,16 @@ def load_backtest_worker_status(
         live_managers = []
     manager = live_managers[0] if live_managers else None
     configured_concurrency = resolve_backtest_worker_concurrency()
+    configured_intra_run_threads = resolve_backtest_intra_run_threads()
     return {
         "execution_model": BACKTEST_EXECUTION_MODEL,
         "configured_concurrency": configured_concurrency,
+        "intra_run_execution_model": BACKTEST_INTRA_RUN_EXECUTION_MODEL,
+        "configured_intra_run_threads": configured_intra_run_threads,
+        "effective_intra_run_threads": resolve_effective_backtest_intra_run_threads(
+            configured_intra_run_threads,
+            worker_concurrency=configured_concurrency,
+        ),
         "available_slots": max(configured_concurrency - active_jobs, 0),
         "automation_available": any(item.is_leader for item in live_managers),
         "manager_state": manager.status if manager is not None else "unavailable",

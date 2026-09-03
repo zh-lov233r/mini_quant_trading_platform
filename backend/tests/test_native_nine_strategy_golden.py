@@ -196,7 +196,10 @@ class NativeNineStrategyGoldenTests(unittest.TestCase):
         runtime = self._runtime("support_resistance")
         runtime["params"]["universe"] = {
             "selection_mode": "manual",
-            "symbols": [f"S{instrument_id:02d}" for instrument_id in range(1, 21)],
+            "symbols": [
+                f"S{instrument_id:02d}"
+                for instrument_id in range(1, self.SYMBOL_COUNT + 1)
+            ],
         }
         return dataset, runtime
 
@@ -277,6 +280,125 @@ class NativeNineStrategyGoldenTests(unittest.TestCase):
                     self._fingerprint(result),
                     golden["strategies"][strategy_type],
                 )
+
+    def test_all_nine_ledgers_match_between_one_and_four_threads(self) -> None:
+        original_symbol_count = self.SYMBOL_COUNT
+        self.SYMBOL_COUNT = 256
+        try:
+            for strategy_type, dataset, runtime in self._cases():
+                with self.subTest(strategy_type=strategy_type):
+                    options = {
+                        "initial_cash": 100_000.0,
+                        "commission_bps": 0.0,
+                        "commission_min": 0.0,
+                        "slippage_bps": 0.0,
+                    }
+                    serial = quant_kernel.run_backtest(
+                        dataset,
+                        runtime,
+                        {**options, "thread_count": 1},
+                    )
+                    parallel = quant_kernel.run_backtest(
+                        dataset,
+                        runtime,
+                        {**options, "thread_count": 4},
+                    )
+                    self.assertEqual(
+                        self._fingerprint(parallel),
+                        self._fingerprint(serial),
+                    )
+                    self.assertEqual(parallel.performance["thread_count"], 4)
+                    self.assertEqual(
+                        parallel.performance["parallel_sessions"],
+                        self.SESSION_COUNT,
+                    )
+                    self.assertEqual(parallel.performance["serial_sessions"], 0)
+        finally:
+            self.SYMBOL_COUNT = original_symbol_count
+
+    def test_support_resistance_parallel_result_is_repeatable(self) -> None:
+        original_symbol_count = self.SYMBOL_COUNT
+        self.SYMBOL_COUNT = 256
+        try:
+            dataset, runtime = self._support_case()
+            options = {
+                "initial_cash": 100_000.0,
+                "commission_bps": 0.0,
+                "commission_min": 0.0,
+                "slippage_bps": 0.0,
+                "thread_count": 4,
+            }
+            expected = self._fingerprint(
+                quant_kernel.run_backtest(dataset, runtime, options)
+            )
+            for repetition in range(10):
+                with self.subTest(repetition=repetition):
+                    result = quant_kernel.run_backtest(dataset, runtime, options)
+                    self.assertEqual(self._fingerprint(result), expected)
+        finally:
+            self.SYMBOL_COUNT = original_symbol_count
+
+    def test_pattern_warmup_matches_serial_with_daily_barriers(self) -> None:
+        original_symbol_count = self.SYMBOL_COUNT
+        self.SYMBOL_COUNT = 256
+        try:
+            strategy_type, bars, params = next(
+                item
+                for item in self.helper._staged_pattern_cases()
+                if item[0] == "double_bottom"
+            )
+            dataset = self.helper._dataset(
+                self.helper._pattern_matrix_days(
+                    bars,
+                    symbol_count=self.SYMBOL_COUNT,
+                    session_count=self.SESSION_COUNT,
+                )
+            )
+            runtime = self.helper._pattern_runtime(
+                strategy_type,
+                params,
+                max_positions=self.SYMBOL_COUNT,
+                position_size_pct=0.02,
+            )
+            start_date = date(2025, 1, 1) + timedelta(days=60)
+            serial = quant_kernel.run_backtest(
+                dataset,
+                runtime,
+                {"thread_count": 1, "start_date": start_date},
+            )
+            parallel = quant_kernel.run_backtest(
+                dataset,
+                runtime,
+                {"thread_count": 4, "start_date": start_date},
+            )
+            self.assertEqual(self._fingerprint(parallel), self._fingerprint(serial))
+            self.assertEqual(parallel.performance["thread_count"], 4)
+            self.assertEqual(parallel.performance["parallel_sessions"], 60)
+        finally:
+            self.SYMBOL_COUNT = original_symbol_count
+
+    def test_small_universe_uses_serial_fallback(self) -> None:
+        dataset = self.helper._dataset(self._stateless_days("trend"))
+        result = quant_kernel.run_backtest(
+            dataset,
+            self._runtime("trend"),
+            {"thread_count": 4},
+        )
+        self.assertEqual(result.performance["thread_count"], 1)
+        self.assertEqual(result.performance["parallel_sessions"], 0)
+        self.assertEqual(result.performance["serial_sessions"], self.SESSION_COUNT)
+
+    def test_thread_count_is_bounded_by_native_abi(self) -> None:
+        dataset = self.helper._dataset(self._stateless_days("trend"))
+        runtime = self._runtime("trend")
+        for thread_count in (0, 17):
+            with self.subTest(thread_count=thread_count):
+                with self.assertRaisesRegex(ValueError, "between 1 and 16"):
+                    quant_kernel.run_backtest(
+                        dataset,
+                        runtime,
+                        {"thread_count": thread_count},
+                    )
 
 
 if __name__ == "__main__":

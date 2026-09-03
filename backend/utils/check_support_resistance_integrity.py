@@ -69,9 +69,9 @@ CHECKS = {
     """,
     "duplicate_regime_starts": """
         SELECT count(*) FROM (
-          SELECT materialization_id, symbol, effective_from
+          SELECT materialization_id, instrument_id, effective_from
           FROM support_resistance_regime_versions
-          GROUP BY materialization_id, symbol, effective_from
+          GROUP BY materialization_id, instrument_id, effective_from
           HAVING count(*) > 1
         ) duplicates
     """,
@@ -101,7 +101,7 @@ CHECKS = {
         SELECT count(*) FROM (
           SELECT regime,
                  lag(regime) OVER (
-                   PARTITION BY materialization_id, symbol
+                   PARTITION BY materialization_id, instrument_id
                    ORDER BY effective_from, version
                  ) AS previous_regime
           FROM support_resistance_regime_versions

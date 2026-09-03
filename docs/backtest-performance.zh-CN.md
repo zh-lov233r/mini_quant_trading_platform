@@ -33,9 +33,9 @@ make backtest-worker-manager
 
 API 在同一事务创建 `strategy_runs` 与 `backtest_jobs`，即使自动执行不可用也返回 HTTP 201。轻量 manager 常驻，每 2 秒轮询并恢复过期 lease；它持有 PostgreSQL advisory lock，保证只有一个 leader 能启动 worker 组。存在 eligible queued 任务时，leader 启动 `backtest_worker --once --concurrency N`；worker 协调进程通过 multiprocessing `spawn` 上下文创建 `ProcessPoolExecutor`，连续清空队列、等待全部 active job 后退出。每个子进程都会重新导入应用并创建自己的 SQLAlchemy engine/session 状态，不继承协调进程的数据库连接。普通任务异常只影响对应 job；进程池损坏会让 worker 非零退出，再由 manager 现有的 1/2/5/10/30 秒封顶退避和过期 lease 恢复接管。
 
-`BACKTEST_WORKER_CONCURRENCY` 默认为 `2`，只接受 `1` 或 `2`；非整数、越界值会让启动明确失败。设为 `1` 可立即回退串行。Docker Compose 会把同一值注入 backend 与 manager，Make 目标则继承当前 shell 环境变量。配置只在进程启动时读取，不支持热更新，因此修改后必须同时重启 backend 和 manager。状态接口返回 `execution_model=process`、`configured_concurrency` 和 `available_slots=max(configured_concurrency-active_jobs, 0)`。
+`BACKTEST_WORKER_CONCURRENCY` 默认为 `2`，只接受 `1` 或 `2`。`BACKTEST_INTRA_RUN_THREADS` 默认为 `4`，接受 `1` 到 `16`；设为 `1` 可立即回退单 run 串行。有效线程数为 `min(配置线程数, max(1, 可用 CPU 数 / worker 进程数))`。Linux 优先使用 affinity/cgroup 可见 CPU 集，其他平台回退到 `os.cpu_count()`。非整数或越界值会让启动明确失败。Docker Compose 会把两个设置同时注入 backend 与 manager，Make 目标继承当前 shell 环境变量。配置只在进程启动时读取，不支持热更新，因此修改后必须同时重启 backend 和 manager。状态接口除进程容量外，还返回 `intra_run_execution_model=thread`、配置线程数和有效线程数。
 
-每个回测统一占用一个执行槽。单个 run 内部仍按交易日和标的串行，因此该设置提升多个独立回测的吞吐量，不会缩短单个回测耗时。两个全市场或长周期任务可能接近单任务两倍的内存压力；已记录的单任务验收基线峰值是 16.1 GB。应观测 peak RSS，出现内存压力时把并发降到 `1`。全局只应由 advisory-lock leader manager 启动这一组 worker；自动 manager 运行时不要额外执行 `make backtest-worker` 或其他诊断 worker，否则会突破配置的全局槽位数。
+每个回测统一占用一个进程槽。单个 run 内交易日之间保持串行，但原生内核通过一个可复用的 C++20 固定线程池并行评估同日不同标的。公司行动、退市、上一日信号成交、SELL-first、共享现金、持仓上限、确定性 BUY 排名、审计序列化和权益计算仍为串行。当日少于 `64 × 有效线程数` 行时自动串行；如果 warmup 与正式交易日都未达到阈值，则完全不创建工作线程。两个全市场或长周期任务可能接近单任务两倍的内存压力；若 CPU 限额配置不准确，“进程数 × run 内线程数”还可能导致过度并行。应观测 peak RSS 与 CPU 饱和度：需要单 run 回退时先降低 `BACKTEST_INTRA_RUN_THREADS`，内存紧张时再把进程并发降到 `1`。全局只应由 advisory-lock leader manager 启动这一组 worker；自动 manager 运行时不要额外执行 `make backtest-worker` 或其他诊断 worker，否则会突破配置的全局槽位数。
 
 `backtest_worker_managers` 中的 manager 每 5 秒心跳。leader 心跳超过 15 秒即视为自动执行不可用。空队列时，只要 manager 健康，即使没有 worker 子进程，平台仍为 ready。`make dev`、`make dev-agent-safe` 和 `make backtest-worker-manager` 会监管 manager，并在意外退出 2 秒后自动重启；`make dev-agent-all` 与 Docker Compose 使用各自的进程监管。所有完整启动路径都会强制关闭两项 paper scheduler 配置。`make dev-backend`、`make dev-frontend` 和直接运行 `uvicorn` 属于部分启动方式，不保证自动消费队列。`make backtest-worker` 仍保留为显式诊断/运维命令。
 
@@ -45,7 +45,7 @@ worker 使用 `FOR UPDATE SKIP LOCKED` claim，维护 heartbeat/lease，每个�
 
 `/backtest-tasks` 是现有研究调度、`strategy_runs`、`backtest_jobs` 和 verification candidate 的只读投影。`GET /api/backtests/tasks` 合并手动回测、每个研究 trial（包括尚未进入回测队列的 trial）和候选验证任务；已经关联 run/job 的 trial 仍只出现一行。活动任务排在终态历史之前，来源/阶段筛选和 25/50/100 条分页均由服务端执行。
 
-页面有意并列展示两层健康状态。`GET /api/research/worker-status` 解释 trial 是否仍在等待研究调度；`GET /api/backtests/worker-status` 解释已经入队的 run 是否具备执行容量。仅当当前结果页含有非终态任务时，任务列表才每 4 秒轮询。取消继续使用现有协作式回测安全边界；任务中心不会创建第二套队列，也不改变信号、成交、成本或持久化语义。
+页面有意并列展示两层健康状态。`GET /api/research/worker-status` 解释 trial 是否仍在等待研究调度；`GET /api/backtests/worker-status` 解释已经入队的 run 是否具备执行容量。仅当当前结果页含有非终态任务时，任务列表才每 4 秒轮询。取消继续使用现有协作式回测安全边界。失败的普通回测或验证回测可通过 `POST /api/backtests/{runId}/retry` 重试一次；重试会依据相同的 durable payload 创建新 run/job，并保留原失败记录用于审计。普通回测的 completed、failed 和 cancelled 终态任务可通过现有 `DELETE /api/backtests/{runId}` 边界逐条删除，删除不会沿重试链级联。研究 trial 与验证证据仍由所属实验工作流管理，只能从实验页删除。任务中心不会创建第二套队列，也不改变信号、成交、成本或持久化语义。
 
 ## 进度语义
 
@@ -84,13 +84,13 @@ worker 使用 `FOR UPDATE SKIP LOCKED` claim，维护 heartbeat/lease，每个�
 
 ## 指标与验收
 
-`summary_metrics.performance` 使用互不重叠的阶段记录 `sql_execute_ms`、`sql_fetch_ms`、`row_decode_ms`、`day_grouping_ms`、历史状态、信号、成交、明细构造、明细/摘要持久化、响应构造和总耗时。它同时记录 rows/day/signals/trades 每秒、每输入行微秒数、阶段占比、`unaccounted_ms` 与峰值 RSS；worker 终态补充 queue wait、active 和 finalization overhead。支撑/压力区子阶段只作为诊断维度，不重复计入 `unaccounted_ms`。结构化日志记录同一映射。
+`summary_metrics.performance` 使用互不重叠的阶段记录 `sql_execute_ms`、`sql_fetch_ms`、`row_decode_ms`、`day_grouping_ms`、历史状态、信号、成交、明细构造、明细/摘要持久化、响应构造和总耗时。它同时记录 rows/day/signals/trades 每秒、每输入行微秒数、阶段占比、`unaccounted_ms`、峰值 RSS、配置/有效/实际 run 内线程数、并行/串行交易日数、原生 warmup 耗时和正式信号生成耗时；worker 终态补充 queue wait、active 和 finalization overhead。支撑/压力区子阶段只作为诊断维度，不重复计入 `unaccounted_ms`。结构化日志记录同一映射。
 
 手动、研究和验证回测都使用 `run_manifest.preparedDataset` 中的稳定 key/manifest。v3 key 包含 loader revision、源数据指纹、稳定 instrument 集合、完整日期范围、feature set、价格/公司行动、symbol identity 和 universe membership 语义，不包含普通策略参数。首个运行在文件锁内原子构建相互独立且按 Fortran 顺序存储的 `int64` identity/date memmap 与 `float64` feature memmap，并写入 symbol/asset/exchange、日期 offset、公司行动和动态 universe sidecar；数值缺失统一使用 NaN。后续运行只读打开两个 buffer。v2 key 不会匹配 v3，旧文件也不会被自动删除。文件或 metadata 损坏会在锁内重建；源行数/指纹变化会标记 `data_changed`，无法恢复的缓存构建失败会直接终止运行，不回退到 Python 逐日循环。cleanup 会统计引用同一 key 的 queued/running job，存在 active lease 时拒绝删除。
 
-原生包使用 C++20、`pybind11==3.1.0`、`-O3` 和 `-DNDEBUG` 构建，并明确禁用 fast-math。本地开发执行 `.venv/bin/pip install -e backend/native`；Docker 在 Linux builder stage 生成 wheel，runtime stage 只安装该 wheel。
+原生包使用 C++20、`pybind11==3.1.0`、`-O3`、`-DNDEBUG` 和平台标准线程编译/链接参数构建，并明确禁用 fast-math。ABI 要求为 `2`，`KERNEL_VERSION` 仍为 `cpp-v1`，因为并行执行没有改变交易算法或结果语义。本地开发执行 `.venv/bin/pip install -e backend/native`；Docker 在 Linux builder stage 生成 wheel，runtime stage 只安装该 wheel。应用启动时会拒绝 ABI 不匹配的 wheel。
 
-原生 `run_backtest(dataset, strategy, options, control_callback)` 覆盖 Trend、Mean Reversion、Momentum Breakout、Island Reversal、Double Bottom、Head-and-Shoulders Bottom、Rounded Bottom、V Reversal 和 Support/Resistance。它零拷贝读取 PreparedDataset v3 NumPy buffer，并且每个正式 session 只调用一次 Python control callback；`start_date` 之前的行只预热有界历史、形态/支撑压力状态和动态股票池计数，不生成 signal、trade、equity 行或回调。typed `KernelResult` 为 signals、trades、equity/positions、universe diagnostics 和支撑/压力审计 vector 提供只读 NumPy view 与 canonical JSON 列。共享原生账本保留 T 日收盘/T+1 开盘、SELL-first、共享现金、确定性强度排序与阈值、仓位上限、分阶段目标、最低佣金、不利滑点、公司行动、稳定 identity、缺失开盘、动态股票池 exit-only 和退市归零。
+原生 `run_backtest(dataset, strategy, options, control_callback)` 覆盖 Trend、Mean Reversion、Momentum Breakout、Island Reversal、Double Bottom、Head-and-Shoulders Bottom、Rounded Bottom、V Reversal 和 Support/Resistance。内部 `options.thread_count` 对直接原生调用方默认 `1`。它零拷贝读取 PreparedDataset v3 NumPy buffer，在 warmup 与正式 session 复用同一个固定线程池，并在日期之间设置 barrier；每个正式 session 只调用一次 Python control callback；`start_date` 之前的行只预热有界历史、形态/支撑压力状态和动态股票池计数，不生成 signal、trade、equity 行或回调。Pattern 与 Support/Resistance 状态在线程启动前按 instrument 初始化，每个线程只修改自己标的的状态并写入独立结果槽；多行异常按最低输入行确定性重抛。typed `KernelResult` 为 signals、trades、equity/positions、universe diagnostics 和支撑/压力审计 vector 提供只读 NumPy view 与 canonical JSON 列，并提供只读线程/session/耗时性能数据。共享原生账本保留 T 日收盘/T+1 开盘、SELL-first、共享现金、确定性强度排序与阈值、仓位上限、分阶段目标、最低佣金、不利滑点、公司行动、稳定 identity、缺失开盘、动态股票池 exit-only 和退市归零。
 
 Paper 日信号会把有界历史和当前组合状态转换为内存 v3 列式视图，再调用 `evaluate_day(dataset_day, strategy, portfolio_state)`。回归测试要求其 action、顺序、reason、score 和 canonical metadata 与对应原生回测 session 完全一致。
 
@@ -110,6 +110,6 @@ screening 覆盖九策略 `500 symbols × 1 year` warm `summary`，要求原生�
 
 不能凭单元测试或 synthetic smoke 宣称通过性能门槛。只有另行授权的数据库规模矩阵全部达标，候选才可部署。索引或 SQL 查询改动仍必须有真实 `EXPLAIN ANALYZE` 证据，不能从 synthetic 测试推断改善。
 
-当前不依赖 Numba。并发保持 `1|2`；concurrency=4、SQL/索引、ring buffer 和更多 pattern 优化都必须先满足本文的真实观测门槛并另立改动。
+当前不依赖 Numba。外层进程并发保持 `1|2`，run 内线程限制为 `1..16` 并受可用 CPU 自动限额。把外层并发提高到 `2` 以上、SQL/索引、ring buffer 和更多 pattern 优化都必须先满足本文的真实观测门槛并另立改动。
 
 图表发布需记录生产构建的 shared 与回测详情 First Load JS，并确认 Lightweight Charts 使用独立 chunk。固定 fixture 使用 1,500/5,000 个权益点、200 个事件以及 500 根 K 线/100 个 marker；在同一生产 Chromium 连续测量 5 次，要求数据就绪到 chart-ready 中位数不超过 100 ms、平移缩放平均不低于 55 FPS，且图表主线程任务不超过 50 ms。
