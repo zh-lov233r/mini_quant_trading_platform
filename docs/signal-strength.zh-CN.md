@@ -9,7 +9,7 @@
 - `signal.min_strength_score` 的合法范围为 `[0, 100]`，默认值为 `50`。
 - T 日数据决定分数、等级、阈值结果和确定性排名，这些值在下一交易日前冻结。
 - 退出信号始终优先。通过阈值的 BUY 入场按 `strength DESC, instrument_id ASC, symbol ASC` 在下一有效交易日开盘执行，直到现金或 `risk.max_positions` 用完。
-- 某候选缺少开盘价时跳过并尝试下一名；T+1 价格不能改变已经冻结的排名。
+- 某候选缺少下一有效交易日（T+1）开盘价时跳过并尝试下一名；该开盘价不能改变已经冻结的排名。
 - 低于阈值的信号仍保留在 full 回测和 Paper run 审计数据中，但不能开仓。
 
 等级固定为：50 以下 `weak`，50 起 `medium`，70 起 `strong`，85 起 `very_strong`。API 通过 `SignalRecord.strength` 返回分数、等级、阈值、通过状态、排名、模型版本和加权组成项；旧回测返回 `null`。

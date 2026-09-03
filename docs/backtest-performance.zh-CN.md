@@ -4,7 +4,7 @@
 
 ## 原生执行边界
 
-九个 engine-ready 日线多头策略统一使用一个进程内 C++20 内核完成完整回测和 Paper Trading 日信号评估。信号规则、T 日收盘决策、下一交易日开盘成交、先卖后买、共享现金、成本、公司行动、动态股票池、持仓上限和确定性排序仍是不变量。Python 负责数据访问、durable queue、数据库事务、进度/取消、券商副作用和结果持久化；`custom` 继续 stored-only。
+九个 engine-ready 日线多头策略统一使用一个进程内 C++20 内核完成完整回测和 Paper Trading 日信号评估。信号规则、T 日收盘决策、下一有效交易日（T+1）开盘成交、先卖后买、共享现金、成本、公司行动、动态股票池、持仓上限和确定性排序仍是不变量。Python 负责数据访问、durable queue、数据库事务、进度/取消、券商副作用和结果持久化；`custom` 继续 stored-only。
 
 系统不再提供运行时引擎选择、job 级 engine version 或 Python 执行回退。新回测摘要写入 `kernel.version=cpp-v1`、ABI、build ID、PreparedDataset schema `v3` 和策略算法 revision；历史记录继续可读。运维回滚是重新部署上一个已验证的应用/wheel 构建，不是在当前进程内选择旧引擎。
 
@@ -74,7 +74,7 @@ worker 使用 `FOR UPDATE SKIP LOCKED` claim，维护 heartbeat/lease，每个�
 
 权益、生命周期和全局股票图表统一使用固定版本 `lightweight-charts@5.2.1` 的客户端模块。模块仅在图表可见时动态加载，不进入 shared 首屏 chunk。平移、滚轮及触控缩放、十字光标和 resize 使用原生 Canvas 交互。Canvas primitives 保留岛形缺口、双底、支撑/压力区域、连接线及标签避让。面板关闭或切换时会销毁图表实例和附加 primitive。TradingView 内置 attribution logo 保持开启。
 
-渲染层变化不改变回测计算、T+1 成交、费用、公司行动、持仓、指标、快照持久化、paper trading 或 worker/scheduler 行为。
+渲染层变化不改变回测计算、下一有效交易日（T+1）开盘成交、费用、公司行动、持仓、指标、快照持久化、paper trading 或 worker/scheduler 行为。
 
 ## 数据库上线与恢复
 

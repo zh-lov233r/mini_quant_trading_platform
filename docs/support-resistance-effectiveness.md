@@ -8,7 +8,7 @@ This workflow independently validates the pre-registered `pivot-slope-regime-v3`
 
 The market-data warm-up begins on 2016-03-18. Research starts on 2017-03-20; 2024-01-02 through 2026-08-27 is sealed until candidate selection is frozen. The protocol has seed `20260828`, 10,000 two-dimensional month/instrument block-bootstrap replicates, a 40-session event de-duplication window, and an absolute limit of 200 backtests.
 
-`universePolicy.type=point_in_time_liquid` is mutually exclusive with `basketId` and `symbols`. Entry eligibility is evaluated at the T close for T+1 execution:
+`universePolicy.type=point_in_time_liquid` is mutually exclusive with `basketId` and `symbols`. Entry eligibility is evaluated at the T close for next-valid-session (T+1) open execution:
 
 - common stock on XNAS, XNYS, or XASE;
 - unadjusted close at least USD 5;

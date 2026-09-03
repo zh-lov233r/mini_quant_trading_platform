@@ -9,7 +9,7 @@ The nine engine-ready strategy categories calculate a deterministic, strategy-lo
 - `signal.min_strength_score` is validated within `[0, 100]` and defaults to `50`.
 - Day T data produces the score, level, threshold result, and deterministic rank. These values are frozen before the next session.
 - Exit signals always run first. Passing BUY entries then run by `strength DESC, instrument_id ASC, symbol ASC` at the next valid session open until cash or `risk.max_positions` is exhausted.
-- A missing open price skips that candidate and allows the next ranked candidate to proceed. T+1 prices never change the frozen rank.
+- A missing next-valid-session (T+1) open price skips that candidate and allows the next ranked candidate to proceed. That open price never changes the frozen rank.
 - Signals below the threshold remain in full-persistence backtests and paper-run audit data but cannot open a position.
 
 Levels are `weak` below 50, `medium` from 50, `strong` from 70, and `very_strong` from 85. The API exposes the score, level, threshold, pass flag, rank, model version, and weighted components as `SignalRecord.strength`; legacy runs return `null`.

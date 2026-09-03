@@ -10,7 +10,7 @@
 - [系统架构](architecture.zh-CN.md)：子系统边界、数据流、执行时序和安全不变量。
 - [研究实验](research-experiments.zh-CN.md)：实验输入、trial 生命周期、停止策略、报告和恢复行为。
 - [回测性能与 worker 运维](backtest-performance.zh-CN.md)：共享原生内核边界、typed COPY 持久化、durable job、benchmark 门槛和恢复。
-- [BUY 信号强度](signal-strength.zh-CN.md)：各大类 0–100 公式、阈值排名、T/T+1 时序和审计字段。
+- [BUY 信号强度](signal-strength.zh-CN.md)：各大类 0–100 公式、阈值排名、T 日收盘/下一有效交易日开盘时序和审计字段。
 - [底部反转策略](bottom-reversal-strategies.zh-CN.md)：五类形态、三阶段累计目标、审计字段与安全边界。
 - [支撑线与压力线策略](support-resistance-strategy.zh-CN.md)：原生因果 Pivot/ATR 区域与状态、入场退出、typed 稀疏持久化、缓存失效和数据库上线。
 - [支撑/压力区策略有效性研究](support-resistance-effectiveness.zh-CN.md)：预注册动态股票池验证、父子编排、判定门槛和双语报告交付。

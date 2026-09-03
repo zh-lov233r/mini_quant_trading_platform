@@ -8,7 +8,7 @@
 
 行情从 2016-03-18 预热，研究从 2017-03-20 开始；2024-01-02 至 2026-08-27 在候选冻结前保持封存。协议固定随机种子 `20260828`、10,000 次“月份 + instrument”双维分块 bootstrap、40 个交易日事件去重窗，以及最多 200 次回测。
 
-`universePolicy.type=point_in_time_liquid` 与 `basketId`、`symbols` 三选一。T 日收盘确定成员，T+1 执行：
+`universePolicy.type=point_in_time_liquid` 与 `basketId`、`symbols` 三选一。T 日收盘确定成员，在下一有效交易日（T+1）开盘执行：
 
 - XNAS、XNYS 或 XASE 的普通股；
 - T 日未复权收盘价至少 5 美元；

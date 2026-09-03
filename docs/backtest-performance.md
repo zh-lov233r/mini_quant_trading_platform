@@ -4,7 +4,7 @@
 
 ## Native execution boundary
 
-All nine engine-ready daily long strategies use one in-process C++20 kernel for both full backtests and Paper Trading signal evaluation. Signal rules, day-T close decisions, next-session open fills, sell-before-buy ordering, shared cash, costs, corporate actions, dynamic-universe handling, position limits, and deterministic ordering remain invariants. Python owns data access, the durable queue, database transactions, progress/cancellation, broker effects, and result persistence. `custom` remains stored-only.
+All nine engine-ready daily long strategies use one in-process C++20 kernel for both full backtests and Paper Trading signal evaluation. Signal rules, day-T close decisions, next-valid-session (T+1) open fills, sell-before-buy ordering, shared cash, costs, corporate actions, dynamic-universe handling, position limits, and deterministic ordering remain invariants. Python owns data access, the durable queue, database transactions, progress/cancellation, broker effects, and result persistence. `custom` remains stored-only.
 
 There is no runtime engine selector, job-level engine version, or Python execution fallback. New run summaries record `kernel.version=cpp-v1`, ABI, build ID, PreparedDataset schema `v3`, and the strategy algorithm revision. Historical records remain readable. Operational rollback means redeploying the previously validated application/wheel build, not selecting an old engine inside the current process.
 
@@ -74,7 +74,7 @@ After completion, the first 100 newest transactions make the detail tables avail
 
 Equity, lifecycle, and global stock charts use the pinned `lightweight-charts@5.2.1` client-only module. It is dynamically loaded only when a chart is visible and does not enter the shared first-load chunk. Native canvas interaction handles panning, wheel and touch zoom, crosshairs, and resize. Canvas primitives preserve island gaps, Double Bottom annotations, Support/Resistance regions, connectors, and collision-aware labels. Chart instances and attached primitives are destroyed when their panel closes or changes. The built-in TradingView attribution logo remains enabled.
 
-Rendering changes do not alter backtest calculations, T+1 execution, costs, corporate actions, positions, metrics, snapshot persistence, paper trading, or worker/scheduler behavior.
+Rendering changes do not alter backtest calculations, next-valid-session (T+1) open execution, costs, corporate actions, positions, metrics, snapshot persistence, paper trading, or worker/scheduler behavior.
 
 ## Database rollout and recovery
 

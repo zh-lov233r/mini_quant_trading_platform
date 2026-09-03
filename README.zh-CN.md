@@ -21,7 +21,7 @@
   - 五类底部反转策略使用 20% / 50% / 100% 累计目标分批建仓；详见 [底部反转策略](docs/bottom-reversal-strategies.zh-CN.md)
   - 当前 engine-ready 的执行型策略包含 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`、`head_shoulders_bottom`、`rounded_bottom`、`v_reversal`、`support_resistance`
   - 九个 engine-ready 策略全部只由共享 C++ 内核执行；`custom` 继续 stored-only，不是可执行 DSL
-  - `momentum_breakout` 只使用现有优先前复权的日线收盘价、SMA20、20 日收益和成交量特征；T 日收盘信号继续在下一交易日开盘成交
+  - `momentum_breakout` 只使用现有优先前复权的日线收盘价、SMA20、20 日收益和成交量特征；T 日收盘信号在下一有效交易日（T+1）开盘成交
 
 - 市场数据与特征工程
   - 维护 instruments、EOD bars、adjusted prices、daily features
@@ -36,14 +36,14 @@
   - 手动、研究和验证回测统一解析稳定 instrument identity，并复用按数据指纹寻址的只读 v3 列式 PreparedDataset；损坏或漂移的缓存会原子重建，不回退到 Python 逐日循环
   - 通过增量接口加载摘要、下采样权益、signals 和 transactions
   - 所有 engine-ready 运行由进程内 C++20 内核执行，并用同一事务中的 psycopg3 `COPY` 持久化 typed 结果；Python 只保留队列、数据库、进度/取消和结果编排
-  - 按 T 日冻结的信号强度对同策略 BUY 排名，再于 T+1 尝试成交；详见[信号强度](docs/signal-strength.zh-CN.md)
+  - 按 T 日冻结的信号强度对同策略 BUY 排名，再于下一有效交易日（T+1）开盘尝试成交；详见[信号强度](docs/signal-strength.zh-CN.md)
 
 - Paper trading
   - 支持多个 Alpaca paper account
   - 支持一个 account 下挂多个 strategy portfolio
   - 支持 strategy allocation、capital base、是否允许碎股、是否参与 auto-run
   - 支持单策略和多策略 paper trading
-  - 将 Paper 历史转换为内存 PreparedDataset v3，并调用原生 `evaluate_day(dataset_day, strategy, portfolio_state)`，与回测共享规则和 canonical metadata；券商查询、幂等订单、策略资金隔离和下一交易日实时报价校验继续留在 Python
+  - 将 Paper 历史转换为内存 PreparedDataset v3，并调用原生 `evaluate_day(dataset_day, strategy, portfolio_state)`，与回测共享规则和 canonical metadata；券商查询、幂等订单、策略资金隔离和下一有效交易日开盘实时报价校验继续留在 Python
   - 支持向 Alpaca 提交真实 paper order
 
 - 每日 scheduler

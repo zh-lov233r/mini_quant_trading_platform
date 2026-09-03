@@ -21,7 +21,7 @@ The repository currently has two main parts:
   - The five bottom-reversal categories use cumulative 20% / 50% / 100% staged entries; see [Bottom-reversal strategies](docs/bottom-reversal-strategies.md)
   - Engine-ready execution currently supports `trend`, `mean_reversion`, `momentum_breakout`, `island_reversal`, `double_bottom`, `head_shoulders_bottom`, `rounded_bottom`, `v_reversal`, and `support_resistance`
   - All nine engine-ready strategies execute only through the shared C++ kernel; `custom` remains stored-only and is not an executable DSL
-  - `momentum_breakout` uses existing forward-adjusted-when-available daily close, SMA20, 20-day return, and volume features; day-T close signals retain next-session open backtest fills
+  - `momentum_breakout` uses existing forward-adjusted-when-available daily close, SMA20, 20-day return, and volume features; day-T close signals fill at the next valid session (T+1) open
 
 - Market data and feature engineering
   - Maintain instruments, EOD bars, adjusted prices, and daily features
@@ -36,14 +36,14 @@ The repository currently has two main parts:
   - Resolve stable instrument identity and reuse a fingerprinted, read-only v3 columnar PreparedDataset for manual, research, and verification runs; corrupt or drifted caches rebuild atomically and never fall back to a Python trading-day loop
   - Load summary, downsampled equity, signals, and transactions through incremental APIs
   - Execute every engine-ready run with the in-process C++20 kernel and persist typed results with transaction-scoped psycopg3 `COPY`; Python retains queueing, database, progress/cancellation, and result orchestration
-  - Rank same-strategy BUY signals by a frozen day-T strength score before day-(T+1) fills; see [Signal strength](docs/signal-strength.md)
+  - Rank same-strategy BUY signals by a frozen day-T strength score before next-valid-session (T+1) open fills; see [Signal strength](docs/signal-strength.md)
 
 - Paper trading
   - Support multiple Alpaca paper accounts
   - Support multiple strategy portfolios under one paper account
   - Support strategy allocation, capital base, fractional trading, and auto-run flags
   - Support single-strategy and multi-strategy paper trading
-  - Convert Paper history into an in-memory PreparedDataset v3 and call native `evaluate_day(dataset_day, strategy, portfolio_state)`, sharing the same rules and canonical metadata as backtests; broker queries, idempotent orders, sleeve isolation, and next-session quote validation remain in Python
+  - Convert Paper history into an in-memory PreparedDataset v3 and call native `evaluate_day(dataset_day, strategy, portfolio_state)`, sharing the same rules and canonical metadata as backtests; broker queries, idempotent orders, sleeve isolation, and next-valid-session-open quote validation remain in Python
   - Support real paper-order submission to Alpaca
 
 - Daily scheduler

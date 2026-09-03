@@ -28,7 +28,7 @@ Each stage records `pattern_type`, `setup_id`, `stage_index`, `stage_key`, `stag
 | Rounded bottom | First right-side pullback | Second higher pullback | Volume-backed rim breakout |
 | V reversal | High-volume bottom pivot | Volume-backed continuation | Range breakout and low-volume retest |
 
-A Pivot is usable only after its right-side confirmation bars exist. Rounded-bottom detection fits a quadratic curve to log closes over an 80–240 session window by default. Every stage uses only data observable at its signal timestamp: signals form after the day-T close and fill at the next valid session open.
+A Pivot is usable only after its right-side confirmation bars exist. Rounded-bottom detection fits a quadratic curve to log closes over an 80–240 session window by default. Every stage uses only data observable at its signal timestamp: signals form after the day-T close and fill at the next valid session (T+1) open.
 
 ## Exits and safety boundary
 

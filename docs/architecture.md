@@ -37,8 +37,10 @@ Reusable strategy definitions and parameter normalization live in the strategy r
 The daily timing model is:
 
 ```text
-day T data closes -> day T signal is generated -> next available session opens -> fill at day T+1 open
+day T data closes -> day T signal is generated -> next valid session (T+1) opens -> fill at that session's open
 ```
+
+Here `T+1` means the next valid market session, not the next calendar day. The fill reference is that session's opening price; it is never the T+1 close.
 
 A signal must never use data that was unavailable at its signal timestamp. Runs, dates, symbols, signals, and fills must remain deterministically ordered. Costs, slippage, commissions, missing sessions, corporate actions, inactive instruments, and partial or fractional fills are part of execution correctness.
 
