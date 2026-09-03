@@ -63,7 +63,7 @@ T 日只能使用 T-1 日收盘后冻结的区域。T 日判断结束后才追�
 - `support_resistance_run_materializations`：运行与共享缓存的审计关联。
 - `support_resistance_run_events`：触碰、突破、回踩、候选、选择、通道起止、信号/成交拒绝、评分结果、角色转换和失效事件。
 
-缓存身份包含 v3 算法、检测器 revision、regime-logic revision、规范化检测参数、价格语义、标的集合哈希、覆盖区间和源数据指纹，不能复用 v2 materialization。只有覆盖起止与请求完全相同的物化可复用，避免交易日序号偏移改变投影价格。系统在读取行情前冻结指纹并在持久化前再次校验；若运行中数据变化或状态完整性检查失败，整个构建失败，不能保存为 completed 缓存。区域和状态版本均不可回写；未来数据只能追加版本或生成新 materialization。
+结构缓存身份包含 v3 算法、检测器 revision、regime-logic revision、规范化检测参数、价格语义、标的集合哈希和覆盖区间，不能复用 v2 materialization。只有覆盖起止与请求完全相同且 `invalidated_at IS NULL` 的物化可复用，避免交易日序号偏移改变投影价格。任何受支持的行情写入前，排他维护窗口会先失效当前记录；后续运行可用同一结构键创建新的当前物化，同时保留历史运行链接。状态完整性检查失败时整个构建仍然失败。区域和状态版本均不可回写。
 
 首个明细写入前，持久化层会完整校验 typed 列长/顺序、枚举与 JSON、稳定 instrument 引用、有限数/数据库数值边界、完整状态时间线和投影后的 zone/event 几何。PostgreSQL 使用当前事务的 psycopg3 `COPY FROM STDIN` connection，以每批 5,000 行写入 zone version、regime version 和 run event，并在每批前检查取消。批次不独立提交；校验、COPY、取消或物化任一失败都会回滚整次运行结果。
 
@@ -111,7 +111,7 @@ GET /api/backtests/{run_id}/support-resistance?symbol=AAPL&start_date=2025-01-01
 
 5. 部署后端和前端代码；schema 上线不得顺带激活 allocation。
 
-回滚时先回滚应用；新增状态表可留作审计。若明确授权删除，先备份并确认没有 v3 materialization 引用，再删除状态表。不能为了修复陈旧缓存直接 drop 表。EOD、复权价格或 `daily_features` 修正后重新运行目标回测即可；新源指纹会生成新 materialization，被运行引用的旧证据继续保留。
+回滚时先回滚应用；新增状态表可留作审计。若明确授权删除，先备份并确认没有 v3 materialization 引用，再删除状态表。不能为了修复陈旧缓存直接 drop 表。通过维护流水线修正 EOD、复权价格或 `daily_features` 后重新运行目标回测；已失效的历史物化继续作为运行证据保留，并生成新的当前物化。
 
 ## 验证
 

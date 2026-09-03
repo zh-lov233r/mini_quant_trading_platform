@@ -24,7 +24,6 @@ from src.services.native_backtest_service import _load_prepared_dataset
 from src.services.prepared_dataset_service import (
     PREPARED_DATASET_SCHEMA_VERSION,
     PreparedDatasetCache,
-    PreparedDatasetDataChangedError,
     encode_prepared_snapshot,
 )
 from src.services.strategy_engine import evaluate_native_signals
@@ -37,16 +36,43 @@ from backend.utils.benchmark_backtests import (
 
 
 class BacktestPerformanceComponentTests(unittest.TestCase):
+    def test_native_warm_dataset_opens_without_source_scan(self) -> None:
+        cache = MagicMock()
+        dataset = SimpleNamespace(sidecar={})
+        cache.open.return_value = dataset
+        db = MagicMock()
+        resolved_universe = SimpleNamespace(manifest=lambda: {}, instrument_ids=[1])
+
+        with (
+            patch(
+                "src.services.native_backtest_service.PreparedDatasetCache",
+                return_value=cache,
+            ),
+            patch(
+                "src.services.native_backtest_service.MarketDataLoader",
+                autospec=True,
+            ) as loader_class,
+        ):
+            loaded, _manifest, status, materialization = _load_prepared_dataset(
+                db,
+                runtime={"strategy_type": "trend"},
+                symbols=["AAA"],
+                resolved_universe=resolved_universe,
+                start_date=date(2025, 1, 2),
+                end_date=date(2025, 1, 2),
+                universe_policy=None,
+                supplied=None,
+                performance={},
+            )
+
+        self.assertIs(loaded, dataset)
+        self.assertEqual(status, "warm")
+        self.assertIsNone(materialization)
+        db.execute.assert_not_called()
+        loader_class.assert_not_called()
+
     def test_native_cold_dataset_build_supplies_loader_performance(self) -> None:
         performance: dict[str, object] = {}
-        fingerprint = {
-            "sha256": "a" * 64,
-            "rowCount": 1,
-            "instrumentIds": [1],
-            "startDate": "2025-01-02",
-            "endDate": "2025-01-02",
-            "universePolicy": None,
-        }
         cache = MagicMock()
         cache.open.return_value = None
         dataset = SimpleNamespace(sidecar={})
@@ -57,13 +83,11 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
             return dataset
 
         cache.build.side_effect = build
-        resolved_universe = SimpleNamespace(manifest=lambda: {})
+        resolved_universe = SimpleNamespace(manifest=lambda: {}, instrument_ids=[1])
+        db = MagicMock()
+        db.execute.return_value.scalar_one.return_value = 1
 
         with (
-            patch(
-                "src.services.research_experiment_service.calculate_data_fingerprint",
-                return_value=fingerprint,
-            ),
             patch(
                 "src.services.native_backtest_service.PreparedDatasetCache",
                 return_value=cache,
@@ -85,7 +109,7 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
                 )
             ]
             loaded, _manifest, status, materialization = _load_prepared_dataset(
-                MagicMock(),
+                db,
                 runtime={"strategy_type": "trend"},
                 symbols=["AAA"],
                 resolved_universe=resolved_universe,
@@ -306,13 +330,12 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
                 self.assertIn("ENTRY", {event.symbol for event in events})
                 self.assertTrue(all("strength" in event.metadata for event in events if event.action == "BUY" and float(event.metadata.get("position") or 0) >= 0))
 
-    def test_prepared_dataset_is_read_only_atomic_and_fingerprint_addressed(self) -> None:
+    def test_prepared_dataset_is_read_only_atomic_and_structurally_addressed(self) -> None:
         manifest = {
             "instrument_intervals": [[1, "2025-01-01", None]],
             "date_range": ["2025-01-01", "2025-01-03"],
             "feature_set": ["close", "ret_20d"],
             "price_semantics": "forward_adjusted_when_available",
-            "data_fingerprint": "a" * 64,
         }
         with tempfile.TemporaryDirectory() as directory:
             cache = PreparedDatasetCache(Path(directory))
@@ -341,11 +364,10 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
 
     def test_prepared_dataset_concurrent_build_and_corruption_recovery(self) -> None:
         manifest = {
-            "loader_schema_version": "v1",
+            "loader_schema_version": PREPARED_DATASET_SCHEMA_VERSION,
             "instrument_ids": [1],
             "date_range": ["2025-01-01", "2025-01-02"],
             "feature_set": ["daily_features"],
-            "data_fingerprint": "b" * 64,
         }
         with tempfile.TemporaryDirectory() as directory:
             cache = PreparedDatasetCache(Path(directory))
@@ -378,7 +400,7 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
             self.assertTrue(all(not array.writeable for array in arrays))
             self.assertEqual(cache.metadata(manifest)["sidecar"]["date_offsets"][1][1], 1)
 
-            data_path = next(Path(directory).glob("*.v3/integers.npy"))
+            data_path = next(Path(directory).glob("*.v4/integers.npy"))
             data_path.write_bytes(b"corrupt")
             rebuilt = cache.build(manifest, row_count=2, writer=writer)
             self.assertEqual(writes, 2)
@@ -390,7 +412,6 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
             "instrument_ids": [1],
             "date_range": ["2025-01-01", "2025-01-02"],
             "feature_set": ["daily_features"],
-            "data_fingerprint": "c" * 64,
         }
         with tempfile.TemporaryDirectory() as directory:
             cache = PreparedDatasetCache(Path(directory))
@@ -426,23 +447,53 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
             db.execute.return_value.scalar_one.return_value = 0
             self.assertTrue(cache.cleanup_if_unused(db, manifest))
 
-    def test_prepared_dataset_failed_fingerprint_build_is_not_published(self) -> None:
+    def test_prepared_dataset_failed_build_is_not_published(self) -> None:
         manifest = {
             "loader_schema_version": PREPARED_DATASET_SCHEMA_VERSION,
             "instrument_ids": [1],
-            "date_range": ["2025-01-01", "2025-01-01"],
+            "date_range": ["2025-01-01", "2025-01-02"],
             "feature_set": ["daily_features"],
-            "data_fingerprint": "d" * 64,
         }
         with tempfile.TemporaryDirectory() as directory:
             cache = PreparedDatasetCache(Path(directory))
 
             def writer(_array: object) -> None:
-                raise PreparedDatasetDataChangedError("fingerprint changed")
+                raise RuntimeError("loader failed")
 
-            with self.assertRaises(PreparedDatasetDataChangedError):
+            with self.assertRaises(RuntimeError):
                 cache.build(manifest, row_count=1, writer=writer)
-            self.assertEqual(list(Path(directory).glob("*.v3")), [])
+            self.assertEqual(list(Path(directory).glob("*.v4")), [])
+
+    def test_prepared_dataset_invalidation_removes_generated_versions(self) -> None:
+        manifest = {
+            "loader_schema_version": PREPARED_DATASET_SCHEMA_VERSION,
+            "instrument_ids": [1],
+            "date_range": ["2025-01-01", "2025-01-01"],
+            "feature_set": ["daily_features"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            cache = PreparedDatasetCache(Path(directory))
+
+            def writer(dataset: object) -> None:
+                for index in range(2):
+                    encode_prepared_snapshot(
+                        dataset,
+                        index,
+                        {
+                            "instrument_id": 1,
+                            "symbol": "AAA",
+                            "dt_ny": date(2025, 1, index + 1),
+                        },
+                    )
+
+            cache.build(
+                manifest,
+                row_count=2,
+                writer=writer,
+            )
+
+            self.assertEqual(cache.invalidate_all(), 1)
+            self.assertIsNone(cache.open(manifest))
 
 
 if __name__ == "__main__":

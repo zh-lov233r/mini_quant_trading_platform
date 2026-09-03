@@ -66,6 +66,7 @@ import {
 } from "@/utils/backtestTransactions";
 import {
   buildEquityEventMarkers,
+  candleMarkerColor,
   isDisplayableSupportResistanceEventType,
   latestVisibleZoneOverlaysByRole,
   normalizeEquityPoints,
@@ -78,6 +79,11 @@ import type {
   ChartZoneOverlay,
 } from "@/components/charts/chartModels";
 import { isLifecycleInteractiveTarget } from "@/utils/lifecycleInteraction";
+import {
+  buildPatternLifecycleMarkers,
+  earliestPatternAnchorDate,
+  selectLifecyclePattern,
+} from "@/utils/patternLifecycle";
 
 // Keep the chart engine out of the shared application and server-rendered bundles.
 const EquityLightweightChart = dynamic(
@@ -468,6 +474,7 @@ type PositionLifecycleRow = {
   qty: number;
   entryTs: string | null;
   entrySignalTs: string | null;
+  entrySignalFeatures: Record<string, unknown> | null;
   exitTs: string | null;
   exitSignalTs: string | null;
   markTs: string | null;
@@ -544,20 +551,6 @@ type IslandReversalGapSetup = {
   breakoutGapPct: number | null;
 };
 
-type DoubleBottomSetup = {
-  leftBottomTradeDate: string;
-  rightBottomTradeDate: string;
-  leftBottomLow: number;
-  rightBottomLow: number;
-  necklineTradeDate: string | null;
-  necklinePrice: number | null;
-  breakoutTradeDate: string | null;
-  breakoutClose: number | null;
-  breakoutWaitBars: number | null;
-  breakoutVolumeRatio: number | null;
-  bottomDistancePct: number | null;
-};
-
 type LifecycleGapOverlay = {
   key: string;
   label: string;
@@ -574,6 +567,7 @@ type OpenLifecycleLot = {
   qty: number;
   entryTs: string | null;
   entrySignalTs: string | null;
+  entrySignalFeatures: Record<string, unknown> | null;
   entryTradeDate: string | null;
   entrySignalTradeDate: string | null;
   entryPrice: number;
@@ -756,6 +750,7 @@ function buildPositionLifecycleRows(run: BacktestDetailOut): PositionLifecycleRo
         qty: txn.qty,
         entryTs: txn.ts || null,
         entrySignalTs: signalTs,
+        entrySignalFeatures: getObjectValue(txn.meta?.entry_signal_features),
         entryTradeDate: tradeDate,
         entrySignalTradeDate: signalTradeDate,
         entryPrice: txn.price,
@@ -795,6 +790,7 @@ function buildPositionLifecycleRows(run: BacktestDetailOut): PositionLifecycleRo
         qty: matchedQty,
         entryTs: lot.entryTs,
         entrySignalTs: lot.entrySignalTs,
+        entrySignalFeatures: lot.entrySignalFeatures,
         exitTs: txn.ts || null,
         exitSignalTs: signalTs,
         markTs: null,
@@ -850,6 +846,7 @@ function buildPositionLifecycleRows(run: BacktestDetailOut): PositionLifecycleRo
         qty: lot.qty,
         entryTs: lot.entryTs,
         entrySignalTs: lot.entrySignalTs,
+        entrySignalFeatures: lot.entrySignalFeatures,
         exitTs: null,
         exitSignalTs: null,
         markTs: latestSnapshotTs,
@@ -2586,39 +2583,6 @@ function extractIslandReversalGapSetup(signal: BacktestSignalOut | null): Island
   };
 }
 
-function extractDoubleBottomSetup(signal: BacktestSignalOut | null): DoubleBottomSetup | null {
-  const features = getObjectValue(signal?.features);
-  const setup = getObjectValue(features?.setup);
-  if (!setup) {
-    return null;
-  }
-
-  const leftBottomTradeDate = getRecordText(setup, "left_bottom_trade_date");
-  const necklineTradeDate = getRecordText(setup, "neckline_trade_date");
-  const rightBottomTradeDate = getRecordText(setup, "right_bottom_trade_date");
-  const breakoutTradeDate = getRecordText(setup, "breakout_trade_date");
-  const leftBottomLow = getRecordNumber(setup, "left_bottom_low");
-  const rightBottomLow = getRecordNumber(setup, "right_bottom_low");
-
-  if (!leftBottomTradeDate || !rightBottomTradeDate || leftBottomLow == null || rightBottomLow == null) {
-    return null;
-  }
-
-  return {
-    leftBottomTradeDate,
-    rightBottomTradeDate,
-    leftBottomLow,
-    rightBottomLow,
-    necklineTradeDate,
-    necklinePrice: getRecordNumber(setup, "neckline_price"),
-    breakoutTradeDate,
-    breakoutClose: getRecordNumber(setup, "breakout_close"),
-    breakoutWaitBars: getRecordNumber(setup, "breakout_wait_bars"),
-    breakoutVolumeRatio: getRecordNumber(setup, "breakout_volume_ratio"),
-    bottomDistancePct: getRecordNumber(setup, "bottom_distance_pct"),
-  };
-}
-
 function buildSupportResistanceMarkers(
   events: SupportResistanceRunEventOut[],
   locale: string,
@@ -2773,99 +2737,6 @@ function regimeReasonLabel(reasonCode: string, isZh: boolean): string {
   return resolved ? (isZh ? resolved.zh : resolved.en) : reasonCode;
 }
 
-function buildDoubleBottomSetupMarkers(
-  setup: DoubleBottomSetup | null,
-  locale: string,
-  isZh: boolean
-): LifecycleChartMarker[] {
-  if (!setup) {
-    return [];
-  }
-
-  const sharedParts = [
-    setup.bottomDistancePct != null
-      ? `${isZh ? "底部价差" : "Bottom Spread"} ${formatPercent(setup.bottomDistancePct, 2)}`
-      : null,
-    setup.necklinePrice != null
-      ? `${isZh ? "颈线" : "Neckline"} ${formatCurrency(setup.necklinePrice, locale)}`
-      : null,
-  ].filter(Boolean);
-
-  const markers: LifecycleChartMarker[] = [
-    {
-      key: `left-bottom-${setup.leftBottomTradeDate}`,
-      label: isZh ? "左底" : "Left Bottom",
-      date: setup.leftBottomTradeDate,
-      price: setup.leftBottomLow,
-      tone: "left_bottom",
-      description: [
-        isZh ? "双底左底" : "Double-Bottom Left Low",
-        setup.leftBottomTradeDate,
-        formatCurrency(setup.leftBottomLow, locale),
-        ...sharedParts,
-      ].join(" · "),
-    },
-    {
-      key: `right-bottom-${setup.rightBottomTradeDate}`,
-      label: isZh ? "右底" : "Right Bottom",
-      date: setup.rightBottomTradeDate,
-      price: setup.rightBottomLow,
-      tone: "right_bottom",
-      description: [
-        isZh ? "双底右底" : "Double-Bottom Right Low",
-        setup.rightBottomTradeDate,
-        formatCurrency(setup.rightBottomLow, locale),
-        ...sharedParts,
-      ].join(" · "),
-    },
-  ];
-
-  if (setup.necklineTradeDate && setup.necklinePrice != null) {
-    markers.push({
-      key: `neckline-${setup.necklineTradeDate}`,
-      label: isZh ? "颈线" : "Neckline",
-      date: setup.necklineTradeDate,
-      price: setup.necklinePrice,
-      tone: "neckline",
-      description: [
-        isZh ? "双底颈线" : "Double-Bottom Neckline",
-        setup.necklineTradeDate,
-        formatCurrency(setup.necklinePrice, locale),
-        setup.bottomDistancePct != null
-          ? `${isZh ? "底部价差" : "Bottom Spread"} ${formatPercent(setup.bottomDistancePct, 2)}`
-          : null,
-      ]
-        .filter(Boolean)
-        .join(" · "),
-    });
-  }
-
-  if (setup.breakoutTradeDate) {
-    markers.push({
-      key: `breakout-${setup.breakoutTradeDate}`,
-      label: isZh ? "突破" : "Breakout",
-      date: setup.breakoutTradeDate,
-      price: setup.breakoutClose ?? setup.necklinePrice,
-      tone: "breakout",
-      description: [
-        isZh ? "双底突破确认" : "Double-Bottom Breakout",
-        setup.breakoutTradeDate,
-        setup.breakoutClose != null ? formatCurrency(setup.breakoutClose, locale) : null,
-        setup.breakoutWaitBars != null
-          ? `${isZh ? "右底后" : "After Right Bottom"} ${Math.round(setup.breakoutWaitBars)} ${isZh ? "根K线" : "bars"}`
-          : null,
-        setup.breakoutVolumeRatio != null
-          ? `${isZh ? "放量倍数" : "Volume Ratio"} ${setup.breakoutVolumeRatio.toFixed(2)}x`
-          : null,
-      ]
-        .filter(Boolean)
-        .join(" · "),
-    });
-  }
-
-  return markers;
-}
-
 function buildLifecycleGapOverlays(
   bars: CandleBarOut[],
   setup: IslandReversalGapSetup | null,
@@ -2952,20 +2823,29 @@ function LifecycleDetailPanel({
   const isZh = locale === "zh-CN";
   const collapsePointerRef = useRef<{ x: number; y: number; dragged: boolean } | null>(null);
   const resolvedEntryTradeDate = row.entryTradeDate || toTradeDateKey(row.entryTs);
-  const initialEntrySignal = findLifecycleSignal(signals, row, "BUY");
-  const initialDoubleBottomSetup = extractDoubleBottomSetup(initialEntrySignal);
+  const persistedEntrySignal: BacktestSignalOut | null = row.entrySignalFeatures
+    ? {
+        id: `entry-${row.key}`,
+        ts: row.entrySignalTs,
+        symbol: row.symbol,
+        signal: "BUY",
+        features: row.entrySignalFeatures,
+      }
+    : null;
+  const initialEntrySignal = persistedEntrySignal || findLifecycleSignal(signals, row, "BUY");
+  const initialPatternAnchorDate = earliestPatternAnchorDate(initialEntrySignal);
   const initialLookbackDays = (() => {
-    if (!initialDoubleBottomSetup || !resolvedEntryTradeDate) {
+    if (!initialPatternAnchorDate || !resolvedEntryTradeDate) {
       return LIFECYCLE_PRE_ENTRY_LOOKBACK_TRADING_DAYS;
     }
 
-    const leftBottomTime = Date.parse(`${initialDoubleBottomSetup.leftBottomTradeDate}T00:00:00Z`);
+    const anchorTime = Date.parse(`${initialPatternAnchorDate}T00:00:00Z`);
     const entryTime = Date.parse(`${resolvedEntryTradeDate}T00:00:00Z`);
-    if (!Number.isFinite(leftBottomTime) || !Number.isFinite(entryTime) || entryTime <= leftBottomTime) {
+    if (!Number.isFinite(anchorTime) || !Number.isFinite(entryTime) || entryTime <= anchorTime) {
       return LIFECYCLE_PRE_ENTRY_LOOKBACK_TRADING_DAYS;
     }
 
-    const calendarDaySpan = Math.ceil((entryTime - leftBottomTime) / 86_400_000) + 5;
+    const calendarDaySpan = Math.ceil((entryTime - anchorTime) / 86_400_000) + 5;
     return normalizeLifecycleLookbackDays(
       Math.max(LIFECYCLE_PRE_ENTRY_LOOKBACK_TRADING_DAYS, calendarDaySpan)
     );
@@ -2976,6 +2856,8 @@ function LifecycleDetailPanel({
   const [supportResistanceDetail, setSupportResistanceDetail] = useState<SupportResistanceBacktestOut | null>(null);
   const [supportResistanceLoading, setSupportResistanceLoading] = useState(false);
   const [supportResistanceError, setSupportResistanceError] = useState<string | null>(null);
+  const [patternSignals, setPatternSignals] = useState<BacktestSignalOut[]>(signals);
+  const [patternSignalError, setPatternSignalError] = useState<string | null>(null);
   const [lookbackTradingDays, setLookbackTradingDays] = useState(
     initialLookbackDays
   );
@@ -3003,20 +2885,27 @@ function LifecycleDetailPanel({
     row.status === "closed" && exitTradeDate && fetchForwardBufferDays > 0
       ? shiftDateKey(exitTradeDate, fetchForwardBufferDays) || baseEndDate
       : baseEndDate;
-  const entrySignal = useMemo(() => findLifecycleSignal(signals, row, "BUY"), [row, signals]);
+  const entrySignal = initialEntrySignal;
   const exitSignal = useMemo(() => findLifecycleSignal(signals, row, "SELL"), [row, signals]);
-  const doubleBottomSetup = useMemo(
-    () => extractDoubleBottomSetup(entrySignal) || extractDoubleBottomSetup(exitSignal),
-    [entrySignal, exitSignal]
+  const patternSelection = useMemo(
+    () => selectLifecyclePattern(patternSignals, entrySignal, row.symbol, row.exitSignalTs || row.markTs),
+    [entrySignal, patternSignals, row.exitSignalTs, row.markTs, row.symbol]
   );
-  const markers = useMemo(
-    () => [
-      ...buildLifecycleChartMarkers(row, locale, isZh),
-      ...buildDoubleBottomSetupMarkers(doubleBottomSetup, locale, isZh),
-      ...buildSupportResistanceMarkers(supportResistanceDetail?.events || [], locale, isZh),
-    ],
-    [doubleBottomSetup, isZh, locale, row, supportResistanceDetail?.events]
-  );
+
+  useEffect(() => {
+    let active = true;
+    setPatternSignals(signals.filter((signal) => signal.symbol.toUpperCase() === row.symbol.toUpperCase()));
+    setPatternSignalError(null);
+    void getBacktestSignals(runId, { symbol: row.symbol, limit: 500 })
+      .then((page) => {
+        if (active) setPatternSignals(page.items);
+      })
+      .catch((err) => {
+        if (!active) return;
+        setPatternSignalError(err instanceof Error ? err.message : (isZh ? "加载形态阶段失败" : "Failed to load pattern stages"));
+      });
+    return () => { active = false; };
+  }, [isZh, row.symbol, runId, signals]);
 
   function applyLookbackDays(nextValue: number) {
     const normalized = normalizeLifecycleLookbackDays(nextValue);
@@ -3103,6 +2992,14 @@ function LifecycleDetailPanel({
       ),
     [baseEndDate, entryTradeDate, lookbackTradingDays, postExitTradingDays, row.status, series?.bars]
   );
+  const markers = useMemo(
+    () => [
+      ...buildLifecycleChartMarkers(row, locale, isZh),
+      ...buildPatternLifecycleMarkers(patternSelection, bars, locale),
+      ...buildSupportResistanceMarkers(supportResistanceDetail?.events || [], locale, isZh),
+    ],
+    [bars, isZh, locale, patternSelection, row, supportResistanceDetail?.events]
+  );
   const visibleStartDate = bars[0]?.trade_date || fetchStartDate;
   const visibleEndDate = bars[bars.length - 1]?.trade_date || baseEndDate;
   const chartDisplayState = lifecycleChartDisplayState({
@@ -3139,16 +3036,17 @@ function LifecycleDetailPanel({
     return () => { active = false; };
   }, [bars.length, isZh, row.symbol, runId, visibleEndDate, visibleStartDate]);
   const gapSetup = useMemo(
-    () => extractIslandReversalGapSetup(entrySignal) || extractIslandReversalGapSetup(exitSignal),
-    [entrySignal, exitSignal]
+    () => extractIslandReversalGapSetup(patternSelection?.latestSignal || entrySignal || exitSignal),
+    [entrySignal, exitSignal, patternSelection]
   );
-  const requiredDoubleBottomLookback = useMemo(() => {
-    if (!doubleBottomSetup || !entryTradeDate || !series?.bars?.length) {
+  const requiredPatternLookback = useMemo(() => {
+    const earliestAnchorDate = earliestPatternAnchorDate(patternSelection?.latestSignal || entrySignal);
+    if (!earliestAnchorDate || !entryTradeDate || !series?.bars?.length) {
       return null;
     }
 
     const leftBottomIndex = series.bars.findIndex(
-      (bar) => bar.trade_date === doubleBottomSetup.leftBottomTradeDate
+      (bar) => bar.trade_date === earliestAnchorDate
     );
     const entryIndex = series.bars.findIndex(
       (bar) => bar.trade_date >= entryTradeDate
@@ -3160,7 +3058,7 @@ function LifecycleDetailPanel({
     return normalizeLifecycleLookbackDays(
       Math.max(LIFECYCLE_PRE_ENTRY_LOOKBACK_TRADING_DAYS, entryIndex - leftBottomIndex + 3)
     );
-  }, [doubleBottomSetup, entryTradeDate, series?.bars]);
+  }, [entrySignal, entryTradeDate, patternSelection, series?.bars]);
   const gapOverlays = useMemo(
     () => buildLifecycleGapOverlays(bars, gapSetup, locale, isZh),
     [bars, gapSetup, isZh, locale]
@@ -3257,15 +3155,15 @@ function LifecycleDetailPanel({
 
   useEffect(() => {
     if (
-      requiredDoubleBottomLookback == null
+      requiredPatternLookback == null
       || lookbackTradingDays !== initialLookbackDays
-      || requiredDoubleBottomLookback <= lookbackTradingDays
+      || requiredPatternLookback <= lookbackTradingDays
     ) {
       return;
     }
 
-    applyLookbackDays(requiredDoubleBottomLookback);
-  }, [initialLookbackDays, lookbackTradingDays, requiredDoubleBottomLookback]);
+    applyLookbackDays(requiredPatternLookback);
+  }, [initialLookbackDays, lookbackTradingDays, requiredPatternLookback]);
 
   return (
     <div
@@ -3324,10 +3222,10 @@ function LifecycleDetailPanel({
             {isZh
               ? `${visibleStartDate || "-"} -> ${visibleEndDate || "-"}，当前额外包含买入前 ${lookbackTradingDays} 个交易日${
                   row.status === "closed" ? `、卖出后 ${postExitTradingDays} 个交易日` : ""
-                }的走势，并标出买卖信号、实际买卖，以及形态关键位置，例如岛形反转缺口或双底的左右底、颈线与突破日。`
+                }的走势，并标出买卖信号、实际买卖，以及岛形、双底、头肩底、圆弧底和 V 型的底部、肩部、回踩与反转确认等关键位置。`
               : `${visibleStartDate || "-"} -> ${visibleEndDate || "-"}, currently including ${lookbackTradingDays} trading days before entry${
                   row.status === "closed" ? ` and ${postExitTradingDays} trading days after exit` : ""
-                } so you can see signal-generation points, actual fills, and key pattern landmarks such as island-reversal gaps or a double bottom's two lows, neckline, and breakout day.`}
+                } so you can see signal-generation points, actual fills, and the bottoms, shoulders, pullbacks, and reversal confirmations for Island, Double Bottom, Head-and-Shoulders Bottom, Rounded Bottom, and V patterns.`}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -3625,24 +3523,7 @@ function LifecycleDetailPanel({
                 <span
                   style={{
                     ...legendDotStyle,
-                    background:
-                      marker.tone === "buy"
-                        ? "#22c55e"
-                        : marker.tone === "buy_signal"
-                          ? "#38bdf8"
-                        : marker.tone === "sell"
-                          ? "#ef4444"
-                          : marker.tone === "sell_signal"
-                            ? "#f59e0b"
-                            : marker.tone === "neckline"
-                              ? "#94a3b8"
-                              : marker.tone === "breakout"
-                                ? "#f97316"
-                            : marker.tone === "left_bottom"
-                              ? "#eab308"
-                              : marker.tone === "right_bottom"
-                                ? "#14b8a6"
-                            : "#38bdf8",
+                    background: candleMarkerColor(marker.tone),
                   }}
                 />
                 {marker.description}
@@ -3652,6 +3533,11 @@ function LifecycleDetailPanel({
           {supportResistanceError ? (
             <div style={{ marginTop: 8, color: "#fbbf24", fontSize: 12 }}>
               {supportResistanceError}
+            </div>
+          ) : null}
+          {patternSignalError ? (
+            <div style={{ marginTop: 8, color: "#fbbf24", fontSize: 12 }}>
+              {patternSignalError}
             </div>
           ) : null}
         </>

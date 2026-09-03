@@ -29,18 +29,6 @@ from src.services.support_resistance_service import (
 )
 
 
-SOURCE_REVISION_SQL = """
-SELECT
-  (SELECT count(*) FROM instruments) AS instrument_count,
-  (SELECT max(updated_at) FROM instruments) AS instrument_max_updated_at,
-  (SELECT count(*) FROM symbol_history) AS symbol_history_count,
-  (SELECT max(updated_at) FROM symbol_history) AS symbol_history_max_updated_at,
-  (SELECT count(*) FROM eod_bars) AS eod_count,
-  (SELECT max(asof) FROM eod_bars) AS eod_max_asof,
-  (SELECT count(*) FROM daily_features) AS feature_count,
-  (SELECT max(asof) FROM daily_features) AS feature_max_asof
-"""
-
 BATCH_INSERT_SIZE = 5_000
 NUMERIC_24_10_ABS_LIMIT = 100_000_000_000_000.0
 NUMERIC_20_10_ABS_LIMIT = 10_000_000_000.0
@@ -67,7 +55,6 @@ class SupportResistanceMaterializationBuildError(RuntimeError):
         symbols: list[str],
         coverage_start: date,
         coverage_end: date,
-        data_fingerprint: str,
         price_semantics: str,
         detail: str,
     ) -> None:
@@ -79,27 +66,12 @@ class SupportResistanceMaterializationBuildError(RuntimeError):
         self.symbols = symbols
         self.coverage_start = coverage_start
         self.coverage_end = coverage_end
-        self.data_fingerprint = data_fingerprint
         self.price_semantics = price_semantics
         self.detail = detail
 
 
 class SupportResistancePersistenceCancelledError(RuntimeError):
     pass
-
-
-def source_data_fingerprint(db: Session) -> str:
-    """Fingerprint the adjusted-price/features revision without mutating source tables.
-
-    The revision is deliberately global: a correction invalidates more caches than
-    strictly necessary, but can never cause an older cache to be silently reused.
-    """
-    row = db.execute(text(SOURCE_REVISION_SQL)).mappings().one()
-    payload = {
-        key: value.isoformat() if isinstance(value, datetime) else value
-        for key, value in sorted(row.items())
-    }
-    return _hash_json(payload)
 
 
 def universe_hash(symbols: list[str]) -> str:
@@ -114,7 +86,6 @@ def materialization_cache_key(
     symbols_hash: str,
     coverage_start: date,
     coverage_end: date,
-    data_fingerprint: str,
 ) -> str:
     return _hash_json(
         {
@@ -124,7 +95,6 @@ def materialization_cache_key(
             "universe_hash": symbols_hash,
             "coverage_start": coverage_start.isoformat(),
             "coverage_end": coverage_end.isoformat(),
-            "source_data_fingerprint": data_fingerprint,
         }
     )
 
@@ -136,7 +106,6 @@ def find_reusable_materialization(
     symbols: list[str],
     coverage_start: date,
     coverage_end: date,
-    expected_data_fingerprint: str | None = None,
 ) -> SupportResistanceMaterialization | None:
     metadata = runtime["params"].get("metadata", {}) or {}
     algorithm_version = str(metadata.get("algorithm_version") or "pivot-slope-regime-v3")
@@ -146,16 +115,15 @@ def find_reusable_materialization(
     )
     detector = normalized_detector_params(runtime["params"])
     symbols_hash = universe_hash(symbols)
-    fingerprint = expected_data_fingerprint or source_data_fingerprint(db)
     candidates = db.execute(
         select(SupportResistanceMaterialization)
         .where(SupportResistanceMaterialization.algorithm_version == algorithm_version)
         .where(SupportResistanceMaterialization.universe_hash == symbols_hash)
-        .where(SupportResistanceMaterialization.source_data_fingerprint == fingerprint)
         .where(SupportResistanceMaterialization.price_semantics == price_semantics)
         .where(SupportResistanceMaterialization.coverage_start == coverage_start)
         .where(SupportResistanceMaterialization.coverage_end == coverage_end)
         .where(SupportResistanceMaterialization.status == "completed")
+        .where(SupportResistanceMaterialization.invalidated_at.is_(None))
         .order_by(SupportResistanceMaterialization.coverage_start.desc())
     ).scalars().all()
     return next((item for item in candidates if item.detector_params == detector), None)
@@ -265,7 +233,6 @@ def persist_support_resistance_run(
     symbols: list[str],
     coverage_start: date,
     coverage_end: date,
-    expected_data_fingerprint: str | None = None,
     persist_run_events: bool = True,
     performance: dict[str, Any] | None = None,
     progress_callback: PersistenceProgressCallback | None = None,
@@ -283,39 +250,14 @@ def persist_support_resistance_run(
     detector = normalized_detector_params(runtime["params"])
     normalized_symbols = sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()})
     symbols_hash = universe_hash(normalized_symbols)
-    observed_fingerprint = source_data_fingerprint(db)
-    data_fingerprint = expected_data_fingerprint or observed_fingerprint
-    if expected_data_fingerprint is not None and observed_fingerprint != expected_data_fingerprint:
-        cache_key = materialization_cache_key(
-            algorithm_version=algorithm_version,
-            detector_params=detector,
-            price_semantics=price_semantics,
-            symbols_hash=symbols_hash,
-            coverage_start=coverage_start,
-            coverage_end=coverage_end,
-            data_fingerprint=data_fingerprint,
-        )
-        raise SupportResistanceMaterializationBuildError(
-            cache_key=cache_key,
-            algorithm_version=algorithm_version,
-            detector_params=detector,
-            symbols_hash=symbols_hash,
-            symbols=normalized_symbols,
-            coverage_start=coverage_start,
-            coverage_end=coverage_end,
-            data_fingerprint=data_fingerprint,
-            price_semantics=price_semantics,
-            detail="source data fingerprint changed while the strategy run was executing",
-        )
-
     candidates = db.execute(
         select(SupportResistanceMaterialization)
         .where(SupportResistanceMaterialization.algorithm_version == algorithm_version)
         .where(SupportResistanceMaterialization.universe_hash == symbols_hash)
-        .where(SupportResistanceMaterialization.source_data_fingerprint == data_fingerprint)
         .where(SupportResistanceMaterialization.price_semantics == price_semantics)
         .where(SupportResistanceMaterialization.coverage_start == coverage_start)
         .where(SupportResistanceMaterialization.coverage_end == coverage_end)
+        .where(SupportResistanceMaterialization.invalidated_at.is_(None))
         .order_by(SupportResistanceMaterialization.coverage_start.desc())
     ).scalars().all()
     materialization = next(
@@ -335,7 +277,6 @@ def persist_support_resistance_run(
             symbols_hash=symbols_hash,
             coverage_start=coverage_start,
             coverage_end=coverage_end,
-            data_fingerprint=data_fingerprint,
         )
         if db.bind is not None and db.bind.dialect.name == "postgresql":
             db.execute(
@@ -343,9 +284,9 @@ def persist_support_resistance_run(
                 {"cache_key": cache_key},
             )
         materialization = db.execute(
-            select(SupportResistanceMaterialization).where(
-                SupportResistanceMaterialization.cache_key == cache_key
-            )
+            select(SupportResistanceMaterialization)
+            .where(SupportResistanceMaterialization.cache_key == cache_key)
+            .where(SupportResistanceMaterialization.invalidated_at.is_(None))
         ).scalar_one_or_none()
         if materialization is not None and materialization.status == "completed":
             should_write_zones = False
@@ -360,7 +301,6 @@ def persist_support_resistance_run(
                 symbols=normalized_symbols,
                 coverage_start=coverage_start,
                 coverage_end=coverage_end,
-                source_data_fingerprint=data_fingerprint,
                 price_semantics=price_semantics,
                 status="building",
                 statistics={},
@@ -545,7 +485,6 @@ def persist_support_resistance_run(
                 symbols=normalized_symbols,
                 coverage_start=coverage_start,
                 coverage_end=coverage_end,
-                data_fingerprint=data_fingerprint,
                 price_semantics=price_semantics,
                 detail=str(exc),
             ) from exc
@@ -575,9 +514,9 @@ def record_failed_materialization_after_rollback(
 ) -> SupportResistanceMaterialization:
     """Persist failed build evidence after the strategy transaction was rolled back."""
     materialization = db.execute(
-        select(SupportResistanceMaterialization).where(
-            SupportResistanceMaterialization.cache_key == error.cache_key
-        )
+        select(SupportResistanceMaterialization)
+        .where(SupportResistanceMaterialization.cache_key == error.cache_key)
+        .where(SupportResistanceMaterialization.invalidated_at.is_(None))
     ).scalar_one_or_none()
     if materialization is not None and materialization.status == "completed":
         return materialization
@@ -590,7 +529,6 @@ def record_failed_materialization_after_rollback(
             symbols=error.symbols,
             coverage_start=error.coverage_start,
             coverage_end=error.coverage_end,
-            source_data_fingerprint=error.data_fingerprint,
             price_semantics=error.price_semantics,
             status="failed",
             statistics={},

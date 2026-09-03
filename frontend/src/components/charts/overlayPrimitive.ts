@@ -14,6 +14,7 @@ import type {
 
 import {
   candleMarkerColor,
+  isLowerGutterMarkerTone,
   toChartTime,
 } from "@/components/charts/chartModels";
 import type {
@@ -378,9 +379,7 @@ class LifecycleOverlayRenderer implements IPrimitivePaneRenderer {
         const bar = time ? this.barByTime.get(time) : null;
         const x = time ? chart.timeScale().timeToCoordinate(time) : null;
         if (!bar || x == null) return;
-        const lowerGutter = marker.tone === "buy"
-          || marker.tone === "buy_signal"
-          || marker.tone === "left_bottom";
+        const lowerGutter = isLowerGutterMarkerTone(marker.tone);
         const anchorY = series.priceToCoordinate(lowerGutter ? bar.low : bar.high);
         if (anchorY == null) return;
 

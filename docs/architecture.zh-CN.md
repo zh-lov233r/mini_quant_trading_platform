@@ -68,9 +68,9 @@ Quant 是策略、行情、trial 和回测结果的事实来源。AgentOps 负�
 
 认证后的 `/api/agent/*` 接口被刻意限制：只校验或创建策略草案和研究实验，接收取消与 token 用量更新，不开放券商订单或组合激活。公开的 `/api/research/*` 接口供 Quant UI 和结果查询使用。
 
-引擎大类研究持久化 `ResearchExperiment -> ExperimentRound -> ExperimentCandidate -> ExperimentTrial -> StrategyRun`。候选参数先归一化并在全实验内去重，再确定性展开；Pareto 排序使用锁定的目标方向和参数哈希并列规则。轮次之间 Quant 进入 `waiting_agent`，AgentOps 重启后只基于有界聚合证据继续规划。universe 和行情输入固化指纹，漂移显式进入 `data_changed`；旧有限网格数据继续只读。详见[研究实验](research-experiments.zh-CN.md)。
+引擎大类研究持久化 `ResearchExperiment -> ExperimentRound -> ExperimentCandidate -> ExperimentTrial -> StrategyRun`。候选参数先归一化并在全实验内去重，再确定性展开；Pareto 排序使用锁定的目标方向和参数哈希并列规则。轮次之间 Quant 进入 `waiting_agent`，AgentOps 重启后只基于有界聚合证据继续规划。行情可复现性由 `ready / draining / updating / failed` 维护门禁及 PostgreSQL 共享/排他 advisory lock 保证；模型不再保存逐行指纹或 `data_changed`。旧有限网格数据继续只读。详见[研究实验](research-experiments.zh-CN.md)。
 
-预注册支撑/压力区有效性研究在该链路之上增加自引用父实验。父级保存协议哈希、不可变数据指纹、子阶段 ID、冻结冠军、留出门禁、最终判定和产物清单；子实验继续复用 PostgreSQL trial 队列。只读接口开放子实验和生成文档，报告重试仍要求 service 认证，且不授予 portfolio 或券商权限。详见[支撑/压力区策略有效性研究](support-resistance-effectiveness.zh-CN.md)。
+预注册支撑/压力区有效性研究在该链路之上增加自引用父实验。父级保存协议哈希、子阶段 ID、冻结冠军、留出门禁、最终判定和产物清单；子实验继续复用 PostgreSQL trial 队列。只读接口开放子实验和生成文档，报告重试仍要求 service 认证，且不授予 portfolio 或券商权限。详见[支撑/压力区策略有效性研究](support-resistance-effectiveness.zh-CN.md)。
 
 ## 契约与 Schema 变更
 

@@ -134,7 +134,6 @@ class BacktestDeleteApiTests(unittest.TestCase):
             symbols=["AAPL"],
             coverage_start=date(2025, 1, 1),
             coverage_end=date(2025, 1, 2),
-            source_data_fingerprint="c" * 64,
             price_semantics="adjusted",
             status="completed",
             statistics={},

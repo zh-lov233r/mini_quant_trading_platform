@@ -424,10 +424,31 @@ class BacktestWorkerManager(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
+class MarketDataMaintenanceState(Base):
+    """Singleton gate that keeps market-data writes outside strategy execution."""
+
+    __tablename__ = "market_data_maintenance_state"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_market_data_maintenance_state_singleton"),
+        CheckConstraint(
+            "status IN ('ready', 'draining', 'updating', 'failed')",
+            name="ck_market_data_maintenance_state_status",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, default=1)
+    status = Column(String(16), nullable=False, default="ready")
+    owner_token = Column(UUID(as_uuid=True))
+    requested_at = Column(DateTime(timezone=True))
+    started_at = Column(DateTime(timezone=True))
+    finished_at = Column(DateTime(timezone=True))
+    error_message = Column(Text)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
 class SupportResistanceMaterialization(Base):
     __tablename__ = "support_resistance_materializations"
     __table_args__ = (
-        UniqueConstraint("cache_key", name="uq_support_resistance_materializations_cache_key"),
         CheckConstraint(
             "status IN ('building', 'completed', 'failed')",
             name="ck_support_resistance_materializations_status",
@@ -440,9 +461,15 @@ class SupportResistanceMaterialization(Base):
             "idx_support_resistance_materializations_lookup",
             "algorithm_version",
             "universe_hash",
-            "source_data_fingerprint",
             "coverage_start",
             "coverage_end",
+        ),
+        Index(
+            "uq_support_resistance_materializations_current_cache_key",
+            "cache_key",
+            unique=True,
+            postgresql_where=text("invalidated_at IS NULL"),
+            sqlite_where=text("invalidated_at IS NULL"),
         ),
     )
 
@@ -454,13 +481,13 @@ class SupportResistanceMaterialization(Base):
     symbols = Column(JSON_VARIANT, nullable=False, default=list)
     coverage_start = Column(Date, nullable=False)
     coverage_end = Column(Date, nullable=False)
-    source_data_fingerprint = Column(String(64), nullable=False)
     price_semantics = Column(String(96), nullable=False)
     status = Column(String(16), nullable=False, default="building")
     statistics = Column(JSON_VARIANT, nullable=False, default=dict)
     error_message = Column(Text)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     completed_at = Column(DateTime(timezone=True))
+    invalidated_at = Column(DateTime(timezone=True))
 
     zone_versions = relationship(
         "SupportResistanceZoneVersion",
@@ -686,7 +713,7 @@ class ResearchExperiment(Base):
         UniqueConstraint("idempotency_key", name="uq_research_experiments_idempotency_key"),
         CheckConstraint(
             "status IN ('queued', 'running', 'waiting_agent', 'completed', 'partially_failed', "
-            "'failed', 'cancel_requested', 'cancelled', 'data_changed')",
+            "'failed', 'cancel_requested', 'cancelled')",
             name="ck_research_experiments_status",
         ),
     )
@@ -871,7 +898,6 @@ class ExperimentTrial(Base):
     window_start = Column(Date, nullable=False)
     window_end = Column(Date, nullable=False)
     cost_config = Column(JSON_VARIANT, nullable=False, default=dict)
-    data_fingerprint = Column(String(64))
     metrics = Column(JSON_VARIANT, nullable=False, default=dict)
     attempt = Column(Integer, nullable=False, default=0)
     error_code = Column(String(64))

@@ -25,7 +25,7 @@ from src.models.tables import (
     Transaction,
 )
 from src.services.backtest_engine import BacktestCancelledError, run_backtest
-from src.services.prepared_dataset_service import PreparedDatasetDataChangedError
+from src.services.market_data_maintenance_service import assert_market_data_submission_allowed
 
 log = logging.getLogger(__name__)
 UTC = timezone.utc
@@ -276,6 +276,8 @@ def enqueue_backtest_job(
     existing = db.execute(select(BacktestJob).where(BacktestJob.run_id == run.id)).scalar_one_or_none()
     if existing is not None:
         return existing
+    if source == "manual":
+        assert_market_data_submission_allowed(db)
     job = BacktestJob(
         run_id=run.id,
         experiment_trial_id=experiment_trial_id,
@@ -293,6 +295,7 @@ def enqueue_backtest_job(
 
 
 def retry_failed_backtest_job(db: Session, run_id: UUID) -> StrategyRun:
+    assert_market_data_submission_allowed(db)
     job = db.execute(
         select(BacktestJob).where(BacktestJob.run_id == run_id).with_for_update()
     ).scalar_one_or_none()
@@ -592,23 +595,6 @@ def _finalize_research_experiment(db: Session, experiment_id: UUID | None) -> No
     _commit_trial_and_finalize_experiment(db, experiment)
 
 
-def _validate_verification_payload(db: Session, payload: dict[str, Any]) -> None:
-    expected = payload.get("expected_data_fingerprint")
-    if not expected:
-        raise BacktestVerificationError("verification data fingerprint is missing")
-    from src.services.research_experiment_service import calculate_data_fingerprint
-
-    observed = calculate_data_fingerprint(
-        db,
-        symbols=list(payload.get("universe_symbols") or []),
-        start_date=datetime.fromisoformat(payload["start_date"]).date(),
-        end_date=datetime.fromisoformat(payload["end_date"]).date(),
-        universe_policy=payload.get("universe_policy"),
-    )
-    if observed.get("sha256") != expected:
-        raise BacktestVerificationError("verification data fingerprint changed")
-
-
 def _complete_candidate_verification(
     db: Session,
     *,
@@ -718,9 +704,6 @@ def execute_backtest_job(
         if run is None:
             raise ValueError("backtest run not found")
         payload = dict(job.payload or {})
-        if job.source == "verification":
-            _validate_verification_payload(db, payload)
-
         # A retry starts from an empty run-scoped detail set. The shared
         # support/resistance materialization remains reusable.
         db.execute(delete(Signal).where(Signal.run_id == run.id))
@@ -806,10 +789,6 @@ def execute_backtest_job(
             job.error_message = str(exc)[:2000]
             job.progress = _job_progress(job, "failed", percent=None, preserve=True)
             _fail_candidate_verification(db, dict(job.payload or {}), job.error_message)
-        elif isinstance(exc, PreparedDatasetDataChangedError):
-            job.status = "failed"
-            job.error_message = str(exc)[:2000]
-            job.progress = _job_progress(job, "failed", percent=None, preserve=True)
         elif job.attempt < job.max_attempts:
             job.status = "queued"
             job.available_at = datetime.now(UTC) + timedelta(seconds=5)
@@ -833,26 +812,6 @@ def execute_backtest_job(
             run.finished_at = datetime.now(UTC)
             run.error_message = job.error_message
             experiment_id = _finalize_linked_trial(db, job, run)
-            if isinstance(exc, PreparedDatasetDataChangedError) and experiment_id is not None:
-                experiment = db.get(ResearchExperiment, experiment_id)
-                if experiment is not None:
-                    experiment.status = "data_changed"
-                    experiment.error_code = "data_changed"
-                    experiment.error_message = str(exc)[:2000]
-                    experiment.finished_at = datetime.now(UTC)
-                    db.execute(
-                        ExperimentTrial.__table__.update()
-                        .where(
-                            ExperimentTrial.experiment_id == experiment_id,
-                            ExperimentTrial.status == "queued",
-                        )
-                        .values(
-                            status="cancelled",
-                            error_code="data_changed",
-                            error_message=experiment.error_message,
-                            finished_at=datetime.now(UTC),
-                        )
-                    )
         else:
             experiment_id = None
         db.commit()

@@ -29,6 +29,8 @@ make import-a-share A_SHARE_ARGS="plan --start-date 2016-01-01 --end-date 2026-0
 make import-a-share A_SHARE_ARGS="apply --start-date 2016-01-01 --end-date 2026-09-02"
 ```
 
+`apply` 与每日 Massive 流水线复用同一个排他行情维护窗口：先排空现有回测/研究工作，写入前失效派生缓存；导入未完成会保持 `failed` 并继续阻塞策略工作，修复原因并成功重跑后才恢复 `ready`。
+
 正常全量导入也会维护上证指数（`000001.SH`）和深证成指（`399001.SZ`）。只修复或更新这两个指数时运行：
 
 ```bash
@@ -48,7 +50,7 @@ make import-a-share A_SHARE_ARGS="apply --start-date 2026-09-01 --end-date 2026-
 - 证券代码保留 Tushare 后缀，例如 `000001.SZ`、`600000.SH`、`920000.BJ`；交易所保存为 `XSHE`、`XSHG`、`XBSE`，币种为 `CNY`，locale 为 `cn`。
 - `daily.vol` 的单位是“手”，导入时乘以 100 保存为股；`daily.amount` 的单位是千元，据此计算未复权 VWAP。
 - 日线时间戳使用交易日上海时间 15:00 并转换成 UTC。现有列名 `dt_ny` 是历史命名，但该时间戳在纽约时区仍落在同一公历日期，所以主键交易日与 Tushare `trade_date` 一致。
-- 前复权采用 Tushare 官方公式 `原始价格 × 当日复权因子 / 数据库中该标的最新复权因子`，后复权采用 `原始价格 × 当日复权因子`。复权因子刷新会改变数据指纹并使 PreparedDataset 缓存失效。
+- 前复权采用 Tushare 官方公式 `原始价格 × 当日复权因子 / 数据库中该标的最新复权因子`，后复权采用 `原始价格 × 当日复权因子`。复权因子刷新必须通过排他维护流水线，在写入前失效 PreparedDataset 缓存。
 - 导入器会拒绝非有限、非正价格、倒置 OHLC、负成交量/成交额、缺失复权因子以及达到 6000 行上限的疑似截断响应。
 - `backfill_adjusted_prices.py` 不会覆盖 `vendor='tushare'` 的供应商复权字段。
 - 两个大盘指数以 `INDEX` 类型存储。指数日线不需要公司行动复权，因此前后复权因子均持久化为 `1.0`；仍生成日频特征以保持行情完整性约束。

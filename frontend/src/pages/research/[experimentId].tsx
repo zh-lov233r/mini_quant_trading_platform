@@ -25,7 +25,7 @@ import type {
   ResearchExperiment,
 } from "@/types/research";
 
-const TERMINAL = new Set(["completed", "partially_failed", "failed", "cancelled", "data_changed"]);
+const TERMINAL = new Set(["completed", "partially_failed", "failed", "cancelled"]);
 
 export default function ResearchExperimentPage() {
   const router = useRouter();
@@ -172,8 +172,8 @@ export default function ResearchExperimentPage() {
         onConfirm={() => void deleteExperimentBacktest()}
       >
         {isZh
-          ? "将删除这条回测的运行数据。Trial 参数、指标、数据指纹、候选证据和已生成报告会继续保留，并记录删除时间。"
-          : "This deletes the run data. Trial parameters, metrics, fingerprints, candidate evidence, and generated reports remain available with a deletion timestamp."}
+          ? "将删除这条回测的运行数据。Trial 参数、指标、候选证据和已生成报告会继续保留，并记录删除时间。"
+          : "This deletes the run data. Trial parameters, metrics, candidate evidence, and generated reports remain available with a deletion timestamp."}
       </WorkspaceConfirmDialog>
       {error ? <p style={{ color: "#fda4af" }}>{error}</p> : null}
       {!experiment ? <p>{isZh ? "加载中…" : "Loading…"}</p> : (
@@ -186,7 +186,6 @@ export default function ResearchExperimentPage() {
               ) : null}
             </div>
             {experiment.errorCode ? <p style={{ color: "#fda4af" }}>{experiment.errorCode}: {experiment.errorMessage}</p> : null}
-            {experiment.status === "data_changed" ? <p style={{ color: "#fbbf24" }}>{isZh ? "数据指纹已变化，实验已停止，未混合不同数据版本。" : "The data fingerprint changed. Execution stopped without mixing data versions."}</p> : null}
             {termination?.earlyStopped ? (
               <p style={{ color: "#67e8f9" }}>
                 {isZh ? "实验已按自动条件提前停止：" : "Experiment stopped early by policy: "}

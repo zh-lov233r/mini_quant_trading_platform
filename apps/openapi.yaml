@@ -2371,7 +2371,7 @@ components:
         workflowRunId: {type: string}
         status:
           type: string
-          enum: [queued, running, waiting_agent, completed, partially_failed, failed, cancel_requested, cancelled, data_changed]
+          enum: [queued, running, waiting_agent, completed, partially_failed, failed, cancel_requested, cancelled]
         spec: {$ref: "#/components/schemas/FreeFormObject"}
         runManifest: {$ref: "#/components/schemas/FreeFormObject"}
         progress: {$ref: "#/components/schemas/FreeFormObject"}
@@ -2398,7 +2398,6 @@ components:
         windowStart: {type: string, format: date}
         windowEnd: {type: string, format: date}
         costConfig: {$ref: "#/components/schemas/FreeFormObject"}
-        dataFingerprint: {type: [string, "null"]}
         backtestRunId: {type: [string, "null"], format: uuid}
         backtestDeletedAt: {type: [string, "null"], format: date-time}
         cancelRequestedAt: {type: [string, "null"], format: date-time}
@@ -2751,7 +2750,7 @@ components:
         materialization:
           oneOf:
             - type: object
-              required: [id, cache_key, algorithm_version, detector_params, symbols, coverage_start, coverage_end, source_data_fingerprint, price_semantics, status, statistics]
+              required: [id, cache_key, algorithm_version, detector_params, symbols, coverage_start, coverage_end, price_semantics, status, statistics]
               properties:
                 id: {type: string, format: uuid}
                 cache_key: {type: string}
@@ -2760,7 +2759,6 @@ components:
                 symbols: {type: array, items: {type: string}}
                 coverage_start: {type: string, format: date}
                 coverage_end: {type: string, format: date}
-                source_data_fingerprint: {type: string}
                 price_semantics: {type: string}
                 status: {type: string, enum: [building, completed, failed]}
                 statistics: {$ref: "#/components/schemas/FreeFormObject"}

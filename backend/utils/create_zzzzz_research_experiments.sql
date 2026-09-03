@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS research_experiments (
     status VARCHAR(24) NOT NULL DEFAULT 'queued'
         CHECK (status IN (
             'queued', 'running', 'waiting_agent', 'completed', 'partially_failed', 'failed',
-            'cancel_requested', 'cancelled', 'data_changed'
+            'cancel_requested', 'cancelled'
         )),
     spec JSONB NOT NULL DEFAULT '{}'::jsonb,
     run_manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -55,7 +55,7 @@ ALTER TABLE research_experiments DROP CONSTRAINT IF EXISTS research_experiments_
 ALTER TABLE research_experiments ADD CONSTRAINT ck_research_experiments_status CHECK (
     status IN (
         'queued', 'running', 'waiting_agent', 'completed', 'partially_failed', 'failed',
-        'cancel_requested', 'cancelled', 'data_changed'
+        'cancel_requested', 'cancelled'
     )
 );
 
@@ -117,7 +117,6 @@ CREATE TABLE IF NOT EXISTS experiment_trials (
     window_start DATE NOT NULL,
     window_end DATE NOT NULL,
     cost_config JSONB NOT NULL DEFAULT '{}'::jsonb,
-    data_fingerprint VARCHAR(64),
     metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
     attempt INTEGER NOT NULL DEFAULT 0,
     error_code VARCHAR(64),

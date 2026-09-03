@@ -32,10 +32,10 @@ from src.services.research_experiment_service import (
     _load_universe,
     _refresh_progress,
     build_experiment_report,
-    calculate_data_fingerprint,
     canonical_hash,
 )
 from src.services.backtest_job_service import enqueue_backtest_job
+from src.services.market_data_maintenance_service import assert_market_data_submission_allowed
 from src.services.strategy_registry import (
     build_strategy_catalog,
     extract_description,
@@ -49,7 +49,7 @@ MAX_ADAPTIVE_ROUNDS = 5
 MAX_ADAPTIVE_TRIALS = 100
 MAX_CANDIDATES_PER_ROUND = 5
 _ALLOWED_PREFIXES = ("signal.", "risk.")
-_TERMINAL = {"completed", "partially_failed", "failed", "cancelled", "data_changed"}
+_TERMINAL = {"completed", "partially_failed", "failed", "cancelled"}
 VERIFICATION_METRIC_TOLERANCE = 1e-10
 
 
@@ -389,6 +389,7 @@ def create_category_study(
         if existing.workflow_run_id == workflow_run_id and (existing.run_manifest or {}).get("requestHash") == request_hash:
             return existing
         raise ExperimentConflictError("idempotency key was used with a different category study")
+    assert_market_data_submission_allowed(db)
 
     strategy = db.get(Strategy, spec.strategy_id)
     if strategy is None or strategy.status != "draft":
@@ -404,19 +405,6 @@ def create_category_study(
     if not is_engine_ready(strategy.strategy_type, base_params):
         raise ValueError("draft strategy is not engine-ready")
     symbols, universe = _load_universe(db, spec)
-    start_date = min(spec.in_sample.start_date, spec.out_of_sample.start_date)
-    end_date = max(spec.in_sample.end_date, spec.out_of_sample.end_date)
-    fingerprint = calculate_data_fingerprint(
-        db,
-        symbols=symbols,
-        start_date=start_date,
-        end_date=end_date,
-        universe_policy=(
-            spec.universe_policy.model_dump(mode="json", by_alias=True)
-            if spec.universe_policy
-            else None
-        ),
-    )
     now = datetime.now(UTC)
     experiment = ResearchExperiment(
         parent_experiment_id=parent_experiment_id,
@@ -431,7 +419,6 @@ def create_category_study(
             "strategyVersion": strategy.version,
             "strategyType": strategy.strategy_type,
             "universe": universe,
-            "dataFingerprint": fingerprint,
             "policyStartedAt": now.isoformat(),
             "tokenUsage": {},
         },
@@ -682,7 +669,7 @@ def finalize_adaptive_round_if_ready(db: Session, experiment: ResearchExperiment
 
     manifest = dict(experiment.run_manifest or {})
     termination = manifest.get("termination")
-    if isinstance(termination, dict) or experiment.status in {"cancel_requested", "data_changed"}:
+    if isinstance(termination, dict) or experiment.status == "cancel_requested":
         return False
     spec = AdaptiveExperimentSpec.model_validate(experiment.spec)
     trial_count = int((experiment.progress or {}).get("total") or 0)
@@ -779,6 +766,7 @@ def promote_candidates(
         raise ExperimentConflictError("experiment is not terminal")
     if not payload.candidate_ids:
         return []
+    assert_market_data_submission_allowed(db)
     candidates = list(
         db.execute(
             select(ExperimentCandidate).where(
@@ -815,7 +803,7 @@ def promote_candidates(
             ),
             None,
         )
-        if base_oos is None or not base_oos.data_fingerprint:
+        if base_oos is None:
             raise ExperimentConflictError(
                 f"candidate {candidate.id} has no completed OOS/base summary evidence"
             )
@@ -861,7 +849,6 @@ def promote_candidates(
                 "universe_policy": universe.get("universePolicy"),
                 "runtime_params_override": base_oos.params,
                 "persist_level": "full",
-                "expected_data_fingerprint": base_oos.data_fingerprint,
                 "expected_metrics": dict(base_oos.metrics or {}),
                 "metric_tolerance": VERIFICATION_METRIC_TOLERANCE,
             },
@@ -870,7 +857,6 @@ def promote_candidates(
             "status": "queued",
             "runId": str(run.id),
             "sourceTrialId": str(base_oos.id),
-            "dataFingerprint": base_oos.data_fingerprint,
         }
         candidate.aggregate_metrics = aggregate
         verification_pending = True

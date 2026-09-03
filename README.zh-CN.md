@@ -27,14 +27,14 @@
   - 维护 instruments、EOD bars、adjusted prices、daily features
   - 支持通过 Massive 补历史行情、补缺失行情、回刷特征
   - 支持通过 Tushare 将沪深北 A 股日线、复权因子、大盘指数和回测特征幂等导入 PostgreSQL；详见 [Tushare A 股数据](docs/tushare-a-share-data.zh-CN.md)
-  - 内置每日市场数据 catch-up 脚本
+  - 每日 catch-up 在排他维护窗口中运行：先排空回测/研究，在写入前失效派生缓存，失败后继续阻塞
 
 - 回测
   - 基于策略参数和 `daily_features` 生成信号
   - 在 PostgreSQL 中排队手动与研究回测，并由独立 worker 执行
   - 支持 `summary`、`trades`、`full` 三种持久化级别；手动回测默认 `full`
   - 使用 `make benchmark-backtests BENCHMARK_ARGS="plan"` 只读规划 correctness/screening 漏斗；写入基准必须显式增加 `--apply` 并满足性能指南的安全门禁
-  - 手动、研究和验证回测统一解析稳定 instrument identity，并复用按数据指纹寻址的只读 v3 列式 PreparedDataset；损坏或漂移的缓存会原子重建，不回退到 Python 逐日循环
+  - 手动、研究和验证回测统一解析稳定 instrument identity，并复用按结构键寻址的只读 v4 列式 PreparedDataset；热命中直接打开，损坏缓存会原子重建
   - 通过增量接口加载摘要、下采样权益、signals 和 transactions
   - 所有 engine-ready 运行由进程内 C++20 内核执行，并用同一事务中的 psycopg3 `COPY` 持久化 typed 结果；Python 只保留队列、数据库、进度/取消和结果编排
   - 按 T 日冻结的信号强度对同策略 BUY 排名，再于下一有效交易日（T+1）开盘尝试成交；详见[信号强度](docs/signal-strength.zh-CN.md)
@@ -395,7 +395,7 @@ make docker-logs
 
 Massive VWAP 以未复权口径保存（`adjusted=false`）。当前套餐历史边界从 2016-08-29 开始，更早的空 VWAP 属于预期 warning。SIC 是快照而非 point-in-time 行业历史。Short interest 以结算日为键；由于接口没有可靠发布日期，不能视为每个日线交易日当时已知。Ticker Events 仍是 experimental：原始事件始终可审计；不完整事件链、FIGI/交易所不一致、ticker 复用和区间冲突保持 `unresolved`，绝不猜测修复。
 
-Tushare A 股导入必须先运行 `plan`，再显式运行 `apply`；它不启动 backend、paper scheduler 或任何券商操作。完整命令、字段口径、恢复方式和回测限制见 [Tushare A 股数据](docs/tushare-a-share-data.zh-CN.md)。
+Tushare A 股导入必须先运行 `plan`，再显式运行 `apply`；apply 与每日 Massive 流水线复用同一个排他维护窗口，且不启动 backend、paper scheduler 或任何券商操作。完整命令、字段口径、恢复方式和回测限制见 [Tushare A 股数据](docs/tushare-a-share-data.zh-CN.md)。
 
 通过 Makefile 触发每日回填：
 
@@ -433,7 +433,7 @@ make check-data CHECK_DATA_ARGS="--strict --json"
 
 特殊维护运行可用 `--skip-quality-check` 跳过最终门禁，或用 `--strict-quality-check` 让流水线中的 warning 也阻断任务。正常安装任务保持默认的“仅关键失败阻断”策略。
 
-已安装的 macOS LaunchAgent 每天按本地时间 20:15 运行，并将日志写入 `logs/daily-market-backfill.log` 和 `logs/daily-market-backfill.err.log`。可用 `launchctl print "gui/$(id -u)/com.quant.daily-market-backfill"` 检查状态；补数脚本不会修改其日程或安装路径。每个维护子进程都会显式收到 `PAPER_TRADING_SCHEDULER_ENABLED=false` 和 `PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false`。证券主数据或质量门禁失败时，后续步骤会停止，幂等的补数日期范围会留给下一次运行继续处理。
+已安装的 macOS LaunchAgent 每天按本地时间 20:15 运行，并将日志写入 `logs/daily-market-backfill.log` 和 `logs/daily-market-backfill.err.log`。可用 `launchctl print "gui/$(id -u)/com.quant.daily-market-backfill"` 检查状态；补数脚本不会修改其日程或安装路径。写入运行先进入单例 `draining` 状态，拒绝新回测/研究并等待现有工作，取得数据库排他 advisory lock、失效派生缓存后才写源表。每个子进程收到同一维护所有者令牌，两项 Paper scheduler 配置始终显式关闭。流水线或质量门禁失败会把状态留在 `failed`，持续阻止策略工作，直到后续重跑成功。
 
 ## Paper Trading 与 Scheduler
 

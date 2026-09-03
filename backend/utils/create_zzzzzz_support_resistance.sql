@@ -10,15 +10,13 @@ CREATE TABLE IF NOT EXISTS support_resistance_materializations (
   symbols JSONB NOT NULL DEFAULT '[]'::jsonb,
   coverage_start DATE NOT NULL,
   coverage_end DATE NOT NULL,
-  source_data_fingerprint VARCHAR(64) NOT NULL,
   price_semantics VARCHAR(96) NOT NULL,
   status VARCHAR(16) NOT NULL DEFAULT 'building',
   statistics JSONB NOT NULL DEFAULT '{}'::jsonb,
   error_message TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   completed_at TIMESTAMPTZ,
-  CONSTRAINT uq_support_resistance_materializations_cache_key
-    UNIQUE (cache_key),
+  invalidated_at TIMESTAMPTZ,
   CONSTRAINT ck_support_resistance_materializations_status
     CHECK (status IN ('building', 'completed', 'failed')),
   CONSTRAINT ck_support_resistance_materializations_window
@@ -27,7 +25,11 @@ CREATE TABLE IF NOT EXISTS support_resistance_materializations (
 
 CREATE INDEX IF NOT EXISTS idx_support_resistance_materializations_lookup
   ON support_resistance_materializations
-  (algorithm_version, universe_hash, source_data_fingerprint, coverage_start, coverage_end);
+  (algorithm_version, universe_hash, coverage_start, coverage_end);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_support_resistance_materializations_current_cache_key
+  ON support_resistance_materializations (cache_key)
+  WHERE invalidated_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS support_resistance_zone_versions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

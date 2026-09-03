@@ -64,5 +64,23 @@ CREATE TABLE IF NOT EXISTS backtest_worker_managers (
 CREATE INDEX IF NOT EXISTS idx_backtest_worker_managers_heartbeat
     ON backtest_worker_managers (heartbeat_at);
 
+CREATE TABLE IF NOT EXISTS market_data_maintenance_state (
+    id INTEGER PRIMARY KEY DEFAULT 1,
+    status VARCHAR(16) NOT NULL DEFAULT 'ready',
+    owner_token UUID,
+    requested_at TIMESTAMPTZ,
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    error_message TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_market_data_maintenance_state_singleton CHECK (id = 1),
+    CONSTRAINT ck_market_data_maintenance_state_status
+        CHECK (status IN ('ready', 'draining', 'updating', 'failed'))
+);
+
+INSERT INTO market_data_maintenance_state (id, status)
+VALUES (1, 'ready')
+ON CONFLICT (id) DO NOTHING;
+
 -- Deliberately no signals/transactions cursor index is created here. Add one
 -- only after production-scale EXPLAIN ANALYZE proves at least 20% improvement.

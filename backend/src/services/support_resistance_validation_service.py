@@ -24,8 +24,8 @@ from src.services.backtest_universe_service import resolve_point_in_time_univers
 from src.services.research_experiment_service import (
     ExperimentConflictError,
     canonical_hash,
-    calculate_data_fingerprint,
 )
+from src.services.market_data_maintenance_service import assert_market_data_submission_allowed
 from src.services.strategy_registry import (
     build_strategy_catalog,
     extract_description,
@@ -331,17 +331,10 @@ def create_effectiveness_study(
         if existing.workflow_run_id == workflow_run_id and (existing.run_manifest or {}).get("requestHash") == request_hash:
             return existing
         raise ExperimentConflictError("idempotency key was used with a different effectiveness study")
+    assert_market_data_submission_allowed(db)
     strategy = db.get(Strategy, spec.strategy_id)
     if strategy is None or strategy.status != "draft" or strategy.strategy_type != "support_resistance":
         raise ValueError("effectiveness study requires a draft support_resistance strategy")
-    policy = spec.universe_policy.model_dump(mode="json", by_alias=True)
-    fingerprint = calculate_data_fingerprint(
-        db,
-        symbols=[],
-        start_date=DISCOVERY_IN[0],
-        end_date=FINAL_WINDOW[3],
-        universe_policy=policy,
-    )
     now = datetime.now(UTC)
     parent = ResearchExperiment(
         study_kind=STUDY_KIND,
@@ -355,7 +348,6 @@ def create_effectiveness_study(
             "strategyId": str(strategy.id),
             "strategyVersion": strategy.version,
             "strategyType": strategy.strategy_type,
-            "dataFingerprint": fingerprint,
             "sealedHoldout": {
                 "startDate": FINAL_WINDOW[2].isoformat(),
                 "endDate": FINAL_WINDOW[3].isoformat(),
@@ -707,10 +699,9 @@ def advance_effectiveness_study(db: Session, child_experiment_id: UUID) -> None:
         "failed",
         "cancel_requested",
         "cancelled",
-        "data_changed",
     }:
         return
-    if child.status in {"data_changed", "cancelled"}:
+    if child.status == "cancelled":
         parent.error_code = f"child_{child.status}"
         parent.error_message = f"Child experiment {child.id} ended with status {child.status}."
         from src.services.support_resistance_validation_report_service import (

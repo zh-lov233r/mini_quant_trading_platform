@@ -1289,15 +1289,9 @@ class SupportResistancePersistenceTests(unittest.TestCase):
                     ),
                 ]
             )
-            with (
-                patch(
-                    "src.services.support_resistance_persistence_service._instrument_ids",
-                    return_value={},
-                ),
-                patch(
-                    "src.services.support_resistance_persistence_service.source_data_fingerprint",
-                    return_value="reused-ticker-fingerprint",
-                ),
+            with patch(
+                "src.services.support_resistance_persistence_service._instrument_ids",
+                return_value={},
             ):
                 materialization = persist_support_resistance_run(
                     db,
@@ -1392,11 +1386,7 @@ class SupportResistancePersistenceTests(unittest.TestCase):
         "src.services.support_resistance_persistence_service._instrument_ids",
         return_value={"TEST": 1},
     )
-    @patch(
-        "src.services.support_resistance_persistence_service.source_data_fingerprint",
-        return_value="fingerprint-invalid-event",
-    )
-    def test_invalid_event_geometry_is_rejected_before_detail_insert(self, _fingerprint, _ids) -> None:
+    def test_invalid_event_geometry_is_rejected_before_detail_insert(self, _ids) -> None:
         state = self._state()
         state.symbols["TEST"].events[0]["lower"] = float("nan")
         with self.Session() as db:
@@ -1630,7 +1620,6 @@ class SupportResistancePersistenceTests(unittest.TestCase):
                 symbols=["TEST"],
                 coverage_start=date(2025, 1, 1),
                 coverage_end=date(2025, 1, 31),
-                source_data_fingerprint="fingerprint",
                 price_semantics="forward_adjusted_preferred_unadjusted_fallback",
                 status="completed",
             )
@@ -1689,11 +1678,7 @@ class SupportResistancePersistenceTests(unittest.TestCase):
         "src.services.support_resistance_persistence_service._instrument_ids",
         return_value={"TEST": 1},
     )
-    @patch(
-        "src.services.support_resistance_persistence_service.source_data_fingerprint",
-        return_value="fingerprint-a",
-    )
-    def test_cache_hit_reuses_shared_rows_and_run_delete_keeps_cache(self, _fingerprint, _ids) -> None:
+    def test_cache_hit_reuses_shared_rows_and_run_delete_keeps_cache(self, _ids) -> None:
         with self.Session() as db:
             first_run = self._new_run(db)
             first = persist_support_resistance_run(
@@ -1713,7 +1698,6 @@ class SupportResistancePersistenceTests(unittest.TestCase):
                     symbols=["TEST"],
                     coverage_start=date(2025, 1, 15),
                     coverage_end=date(2025, 2, 15),
-                    expected_data_fingerprint="fingerprint-a",
                 )
             )
             second_run = self._new_run(db)
@@ -1760,11 +1744,7 @@ class SupportResistancePersistenceTests(unittest.TestCase):
         "src.services.support_resistance_persistence_service._instrument_ids",
         return_value={"TEST": 1},
     )
-    @patch(
-        "src.services.support_resistance_persistence_service.source_data_fingerprint",
-        return_value="fingerprint-batches",
-    )
-    def test_bulk_persistence_reports_batches_and_exact_rows(self, _fingerprint, _ids) -> None:
+    def test_bulk_persistence_reports_batches_and_exact_rows(self, _ids) -> None:
         progress: list[tuple[str, int, int]] = []
         performance: dict = {}
         state = self._state()
@@ -1906,11 +1886,7 @@ class SupportResistancePersistenceTests(unittest.TestCase):
         "src.services.support_resistance_persistence_service._instrument_ids",
         return_value={"TEST": 1},
     )
-    @patch(
-        "src.services.support_resistance_persistence_service.source_data_fingerprint",
-        return_value="fingerprint-batch-rollback",
-    )
-    def test_partial_bulk_insert_rolls_back_without_run_events(self, _fingerprint, _ids) -> None:
+    def test_partial_bulk_insert_rolls_back_without_run_events(self, _ids) -> None:
         with self.Session() as db:
             first_run = self._new_run(db)
             persist_support_resistance_run(
@@ -1959,50 +1935,41 @@ class SupportResistancePersistenceTests(unittest.TestCase):
         "src.services.support_resistance_persistence_service._instrument_ids",
         return_value={"TEST": 1},
     )
-    def test_source_fingerprint_change_creates_cache_miss(self, _ids) -> None:
+    def test_invalidated_materialization_is_not_reused(self, _ids) -> None:
         with self.Session() as db:
-            with patch(
-                "src.services.support_resistance_persistence_service.source_data_fingerprint",
-                return_value="fingerprint-a",
-            ):
-                persist_support_resistance_run(
-                    db,
-                    run=self._new_run(db),
-                    runtime=self.runtime,
-                    state=self._state(),
-                    symbols=["TEST"],
-                    coverage_start=date(2025, 1, 1),
-                    coverage_end=date(2025, 3, 1),
-                )
-                db.commit()
-            with patch(
-                "src.services.support_resistance_persistence_service.source_data_fingerprint",
-                return_value="fingerprint-b",
-            ):
-                persist_support_resistance_run(
-                    db,
-                    run=self._new_run(db),
-                    runtime=self.runtime,
-                    state=self._state(),
-                    symbols=["TEST"],
-                    coverage_start=date(2025, 1, 1),
-                    coverage_end=date(2025, 3, 1),
-                )
-                db.commit()
+            first = persist_support_resistance_run(
+                db,
+                run=self._new_run(db),
+                runtime=self.runtime,
+                state=self._state(),
+                symbols=["TEST"],
+                coverage_start=date(2025, 1, 1),
+                coverage_end=date(2025, 3, 1),
+            )
+            db.commit()
+            first.invalidated_at = datetime.now(UTC)
+            db.commit()
+            second = persist_support_resistance_run(
+                db,
+                run=self._new_run(db),
+                runtime=self.runtime,
+                state=self._state(),
+                symbols=["TEST"],
+                coverage_start=date(2025, 1, 1),
+                coverage_end=date(2025, 3, 1),
+            )
+            db.commit()
             self.assertEqual(
                 db.scalar(select(func.count()).select_from(SupportResistanceMaterialization)),
                 2,
             )
+            self.assertNotEqual(first.id, second.id)
 
     @patch(
         "src.services.support_resistance_persistence_service._instrument_ids",
         return_value={"TEST": 1},
     )
-    @patch(
-        "src.services.support_resistance_persistence_service.source_data_fingerprint",
-        return_value="fingerprint-role-params",
-    )
-    def test_role_transition_parameter_change_creates_cache_miss(self, _fingerprint, _ids) -> None:
+    def test_role_transition_parameter_change_creates_cache_miss(self, _ids) -> None:
         with self.Session() as db:
             persist_support_resistance_run(
                 db,
@@ -2040,11 +2007,7 @@ class SupportResistancePersistenceTests(unittest.TestCase):
         "src.services.support_resistance_persistence_service._instrument_ids",
         return_value={"TEST": 1},
     )
-    @patch(
-        "src.services.support_resistance_persistence_service.source_data_fingerprint",
-        return_value="fingerprint-failed",
-    )
-    def test_failed_materialization_is_persisted_but_never_reused(self, _fingerprint, _ids) -> None:
+    def test_failed_materialization_is_persisted_but_never_reused(self, _ids) -> None:
         with self.Session() as db:
             with patch(
                 "src.services.support_resistance_persistence_service._write_zone_versions",
@@ -2074,27 +2037,6 @@ class SupportResistancePersistenceTests(unittest.TestCase):
                 coverage_end=date(2025, 3, 1),
             )
             self.assertIsNone(reusable)
-
-    @patch(
-        "src.services.support_resistance_persistence_service.source_data_fingerprint",
-        return_value="fingerprint-after",
-    )
-    def test_source_change_during_run_rejects_materialization(self, _fingerprint) -> None:
-        with self.Session() as db:
-            with self.assertRaisesRegex(
-                SupportResistanceMaterializationBuildError,
-                "source data fingerprint changed",
-            ):
-                persist_support_resistance_run(
-                    db,
-                    run=self._new_run(db),
-                    runtime=self.runtime,
-                    state=self._state(),
-                    symbols=["TEST"],
-                    coverage_start=date(2025, 1, 1),
-                    coverage_end=date(2025, 3, 1),
-                    expected_data_fingerprint="fingerprint-before",
-                )
 
     def test_paper_build_failure_happens_before_any_order_submission(self) -> None:
         class BrokerStub:
@@ -2167,14 +2109,6 @@ class SupportResistancePersistenceTests(unittest.TestCase):
                     return_value={"TEST": snapshot},
                 ),
                 patch(
-                    "src.services.paper_trading_service.source_data_fingerprint",
-                    return_value="paper-fingerprint",
-                ),
-                patch(
-                    "src.services.support_resistance_persistence_service.source_data_fingerprint",
-                    return_value="paper-fingerprint",
-                ),
-                patch(
                     "src.services.support_resistance_persistence_service._instrument_ids",
                     return_value={"TEST": 1},
                 ),
@@ -2214,11 +2148,7 @@ class SupportResistancePersistenceTests(unittest.TestCase):
         "src.services.support_resistance_persistence_service._instrument_ids",
         return_value={"TEST": 1},
     )
-    @patch(
-        "src.services.support_resistance_persistence_service.source_data_fingerprint",
-        return_value="fingerprint-api",
-    )
-    def test_audit_api_filters_entry_zone_and_returns_empty_state(self, _fingerprint, _ids) -> None:
+    def test_audit_api_filters_entry_zone_and_returns_empty_state(self, _ids) -> None:
         with self.Session() as db:
             empty_run = self._new_run(db)
             db.commit()

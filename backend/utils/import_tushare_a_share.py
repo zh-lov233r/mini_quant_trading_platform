@@ -18,8 +18,10 @@ from psycopg.types.json import Jsonb
 
 try:
     from .backfill_daily_features import backfill_daily_features
+    from .run_daily_market_backfill import MaintenanceWindow
 except ImportError:
     from backfill_daily_features import backfill_daily_features
+    from run_daily_market_backfill import MaintenanceWindow
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -719,11 +721,67 @@ def main() -> None:
     token = str(os.getenv("TUSHARE_TOKEN") or "").strip()
     if not token:
         raise SystemExit("Missing TUSHARE_TOKEN")
+    maintenance = MaintenanceWindow(args.database_url)
+    maintenance.start()
     client = TushareClient(
         token,
         request_interval_seconds=args.request_interval_seconds,
     )
-    if args.indices_only:
+    try:
+        if args.indices_only:
+            _import_indices(
+                client,
+                args.database_url,
+                start_date,
+                end_date,
+                skip_features=args.skip_features,
+            )
+            maintenance.succeed()
+            return
+
+        instruments = _fetch_instruments(client, selected)
+        with psycopg.connect(_psycopg_dsn(args.database_url)) as conn:
+            instrument_ids = _upsert_instruments(conn, instruments)
+        dates = _trade_dates(client, start_date, end_date)
+        print(f"Resolved instruments={len(instruments)} open_sessions={len(dates)}")
+
+        imported_rows = 0
+        with psycopg.connect(_psycopg_dsn(args.database_url)) as conn:
+            for index, trade_date in enumerate(dates, start=1):
+                daily, factors = _daily_rows(client, trade_date, selected)
+                bars = [
+                    normalize_bar(
+                        row,
+                        instrument_id=instrument_ids[str(row["ts_code"]).strip().upper()],
+                        adj_factor=factors[str(row["ts_code"]).strip().upper()],
+                    )
+                    for row in daily
+                    if str(row.get("ts_code") or "").strip().upper() in instrument_ids
+                ]
+                imported_rows += _upsert_bars(conn, bars)
+                if index == 1 or index == len(dates) or index % 20 == 0:
+                    print(
+                        f"Imported sessions={index}/{len(dates)} bars={imported_rows} "
+                        f"last_date={trade_date.isoformat()}",
+                        flush=True,
+                    )
+            adjusted_rows = _refresh_forward_adjustment(conn, list(instrument_ids.values()))
+            basket_symbols = _sync_a_share_basket(conn)
+
+        feature_instruments = 0
+        feature_rows = 0
+        if not args.skip_features:
+            feature_instruments, feature_rows = backfill_daily_features(
+                args.database_url,
+                start_date=args.start_date,
+                end_date=args.end_date,
+                instrument_ids=list(instrument_ids.values()),
+            )
+        print(
+            f"Tushare import completed. instruments={len(instruments)} bars={imported_rows} "
+            f"adjusted_rows={adjusted_rows} feature_instruments={feature_instruments} "
+            f"feature_rows={feature_rows} basket_symbols={basket_symbols}"
+        )
         _import_indices(
             client,
             args.database_url,
@@ -731,58 +789,9 @@ def main() -> None:
             end_date,
             skip_features=args.skip_features,
         )
-        return
-
-    instruments = _fetch_instruments(client, selected)
-    with psycopg.connect(_psycopg_dsn(args.database_url)) as conn:
-        instrument_ids = _upsert_instruments(conn, instruments)
-    dates = _trade_dates(client, start_date, end_date)
-    print(f"Resolved instruments={len(instruments)} open_sessions={len(dates)}")
-
-    imported_rows = 0
-    with psycopg.connect(_psycopg_dsn(args.database_url)) as conn:
-        for index, trade_date in enumerate(dates, start=1):
-            daily, factors = _daily_rows(client, trade_date, selected)
-            bars = [
-                normalize_bar(
-                    row,
-                    instrument_id=instrument_ids[str(row["ts_code"]).strip().upper()],
-                    adj_factor=factors[str(row["ts_code"]).strip().upper()],
-                )
-                for row in daily
-                if str(row.get("ts_code") or "").strip().upper() in instrument_ids
-            ]
-            imported_rows += _upsert_bars(conn, bars)
-            if index == 1 or index == len(dates) or index % 20 == 0:
-                print(
-                    f"Imported sessions={index}/{len(dates)} bars={imported_rows} "
-                    f"last_date={trade_date.isoformat()}",
-                    flush=True,
-                )
-        adjusted_rows = _refresh_forward_adjustment(conn, list(instrument_ids.values()))
-        basket_symbols = _sync_a_share_basket(conn)
-
-    feature_instruments = 0
-    feature_rows = 0
-    if not args.skip_features:
-        feature_instruments, feature_rows = backfill_daily_features(
-            args.database_url,
-            start_date=args.start_date,
-            end_date=args.end_date,
-            instrument_ids=list(instrument_ids.values()),
-        )
-    print(
-        f"Tushare import completed. instruments={len(instruments)} bars={imported_rows} "
-        f"adjusted_rows={adjusted_rows} feature_instruments={feature_instruments} "
-        f"feature_rows={feature_rows} basket_symbols={basket_symbols}"
-    )
-    _import_indices(
-        client,
-        args.database_url,
-        start_date,
-        end_date,
-        skip_features=args.skip_features,
-    )
+        maintenance.succeed()
+    finally:
+        maintenance.fail_if_open()
 
 
 if __name__ == "__main__":

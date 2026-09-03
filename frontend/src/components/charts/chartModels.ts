@@ -354,7 +354,7 @@ export function groupCandleOverlayMarkers(markers: ChartOverlayMarker[]): ChartO
       grouped.set(key, {
         ...marker,
         key: `group:${key}`,
-        showText: false,
+        showText: marker.showText ?? false,
         details: marker.details || [marker.description],
       });
       return;
@@ -426,8 +426,22 @@ export function candleMarkerColor(tone: string) {
     breakout: "#f97316",
     left_bottom: "#eab308",
     right_bottom: "#14b8a6",
+    pattern_bottom: "#eab308",
+    shoulder: "#a78bfa",
+    pullback: "#14b8a6",
+    reversal: "#f97316",
   };
   return colors[tone] || "#94a3b8";
+}
+
+export function isLowerGutterMarkerTone(tone: string): boolean {
+  return tone === "buy"
+    || tone === "buy_signal"
+    || tone === "left_bottom"
+    || tone === "right_bottom"
+    || tone === "pattern_bottom"
+    || tone === "shoulder"
+    || tone === "pullback";
 }
 
 export function buildEquityEventMarkers(

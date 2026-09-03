@@ -2,7 +2,7 @@
 
 [English](research-experiments.md) | [文档索引](README.zh-CN.md)
 
-大类研究从已有引擎 handler 出发，而不是从已有 Strategy 实例出发。AgentOps 生成具体可执行 draft 和有界的自适应 Pareto 计划；Quant 负责确定性校验、trial、数据指纹、排序、lineage 和报告。旧有限网格实验继续只读，但不能再创建。
+大类研究从已有引擎 handler 出发，而不是从已有 Strategy 实例出发。AgentOps 生成具体可执行 draft 和有界的自适应 Pareto 计划；Quant 负责确定性校验、trial、排序、lineage 和报告。旧有限网格实验继续只读，但不能再创建。
 
 `support_resistance` 作为已有引擎大类参与研究。三个布尔模式开关以及数值型 `signal.*` / `risk.*` 叶子都是标量搜索路径；三个模式全部关闭的候选会被校验拒绝。每个 trial 都使用 T-1 冻结区域与版本化缓存语义，详见[策略指南](support-resistance-strategy.zh-CN.md)。
 
@@ -72,9 +72,9 @@ Agent 路由要求 `Authorization: Bearer <QUANT_AGENT_SERVICE_TOKEN>`。不要�
 
 sample kind、成本场景和参数值的每种组合都会产生稳定的 trial key。worker 使用 PostgreSQL 锁领取排队 trial，创建或复用关联的 `StrategyRun`，调用常规回测引擎，并保存指标和 backtest run ID。
 
-每个 trial 执行前，Quant 会根据相关特征、复权与未复权价格和公司行动重新计算数据指纹。如果不一致，实验以 `data_changed` 停止可复现执行，报告不能静默混合来自不同数据快照的结果。
+研究不再计算或保存行情逐行指纹。可复现边界改由运维流程保证：受支持的每日行情更新先进入 `draining`，以 HTTP 409 `market_data_maintenance` 拒绝新研究和候选推广，等待整个非终态实验结束，再失效派生缓存并在排他 advisory lock 下更新源表。维护失败后持续阻塞，直到后续重跑成功。
 
-轮次之间实验使用 `waiting_agent`。停止原因包括轮数、trial、token、时间、目标、无有效/新候选、数据漂移、取消和控制器失败。trial 失败会继续作为证据保留。
+轮次之间实验使用 `waiting_agent`。停止原因包括轮数、trial、token、时间、目标、无有效/新候选、取消和控制器失败。trial 失败会继续作为证据保留。
 
 最终审批展示 Pareto rank 1–2。用户可保存最多 5 个普通可见 draft，也可空选择正常完成。推广幂等并记录 Experiment、Candidate、WorkflowRun 和 Backtest lineage，不激活、不分配。
 
@@ -123,7 +123,7 @@ worker 重启后会恢复遗留 trial，不重复创建回测证据。已经因�
 - `GET /api/research/experiments/{experimentId}/report`
 - `DELETE /api/research/experiments/{experimentId}/backtests/{runId}`：逐条删除属于该实验的终态回测
 
-删除研究回测只会移除运行期执行产物，并且仅在实验和回测都进入终态后允许；确认步骤使用平台工作区弹窗，不再调用浏览器原生提示框。Trial 参数、指标、数据指纹、候选证据和已经生成的报告产物继续保留；实时 Trial 或候选记录会保存删除时间，不再保留运行链接。
+删除研究回测只会移除运行期执行产物，并且仅在实验和回测都进入终态后允许；确认步骤使用平台工作区弹窗，不再调用浏览器原生提示框。Trial 参数、指标、候选证据和已经生成的报告产物继续保留；实时 Trial 或候选记录会保存删除时间，不再保留运行链接。
 
 报告包含进度、成功与失败 trial 证据、稳健性对比、终止详情，以及可用时的 token 用量。它只描述研究执行，不能被表述为实盘安全或预期盈利能力。
 

@@ -27,14 +27,14 @@ The repository currently has two main parts:
   - Maintain instruments, EOD bars, adjusted prices, and daily features
   - Backfill historical and missing market data from Massive
   - Idempotently import Shanghai, Shenzhen, and Beijing A-share daily bars, adjustment factors, broad-market indices, and backtest features from Tushare into PostgreSQL; see [Tushare A-share data](docs/tushare-a-share-data.md)
-  - Provide a daily market-data catch-up pipeline
+  - Run the daily catch-up inside an exclusive maintenance window that drains backtests/research, invalidates derived caches before writes, and stays blocked after failure
 
 - Backtesting
   - Generate signals from strategy parameters plus `daily_features`
   - Queue manual and research runs in PostgreSQL and execute them with an independent worker
   - Choose `summary`, `trades`, or `full` persistence; manual runs default to `full`
   - Plan the read-only correctness/screening funnel with `make benchmark-backtests BENCHMARK_ARGS="plan"`; write benchmarks require explicit `--apply` and the safety gates in the performance guide
-  - Resolve stable instrument identity and reuse a fingerprinted, read-only v3 columnar PreparedDataset for manual, research, and verification runs; corrupt or drifted caches rebuild atomically and never fall back to a Python trading-day loop
+  - Resolve stable instrument identity and reuse a structurally keyed, read-only v4 columnar PreparedDataset for manual, research, and verification runs; warm hits open directly and corrupt caches rebuild atomically
   - Load summary, downsampled equity, signals, and transactions through incremental APIs
   - Execute every engine-ready run with the in-process C++20 kernel and persist typed results with transaction-scoped psycopg3 `COPY`; Python retains queueing, database, progress/cancellation, and result orchestration
   - Rank same-strategy BUY signals by a frozen day-T strength score before next-valid-session (T+1) open fills; see [Signal strength](docs/signal-strength.md)
@@ -395,7 +395,7 @@ Apply `backend/utils/create_stock_enrichment.sql` before the first enrichment ru
 
 Massive VWAP is stored unadjusted (`adjusted=false`). The current plan boundary begins on 2016-08-29; older null VWAP remains an expected warning. SIC is a snapshot, not point-in-time industry history. Short interest is keyed by settlement date and is not treated as known on every daily bar because the endpoint does not provide a reliable publication timestamp. Ticker Events is experimental: raw events are always auditable, while incomplete chains, FIGI/exchange mismatches, ticker reuse, and interval conflicts remain `unresolved` and never trigger a guessed repair.
 
-The Tushare A-share flow requires a `plan` run before an explicit `apply`. It does not start the backend, paper scheduler, or any broker operation. See [Tushare A-share data](docs/tushare-a-share-data.md) for commands, field semantics, recovery, and backtest limitations.
+The Tushare A-share flow requires a `plan` run before an explicit `apply`. Apply runs use the same exclusive maintenance window as the daily Massive pipeline; they do not start the backend, paper scheduler, or any broker operation. See [Tushare A-share data](docs/tushare-a-share-data.md) for commands, field semantics, recovery, and backtest limitations.
 
 Run the daily backfill flow through Make:
 
@@ -433,7 +433,7 @@ make check-data CHECK_DATA_ARGS="--strict --json"
 
 For an exceptional maintenance run, `--skip-quality-check` omits the final gate; `--strict-quality-check` makes pipeline warnings blocking. The normal installed task uses the default critical-failure-only policy.
 
-The installed macOS LaunchAgent runs daily at 20:15 local time and writes to `logs/daily-market-backfill.log` and `logs/daily-market-backfill.err.log`. Inspect its status with `launchctl print "gui/$(id -u)/com.quant.daily-market-backfill"`. Its schedule and installed paths are unchanged by the backfill scripts. Every child maintenance process explicitly receives `PAPER_TRADING_SCHEDULER_ENABLED=false` and `PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false`. A failed security-master or quality-gate step stops the remaining pipeline and leaves the idempotent catch-up range available for the next run.
+The installed macOS LaunchAgent runs daily at 20:15 local time and writes to `logs/daily-market-backfill.log` and `logs/daily-market-backfill.err.log`. Inspect its status with `launchctl print "gui/$(id -u)/com.quant.daily-market-backfill"`. Its schedule and installed paths are unchanged by the backfill scripts. A write run enters the singleton `draining` state, rejects new backtest/research work, waits for existing work, takes the exclusive database advisory lock, invalidates derived caches, and then updates source tables. Every child receives the same maintenance-owner token and both Paper scheduler controls remain explicitly disabled. A failed pipeline or quality gate leaves the state `failed` and blocks strategy work until a later successful rerun.
 
 ## Paper Trading and Scheduler
 

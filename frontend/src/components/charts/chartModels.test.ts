@@ -8,6 +8,7 @@ import {
   currentZoneOverlays,
   groupCandleOverlayMarkers,
   isDisplayableSupportResistanceEventType,
+  isLowerGutterMarkerTone,
   latestVisibleZoneOverlaysByRole,
   normalizeCandleBars,
   normalizeEquityPoints,
@@ -353,14 +354,16 @@ describe("chart models", () => {
     ).map((zone) => zone.key)).toEqual(["latest-resistance", "flipped-support"]);
   });
 
-  it("keeps text only on primary trade markers and groups same-day secondary events", () => {
+  it("keeps primary and explicitly requested pattern labels while grouping secondary events", () => {
     const grouped = groupCandleOverlayMarkers([
       { key: "buy", label: "买入", date: "2025-01-02", price: 10, tone: "buy", description: "fill" },
       { key: "t1", label: "触碰", date: "2025-01-02", price: 9, tone: "neckline", description: "first" },
       { key: "t2", label: "触碰", date: "2025-01-02", price: 9.1, tone: "neckline", description: "second" },
+      { key: "bottom", label: "圆弧底部", date: "2025-01-03", price: 8, tone: "pattern_bottom", description: "bottom", showText: true },
     ]);
-    expect(grouped).toHaveLength(2);
+    expect(grouped).toHaveLength(3);
     expect(grouped.find((item) => item.key === "buy")?.showText).toBe(true);
+    expect(grouped.find((item) => item.label === "圆弧底部")?.showText).toBe(true);
     const touch = grouped.find((item) => item.key.startsWith("group:"));
     expect(touch).toMatchObject({ showText: false, label: "触碰 ×2" });
     expect(touch?.details).toEqual(["first", "second"]);
@@ -428,6 +431,11 @@ describe("chart models", () => {
       expect.objectContaining({ id: "left", time: "2025-01-02", price: 9.25, position: "atPriceBottom", color: "#eab308" }),
       expect.objectContaining({ id: "neckline", time: "2025-01-03", price: 12, position: "atPriceTop", color: "#94a3b8" }),
     ]);
+  });
+
+  it("keeps pattern lows and pullbacks in the lower label gutter", () => {
+    expect(["pattern_bottom", "shoulder", "pullback"].every(isLowerGutterMarkerTone)).toBe(true);
+    expect(isLowerGutterMarkerTone("reversal")).toBe(false);
   });
 
   it("uses date-only chart keys without timezone conversion", () => {

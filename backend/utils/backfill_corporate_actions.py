@@ -15,6 +15,11 @@ import aiohttp
 import psycopg
 from dotenv import load_dotenv
 
+try:
+    from backend.utils.market_data_maintenance_guard import require_market_data_maintenance_owner
+except ModuleNotFoundError:
+    from market_data_maintenance_guard import require_market_data_maintenance_owner
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -339,6 +344,7 @@ async def main() -> None:
     args = parse_args()
     if not args.database_url:
         raise SystemExit("Missing DATABASE_URL or SQLALCHEMY_DATABASE_URL")
+    require_market_data_maintenance_owner(args.database_url)
 
     api_key = os.getenv("MASSIVE_API_KEY")
     if not api_key:

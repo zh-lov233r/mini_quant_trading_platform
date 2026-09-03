@@ -2,7 +2,7 @@
 
 [中文](research-experiments.zh-CN.md) | [Documentation index](README.md)
 
-Category research starts from an existing engine handler, not an existing Strategy row. AgentOps generates a concrete engine-ready draft and a bounded adaptive Pareto plan; Quant owns deterministic validation, trials, fingerprints, ranking, lineage, and reports. Historical finite-grid experiments remain readable but can no longer be created.
+Category research starts from an existing engine handler, not an existing Strategy row. AgentOps generates a concrete engine-ready draft and a bounded adaptive Pareto plan; Quant owns deterministic validation, trials, ranking, lineage, and reports. Historical finite-grid experiments remain readable but can no longer be created.
 
 `support_resistance` participates as an existing engine category. Its three boolean mode switches and numeric `signal.*` / `risk.*` leaves are scalar search paths; validation rejects a candidate that disables all three modes. Every trial uses the same T-1-frozen zone detector and versioned cache semantics described in the [strategy guide](support-resistance-strategy.md).
 
@@ -72,9 +72,9 @@ After each round, Quant aggregates only bounded metrics and performs determinist
 
 Each combination of sample kind, cost scenario, and parameter values produces a stable trial key. The worker claims queued trials with PostgreSQL locking, creates or reuses the associated `StrategyRun`, runs the normal backtest engine, and stores metrics and the backtest run ID.
 
-Before a trial runs, Quant recomputes the fingerprint over the relevant features, adjusted and unadjusted prices, and corporate actions. A mismatch stops reproducible execution with experiment status `data_changed`. The report must not silently combine results produced from different data snapshots.
+Research no longer computes or stores a market-row fingerprint. Reproducibility is enforced operationally: the supported daily market-data pipeline enters `draining`, rejects new studies and promotions with HTTP 409 `market_data_maintenance`, waits for the entire non-terminal experiment to finish, and only then updates source tables under the exclusive advisory lock after invalidating derived caches. A failed maintenance remains blocked until a successful rerun.
 
-Experiment states also include `waiting_agent` between rounds. Stop reasons include round/trial/token/time/target limits, no valid or novel candidates, data drift, cancellation, and controller failure. Trial failures remain evidence.
+Experiment states also include `waiting_agent` between rounds. Stop reasons include round/trial/token/time/target limits, no valid or novel candidates, cancellation, and controller failure. Trial failures remain evidence.
 
 Final approval lists Pareto ranks 1–2. The user may save up to five candidates as ordinary visible drafts or approve an empty selection. Promotion is idempotent and records Experiment, Candidate, WorkflowRun, and Backtest lineage; it never activates or allocates a strategy.
 
@@ -123,7 +123,7 @@ Use these endpoints for inspection and terminal-run cleanup:
 - `GET /api/research/experiments/{experimentId}/report`
 - `DELETE /api/research/experiments/{experimentId}/backtests/{runId}` for one terminal run owned by the experiment
 
-Deleting a research backtest removes only run-scoped execution artifacts. It is allowed only after the experiment and run are terminal and uses the platform workspace confirmation dialog rather than a browser-native prompt. Trial parameters, metrics, fingerprints, candidate evidence, and generated report artifacts remain available; the live trial or candidate record retains a deletion timestamp instead of a run link.
+Deleting a research backtest removes only run-scoped execution artifacts. It is allowed only after the experiment and run are terminal and uses the platform workspace confirmation dialog rather than a browser-native prompt. Trial parameters, metrics, candidate evidence, and generated report artifacts remain available; the live trial or candidate record retains a deletion timestamp instead of a run link.
 
 Reports contain progress, successful and failed trial evidence, robustness comparisons, termination details, and token usage where available. They describe research execution only and must not be presented as live-trading safety or expected profitability.
 

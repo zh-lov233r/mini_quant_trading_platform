@@ -99,7 +99,7 @@ While the workflow is `waiting_external`, AgentOps periodically sends cumulative
 - Experiment polling tolerates a bounded number of connection or HTTP 503 failures, configured in AgentOps by `QUANT_TOOL_POLL_MAX_ERRORS`.
 - The Quant worker uses PostgreSQL `FOR UPDATE SKIP LOCKED`, defaults to concurrency 2, and permits at most 5 rounds and 100 actual backtests (defaults: 3/48).
 - Worker restart requeues orphaned trials and reuses their cleaned `StrategyRun` evidence instead of creating duplicate backtests.
-- Creation freezes the universe and a SHA-256 fingerprint of features, adjusted and unadjusted prices, and corporate actions. Drift produces `data_changed`.
+- The exclusive market-data maintenance gate rejects new studies and promotions, drains the complete experiment, invalidates derived caches, and only then permits source writes. A failed maintenance stays blocked until a successful rerun.
 - Cancellation stops new trial claims; already-running synchronous backtests reach a safe boundary before `cancelled`.
 - Policy-stopped and cancelled experiments do not resume queued work after restart.
 - A new code strategy remains in a Draft PR until it is reviewed, merged, rebuilt into the native wheel, deployed, and present in the engine-ready catalog.

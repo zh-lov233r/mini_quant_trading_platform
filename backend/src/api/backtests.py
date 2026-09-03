@@ -47,6 +47,7 @@ from src.services.backtest_job_service import (
 )
 from src.services.backtest_worker_status_service import load_backtest_worker_status
 from src.services.backtest_task_service import TaskSource, TaskStage, list_backtest_tasks
+from src.services.market_data_maintenance_service import MarketDataMaintenanceError
 from src.services.data_service import get_historical_data
 from src.schemas.research import PointInTimeUniversePolicy
 from src.services.stock_basket_service import DEFAULT_COMMON_STOCK_BASKET_NAME
@@ -911,29 +912,36 @@ def create_backtest(
     )
     db.add(run)
     db.flush()
-    enqueue_backtest_job(
-        db,
-        run=run,
-        source="manual",
-        payload={
-            "strategy_id": str(strategy.id),
-            "start_date": payload.start_date.isoformat(),
-            "end_date": payload.end_date.isoformat(),
-            "initial_cash": payload.initial_cash,
-            "benchmark_symbol": benchmark_symbol,
-            "commission_bps": payload.commission_bps,
-            "commission_min": payload.commission_min,
-            "slippage_bps": payload.slippage_bps,
-            "universe_symbols": basket_symbols,
-            "universe_metadata": basket_metadata,
-            "universe_policy": (
-                payload.universe_policy.model_dump(mode="json", by_alias=True)
-                if payload.universe_policy
-                else None
-            ),
-            "persist_level": payload.persist_level,
-        },
-    )
+    try:
+        enqueue_backtest_job(
+            db,
+            run=run,
+            source="manual",
+            payload={
+                "strategy_id": str(strategy.id),
+                "start_date": payload.start_date.isoformat(),
+                "end_date": payload.end_date.isoformat(),
+                "initial_cash": payload.initial_cash,
+                "benchmark_symbol": benchmark_symbol,
+                "commission_bps": payload.commission_bps,
+                "commission_min": payload.commission_min,
+                "slippage_bps": payload.slippage_bps,
+                "universe_symbols": basket_symbols,
+                "universe_metadata": basket_metadata,
+                "universe_policy": (
+                    payload.universe_policy.model_dump(mode="json", by_alias=True)
+                    if payload.universe_policy
+                    else None
+                ),
+                "persist_level": payload.persist_level,
+            },
+        )
+    except MarketDataMaintenanceError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
     db.commit()
     db.refresh(run)
 
@@ -1247,6 +1255,12 @@ def retry_backtest(run_id: UUID, db: Session = Depends(get_db)):
     _run, strategy_name = _get_run_with_strategy(db, run_id)
     try:
         retry_run = retry_failed_backtest_job(db, run_id)
+    except MarketDataMaintenanceError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1369,7 +1383,6 @@ def get_backtest_support_resistance(
             "symbols": materialization.symbols,
             "coverage_start": materialization.coverage_start.isoformat(),
             "coverage_end": materialization.coverage_end.isoformat(),
-            "source_data_fingerprint": materialization.source_data_fingerprint,
             "price_semantics": materialization.price_semantics,
             "status": materialization.status,
             "statistics": materialization.statistics,

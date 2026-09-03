@@ -24,7 +24,6 @@ from src.services.support_resistance_persistence_service import (
     hydrate_state_from_materialization,
     persist_support_resistance_run,
     record_failed_materialization_after_rollback,
-    source_data_fingerprint,
 )
 from src.services.strategy_registry import build_runtime_payload
 from src.services.strategy_types import (
@@ -237,11 +236,6 @@ def generate_and_persist_signals_for_trade_date(
     active_strategies = list_active_strategies(db)
     active_runtimes = _list_engine_ready_runtimes_from_strategies(active_strategies)
     recent_bar_count, recent_bar_lookback_days = _recent_history_window_for_runtimes(active_runtimes)
-    support_resistance_source_fingerprint = (
-        source_data_fingerprint(db)
-        if any(runtime["strategy_type"] == "support_resistance" for runtime in active_runtimes)
-        else None
-    )
     snapshots = load_feature_market_data(
         db,
         trade_date,
@@ -274,7 +268,6 @@ def generate_and_persist_signals_for_trade_date(
                 symbols=replay_symbols,
                 coverage_start=coverage_start,
                 coverage_end=trade_date,
-                expected_data_fingerprint=support_resistance_source_fingerprint,
             )
             replay_state = (
                 hydrate_state_from_materialization(db, reusable)
@@ -312,7 +305,6 @@ def generate_and_persist_signals_for_trade_date(
                     symbols=replay_symbols,
                     coverage_start=min(replay_dates) if replay_dates else trade_date,
                     coverage_end=trade_date,
-                    expected_data_fingerprint=support_resistance_source_fingerprint,
                 )
             except SupportResistanceMaterializationBuildError as exc:
                 db.rollback()

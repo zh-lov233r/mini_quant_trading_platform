@@ -12,6 +12,11 @@ from typing import Iterable, Iterator
 import psycopg
 from dotenv import load_dotenv
 
+try:
+    from backend.utils.market_data_maintenance_guard import require_market_data_maintenance_owner
+except ModuleNotFoundError:
+    from market_data_maintenance_guard import require_market_data_maintenance_owner
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -682,6 +687,7 @@ def main() -> None:
     args = parse_args()
     if not args.database_url:
         raise SystemExit("Missing DATABASE_URL or SQLALCHEMY_DATABASE_URL")
+    require_market_data_maintenance_owner(args.database_url)
 
     processed_instruments, upserted_rows = backfill_daily_features(
         args.database_url,

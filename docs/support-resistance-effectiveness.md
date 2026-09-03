@@ -23,7 +23,7 @@ Run the required read-only universe preflight before an actual study:
 .venv/bin/python backend/utils/dry_run_point_in_time_universe.py
 ```
 
-The JSON output contains yearly eligible membership and exclusion observations. Run `make check-data CHECK_DATA_ARGS="--strict --json"` and require zero critical failures before freezing the data fingerprint.
+The JSON output contains yearly eligible membership and exclusion observations. Run `make check-data CHECK_DATA_ARGS="--strict --json"` and require zero critical failures before starting the study. Market-data updates are excluded for the complete experiment by the maintenance gate.
 
 ## Fixed candidate and time budget
 

@@ -44,7 +44,7 @@ ZH_STATIC_TEXT = {
 def _localized(value: Any, zh: bool) -> str:
     text_value = str(value)
     return ZH_STATIC_TEXT.get(text_value, text_value) if zh else text_value
-TERMINAL_CHILD_STATUSES = {"completed", "partially_failed", "failed", "cancelled", "data_changed"}
+TERMINAL_CHILD_STATUSES = {"completed", "partially_failed", "failed", "cancelled"}
 
 
 def _finite(value: Any) -> float | None:
@@ -1139,7 +1139,7 @@ def build_validation_report(db: Session, parent: ResearchExperiment) -> dict[str
     elif calibrated and calibrated.get("passed"):
         decision = "validated"
         validated_candidate_source = "calibrated"
-    elif final_child is None or final_child.status in {"data_changed", "cancelled"} or not candidates:
+    elif final_child is None or final_child.status == "cancelled" or not candidates:
         decision = "inconclusive"
         validated_candidate_source = None
     else:
@@ -1211,7 +1211,6 @@ def build_validation_report(db: Session, parent: ResearchExperiment) -> dict[str
             "policy": (parent.spec or {}).get("universePolicy"),
             "membershipSemantics": "point_in_time_liquid",
         },
-        "dataFingerprint": (parent.run_manifest or {}).get("dataFingerprint"),
         "backtestBudget": (parent.run_manifest or {}).get("backtestBudget"),
         "sealedHoldout": (parent.run_manifest or {}).get("sealedHoldout"),
         "modeChampions": (parent.run_manifest or {}).get("modeChampions") or {},
@@ -1243,7 +1242,7 @@ def render_markdown(report: dict[str, Any], language: str) -> str:
     sections = [
         ("1. 执行摘要与最终判定", "1. Executive summary and final decision", f"`{report['decision']}`\n\n{report.get('hypothesis') or 'N/A'}"),
         ("2. 预注册假设、通过线和协议哈希", "2. Pre-registered hypothesis, gates, and protocol hash", f"Protocol hash: `{report.get('protocolHash') or 'N/A'}`\n\n```json\n{json.dumps(report.get('protocol') or {}, ensure_ascii=False, indent=2, sort_keys=True)}\n```"),
-        ("3. 数据覆盖、质量检查和动态股票池", "3. Data coverage, quality, and dynamic universe", f"Membership: `point_in_time_liquid`\n\nData fingerprint: `{((report.get('dataFingerprint') or {}).get('sha256') or 'N/A')}`\n\n```json\n{json.dumps(report.get('universe') or {}, ensure_ascii=False, indent=2, sort_keys=True)}\n```"),
+        ("3. 数据覆盖、质量检查和动态股票池", "3. Data coverage, quality, and dynamic universe", f"Membership: `point_in_time_liquid`\n\n```json\n{json.dumps(report.get('universe') or {}, ensure_ascii=False, indent=2, sort_keys=True)}\n```"),
         ("4. 偏差控制与统计方法", "4. Bias controls and statistical methods", "T-close membership; T+1-open fills; 40-session de-duplication; month/instrument block bootstrap; sealed final holdout."),
         ("5. 三种 setup 与四类区间研究", "5. Three-setup and four-regime study", f"```json\n{json.dumps([{'paramsHash': item.get('paramsHash'), 'eventStudy': item.get('eventStudy'), 'regimeAudit': item.get('regimeAudit')} for item in report.get('finalCandidates') or []], ensure_ascii=False, indent=2, sort_keys=True)}\n```"),
         ("6. 参数搜索、Pareto 与参数敏感性", "6. Parameter search, Pareto, and sensitivity", f"```json\n{json.dumps({'modeChampions': report.get('modeChampions'), 'frozenChampion': report.get('frozenChampion'), 'parameterMatrix': (report.get('charts') or {}).get('parameterMatrix')}, ensure_ascii=False, indent=2, sort_keys=True)}\n```"),
@@ -1387,7 +1386,7 @@ def render_pdf(report: dict[str, Any], path: Path, language: str) -> dict[str, A
     headings = [
         ("执行摘要" if zh else "Executive summary", report.get("hypothesis") or "N/A"),
         ("预注册协议" if zh else "Pre-registered protocol", f"Protocol hash: {report.get('protocolHash') or 'N/A'}"),
-        ("数据与动态股票池" if zh else "Data and dynamic universe", f"point_in_time_liquid; fingerprint={((report.get('dataFingerprint') or {}).get('sha256') or 'N/A')}"),
+        ("数据与动态股票池" if zh else "Data and dynamic universe", "point_in_time_liquid"),
     ]
     for heading, body in headings:
         story.extend([paragraph(heading, styles["ValidationH1"]), paragraph(body, styles["ValidationBody"])])

@@ -26,6 +26,11 @@ except ImportError:
     def load_dotenv(*args, **kwargs) -> bool:
         return False
 
+try:
+    from backend.utils.market_data_maintenance_guard import require_market_data_maintenance_owner
+except ModuleNotFoundError:
+    from market_data_maintenance_guard import require_market_data_maintenance_owner
+
 if TYPE_CHECKING:
     import psycopg
 
@@ -525,6 +530,8 @@ def main() -> None:
         raise SystemExit("Missing MASSIVE_API_KEY")
     if not args.database_url:
         raise SystemExit("Missing DATABASE_URL or SQLALCHEMY_DATABASE_URL")
+    if not args.dry_run:
+        require_market_data_maintenance_owner(args.database_url)
 
     start_date, end_date = _resolve_date_range(args)
     trade_dates = _iter_weekdays(start_date, end_date)

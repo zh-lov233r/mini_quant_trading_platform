@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -15,6 +18,9 @@ from dotenv import load_dotenv
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 NEW_YORK = ZoneInfo("America/New_York")
+MARKET_DATA_ADVISORY_LOCK_KEY = 7_314_582_019
+MARKET_DATA_COORDINATOR_LOCK_KEY = 7_314_582_020
+MAINTENANCE_OWNER_TOKEN: str | None = None
 
 LATEST_COVERAGE_SQL = """
 SELECT
@@ -27,6 +33,143 @@ SELECT
 class CoverageWindow:
     latest_eod_date: date | None
     latest_feature_date: date | None
+
+
+class MaintenanceWindow:
+    def __init__(self, database_url: str) -> None:
+        self.database_url = database_url
+        self.owner_token = str(uuid4())
+        self.conn: psycopg.Connection | None = None
+        self.closed = False
+
+    def start(self) -> None:
+        global MAINTENANCE_OWNER_TOKEN
+
+        self.conn = psycopg.connect(_psycopg_dsn(self.database_url), autocommit=True)
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (MARKET_DATA_COORDINATOR_LOCK_KEY,))
+            if not cur.fetchone()[0]:
+                self.conn.close()
+                raise SystemExit("Another market-data maintenance process is active")
+            cur.execute(
+                """
+                UPDATE market_data_maintenance_state
+                SET status = 'draining', owner_token = %s, requested_at = NOW(),
+                    started_at = NULL, finished_at = NULL, error_message = NULL,
+                    updated_at = NOW()
+                WHERE id = 1
+                """,
+                (self.owner_token,),
+            )
+            if cur.rowcount != 1:
+                raise SystemExit(
+                    "market_data_maintenance_state is not initialized; apply the reviewed schema SQL first"
+                )
+
+        MAINTENANCE_OWNER_TOKEN = self.owner_token
+        atexit.register(self.fail_if_open)
+        self._wait_for_strategy_work()
+        assert self.conn is not None
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(%s)", (MARKET_DATA_ADVISORY_LOCK_KEY,))
+            cur.execute(
+                """
+                UPDATE market_data_maintenance_state
+                SET status = 'updating', started_at = NOW(), updated_at = NOW()
+                WHERE id = 1 AND owner_token = %s AND status = 'draining'
+                """,
+                (self.owner_token,),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError("market-data maintenance ownership changed while draining")
+            cur.execute(
+                """
+                UPDATE support_resistance_materializations
+                SET invalidated_at = NOW()
+                WHERE invalidated_at IS NULL
+                """
+            )
+            invalidated = cur.rowcount
+
+        backend_path = str(REPO_ROOT / "backend")
+        if backend_path not in sys.path:
+            sys.path.insert(0, backend_path)
+        from src.services.prepared_dataset_service import PreparedDatasetCache
+
+        PreparedDatasetCache().invalidate_all()
+        print(
+            f"Maintenance window acquired; invalidated {invalidated} support/resistance materializations and PreparedDataset cache.",
+            flush=True,
+        )
+
+    def _wait_for_strategy_work(self) -> None:
+        assert self.conn is not None
+        last_counts: tuple[int, int] | None = None
+        while True:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                      (SELECT COUNT(*) FROM backtest_jobs WHERE status IN ('queued', 'running')),
+                      (SELECT COUNT(*) FROM research_experiments WHERE status NOT IN (
+                        'completed', 'partially_failed', 'failed', 'cancelled'
+                      ))
+                    """
+                )
+                counts = tuple(int(value) for value in cur.fetchone())
+            if counts == (0, 0):
+                return
+            if counts != last_counts:
+                print(
+                    f"Draining strategy work: backtest_jobs={counts[0]} research_experiments={counts[1]}",
+                    flush=True,
+                )
+                last_counts = counts
+            time.sleep(2)
+
+    def succeed(self) -> None:
+        global MAINTENANCE_OWNER_TOKEN
+
+        assert self.conn is not None
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE market_data_maintenance_state
+                SET status = 'ready', owner_token = NULL, finished_at = NOW(),
+                    error_message = NULL, updated_at = NOW()
+                WHERE id = 1 AND owner_token = %s
+                """,
+                (self.owner_token,),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError("market-data maintenance ownership changed before completion")
+        self.closed = True
+        MAINTENANCE_OWNER_TOKEN = None
+        self.conn.close()
+
+    def fail_if_open(self) -> None:
+        global MAINTENANCE_OWNER_TOKEN
+
+        if self.closed or self.conn is None or self.conn.closed:
+            return
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE market_data_maintenance_state
+                    SET status = 'failed', owner_token = NULL, finished_at = NOW(),
+                        error_message = %s, updated_at = NOW()
+                    WHERE id = 1 AND owner_token = %s
+                    """,
+                    (
+                        "market-data maintenance exited before the pipeline and quality gate completed",
+                        self.owner_token,
+                    ),
+                )
+        finally:
+            self.closed = True
+            MAINTENANCE_OWNER_TOKEN = None
+            self.conn.close()
 
 
 def parse_args() -> argparse.Namespace:
@@ -207,6 +350,8 @@ def _run_step(
     # shell or .env enables them for the backend application.
     env["PAPER_TRADING_SCHEDULER_ENABLED"] = "false"
     env["PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS"] = "false"
+    if MAINTENANCE_OWNER_TOKEN is not None:
+        env["MARKET_DATA_MAINTENANCE_OWNER"] = MAINTENANCE_OWNER_TOKEN
     print(f"\n[{step_name}] {printable}", flush=True)
     subprocess.run(command, cwd=REPO_ROOT, env=env, check=True)
 
@@ -289,6 +434,14 @@ def main() -> None:
         f"latest_feature_date={initial_coverage.latest_feature_date}",
         flush=True,
     )
+
+    if args.skip_quality_check and not args.dry_run:
+        raise SystemExit("--skip-quality-check is only allowed with --dry-run")
+
+    maintenance: MaintenanceWindow | None = None
+    if not args.dry_run:
+        maintenance = MaintenanceWindow(args.database_url)
+        maintenance.start()
 
     shared_args = [
         "--start-date",
@@ -426,6 +579,8 @@ def main() -> None:
             end_date,
             strict=args.strict_quality_check,
         )
+    if maintenance is not None:
+        maintenance.succeed()
 
 
 if __name__ == "__main__":

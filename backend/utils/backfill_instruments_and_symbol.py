@@ -6,6 +6,11 @@ import psycopg
 from dotenv import load_dotenv
 from tqdm import tqdm
 
+try:
+    from backend.utils.market_data_maintenance_guard import require_market_data_maintenance_owner
+except ModuleNotFoundError:
+    from market_data_maintenance_guard import require_market_data_maintenance_owner
+
 load_dotenv()
 API = os.getenv("MASSIVE_API_KEY")
 URL = os.getenv("DATABASE_URL")
@@ -491,6 +496,7 @@ def should_update_symbol_history(row: dict, *, effective_is_active: bool) -> boo
 async def backfill():
     if not API or not URL:
         raise SystemExit("Got empty MASSIVE_API_KEY or DATABASE_URL")
+    require_market_data_maintenance_owner(URL)
     
     headers = {"Authorization": f"Bearer {API}"}
     async with aiohttp.ClientSession(headers=headers) as sess:

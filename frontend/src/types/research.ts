@@ -165,7 +165,6 @@ export interface ExperimentTrial {
   windowStart: string;
   windowEnd: string;
   costConfig: Record<string, unknown>;
-  dataFingerprint: string | null;
   backtestRunId: string | null;
   backtestDeletedAt: string | null;
   candidateId: string | null;

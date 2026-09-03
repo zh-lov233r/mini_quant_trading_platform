@@ -29,6 +29,8 @@ Then import explicitly:
 make import-a-share A_SHARE_ARGS="apply --start-date 2016-01-01 --end-date 2026-09-02"
 ```
 
+`apply` uses the same exclusive market-data maintenance window as the daily Massive pipeline. It drains existing backtest/research work, invalidates derived caches before writing, and leaves strategy work blocked in `failed` if the import does not complete; rerun successfully after fixing the cause to restore `ready`.
+
 The normal full import also maintains the Shanghai Composite (`000001.SH`) and Shenzhen Component (`399001.SZ`). To repair or update only those indices:
 
 ```bash
@@ -48,7 +50,7 @@ The importer iterates Shanghai Stock Exchange open dates and commits EOD data pe
 - Symbols retain their Tushare suffix, such as `000001.SZ`, `600000.SH`, and `920000.BJ`. Exchanges are stored as `XSHE`, `XSHG`, and `XBSE`; currency is `CNY`; locale is `cn`.
 - `daily.vol` is reported in board lots and is multiplied by 100 into shares. `daily.amount` is reported in thousands of CNY and is used to derive unadjusted VWAP.
 - Each timestamp is 15:00 Asia/Shanghai on the trading date, converted to UTC. The existing `dt_ny` column has a legacy name, but this timestamp still maps to the same calendar date in New York, so the stored trading-date key matches Tushare `trade_date`.
-- Forward adjustment follows Tushare's documented formula: `raw price × date factor / latest factor`; backward adjustment is `raw price × date factor`. Factor refreshes change the data fingerprint and invalidate the PreparedDataset cache.
+- Forward adjustment follows Tushare's documented formula: `raw price × date factor / latest factor`; backward adjustment is `raw price × date factor`. Run factor refreshes through the exclusive maintenance pipeline so it invalidates the PreparedDataset cache before writing.
 - The importer rejects non-finite/non-positive prices, inverted OHLC, negative volume/amount, missing adjustment factors, and a response at the 6,000-row limit that may have been truncated.
 - `backfill_adjusted_prices.py` excludes `vendor='tushare'`, preserving provider-supplied factors.
 - The two broad-market indices are stored as `INDEX` instruments. Their daily bars need no corporate-action adjustment, so forward/backward factors are persisted as `1.0`; daily features are still generated to preserve market-data completeness.

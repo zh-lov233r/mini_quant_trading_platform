@@ -247,7 +247,6 @@ export interface SupportResistanceMaterializationOut {
   symbols: string[];
   coverage_start: string;
   coverage_end: string;
-  source_data_fingerprint: string;
   price_semantics: string;
   status: string;
   statistics: Record<string, unknown>;

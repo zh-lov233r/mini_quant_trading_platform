@@ -99,7 +99,7 @@ workflow 处于 `waiting_external` 时，AgentOps 会定期向认证后的实验
 - 实验轮询只容忍有界数量的连接或 HTTP 503 错误，由 AgentOps 的 `QUANT_TOOL_POLL_MAX_ERRORS` 配置。
 - Quant worker 使用 PostgreSQL `FOR UPDATE SKIP LOCKED`，默认并发 2，硬上限 5 轮 / 100 个实际回测（默认 3/48）。
 - worker 重启会重新排队遗留 trial，并复用其清理后的 `StrategyRun` 证据，不创建重复回测。
-- 创建实验时会固化 universe，以及特征、复权/未复权价格和公司行动的 SHA-256 指纹；漂移结果为 `data_changed`。
+- 排他行情维护门禁会拒绝新研究和推广，等待整个实验排空，失效派生缓存后才允许写源表；维护失败后持续阻塞，直到重跑成功。
 - 取消会阻止领取新 trial；运行中的同步回测到达安全边界后进入 `cancelled`。
 - 已因策略停止或取消的实验不会在重启后恢复排队工作。
 - 新代码策略会停留在 Draft PR，直到被审查、合并、重新构建进原生 wheel、部署并出现在 engine-ready catalog 中。

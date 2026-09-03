@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 from typing import Any, Callable, Iterator
 from uuid import uuid4
 
@@ -15,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 
-PREPARED_DATASET_SCHEMA_VERSION = "v3"
+PREPARED_DATASET_SCHEMA_VERSION = "v4"
 PREPARED_INTEGER_FIELDS = (
     "session_index", "instrument_id", "ts_us", "dt_ordinal", "symbol_id",
     "asset_type_id", "exchange_id", "listed_ordinal", "delisted_ordinal",
@@ -33,16 +34,12 @@ PREPARED_FLOAT_INDEX = {name: index for index, name in enumerate(PREPARED_FLOAT_
 PREPARED_DATE_SENTINEL = np.iinfo(np.int64).min
 
 
-class PreparedDatasetDataChangedError(RuntimeError):
-    pass
-
-
 @dataclass(slots=True)
 class PreparedDataset:
-    """Two Fortran-order arrays plus dictionary sidecars for the v3 dataset.
+    """Two Fortran-order arrays plus dictionary sidecars for the v4 dataset.
 
-    Fingerprinted caches use read-only memmaps; Paper evaluation uses the same
-    schema in ordinary in-memory NumPy arrays.
+    Prepared caches use read-only memmaps; Paper evaluation uses the same schema
+    in ordinary in-memory NumPy arrays.
     """
 
     integers: np.ndarray
@@ -150,18 +147,18 @@ def prepared_dataset_key(manifest: dict[str, Any]) -> str:
 
 def build_prepared_dataset_manifest(
     *,
-    data_fingerprint: dict[str, Any],
     strategy_type: str,
     universe: dict[str, Any],
+    instrument_ids: list[int],
+    coverage_date_range: tuple[date, date],
     requested_date_range: tuple[date, date],
+    universe_policy: dict[str, Any] | None,
 ) -> dict[str, Any]:
     return {
         "loader_schema_version": PREPARED_DATASET_SCHEMA_VERSION,
-        "data_fingerprint": data_fingerprint["sha256"],
-        "row_count": int(data_fingerprint["rowCount"]),
-        "instrument_ids": sorted(int(value) for value in data_fingerprint["instrumentIds"]),
-        "date_range": [data_fingerprint["startDate"], data_fingerprint["endDate"]],
-        "fingerprint_request_range": [
+        "instrument_ids": sorted(int(value) for value in instrument_ids),
+        "date_range": [coverage_date_range[0].isoformat(), coverage_date_range[1].isoformat()],
+        "requested_date_range": [
             requested_date_range[0].isoformat(), requested_date_range[1].isoformat()
         ],
         "feature_set": ["daily_features", "adjusted_ohlcv", strategy_type],
@@ -169,9 +166,9 @@ def build_prepared_dataset_manifest(
         "corporate_action_semantics": "split_reverse_split_stock_dividend",
         "symbol_identity_semantics": "point_in_time_primary_symbol",
         "universe_membership_semantics": (
-            "point_in_time_liquid" if data_fingerprint.get("universePolicy") else "resolved_instrument_set"
+            "point_in_time_liquid" if universe_policy else "resolved_instrument_set"
         ),
-        "universe_policy": data_fingerprint.get("universePolicy"),
+        "universe_policy": universe_policy,
         "universe": universe,
     }
 
@@ -184,7 +181,7 @@ def default_cache_root() -> Path:
 
 
 class PreparedDatasetCache:
-    """Atomic fingerprint-addressed columnar cache; v2 files remain untouched."""
+    """Atomic structural-keyed columnar cache."""
 
     def __init__(self, root: Path | None = None) -> None:
         self.root = (root or default_cache_root()).resolve()
@@ -192,7 +189,7 @@ class PreparedDatasetCache:
     def _paths(self, key: str) -> tuple[Path, Path]:
         if len(key) != 64 or any(character not in "0123456789abcdef" for character in key):
             raise ValueError("prepared dataset key must be a lowercase sha256")
-        return self.root / f"{key}.v3", self.root / f"{key}.lock"
+        return self.root / f"{key}.{PREPARED_DATASET_SCHEMA_VERSION}", self.root / f"{key}.lock"
 
     @contextmanager
     def _lock(self, lock_path: Path) -> Iterator[None]:
@@ -275,7 +272,7 @@ class PreparedDatasetCache:
             existing = self.open(normalized)
             if existing is not None:
                 return existing
-            temporary = self.root / f".{key}.{uuid4().hex}.v3"
+            temporary = self.root / f".{key}.{uuid4().hex}.{PREPARED_DATASET_SCHEMA_VERSION}"
             temporary.mkdir()
             try:
                 integers = np.lib.format.open_memmap(
@@ -348,6 +345,19 @@ class PreparedDatasetCache:
         )
         return self.cleanup(normalized, active_lease_count=active_lease_count)
 
+    def invalidate_all(self) -> int:
+        if not self.root.exists():
+            return 0
+        removed = 0
+        for directory in sorted(self.root.iterdir()):
+            if not directory.is_dir() or directory.suffix not in {".v3", ".v4"}:
+                continue
+            shutil.rmtree(directory)
+            removed += 1
+        for lock_path in self.root.glob("*.lock"):
+            lock_path.unlink(missing_ok=True)
+        return removed
+
 
 def encode_prepared_snapshot(dataset: PreparedDataset, index: int, snapshot: dict[str, Any]) -> None:
     dataset.encode(index, snapshot)
@@ -358,7 +368,7 @@ def build_in_memory_prepared_dataset(
     *,
     sidecar: dict[str, Any] | None = None,
 ) -> PreparedDataset:
-    """Build a read-only v3 columnar view for one-day native evaluation."""
+    """Build a read-only v4 columnar view for one-day native evaluation."""
     ordered = sorted(
         (dict(snapshot) for snapshot in snapshots),
         key=lambda snapshot: (

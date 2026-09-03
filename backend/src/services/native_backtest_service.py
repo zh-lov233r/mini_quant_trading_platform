@@ -29,7 +29,6 @@ from src.services.prepared_dataset_service import (
     PREPARED_DATASET_SCHEMA_VERSION,
     PREPARED_INTEGER_INDEX,
     PreparedDatasetCache,
-    PreparedDatasetDataChangedError,
     build_prepared_dataset_manifest,
     encode_prepared_snapshot,
     prepared_dataset_key,
@@ -50,8 +49,8 @@ from src.services.support_resistance_persistence_service import (
     find_reusable_materialization,
     hydrate_state_from_materialization,
     persist_support_resistance_run,
-    source_data_fingerprint,
 )
+from src.services.market_data_maintenance_service import acquire_market_data_read_lock
 from src.services.support_resistance_service import (
     SupportResistanceState,
     SupportResistanceSymbolState,
@@ -102,7 +101,6 @@ def _support_hydration(
     symbols: list[str],
     coverage_start: date,
     coverage_end: date,
-    data_fingerprint: str,
 ) -> tuple[dict[str, Any], Any | None]:
     if runtime["strategy_type"] != "support_resistance":
         return {}, None
@@ -112,7 +110,6 @@ def _support_hydration(
         symbols=symbols,
         coverage_start=coverage_start,
         coverage_end=coverage_end,
-        expected_data_fingerprint=data_fingerprint,
     )
     if materialization is None:
         return {}, None
@@ -140,48 +137,31 @@ def _load_prepared_dataset(
     performance: dict[str, Any],
 ) -> tuple[Any, dict[str, Any], str, Any | None]:
     from src.services.backtest_engine import FEATURE_RANGE_V2_SQL, _feature_snapshot_from_row
-    from src.services.research_experiment_service import calculate_data_fingerprint
-
     if supplied is None:
-        fingerprint_start = start_date
-        fingerprint_end = end_date
-        manifest: dict[str, Any] | None = None
+        manifest = build_prepared_dataset_manifest(
+            strategy_type=runtime["strategy_type"],
+            universe=resolved_universe.manifest(),
+            instrument_ids=resolved_universe.instrument_ids,
+            coverage_date_range=(start_date - timedelta(days=400), end_date),
+            requested_date_range=(start_date, end_date),
+            universe_policy=universe_policy,
+        )
     else:
         manifest = dict(supplied.get("manifest") or {})
         expected_key = str(supplied.get("key") or "")
         if prepared_dataset_key(manifest) != expected_key:
             raise ValueError("prepared dataset key does not match its manifest")
-        request_range = list(manifest.get("fingerprint_request_range") or [])
+        request_range = list(manifest.get("requested_date_range") or [])
         if len(request_range) != 2:
-            raise ValueError("prepared dataset fingerprint request range is missing")
-        fingerprint_start = date.fromisoformat(str(request_range[0]))
-        fingerprint_end = date.fromisoformat(str(request_range[1]))
-    fingerprint = calculate_data_fingerprint(
-        db,
-        symbols=symbols,
-        start_date=fingerprint_start,
-        end_date=fingerprint_end,
-        universe_policy=universe_policy,
-    )
-    if manifest is None:
-        manifest = build_prepared_dataset_manifest(
-            data_fingerprint=fingerprint,
-            strategy_type=runtime["strategy_type"],
-            universe=resolved_universe.manifest(),
-            requested_date_range=(start_date, end_date),
-        )
-    else:
-        if manifest.get("data_fingerprint") != fingerprint["sha256"]:
-            raise PreparedDatasetDataChangedError(
-                "daily feature data changed since the prepared dataset was frozen"
-            )
-    manifest_instrument_ids = sorted(
-        int(value) for value in manifest.get("instrument_ids") or []
-    )
-    if manifest_instrument_ids != sorted(
-        int(value) for value in fingerprint.get("instrumentIds") or []
-    ):
-        raise PreparedDatasetDataChangedError("prepared dataset instrument set changed")
+            raise ValueError("prepared dataset request range is missing")
+        if not (
+            date.fromisoformat(str(request_range[0])) <= start_date
+            and end_date <= date.fromisoformat(str(request_range[1]))
+        ):
+            raise ValueError("backtest window is outside the prepared dataset range")
+    manifest_instrument_ids = sorted(int(value) for value in manifest.get("instrument_ids") or [])
+    if not manifest_instrument_ids:
+        raise ValueError("prepared dataset instrument set is empty")
 
     cache = PreparedDatasetCache()
     dataset = cache.open(manifest)
@@ -193,6 +173,28 @@ def _load_prepared_dataset(
         )
         build_start = date.fromisoformat(str(manifest["date_range"][0]))
         build_end = date.fromisoformat(str(manifest["date_range"][1]))
+        row_count = int(
+            db.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM daily_features df
+                    JOIN eod_bars bars
+                      ON bars.instrument_id = df.instrument_id
+                     AND bars.dt_ny = df.dt_ny
+                    WHERE df.instrument_id IN :instrument_ids
+                      AND df.dt_ny BETWEEN :start_date AND :end_date
+                    """
+                ).bindparams(bindparam("instrument_ids", expanding=True)),
+                {
+                    "instrument_ids": manifest_instrument_ids,
+                    "start_date": build_start,
+                    "end_date": build_end,
+                },
+            ).scalar_one()
+        )
+        if row_count <= 0:
+            raise ValueError("no daily feature data found for the backtest universe and window")
 
         def writer(array: Any) -> dict[str, Any]:
             loader = MarketDataLoader(
@@ -214,8 +216,8 @@ def _load_prepared_dataset(
                     date_offsets.append([trade_day.isoformat(), index, len(snapshots)])
                     for snapshot in snapshots.values():
                         if index >= len(array):
-                            raise PreparedDatasetDataChangedError(
-                                "prepared dataset contains more rows than its fingerprint"
+                            raise RuntimeError(
+                                "prepared dataset contains more rows than its preflight count"
                             )
                         encode_prepared_snapshot(array, index, snapshot)
                         identity = (int(snapshot["instrument_id"]), str(snapshot["symbol"]))
@@ -228,8 +230,8 @@ def _load_prepared_dataset(
             finally:
                 loader.close()
             if index != len(array):
-                raise PreparedDatasetDataChangedError(
-                    "prepared dataset row count differs from its fingerprint"
+                raise RuntimeError(
+                    "prepared dataset row count differs from its preflight count"
                 )
             return {
                 "date_offsets": date_offsets,
@@ -247,7 +249,7 @@ def _load_prepared_dataset(
 
         dataset = cache.build(
             manifest,
-            row_count=int(manifest["row_count"]),
+            row_count=row_count,
             writer=writer,
         )
     coverage_start = date.fromisoformat(str(manifest["date_range"][0]))
@@ -258,9 +260,6 @@ def _load_prepared_dataset(
         symbols=symbols,
         coverage_start=coverage_start,
         coverage_end=coverage_end,
-        data_fingerprint=source_data_fingerprint(db)
-        if runtime["strategy_type"] == "support_resistance"
-        else fingerprint["sha256"],
     )
     if hydration:
         dataset.sidecar = {
@@ -549,6 +548,7 @@ def run_backtest_native(
     db.refresh(run)
 
     try:
+        acquire_market_data_read_lock(db, allow_draining=True)
         dataset, manifest, cache_status, reusable_materialization = _load_prepared_dataset(
             db,
             runtime=runtime,
@@ -639,7 +639,6 @@ def run_backtest_native(
                 symbols=symbols,
                 coverage_start=date.fromisoformat(str(manifest["date_range"][0])),
                 coverage_end=date.fromisoformat(str(manifest["date_range"][1])),
-                expected_data_fingerprint=source_data_fingerprint(db),
                 persist_run_events=level == "full",
                 cancel_check=cancel_check,
             )

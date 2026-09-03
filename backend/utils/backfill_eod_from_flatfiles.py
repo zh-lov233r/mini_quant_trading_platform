@@ -17,6 +17,7 @@ from backend.src.services.data_service import (  # noqa: E402
     backfill_massive_day_aggs,
     find_massive_day_agg_files,
 )
+from backend.utils.run_daily_market_backfill import MaintenanceWindow  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -75,8 +76,14 @@ def main() -> None:
 
     print(f"Found {len(files)} flat files under {args.root}")
 
-    with psycopg.connect(args.database_url) as conn:
-        stats = backfill_massive_day_aggs(conn, files)
+    maintenance = MaintenanceWindow(args.database_url)
+    maintenance.start()
+    try:
+        with psycopg.connect(args.database_url) as conn:
+            stats = backfill_massive_day_aggs(conn, files)
+        maintenance.succeed()
+    finally:
+        maintenance.fail_if_open()
 
     staged_total = 0
     upserted_total = 0

@@ -24,6 +24,11 @@ else:
         parse_optional_date,
     )
 
+try:
+    from backend.utils.market_data_maintenance_guard import require_market_data_maintenance_owner
+except ModuleNotFoundError:
+    from market_data_maintenance_guard import require_market_data_maintenance_owner
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EARLIEST_PLAN_DATE = date(2016, 8, 29)
@@ -186,6 +191,8 @@ def main() -> None:
     api_key = os.getenv("MASSIVE_API_KEY")
     if not database_url:
         raise SystemExit("Missing DATABASE_URL or SQLALCHEMY_DATABASE_URL")
+    if not args.dry_run:
+        require_market_data_maintenance_owner(database_url)
     if not api_key:
         raise SystemExit("Missing MASSIVE_API_KEY")
 

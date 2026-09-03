@@ -493,7 +493,6 @@ class TrialOut(BaseModel):
     window_start: date = Field(alias="windowStart")
     window_end: date = Field(alias="windowEnd")
     cost_config: dict[str, Any] = Field(alias="costConfig")
-    data_fingerprint: str | None = Field(default=None, alias="dataFingerprint")
     backtest_run_id: UUID | None = Field(default=None, alias="backtestRunId")
     backtest_deleted_at: datetime | None = Field(default=None, alias="backtestDeletedAt")
     candidate_id: UUID | None = Field(default=None, alias="candidateId")
@@ -529,7 +528,6 @@ TERMINAL_EXPERIMENT_STATUSES: set[str] = {
     "partially_failed",
     "failed",
     "cancelled",
-    "data_changed",
 }
 
 ExperimentStatus = Literal[
@@ -541,5 +539,4 @@ ExperimentStatus = Literal[
     "failed",
     "cancel_requested",
     "cancelled",
-    "data_changed",
 ]

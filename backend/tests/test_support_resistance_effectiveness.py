@@ -127,7 +127,6 @@ class DeterministicReportTests(unittest.TestCase):
             "hypothesis": "Fixture hypothesis",
             "protocol": {"bootstrapSeed": 20260828},
             "protocolHash": "abc123",
-            "dataFingerprint": {"sha256": "def456"},
             "backtestBudget": {"maximum": 200, "scheduled": 196},
             "children": [{"id": "child-1", "phase": "annual_2021", "status": "completed"}],
             "finalCandidates": [{

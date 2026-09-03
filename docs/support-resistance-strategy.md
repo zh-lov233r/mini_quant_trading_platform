@@ -63,7 +63,7 @@ The system does not store a full daily market-wide snapshot. It stores a new zon
 - `support_resistance_run_materializations`: run-to-cache audit link.
 - `support_resistance_run_events`: touches, breakouts, retests, candidates, selections, channel starts/ends, signal/fill rejections, score outcomes, transitions, and invalidations.
 
-The identity includes the v3 algorithm, detector revision, regime-logic revision, normalized detector parameters, price semantics, universe hash, coverage range, and source-data fingerprint, so it cannot reuse a v2 materialization. Coverage must match exactly to avoid changing projected prices through shifted session ordinals. The fingerprint is frozen before reading market rows and checked again before persistence. A mid-run data change or regime-integrity failure fails the entire build. Zone and regime versions are immutable; future data may only append a version or produce a new materialization.
+The structural identity includes the v3 algorithm, detector revision, regime-logic revision, normalized detector parameters, price semantics, universe hash, and coverage range, so it cannot reuse a v2 materialization. Coverage must match exactly to avoid changing projected prices through shifted session ordinals. Only a row with `invalidated_at IS NULL` is reusable. Before any supported market-data write, the exclusive maintenance window invalidates the current row; the next run may create a new current materialization with the same structural key while historical run links remain intact. A regime-integrity failure still fails the entire build. Zone and regime versions are immutable.
 
 Before the first detail write, persistence validates all typed column lengths/order, enum and JSON values, stable instrument references, finite numeric/database bounds, exact regime timelines, and projected zone/event geometry. PostgreSQL writes zone versions, regime versions, and run events with the current transaction's psycopg3 `COPY FROM STDIN` connection in 5,000-row batches, checking cancellation before every batch. No batch commits independently; any validation, COPY, cancellation, or materialization failure rolls back the entire run result.
 
@@ -109,7 +109,7 @@ This repository has no Alembic migration workflow. Do not rely on application st
 
 5. Deploy backend and frontend code. Do not activate allocations as part of schema rollout.
 
-Rollback the application first; the added regime table may remain for audit. If removal is explicitly authorized, back it up and verify that no v3 materialization depends on it before dropping it. Never drop tables merely to repair a stale cache. After an EOD, adjusted-price, or `daily_features` correction, rerun the requested backtest: the changed source fingerprint creates a new materialization while referenced old evidence remains intact.
+Rollback the application first; the added regime table may remain for audit. If removal is explicitly authorized, back it up and verify that no v3 materialization depends on it before dropping it. Never drop tables merely to repair a stale cache. After an EOD, adjusted-price, or `daily_features` correction through the maintenance pipeline, rerun the requested backtest: the invalidated historical materialization remains linked as evidence and a new current materialization is built.
 
 ## Validation
 

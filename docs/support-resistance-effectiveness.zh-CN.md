@@ -23,7 +23,7 @@
 .venv/bin/python backend/utils/dry_run_point_in_time_universe.py
 ```
 
-JSON 输出包含逐年合格成员和排除观测数。随后运行 `make check-data CHECK_DATA_ARGS="--strict --json"`，关键错误必须为零，才能冻结数据指纹。
+JSON 输出包含逐年合格成员和排除观测数。随后运行 `make check-data CHECK_DATA_ARGS="--strict --json"`，关键错误必须为零，才能启动研究；维护门禁会在整个实验期间排除行情更新。
 
 ## 固定候选与时间预算
 

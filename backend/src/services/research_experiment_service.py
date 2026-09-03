@@ -13,7 +13,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import bindparam, delete, func, select, text
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from src.core.db import SessionLocal
@@ -41,13 +41,14 @@ from src.services.prepared_dataset_service import (
     build_prepared_dataset_manifest,
     prepared_dataset_key,
 )
+from src.services.market_data_maintenance_service import assert_market_data_submission_allowed
 from src.services.strategy_service import validate_strategy_params
 
 
 log = logging.getLogger(__name__)
 MAX_EXPERIMENT_TRIALS = min(50, max(1, int(os.getenv("RESEARCH_MAX_TRIALS", "50"))))
 RESEARCH_JOB_QUEUE_LIMIT = max(1, int(os.getenv("RESEARCH_WORKER_CONCURRENCY", "2")))
-TERMINAL_STATUSES = {"completed", "partially_failed", "failed", "cancelled", "data_changed"}
+TERMINAL_STATUSES = {"completed", "partially_failed", "failed", "cancelled"}
 _ALLOWED_GRID_PREFIXES = ("signal.", "risk.")
 
 
@@ -56,10 +57,6 @@ class ExperimentConflictError(RuntimeError):
 
 
 class ExperimentNotFoundError(LookupError):
-    pass
-
-
-class ExperimentDataChangedError(RuntimeError):
     pass
 
 
@@ -210,163 +207,6 @@ def expand_experiment(
     return definitions, symbols, universe
 
 
-def calculate_data_fingerprint(
-    db: Session,
-    *,
-    symbols: list[str],
-    start_date: date,
-    end_date: date,
-    universe_policy: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    lookback_start = start_date - timedelta(days=400)
-    resolved_universe = (
-        resolve_point_in_time_universe(
-            db,
-            universe_policy,
-            start_date=lookback_start,
-            end_date=end_date,
-        )
-        if universe_policy is not None
-        else resolve_backtest_universe(
-            db,
-            symbols,
-            start_date=lookback_start,
-            end_date=end_date,
-        )
-    )
-    instrument_ids = resolved_universe.instrument_ids
-    statement = text(
-        """
-        SELECT
-            i.ticker_canonical AS symbol,
-            df.*,
-            bars.ts_utc AS bar_ts_utc,
-            bars.open_u,
-            bars.high_u,
-            bars.low_u,
-            bars.close_u,
-            bars.open_fa,
-            bars.high_fa,
-            bars.low_fa,
-            bars.close_fa,
-            bars.volume AS bar_volume,
-            bars.asof AS bar_asof
-        FROM daily_features df
-        JOIN instruments i ON i.id = df.instrument_id
-        JOIN eod_bars bars
-          ON bars.instrument_id = df.instrument_id
-         AND bars.dt_ny = df.dt_ny
-        WHERE df.instrument_id IN :instrument_ids
-          AND df.dt_ny BETWEEN :start_date AND :end_date
-        ORDER BY df.instrument_id, df.dt_ny
-        """
-    ).bindparams(bindparam("instrument_ids", expanding=True))
-    rows = db.execute(
-        statement,
-        {"instrument_ids": instrument_ids, "start_date": lookback_start, "end_date": end_date},
-    ).mappings()
-    digest = hashlib.sha256()
-    row_count = 0
-    max_asof: datetime | None = None
-    min_date: date | None = None
-    max_date: date | None = None
-    symbol_counts: dict[str, int] = {}
-    for row in rows:
-        payload = {key: row[key] for key in sorted(row.keys())}
-        digest.update(json.dumps(payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8"))
-        digest.update(b"\n")
-        row_count += 1
-        symbol = str(row.get("symbol") or "")
-        symbol_counts[symbol] = symbol_counts.get(symbol, 0) + 1
-        trade_date = row.get("dt_ny")
-        if isinstance(trade_date, date):
-            min_date = trade_date if min_date is None else min(min_date, trade_date)
-            max_date = trade_date if max_date is None else max(max_date, trade_date)
-        for asof in (row.get("asof"), row.get("bar_asof")):
-            if isinstance(asof, datetime) and (max_asof is None or asof > max_asof):
-                max_asof = asof
-    if row_count == 0:
-        raise ExperimentDataIncompleteError(
-            "no daily feature data found for the experiment universe and window"
-        )
-    action_statement = text(
-        """
-        SELECT
-            i.ticker_canonical AS symbol,
-            ca.action_type,
-            ca.ex_date,
-            ca.split_from,
-            ca.split_to,
-            ca.cash_amount,
-            ca.currency,
-            ca.updated_at
-        FROM corporate_actions ca
-        JOIN instruments i ON i.id = ca.instrument_id
-        WHERE ca.instrument_id IN :instrument_ids
-          AND ca.ex_date BETWEEN :start_date AND :end_date
-        ORDER BY ca.instrument_id, ca.ex_date, ca.id
-        """
-    ).bindparams(bindparam("instrument_ids", expanding=True))
-    action_count = 0
-    for row in db.execute(
-        action_statement,
-        {"instrument_ids": instrument_ids, "start_date": start_date, "end_date": end_date},
-    ).mappings():
-        payload = {key: row[key] for key in sorted(row.keys())}
-        digest.update(b"corporate-action:")
-        digest.update(json.dumps(payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8"))
-        digest.update(b"\n")
-        action_count += 1
-        updated_at = row.get("updated_at")
-        if isinstance(updated_at, datetime) and (max_asof is None or updated_at > max_asof):
-            max_asof = updated_at
-    symbol_history_statement = text(
-        """
-        SELECT
-            sh.instrument_id,
-            sh.exchange,
-            sh.symbol,
-            sh.valid_from,
-            sh.valid_to,
-            sh.is_primary,
-            sh.valid_from_precision,
-            sh.updated_at
-        FROM symbol_history sh
-        WHERE sh.instrument_id IN :instrument_ids
-          AND sh.valid_from <= :end_date
-          AND (sh.valid_to IS NULL OR sh.valid_to >= :start_date)
-        ORDER BY sh.instrument_id, sh.valid_from, sh.symbol, sh.id
-        """
-    ).bindparams(bindparam("instrument_ids", expanding=True))
-    symbol_history_count = 0
-    for row in db.execute(
-        symbol_history_statement,
-        {"instrument_ids": instrument_ids, "start_date": lookback_start, "end_date": end_date},
-    ).mappings():
-        payload = {key: row[key] for key in sorted(row.keys())}
-        digest.update(b"symbol-history:")
-        digest.update(json.dumps(payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8"))
-        digest.update(b"\n")
-        symbol_history_count += 1
-        updated_at = row.get("updated_at")
-        if isinstance(updated_at, datetime) and (max_asof is None or updated_at > max_asof):
-            max_asof = updated_at
-    return {
-        "sha256": digest.hexdigest(),
-        "rowCount": row_count,
-        "corporateActionCount": action_count,
-        "symbolHistoryCount": symbol_history_count,
-        "instrumentIds": instrument_ids,
-        "symbolCounts": {symbol: symbol_counts[symbol] for symbol in sorted(symbol_counts)},
-        "startDate": lookback_start.isoformat(),
-        "endDate": end_date.isoformat(),
-        "minDate": min_date.isoformat() if min_date else None,
-        "maxDate": max_date.isoformat() if max_date else None,
-        "maxAsof": max_asof.isoformat() if max_asof else None,
-        "universePolicy": universe_policy,
-    }
-
-
 def validate_experiment(db: Session, spec: ExperimentSpec) -> dict[str, Any]:
     definitions, symbols, _universe = expand_experiment(db, spec)
     return {
@@ -404,26 +244,33 @@ def create_experiment(
         return existing
 
     definitions, symbols, universe = expand_experiment(db, spec)
+    assert_market_data_submission_allowed(db)
     overall_start = min(spec.in_sample.start_date, spec.out_of_sample.start_date)
     overall_end = max(spec.in_sample.end_date, spec.out_of_sample.end_date)
-    fingerprint = calculate_data_fingerprint(
-        db,
-        symbols=symbols,
-        start_date=overall_start,
-        end_date=overall_end,
-        universe_policy=(
-            spec.universe_policy.model_dump(mode="json", by_alias=True)
-            if spec.universe_policy
-            else None
-        ),
+    universe_policy = (
+        spec.universe_policy.model_dump(mode="json", by_alias=True)
+        if spec.universe_policy
+        else None
+    )
+    coverage_start = overall_start - timedelta(days=400)
+    resolved = (
+        resolve_point_in_time_universe(
+            db, universe_policy, start_date=coverage_start, end_date=overall_end
+        )
+        if universe_policy
+        else resolve_backtest_universe(
+            db, symbols, start_date=coverage_start, end_date=overall_end
+        )
     )
     strategy = db.get(Strategy, spec.strategy_id)
     assert strategy is not None
     prepared_manifest = build_prepared_dataset_manifest(
-        data_fingerprint=fingerprint,
         strategy_type=strategy.strategy_type,
         universe=universe,
+        instrument_ids=resolved.instrument_ids,
+        coverage_date_range=(coverage_start, overall_end),
         requested_date_range=(overall_start, overall_end),
+        universe_policy=universe_policy,
     )
     policy_started_at = datetime.now(UTC)
     experiment = ResearchExperiment(
@@ -438,7 +285,6 @@ def create_experiment(
             "strategyVersion": strategy.version,
             "strategyType": strategy.strategy_type,
             "universe": universe,
-            "dataFingerprint": fingerprint,
             "preparedDataset": {
                 "key": prepared_dataset_key(prepared_manifest),
                 "manifest": prepared_manifest,
@@ -472,7 +318,6 @@ def create_experiment(
                 window_start=definition["windowStart"],
                 window_end=definition["windowEnd"],
                 cost_config=definition["costConfig"],
-                data_fingerprint=fingerprint["sha256"],
             )
         )
     try:
@@ -860,14 +705,12 @@ def build_experiment_report(db: Session, experiment: ResearchExperiment) -> dict
                 "trialId": str(trial.id),
                 "backtestRunId": str(trial.backtest_run_id) if trial.backtest_run_id else None,
                 "paramsHash": trial.params_hash,
-                "dataFingerprint": trial.data_fingerprint,
                 "sampleKind": trial.sample_kind,
                 "costScenario": trial.cost_scenario,
                 "status": trial.status,
             }
             for trial in trials
         ],
-        "dataFingerprint": manifest.get("dataFingerprint"),
         "generatedAt": datetime.now(UTC).isoformat(),
     }
 
@@ -891,18 +734,6 @@ def _finalize_if_ready(db: Session, experiment: ResearchExperiment) -> None:
         if (experiment.spec or {}).get("researchMode") == "adaptive_category"
         else build_experiment_report
     )
-    if experiment.status == "data_changed":
-        previous_report = dict(experiment.report or {})
-        experiment.finished_at = experiment.finished_at or datetime.now(UTC)
-        experiment.report = {
-            **report_builder(db, experiment),
-            **{
-                key: value
-                for key, value in previous_report.items()
-                if key in {"observedDataFingerprint"}
-            },
-        }
-        return
     if finalize_adaptive_round_if_ready(db, experiment):
         return
     termination = (experiment.run_manifest or {}).get("termination")
@@ -1136,7 +967,7 @@ def cancel_trial(
 def _recovery_stop_code(experiment: ResearchExperiment | None) -> str | None:
     if experiment is None:
         return None
-    if experiment.status in {"cancel_requested", "data_changed"}:
+    if experiment.status == "cancel_requested":
         return experiment.status
     termination = (experiment.run_manifest or {}).get("termination")
     if isinstance(termination, dict) and termination.get("earlyStopped"):
@@ -1151,7 +982,7 @@ def recover_orphaned_trials() -> int:
             db.execute(
                 select(ResearchExperiment.id).where(
                     ResearchExperiment.status.in_(
-                        {"queued", "running", "cancel_requested", "data_changed"}
+                        {"queued", "running", "cancel_requested"}
                     )
                 )
             ).scalars()
@@ -1338,51 +1169,6 @@ def process_next_trial() -> bool:
             universe = manifest.get("universe") or {}
             symbols = list(universe.get("symbols") or [])
             spec = experiment.spec or {}
-            start_date = min(date.fromisoformat(spec["inSample"]["startDate"]), date.fromisoformat(spec["outOfSample"]["startDate"]))
-            end_date = max(date.fromisoformat(spec["inSample"]["endDate"]), date.fromisoformat(spec["outOfSample"]["endDate"]))
-            current_fingerprint = calculate_data_fingerprint(
-                db,
-                symbols=symbols,
-                start_date=start_date,
-                end_date=end_date,
-                universe_policy=spec.get("universePolicy"),
-            )
-            expected = (manifest.get("dataFingerprint") or {}).get("sha256")
-            if current_fingerprint["sha256"] != expected:
-                experiment.status = "data_changed"
-                experiment.error_code = "data_changed"
-                experiment.error_message = "Daily feature data changed after the experiment was created."
-                experiment.finished_at = datetime.now(UTC)
-                trial.status = "failed"
-                trial.error_code = "data_changed"
-                trial.error_message = experiment.error_message
-                trial.finished_at = datetime.now(UTC)
-                db.execute(
-                    ExperimentTrial.__table__.update()
-                    .where(
-                        ExperimentTrial.experiment_id == experiment.id,
-                        ExperimentTrial.status == "queued",
-                    )
-                    .values(
-                        status="cancelled",
-                        error_code="data_changed",
-                        error_message=experiment.error_message,
-                        finished_at=datetime.now(UTC),
-                    )
-                )
-                db.flush()
-                _refresh_progress(db, experiment)
-                experiment.report = {
-                    "disclaimer": "Research evidence only; this is not a profitability or live-trading safety guarantee.",
-                    "status": "data_changed",
-                    "counts": dict(experiment.progress or {}),
-                    "dataFingerprint": manifest.get("dataFingerprint"),
-                    "observedDataFingerprint": current_fingerprint,
-                    "generatedAt": datetime.now(UTC).isoformat(),
-                }
-                db.commit()
-                raise ExperimentDataChangedError(experiment.error_message)
-
             run = _prepare_backtest_run(db, trial, experiment)
             trial = db.execute(
                 select(ExperimentTrial)
@@ -1420,23 +1206,18 @@ def process_next_trial() -> bool:
                     "universe_policy": spec.get("universePolicy"),
                     "runtime_params_override": trial.params,
                     "persist_level": persist_level,
-                    "data_fingerprint": current_fingerprint,
                     "prepared_dataset": manifest.get("preparedDataset"),
                     "parameter_hash": canonical_hash(trial.params),
                 },
             )
-            trial.data_fingerprint = current_fingerprint["sha256"]
             run.config_snapshot = {
                 **dict(trial.params or {}),
                 "run_options": {
                     "persist_level": persist_level,
                     "source": "research",
-                    "data_fingerprint": current_fingerprint,
                 },
             }
             db.commit()
-            return True
-        except ExperimentDataChangedError:
             return True
         except Exception as exc:
             db.rollback()

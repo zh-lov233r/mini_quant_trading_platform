@@ -10,6 +10,11 @@ from pathlib import Path
 import psycopg
 from dotenv import load_dotenv
 
+try:
+    from backend.utils.market_data_maintenance_guard import require_market_data_maintenance_owner
+except ModuleNotFoundError:
+    from market_data_maintenance_guard import require_market_data_maintenance_owner
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -313,6 +318,7 @@ def main() -> None:
     args = parse_args()
     if not args.database_url:
         raise SystemExit("Missing DATABASE_URL or SQLALCHEMY_DATABASE_URL")
+    require_market_data_maintenance_owner(args.database_url)
 
     with psycopg.connect(_psycopg_dsn(args.database_url)) as conn:
         with conn.cursor() as cur:

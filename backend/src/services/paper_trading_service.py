@@ -69,8 +69,8 @@ from src.services.support_resistance_persistence_service import (
     hydrate_state_from_materialization,
     persist_support_resistance_run,
     record_failed_materialization_after_rollback,
-    source_data_fingerprint,
 )
+from src.services.market_data_maintenance_service import acquire_market_data_read_lock
 from src.services.support_resistance_service import (
     SupportResistanceState,
     entry_price_is_inside_channel,
@@ -229,6 +229,7 @@ def run_paper_trading(
     db.refresh(run)
 
     try:
+        acquire_market_data_read_lock(db)
         client = alpaca_client or build_alpaca_client_for_portfolio(db, normalized_portfolio)
         account_before = client.get_account()
         allocation_cfg = _resolve_virtual_subportfolio_config(
@@ -294,11 +295,6 @@ def run_paper_trading(
 
         recent_bar_count = required_recent_bar_count_for_runtime(runtime)
         recent_bar_lookback_days = required_recent_bar_lookback_days(recent_bar_count)
-        support_resistance_source_fingerprint = (
-            source_data_fingerprint(db)
-            if runtime["strategy_type"] == "support_resistance"
-            else None
-        )
         snapshots = load_feature_market_data(
             db,
             trade_date,
@@ -337,7 +333,6 @@ def run_paper_trading(
                 symbols=symbols,
                 coverage_start=coverage_start,
                 coverage_end=trade_date,
-                expected_data_fingerprint=support_resistance_source_fingerprint,
             )
             replay_state = (
                 hydrate_state_from_materialization(db, reusable)
@@ -362,7 +357,6 @@ def run_paper_trading(
                 symbols=symbols,
                 coverage_start=coverage_start,
                 coverage_end=trade_date,
-                expected_data_fingerprint=support_resistance_source_fingerprint,
             )
         else:
             signals = evaluate_native_signals(runtime, snapshots)

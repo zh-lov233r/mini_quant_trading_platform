@@ -23,6 +23,7 @@ from backend.utils.download_flatfiles import (
     download_one,
     massive_s3_client,
 )
+from backend.utils.run_daily_market_backfill import MaintenanceWindow
 
 
 @dataclass(frozen=True)
@@ -189,67 +190,73 @@ def main() -> None:
         flush=True,
     )
 
-    with psycopg.connect(database_url) as conn:
-        for batch_start, batch_end in batches:
-            requested_dates = len(_iter_weekdays(batch_start, batch_end))
-            grand_requested += requested_dates
-            print(
-                f"\n[{batch_start} -> {batch_end}] downloading {requested_dates} weekday files",
-                flush=True,
-            )
-
-            files, downloaded, reused, failed = _download_batch(
-                s3_client=s3_client,
-                bucket=bucket,
-                dataset_prefix=args.dataset_prefix,
-                output_root=output_root,
-                start=batch_start,
-                end=batch_end,
-                skip_existing=args.skip_existing,
-            )
-            grand_downloaded += downloaded
-            grand_reused += reused
-            grand_failed += failed
-
-            if not files:
+    maintenance = MaintenanceWindow(database_url)
+    maintenance.start()
+    try:
+        with psycopg.connect(database_url) as conn:
+            for batch_start, batch_end in batches:
+                requested_dates = len(_iter_weekdays(batch_start, batch_end))
+                grand_requested += requested_dates
                 print(
-                    f"[{batch_start} -> {batch_end}] no files available "
-                    f"(failed={failed})",
+                    f"\n[{batch_start} -> {batch_end}] downloading {requested_dates} weekday files",
                     flush=True,
                 )
-                continue
 
-            stats = backfill_massive_day_aggs(conn, files)
-            staged_rows = sum(item.staged_rows for item in stats)
-            upserted_rows = sum(item.upserted_rows for item in stats)
-            filtered_rows = sum(item.filtered_rows for item in stats)
-            unresolved_rows = sum(item.unresolved_symbols for item in stats)
+                files, downloaded, reused, failed = _download_batch(
+                    s3_client=s3_client,
+                    bucket=bucket,
+                    dataset_prefix=args.dataset_prefix,
+                    output_root=output_root,
+                    start=batch_start,
+                    end=batch_end,
+                    skip_existing=args.skip_existing,
+                )
+                grand_downloaded += downloaded
+                grand_reused += reused
+                grand_failed += failed
 
-            grand_staged += staged_rows
-            grand_upserted += upserted_rows
-            grand_filtered += filtered_rows
-            grand_unresolved += unresolved_rows
+                if not files:
+                    print(
+                        f"[{batch_start} -> {batch_end}] no files available "
+                        f"(failed={failed})",
+                        flush=True,
+                    )
+                    continue
 
-            summary = BatchSummary(
-                start_date=batch_start,
-                end_date=batch_end,
-                requested_dates=requested_dates,
-                downloaded_files=downloaded,
-                reused_files=reused,
-                failed_dates=failed,
-                staged_rows=staged_rows,
-                upserted_rows=upserted_rows,
-                filtered_rows=filtered_rows,
-                unresolved_rows=unresolved_rows,
-            )
-            print(
-                f"[{summary.start_date} -> {summary.end_date}] "
-                f"downloaded={summary.downloaded_files} reused={summary.reused_files} "
-                f"failed={summary.failed_dates} staged={summary.staged_rows} "
-                f"upserted={summary.upserted_rows} filtered={summary.filtered_rows} "
-                f"unresolved={summary.unresolved_rows}",
-                flush=True,
-            )
+                stats = backfill_massive_day_aggs(conn, files)
+                staged_rows = sum(item.staged_rows for item in stats)
+                upserted_rows = sum(item.upserted_rows for item in stats)
+                filtered_rows = sum(item.filtered_rows for item in stats)
+                unresolved_rows = sum(item.unresolved_symbols for item in stats)
+
+                grand_staged += staged_rows
+                grand_upserted += upserted_rows
+                grand_filtered += filtered_rows
+                grand_unresolved += unresolved_rows
+
+                summary = BatchSummary(
+                    start_date=batch_start,
+                    end_date=batch_end,
+                    requested_dates=requested_dates,
+                    downloaded_files=downloaded,
+                    reused_files=reused,
+                    failed_dates=failed,
+                    staged_rows=staged_rows,
+                    upserted_rows=upserted_rows,
+                    filtered_rows=filtered_rows,
+                    unresolved_rows=unresolved_rows,
+                )
+                print(
+                    f"[{summary.start_date} -> {summary.end_date}] "
+                    f"downloaded={summary.downloaded_files} reused={summary.reused_files} "
+                    f"failed={summary.failed_dates} staged={summary.staged_rows} "
+                    f"upserted={summary.upserted_rows} filtered={summary.filtered_rows} "
+                    f"unresolved={summary.unresolved_rows}",
+                    flush=True,
+                )
+        maintenance.succeed()
+    finally:
+        maintenance.fail_if_open()
 
     print("\nBackfill complete.", flush=True)
     print(

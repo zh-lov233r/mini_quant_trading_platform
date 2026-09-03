@@ -6,7 +6,7 @@
 
 九个 engine-ready 日线多头策略统一使用一个进程内 C++20 内核完成完整回测和 Paper Trading 日信号评估。信号规则、T 日收盘决策、下一有效交易日（T+1）开盘成交、先卖后买、共享现金、成本、公司行动、动态股票池、持仓上限和确定性排序仍是不变量。Python 负责数据访问、durable queue、数据库事务、进度/取消、券商副作用和结果持久化；`custom` 继续 stored-only。
 
-系统不再提供运行时引擎选择、job 级 engine version 或 Python 执行回退。新回测摘要写入 `kernel.version=cpp-v1`、ABI、build ID、PreparedDataset schema `v3` 和策略算法 revision；历史记录继续可读。运维回滚是重新部署上一个已验证的应用/wheel 构建，不是在当前进程内选择旧引擎。
+系统不再提供运行时引擎选择、job 级 engine version 或 Python 执行回退。新回测摘要写入 `kernel.version=cpp-v1`、ABI、build ID、PreparedDataset schema `v4` 和策略算法 revision；历史记录继续可读。运维回滚是重新部署上一个已验证的应用/wheel 构建，不是在当前进程内选择旧引擎。
 
 ## 持久化级别
 
@@ -20,7 +20,7 @@
 
 signals、transactions、snapshots、支撑/压力 zone/regime 版本与运行审计事件，统一使用当前 SQLAlchemy Session 的 `postgresql+psycopg` connection，以每批 5,000 行执行 `COPY FROM STDIN`。首个明细写入前会完整校验 typed 列、枚举、JSON、instrument 引用、有限数、数据库数值边界和支撑/压力几何；每个 COPY 批次前再次检查取消。批次不会独立提交；校验、COPY、取消或物化失败都会回滚该运行的整套明细。缓存命中会跳过共享 zone/regime 写入，但 `full` 仍保存该运行请求的精确事件集合。
 
-候选 promotion 会先创建 OOS/base-cost `full` verification job。job 重新检查数据指纹，并以相对和绝对 `1e-10` 容差比较数值摘要指标。指纹变化或指标不一致会记录 verification 失败并阻止 promotion。verification run ID 同时写入 candidate metrics 和晋升策略 lineage。
+候选 promotion 会先创建 OOS/base-cost `full` verification job。job 以相对和绝对 `1e-10` 容差比较数值摘要指标；指标不一致会记录 verification 失败并阻止 promotion。verification run ID 同时写入 candidate metrics 和晋升策略 lineage。
 
 ## 按需持久化 Worker
 
@@ -78,7 +78,7 @@ worker 使用 `FOR UPDATE SKIP LOCKED` claim，维护 heartbeat/lease，每个�
 
 ## 数据库上线与恢复
 
-项目没有 Alembic。apply 前必须确认并记录准确目标数据库，执行数据库原生备份，检查已有约束/索引，并通过 `ON_ERROR_STOP` 执行 SQL。脚本增加 `backtest_jobs`、`backtest_worker_managers`、可空 `instrument_id` 列和可空 `experiment_trials.cancel_requested_at`，以及所需外键和队列/manager 索引；取消标记无需历史回填。脚本不会预先增加 signals/transactions cursor 索引，也不会重写历史明细，旧 run 默认解释为 `full`。
+项目没有 Alembic。apply 前必须确认并记录准确目标数据库，执行数据库原生备份，检查已有约束/索引，并通过 `ON_ERROR_STOP` 执行 SQL。新安装由 `create_zzzzzzz_backtest_performance.sql` 创建 `market_data_maintenance_state`；现有安装使用已审阅的增量脚本 `backend/utils/remove_market_data_fingerprints.sql`，它会移除指纹字段和 `data_changed`、统一失效现有支撑/压力物化但保留历史链接，并创建“当前记录”部分唯一索引。该 SQL 永远不会自动应用。脚本不会预先增加 signals/transactions cursor 索引，也不会重写历史运行明细。
 
 如果上线失败，先停止新 job 生产者和 backtest worker，再重新部署上一个已验证的应用和原生 wheel。应用回滚期间保留附加对象。若以后确实需要删除 schema，必须先证明所有应用版本都不再引用，并在任何完整性异常时从备份恢复；正常发布不执行破坏性回滚。
 
@@ -86,13 +86,19 @@ worker 使用 `FOR UPDATE SKIP LOCKED` claim，维护 heartbeat/lease，每个�
 
 `summary_metrics.performance` 使用互不重叠的阶段记录 `sql_execute_ms`、`sql_fetch_ms`、`row_decode_ms`、`day_grouping_ms`、历史状态、信号、成交、明细构造、明细/摘要持久化、响应构造和总耗时。它同时记录 rows/day/signals/trades 每秒、每输入行微秒数、阶段占比、`unaccounted_ms`、峰值 RSS、配置/有效/实际 run 内线程数、并行/串行交易日数、原生 warmup 耗时和正式信号生成耗时；worker 终态补充 queue wait、active 和 finalization overhead。支撑/压力区子阶段只作为诊断维度，不重复计入 `unaccounted_ms`。结构化日志记录同一映射。
 
-手动、研究和验证回测都使用 `run_manifest.preparedDataset` 中的稳定 key/manifest。v3 key 包含 loader revision、源数据指纹、稳定 instrument 集合、完整日期范围、feature set、价格/公司行动、symbol identity 和 universe membership 语义，不包含普通策略参数。首个运行在文件锁内原子构建相互独立且按 Fortran 顺序存储的 `int64` identity/date memmap 与 `float64` feature memmap，并写入 symbol/asset/exchange、日期 offset、公司行动和动态 universe sidecar；数值缺失统一使用 NaN。后续运行只读打开两个 buffer。v2 key 不会匹配 v3，旧文件也不会被自动删除。文件或 metadata 损坏会在锁内重建；源行数/指纹变化会标记 `data_changed`，无法恢复的缓存构建失败会直接终止运行，不回退到 Python 逐日循环。cleanup 会统计引用同一 key 的 queued/running job，存在 active lease 时拒绝删除。
+手动、研究和验证回测都使用 `run_manifest.preparedDataset` 中的稳定 key/manifest。v4 key 包含 loader/schema revision、稳定 instrument 集合、股票池规则、覆盖与请求日期范围、feature set、价格/公司行动、symbol identity 和 universe membership 语义，不包含普通策略参数或行情逐行摘要。热缓存会在任何源行查询前直接只读打开 memmap。冷缓存或损坏缓存先执行一次行数统计，再在文件锁内流式、原子构建相互独立且按 Fortran 顺序存储的 `int64` identity/date memmap 与 `float64` feature memmap，并写入 symbol/asset/exchange、日期 offset、公司行动和动态 universe sidecar；数值缺失统一使用 NaN。cleanup 会统计引用同一 key 的 queued/running job，存在 active lease 时拒绝删除。
+
+## 排他行情维护
+
+每日 20:15 行情更新必须通过 `run_daily_market_backfill.py` 执行。写入运行会把单例状态从 `ready` 切到 `draining`，以 HTTP 409 `market_data_maintenance` 拒绝新的普通回测、重试、研究和验证，并等待所有 queued/running job 及全部非终态研究实验结束；已有 job 继续执行。进入 draining 后不再启动新的 Paper 策略计算，已经持有共享 advisory lock 的工作可安全完成。
+
+排空后，更新器取得 PostgreSQL 排他 advisory lock，把所有当前支撑/压力物化标记为失效，删除生成的 PreparedDataset 文件，再开始写源表。子脚本接收 `MARKET_DATA_MAINTENANCE_OWNER`，属于同一个父维护窗口。只有流水线和质量门禁都成功后才恢复 `ready`；任何失败都会进入 `failed`，之后回测、研究、验证和 Paper 计算持续阻塞，直到下一次维护重跑成功。绕过协调器直接写源表或单独运行写入子脚本属于不支持的操作，因为可能留下陈旧派生缓存。
 
 原生包使用 C++20、`pybind11==3.1.0`、`-O3`、`-DNDEBUG` 和平台标准线程编译/链接参数构建，并明确禁用 fast-math。ABI 要求为 `2`，`KERNEL_VERSION` 仍为 `cpp-v1`，因为并行执行没有改变交易算法或结果语义。本地开发执行 `.venv/bin/pip install -e backend/native`；Docker 在 Linux builder stage 生成 wheel，runtime stage 只安装该 wheel。应用启动时会拒绝 ABI 不匹配的 wheel。
 
-原生 `run_backtest(dataset, strategy, options, control_callback)` 覆盖 Trend、Mean Reversion、Momentum Breakout、Island Reversal、Double Bottom、Head-and-Shoulders Bottom、Rounded Bottom、V Reversal 和 Support/Resistance。内部 `options.thread_count` 对直接原生调用方默认 `1`。它零拷贝读取 PreparedDataset v3 NumPy buffer，在 warmup 与正式 session 复用同一个固定线程池，并在日期之间设置 barrier；每个正式 session 只调用一次 Python control callback；`start_date` 之前的行只预热有界历史、形态/支撑压力状态和动态股票池计数，不生成 signal、trade、equity 行或回调。Pattern 与 Support/Resistance 状态在线程启动前按 instrument 初始化，每个线程只修改自己标的的状态并写入独立结果槽；多行异常按最低输入行确定性重抛。typed `KernelResult` 为 signals、trades、equity/positions、universe diagnostics 和支撑/压力审计 vector 提供只读 NumPy view 与 canonical JSON 列，并提供只读线程/session/耗时性能数据。共享原生账本保留 T 日收盘/T+1 开盘、SELL-first、共享现金、确定性强度排序与阈值、仓位上限、分阶段目标、最低佣金、不利滑点、公司行动、稳定 identity、缺失开盘、动态股票池 exit-only 和退市归零。
+原生 `run_backtest(dataset, strategy, options, control_callback)` 覆盖 Trend、Mean Reversion、Momentum Breakout、Island Reversal、Double Bottom、Head-and-Shoulders Bottom、Rounded Bottom、V Reversal 和 Support/Resistance。内部 `options.thread_count` 对直接原生调用方默认 `1`。它零拷贝读取 PreparedDataset v4 NumPy buffer，在 warmup 与正式 session 复用同一个固定线程池，并在日期之间设置 barrier；每个正式 session 只调用一次 Python control callback；`start_date` 之前的行只预热有界历史、形态/支撑压力状态和动态股票池计数，不生成 signal、trade、equity 行或回调。Pattern 与 Support/Resistance 状态在线程启动前按 instrument 初始化，每个线程只修改自己标的的状态并写入独立结果槽；多行异常按最低输入行确定性重抛。typed `KernelResult` 为 signals、trades、equity/positions、universe diagnostics 和支撑/压力审计 vector 提供只读 NumPy view 与 canonical JSON 列，并提供只读线程/session/耗时性能数据。共享原生账本保留 T 日收盘/T+1 开盘、SELL-first、共享现金、确定性强度排序与阈值、仓位上限、分阶段目标、最低佣金、不利滑点、公司行动、稳定 identity、缺失开盘、动态股票池 exit-only 和退市归零。
 
-Paper 日信号会把有界历史和当前组合状态转换为内存 v3 列式视图，再调用 `evaluate_day(dataset_day, strategy, portfolio_state)`。回归测试要求其 action、顺序、reason、score 和 canonical metadata 与对应原生回测 session 完全一致。
+Paper 日信号会把有界历史和当前组合状态转换为内存 v4 列式视图，再调用 `evaluate_day(dataset_day, strategy, portfolio_state)`。回归测试要求其 action、顺序、reason、score 和 canonical metadata 与对应原生回测 session 完全一致。
 
 冻结 golden fixture 保存九个策略切换前的 oracle 和纯 STL 重构前完整账本结果。`native_nine_strategy_golden.json` 对固定 `20 symbols × 120 sessions` 矩阵中的全部 typed signals/trades/equity/positions/audit vector 计算指纹，并记录用于恢复 oracle 的准确 base commit 与 diff digest。原生测试还按 `1e-10` 数值容差覆盖逐日排序、原因、metadata、分阶段审计和支撑/压力生命周期证据；Paper 测试会在全部 mock Alpaca 的前提下比较日评估与同日回测信号契约。这些检查是语义回归证据，不等于数据库规模性能门槛。
 
@@ -104,9 +110,9 @@ Paper 日信号会把有界历史和当前组合状态转换为内存 v3 列式�
 make benchmark-backtests BENCHMARK_ARGS="plan"
 ```
 
-`plan` 会报告目标数据库、原生 ABI/build、case、紧凑 PostgreSQL 源 revision 指纹、服务状态和完整写入授权范围，但不创建 `StrategyRun`。固定完整矩阵包含 1 个 benchmark-only Draft Strategy、105 个冻结 Python baseline run 和 159 个 native correctness/performance run（合计 264 个 `StrategyRun`）；`currentlyRunnableNativeRunCount` 会另外暴露缺失策略 fixture，不能因缺失 fixture 静默缩小授权范围。该紧凑指纹在数据库端聚合 row/action/identity revision，避免预检把数百万 JSON 行搬到 Python，正式缓存构建仍计算严格逐行指纹。correctness、screening 和 confirmation 必须显式增加 `--apply`，且工作区干净、无 queued/running job、`RESEARCH_WORKER_ENABLED=false`、两项 paper scheduler 配置为 `false`、`BACKTEST_WORKER_CONCURRENCY=1`。screening 和 confirmation 还必须提供 `--baseline /path/to/frozen-python-report.json`；命令会计算每项速度与 RSS 门槛，缺少任一 baseline case 都会阻断验收。每个测量 case 先预热一次，再正式运行五次，并保留每个 run ID。在报告准确数据库、指纹、服务状态和预计 run 数并取得明确授权前，不得执行写入模式。
+`plan` 会报告目标数据库、原生 ABI/build、case、服务状态和完整写入授权范围，但不创建 `StrategyRun`。固定完整矩阵包含 1 个 benchmark-only Draft Strategy、105 个冻结 Python baseline run 和 159 个 native correctness/performance run（合计 264 个 `StrategyRun`）；`currentlyRunnableNativeRunCount` 会另外暴露缺失策略 fixture，不能因缺失 fixture 静默缩小授权范围。correctness、screening 和 confirmation 必须显式增加 `--apply`，且工作区干净、无 queued/running job、`RESEARCH_WORKER_ENABLED=false`、两项 paper scheduler 配置为 `false`、`BACKTEST_WORKER_CONCURRENCY=1`。screening 和 confirmation 还必须提供 `--baseline /path/to/frozen-python-report.json`；命令会计算每项速度与 RSS 门槛，缺少任一 baseline case 都会阻断验收。每个测量 case 先预热一次，再正式运行五次，并保留每个 run ID。在报告准确数据库、服务状态和预计 run 数并取得明确授权前，不得执行写入模式。
 
-screening 覆盖九策略 `500 symbols × 1 year` warm `summary`，要求原生中位速度至少为冻结 Python 基线的 `5×`。confirmation 覆盖 Trend、Double Bottom 和 Support/Resistance `3,640 symbols × 5 years`：cold `summary ≥3×`、warm `summary ≥5×`、warm `full ≥2×`，且峰值 RSS 不高于基线。cold 包含数据库读取与 v3 缓存构建，warm 从同指纹缓存开始。若 cold 未达到 `3×`，下一实现步骤是 PostgreSQL COPY 流式构建列式缓存，不能降低门槛。
+screening 覆盖九策略 `500 symbols × 1 year` warm `summary`，要求原生中位速度至少为冻结 Python 基线的 `5×`。confirmation 覆盖 Trend、Double Bottom 和 Support/Resistance `3,640 symbols × 5 years`：cold `summary ≥3×`、warm `summary ≥5×`、warm `full ≥2×`，且峰值 RSS 不高于基线。cold 包含数据库读取与 v4 缓存构建，warm 从相同结构缓存开始。若 cold 未达到 `3×`，下一实现步骤是 PostgreSQL COPY 流式构建列式缓存，不能降低门槛。
 
 不能凭单元测试或 synthetic smoke 宣称通过性能门槛。只有另行授权的数据库规模矩阵全部达标，候选才可部署。索引或 SQL 查询改动仍必须有真实 `EXPLAIN ANALYZE` 证据，不能从 synthetic 测试推断改善。
 

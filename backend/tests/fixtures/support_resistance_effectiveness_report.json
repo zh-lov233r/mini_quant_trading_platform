@@ -8,7 +8,6 @@
   "hypothesis": "The pre-registered default or frozen champion remains positive after costs out of sample.",
   "protocol": {"bootstrapSeed": 20260828, "bootstrapReplicates": 10000, "maxBacktests": 200},
   "protocolHash": "golden-protocol-hash",
-  "dataFingerprint": {"sha256": "golden-data-fingerprint"},
   "backtestBudget": {"maximum": 200, "scheduled": 195},
   "children": [
     {"id": "discovery-bounce", "phase": "discovery:support_bounce", "status": "completed"},

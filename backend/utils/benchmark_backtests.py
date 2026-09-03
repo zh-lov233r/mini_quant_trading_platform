@@ -12,7 +12,6 @@ import argparse
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from decimal import Decimal
-import hashlib
 import json
 import math
 import os
@@ -210,104 +209,6 @@ def _service_state(db: Any) -> dict[str, Any]:
                 "BACKTEST_WORKER_CONCURRENCY",
             )
         },
-    }
-
-
-def _plan_data_fingerprint(
-    db: Any,
-    *,
-    symbols: list[str],
-    start_date: date,
-    end_date: date,
-) -> dict[str, Any]:
-    """Return a compact read-only source revision without materializing rows in Python."""
-    row = db.execute(
-        text(
-            """
-            WITH selected_instruments AS (
-                SELECT id, ticker_canonical, updated_at
-                FROM instruments
-                WHERE ticker_canonical = ANY(:symbols)
-            ), market_rows AS (
-                SELECT
-                    df.*,
-                    bars.ts_utc AS bar_ts_utc,
-                    bars.open_u,
-                    bars.high_u,
-                    bars.low_u,
-                    bars.close_u,
-                    bars.open_fa,
-                    bars.high_fa,
-                    bars.low_fa,
-                    bars.close_fa,
-                    bars.volume AS bar_volume,
-                    bars.asof AS bar_asof
-                FROM daily_features df
-                JOIN selected_instruments selected ON selected.id = df.instrument_id
-                JOIN eod_bars bars
-                  ON bars.instrument_id = df.instrument_id
-                 AND bars.dt_ny = df.dt_ny
-                WHERE df.dt_ny BETWEEN :lookback_start AND :end_date
-            ), market_revision AS (
-                SELECT
-                    count(*) AS row_count,
-                    min(dt_ny) AS min_date,
-                    max(dt_ny) AS max_date,
-                    max(asof) AS feature_max_asof,
-                    max(bar_asof) AS bar_max_asof,
-                    sum(hashtextextended(row_to_json(market_rows)::text, 0)::numeric)
-                        AS row_hash_sum
-                FROM market_rows
-            ), action_rows AS (
-                SELECT ca.*
-                FROM corporate_actions ca
-                JOIN selected_instruments selected ON selected.id = ca.instrument_id
-                WHERE ca.ex_date BETWEEN :start_date AND :end_date
-            ), action_revision AS (
-                SELECT
-                    count(*) AS action_count,
-                    max(updated_at) AS action_max_updated_at,
-                    sum(hashtextextended(row_to_json(action_rows)::text, 0)::numeric)
-                        AS action_hash_sum
-                FROM action_rows
-            ), identity_revision AS (
-                SELECT
-                    count(*) AS instrument_count,
-                    max(updated_at) AS instrument_max_updated_at,
-                    (
-                        SELECT count(*)
-                        FROM symbol_history history
-                        WHERE history.instrument_id IN (SELECT id FROM selected_instruments)
-                    ) AS symbol_history_count,
-                    (
-                        SELECT max(updated_at)
-                        FROM symbol_history history
-                        WHERE history.instrument_id IN (SELECT id FROM selected_instruments)
-                    ) AS symbol_history_max_updated_at
-                FROM selected_instruments
-            )
-            SELECT *
-            FROM market_revision
-            CROSS JOIN action_revision
-            CROSS JOIN identity_revision
-            """
-        ),
-        {
-            "symbols": symbols,
-            "lookback_start": start_date - timedelta(days=400),
-            "start_date": start_date,
-            "end_date": end_date,
-        },
-    ).mappings().one()
-    payload = {
-        key: value.isoformat() if hasattr(value, "isoformat") else value
-        for key, value in sorted(row.items())
-    }
-    encoded = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
-    return {
-        "kind": "postgresql-source-revision-v1",
-        "sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
-        **payload,
     }
 
 
@@ -549,7 +450,6 @@ def main() -> int:
             "plannedWrites": planned_writes,
             "missingStrategyTypes": sorted({case.strategy_type for case in cases} - set(strategies)),
             "omittedForUniverseSize": [case.name for case in cases if len(symbols) < case.symbol_count],
-            "dataFingerprints": {},
             "performanceThresholds": {
                 "screeningWarmSummarySpeedup": 5.0,
                 "confirmationColdSummarySpeedup": 3.0,
@@ -558,15 +458,6 @@ def main() -> int:
                 "peakRssMayExceedBaseline": False,
             },
         }
-        for case in available_cases:
-            fingerprint_key = f"{case.symbol_count}:{case.start_date}:{case.end_date}"
-            if fingerprint_key not in report["dataFingerprints"]:
-                report["dataFingerprints"][fingerprint_key] = _plan_data_fingerprint(
-                    db,
-                    symbols=symbols[: case.symbol_count],
-                    start_date=case.start_date,
-                    end_date=case.end_date,
-                )
         if args.mode == "plan" or not args.apply:
             report["authorizationRequired"] = args.mode != "plan"
         else:

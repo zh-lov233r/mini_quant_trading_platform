@@ -30,6 +30,10 @@ Each stage records `pattern_type`, `setup_id`, `stage_index`, `stage_key`, `stag
 
 A Pivot is usable only after its right-side confirmation bars exist. Rounded-bottom detection fits a quadratic curve to log closes over an 80–240 session window by default. Every stage uses only data observable at its signal timestamp: signals form after the day-T close and fill at the next valid session (T+1) open.
 
+## Lifecycle pattern annotations
+
+The position-lifecycle candlestick chart in backtest details merges stages already observed for the same `setup_id` during that holding cycle. It marks the known structural points: the island bottom and reversal confirmation, Double Bottom lows and neckline, Head-and-Shoulders shoulders and head low, Rounded Bottom low and right-side pullbacks, and the V pivot. When later stages exist, it also marks the corresponding neckline, rim, or consolidation breakout/retest confirmation. The chart automatically extends its lookback to the earliest pattern anchor. These annotations come from signal audit data and describe what the detector recognized at that time; they are not hindsight confirmation or a profitability claim.
+
 ## Exits and safety boundary
 
 The first version does not scale out. Pattern invalidation, maximum loss, ATR stop, or take profit closes the full position. A V setup also exits before stage 3 when a bearish bar trades at twice average volume.

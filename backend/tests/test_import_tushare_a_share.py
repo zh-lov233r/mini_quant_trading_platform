@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
 import unittest
+from unittest.mock import MagicMock, patch
 
+from backend.utils import import_tushare_a_share
 from backend.utils.import_tushare_a_share import (
     TushareClient,
     TushareError,
@@ -55,6 +58,47 @@ class _Client:
 
 
 class TushareAShareImportTests(unittest.TestCase):
+    def test_apply_uses_exclusive_maintenance_window(self) -> None:
+        args = SimpleNamespace(
+            mode="apply",
+            start_date="2026-09-01",
+            end_date="2026-09-02",
+            ts_code=[],
+            database_url="postgresql://local/hzy",
+            request_interval_seconds=0.2,
+            skip_features=False,
+            indices_only=True,
+        )
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+
+        with patch.object(import_tushare_a_share, "parse_args", return_value=args), patch.object(
+            import_tushare_a_share, "load_dotenv"
+        ), patch.object(
+            import_tushare_a_share.psycopg, "connect", return_value=connection
+        ), patch.object(
+            import_tushare_a_share, "_validate_schema", return_value={
+                "instruments": 0,
+                "bars": 0,
+                "features": 0,
+            }
+        ), patch.object(
+            import_tushare_a_share, "TushareClient"
+        ), patch.object(
+            import_tushare_a_share, "_import_indices"
+        ) as import_indices, patch.object(
+            import_tushare_a_share, "MaintenanceWindow"
+        ) as maintenance_class, patch.dict(
+            "os.environ", {"TUSHARE_TOKEN": "test-token"}, clear=True
+        ):
+            import_tushare_a_share.main()
+
+        maintenance = maintenance_class.return_value
+        maintenance.start.assert_called_once_with()
+        import_indices.assert_called_once()
+        maintenance.succeed.assert_called_once_with()
+        maintenance.fail_if_open.assert_called_once_with()
+
     def test_multiple_selected_symbols_are_filtered_locally(self) -> None:
         client = _Client()
 

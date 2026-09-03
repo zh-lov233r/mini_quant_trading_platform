@@ -53,6 +53,7 @@ from src.services.research_experiment_service import (
     update_experiment_token_usage,
 )
 from src.services.backtest_job_service import delete_terminal_backtest_run
+from src.services.market_data_maintenance_service import MarketDataMaintenanceError
 from src.api.backtests import BacktestDeleteOut
 
 
@@ -108,7 +109,6 @@ def _trial_out(trial: ExperimentTrial) -> TrialOut:
         windowStart=trial.window_start,
         windowEnd=trial.window_end,
         costConfig=trial.cost_config or {},
-        dataFingerprint=trial.data_fingerprint,
         backtestRunId=trial.backtest_run_id,
         backtestDeletedAt=deleted_at,
         candidateId=trial.candidate_id,
@@ -199,6 +199,11 @@ def create_research_category_study(
                 spec=payload.spec,
                 idempotency_key=idempotency_key,
             )
+    except MarketDataMaintenanceError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail={"code": "invalid_spec", "message": str(exc)}) from exc
     except ExperimentDataIncompleteError as exc:
@@ -273,6 +278,11 @@ def promote_research_candidates(
         )
     except ExperimentNotFoundError as exc:
         raise HTTPException(status_code=404, detail="experiment not found") from exc
+    except MarketDataMaintenanceError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail={"code": "invalid_candidates", "message": str(exc)}) from exc
     except ExperimentConflictError as exc:
