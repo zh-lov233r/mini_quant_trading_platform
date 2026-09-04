@@ -8,7 +8,11 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import Session
 
-from src.api.backtests import delete_backtest, list_backtests
+from src.api.backtests import (
+    delete_backtest,
+    get_backtest_support_resistance,
+    list_backtests,
+)
 from src.api.research import delete_research_backtest
 from src.models.tables import (
     BacktestJob,
@@ -22,6 +26,8 @@ from src.models.tables import (
     Strategy,
     StrategyRun,
     SupportResistanceMaterialization,
+    SupportResistanceMaterializationEvent,
+    SupportResistanceRunEvent,
     SupportResistanceRunMaterialization,
     Transaction,
 )
@@ -144,9 +150,18 @@ class BacktestDeleteApiTests(unittest.TestCase):
             run_id=run.id,
             materialization_id=materialization.id,
         ))
+        shared_event = SupportResistanceMaterializationEvent(
+            materialization_id=materialization.id,
+            symbol="AAPL",
+            event_date=date(2025, 1, 1),
+            event_type="touch",
+            payload={},
+        )
+        self.db.add(shared_event)
         run_id = run.id
         materialization_id = materialization.id
         self.db.commit()
+        shared_event_id = shared_event.id
 
         result = delete_backtest(run_id, self.db)
 
@@ -157,6 +172,9 @@ class BacktestDeleteApiTests(unittest.TestCase):
         self.assertEqual(self.db.scalar(select(func.count()).select_from(PortfolioSnapshot)), 0)
         self.assertEqual(self.db.scalar(select(func.count()).select_from(BacktestJob)), 0)
         self.assertIsNotNone(self.db.get(SupportResistanceMaterialization, materialization_id))
+        self.assertIsNotNone(
+            self.db.get(SupportResistanceMaterializationEvent, shared_event_id)
+        )
 
     def test_active_run_cannot_be_deleted(self) -> None:
         run = self.make_run(status="running")
@@ -168,6 +186,70 @@ class BacktestDeleteApiTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.status_code, 409)
         self.assertIsNotNone(self.db.get(StrategyRun, run_id))
+
+    def test_support_resistance_api_merges_and_filters_shared_and_run_events(self) -> None:
+        run = self.make_run()
+        materialization = SupportResistanceMaterialization(
+            cache_key="c" * 64,
+            algorithm_version="legacy-test",
+            detector_params={},
+            universe_hash="d" * 64,
+            symbols=["AAPL", "MSFT"],
+            coverage_start=date(2025, 1, 1),
+            coverage_end=date(2025, 1, 5),
+            price_semantics="adjusted",
+            audit_schema_version=2,
+            status="completed",
+            statistics={},
+        )
+        self.db.add(materialization)
+        self.db.flush()
+        self.db.add_all([
+            SupportResistanceRunMaterialization(
+                run_id=run.id,
+                materialization_id=materialization.id,
+            ),
+            SupportResistanceMaterializationEvent(
+                materialization_id=materialization.id,
+                symbol="AAPL",
+                event_date=date(2025, 1, 2),
+                event_type="touch",
+                zone_key="zone-a",
+                payload={"source": "shared"},
+            ),
+            SupportResistanceRunEvent(
+                run_id=run.id,
+                materialization_id=materialization.id,
+                symbol="AAPL",
+                event_date=date(2025, 1, 3),
+                event_type="candidate",
+                zone_key="zone-a",
+                payload={"source": "run"},
+            ),
+            SupportResistanceMaterializationEvent(
+                materialization_id=materialization.id,
+                symbol="MSFT",
+                event_date=date(2025, 1, 2),
+                event_type="touch",
+                zone_key="zone-b",
+                payload={"source": "filtered"},
+            ),
+        ])
+        self.db.commit()
+
+        result = get_backtest_support_resistance(
+            run.id,
+            self.db,
+            symbol="aapl",
+            zone_key="zone-a",
+            start_date=date(2025, 1, 2),
+            end_date=date(2025, 1, 3),
+        )
+
+        self.assertEqual(
+            [(event["event_type"], event["payload"]["source"]) for event in result.events],
+            [("touch", "shared"), ("candidate", "run")],
+        )
 
     def test_manual_list_excludes_research_runs(self) -> None:
         manual = self.make_run(source="manual")

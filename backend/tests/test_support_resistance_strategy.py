@@ -25,6 +25,7 @@ from src.models.tables import (  # noqa: E402
     StrategyPortfolio,
     StrategyRun,
     SupportResistanceMaterialization,
+    SupportResistanceMaterializationEvent,
     SupportResistanceRegimeVersion,
     SupportResistanceRunEvent,
     SupportResistanceRunMaterialization,
@@ -344,6 +345,28 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         self.assertFalse(candidate["entry_eligible"])
         self.assertFalse(candidate["regime_eligible"])
         self.assertEqual(candidate["regime"], "downtrend")
+
+    def test_falling_support_zone_rejects_entry_but_keeps_audit_event(self) -> None:
+        state = SupportResistanceSymbolState(cached_regime_timeline=_cached_regime("uptrend"))
+        state.history.append(_bar(-1, high=103, low=102, close=102.5))
+        support = _zone("support", "support", 100)
+        support.slope_per_session = -0.01
+        state.zones[support.zone_key] = support
+        state.zones["resistance"] = _zone("resistance", "resistance", 110)
+
+        decision = advance_symbol(
+            state,
+            _bar(1, high=104, low=100, close=102),
+            self.signal,
+            self.risk,
+        )
+
+        self.assertIsNone(decision)
+        candidate = next(event for event in state.events if event["event_type"] == "candidate")
+        self.assertFalse(candidate["entry_eligible"])
+        self.assertFalse(candidate["risk_eligible"])
+        self.assertTrue(candidate["regime_eligible"])
+        self.assertEqual(candidate["rejection_reason"], "falling_support_zone")
 
     def test_transition_does_not_force_an_open_position_to_exit(self) -> None:
         snapshot = _bar(1, high=108, low=103, close=104)
@@ -799,7 +822,7 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         self.assertEqual(zone.center, 100.1234567892)
         self.assertEqual(zone.atr, 1.2345678902)
         detector = normalized_detector_params({"signal": self.signal})
-        self.assertEqual(detector["implementation_revision"], 13)
+        self.assertEqual(detector["implementation_revision"], 14)
         self.assertEqual(detector["regime_logic_revision"], 4)
 
     def test_rebuild_rejects_geometry_rounded_to_zero_before_recording_a_zone(self) -> None:
@@ -894,6 +917,7 @@ class SupportResistanceSchemaContractTests(unittest.TestCase):
             SupportResistanceRegimeVersion.__table__,
             SupportResistanceRunMaterialization.__table__,
             SupportResistanceRunEvent.__table__,
+            SupportResistanceMaterializationEvent.__table__,
         )
 
         expected_names = {
@@ -909,6 +933,7 @@ class SupportResistanceSchemaContractTests(unittest.TestCase):
             SupportResistanceZoneVersion.__table__,
             SupportResistanceRegimeVersion.__table__,
             SupportResistanceRunEvent.__table__,
+            SupportResistanceMaterializationEvent.__table__,
         ):
             foreign_key = next(iter(table.c.instrument_id.foreign_keys))
             self.assertEqual(foreign_key.target_fullname, "instruments.id")
@@ -1044,6 +1069,27 @@ class SupportResistancePersistenceTests(unittest.TestCase):
             }
             for key in ("events", "zone_versions", "regime_versions")
         }
+        events = support["events"]
+        events.update({
+            "materialization_event": np.ones(len(original.events), dtype=np.uint8),
+            "event_date_ordinal": np.array([
+                date.fromisoformat(row["event_date"]).toordinal()
+                for row in original.events
+            ], dtype=np.int32),
+            "event_type": [row["event_type"] for row in original.events],
+            "zone_key": [row.get("zone_key") or "" for row in original.events],
+            "setup": [row.get("setup") or "" for row in original.events],
+            "score": np.array([
+                row.get("score", np.nan) for row in original.events
+            ], dtype=float),
+            "posterior_sample_count": np.array([-1] * len(original.events), dtype=np.int64),
+            "lower_price": np.array([
+                row.get("lower", np.nan) for row in original.events
+            ], dtype=float),
+            "upper_price": np.array([
+                row.get("upper", np.nan) for row in original.events
+            ], dtype=float),
+        })
         native = NativeSupportState(SimpleNamespace(symbols=["TEST"], support_resistance=support), SimpleNamespace(integers=integers))
 
         def write_batches(db, model, rows, **kwargs):
@@ -1067,8 +1113,14 @@ class SupportResistancePersistenceTests(unittest.TestCase):
             self.assertEqual(caches[0].statistics["zone_version_count"], 1)
             self.assertEqual(caches[0].statistics["regime_version_count"], 1)
             self.assertEqual(
-                [db.scalar(select(SupportResistanceRunEvent.payload).where(SupportResistanceRunEvent.run_id == run.id)) for run in runs],
-                [original.events[0], original.events[0]],
+                db.scalar(select(SupportResistanceMaterializationEvent.payload)),
+                original.events[0],
+            )
+            self.assertEqual(
+                [db.scalar(select(func.count()).select_from(SupportResistanceRunEvent).where(
+                    SupportResistanceRunEvent.run_id == run.id
+                )) for run in runs],
+                [0, 0],
             )
 
     def test_instrument_ids_use_unique_point_in_time_symbol_history(self) -> None:
@@ -1276,6 +1328,7 @@ class SupportResistancePersistenceTests(unittest.TestCase):
                     coverage_start=date(2025, 1, 1),
                     coverage_end=date(2025, 3, 1),
                 )
+            db.rollback()
             self.assertEqual(
                 db.scalar(select(func.count()).select_from(SupportResistanceRunEvent)),
                 0,
@@ -1668,11 +1721,17 @@ class SupportResistancePersistenceTests(unittest.TestCase):
                 .where(SupportResistanceRunEvent.run_id == run.id)
                 .order_by(SupportResistanceRunEvent.event_date)
             ).all()
+            materialization_events = db.scalars(
+                select(SupportResistanceMaterializationEvent).where(
+                    SupportResistanceMaterializationEvent.materialization_id == materialization.id
+                )
+            ).all()
 
             self.assertEqual(len(versions), 1)
             self.assertEqual(len(regime_versions), 1)
             self.assertEqual(regime_versions[0].regime, "transition")
-            self.assertEqual(len(events), 8)
+            self.assertEqual(len(events), 6)
+            self.assertEqual(len(materialization_events), 2)
             version = versions[0]
             self.assertEqual(
                 {
@@ -1707,10 +1766,13 @@ class SupportResistancePersistenceTests(unittest.TestCase):
                 },
             )
             self.assertEqual(
-                {item.event_type for item in events},
+                {item.event_type for item in [*events, *materialization_events]},
                 {"touch", "candidate", "selection", "breakout", "retest", "invalidation", "role_transition", "score_outcome"},
             )
             source_events = sorted(state.symbols["TEST"].events, key=lambda item: item["event_date"])
+            persisted_events = sorted(
+                [*events, *materialization_events], key=lambda item: item.event_date
+            )
             self.assertEqual(
                 [
                     {
@@ -1725,7 +1787,7 @@ class SupportResistancePersistenceTests(unittest.TestCase):
                         "upper_price": float(item.upper_price) if item.upper_price is not None else None,
                         "payload": item.payload,
                     }
-                    for item in events
+                    for item in persisted_events
                 ],
                 [
                     {
@@ -1748,7 +1810,8 @@ class SupportResistancePersistenceTests(unittest.TestCase):
             self.assertEqual(events[-1].posterior_sample_count, 7)
             self.assertEqual(performance["support_resistance_zone_versions"], 1)
             self.assertEqual(performance["support_resistance_regime_versions"], 1)
-            self.assertEqual(performance["support_resistance_run_events"], 8)
+            self.assertEqual(performance["support_resistance_run_events"], 6)
+            self.assertEqual(performance["support_resistance_materialization_events"], 2)
             self.assertFalse(performance["support_resistance_cache_reused"])
             self.assertGreaterEqual(performance["support_resistance_persist_total_ms"], 0.0)
             self.assertEqual(progress[0], ("zone_versions", 0, 10))
@@ -1773,6 +1836,11 @@ class SupportResistancePersistenceTests(unittest.TestCase):
             db.commit()
 
             second_run = self._new_run(db)
+            second_state = self._state()
+            second_state.symbols["TEST"].events.append({
+                **second_state.symbols["TEST"].events[0],
+                "event_type": "candidate",
+            })
 
             def insert_one_then_fail(session, model, rows, **_kwargs):
                 first = next(iter(rows))
@@ -1788,7 +1856,7 @@ class SupportResistancePersistenceTests(unittest.TestCase):
                         db,
                         run=second_run,
                         runtime=self.runtime,
-                        state=self._state(),
+                        state=second_state,
                         symbols=["TEST"],
                         coverage_start=date(2025, 1, 1),
                         coverage_end=date(2025, 3, 1),

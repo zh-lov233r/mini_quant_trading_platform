@@ -1125,7 +1125,8 @@ Candidate candidate_payload(
         : overhead.front();
     const double risk = entry - stop;
     const double reward_risk = risk > 0.0 ? (target - entry) / risk : 0.0;
-    const bool eligible = reward_risk >= config.min_reward_risk;
+    const bool support_slope_eligible = zone.slope_per_session >= 0.0;
+    const bool eligible = support_slope_eligible && reward_risk >= config.min_reward_risk;
     const SetupStats& stats = state.stats.at(setup);
     const std::optional<double> volume_ratio = bar.volume_sma_20 > 0.0
         ? std::optional(bar.volume / bar.volume_sma_20)
@@ -1149,9 +1150,9 @@ Candidate candidate_payload(
     });
     result.entry_eligible = eligible;
     result.risk_eligible = eligible;
-    result.rejection_reason = eligible
-        ? std::nullopt
-        : std::optional<std::string>("nearest resistance yields reward/risk below minimum");
+    if (eligible) result.rejection_reason = std::nullopt;
+    else if (!support_slope_eligible) result.rejection_reason = "falling_support_zone";
+    else result.rejection_reason = "nearest resistance yields reward/risk below minimum";
     result.stop_price = stop;
     result.target_price = target;
     result.reward_risk = reward_risk;

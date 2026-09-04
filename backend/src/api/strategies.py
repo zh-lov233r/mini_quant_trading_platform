@@ -18,6 +18,7 @@ from src.models.tables import (
     Strategy,
     StrategyAllocation,
     StrategyRun,
+    SupportResistanceMaterializationEvent,
     SupportResistanceRunEvent,
     SupportResistanceRunMaterialization,
     Transaction,
@@ -173,6 +174,7 @@ class StrategyDeleteOut(BaseModel):
     deleted_support_resistance_run_events: int
     deleted_support_resistance_run_links: int
     retained_support_resistance_materializations: int
+    retained_support_resistance_materialization_events: int
 
 
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
@@ -276,6 +278,19 @@ def _build_delete_summary(db: Session, strategy_id: UUID) -> dict[str, int]:
             .where(StrategyRun.strategy_id == strategy_id)
         ).scalar_one()
     )
+    retained_support_resistance_materialization_events = int(
+        db.execute(
+            select(func.count(func.distinct(SupportResistanceMaterializationEvent.id)))
+            .select_from(SupportResistanceMaterializationEvent)
+            .join(
+                SupportResistanceRunMaterialization,
+                SupportResistanceRunMaterialization.materialization_id
+                == SupportResistanceMaterializationEvent.materialization_id,
+            )
+            .join(StrategyRun, StrategyRun.id == SupportResistanceRunMaterialization.run_id)
+            .where(StrategyRun.strategy_id == strategy_id)
+        ).scalar_one()
+    )
 
     return {
         "deleted_backtest_runs": int(run_counts.get("backtest", 0)),
@@ -288,6 +303,9 @@ def _build_delete_summary(db: Session, strategy_id: UUID) -> dict[str, int]:
         "deleted_support_resistance_run_events": deleted_support_resistance_run_events,
         "deleted_support_resistance_run_links": deleted_support_resistance_run_links,
         "retained_support_resistance_materializations": retained_support_resistance_materializations,
+        "retained_support_resistance_materialization_events": (
+            retained_support_resistance_materialization_events
+        ),
     }
 
 

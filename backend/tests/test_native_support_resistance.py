@@ -273,13 +273,13 @@ class NativeSupportResistanceParityTests(unittest.TestCase):
             "decay_half_life",
         )
         expected = {
-            "implementation_revision": 13,
+            "implementation_revision": 14,
             "regime_logic_revision": 4,
             **{key: self.signal[key] for key in keys},
         }
         actual = self.native.normalized_detector_params({"signal": self.signal})
 
-        self.assertEqual(self.native.DETECTOR_IMPLEMENTATION_REVISION, 13)
+        self.assertEqual(self.native.DETECTOR_IMPLEMENTATION_REVISION, 14)
         self.assertEqual(self.native.REGIME_LOGIC_REVISION, 4)
         self.assertEqual(
             self.native.ENTRY_CHANNEL_SEMANTICS,

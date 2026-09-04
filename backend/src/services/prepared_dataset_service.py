@@ -17,8 +17,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 
-PREPARED_DATASET_SCHEMA_VERSION = "v4"
-PREPARED_READ_PATH_REVISION = "binary-shards-1"
+PREPARED_DATASET_SCHEMA_VERSION = "v5"
+PREPARED_READ_PATH_REVISION = "binary-shards-3"
 PREPARED_INTEGER_FIELDS = (
     "session_index", "instrument_id", "ts_us", "dt_ordinal", "symbol_id",
     "asset_type_id", "exchange_id", "listed_ordinal", "delisted_ordinal",
@@ -38,7 +38,7 @@ PREPARED_DATE_SENTINEL = np.iinfo(np.int64).min
 
 @dataclass(slots=True)
 class PreparedDataset:
-    """Two Fortran-order arrays plus dictionary sidecars for the v4 dataset.
+    """Two Fortran-order arrays plus dictionary sidecars for the v5 dataset.
 
     Prepared caches use read-only memmaps; Paper evaluation uses the same schema
     in ordinary in-memory NumPy arrays.
@@ -165,7 +165,7 @@ def build_prepared_dataset_manifest(
         ],
         "feature_set": ["daily_features", "adjusted_ohlcv", strategy_type],
         "price_semantics": "forward_adjusted_when_available",
-        "corporate_action_semantics": "split_reverse_split_stock_dividend",
+        "corporate_action_semantics": "adjusted_prices_or_raw_price_quantity_adjustment",
         "symbol_identity_semantics": "point_in_time_primary_symbol",
         "universe_membership_semantics": (
             "point_in_time_liquid" if universe_policy else "resolved_instrument_set"
@@ -371,7 +371,7 @@ class PreparedDatasetCache:
         if shards.is_dir():
             removed += PreparedDatasetCache(shards).invalidate_all()
         for directory in sorted(self.root.iterdir()):
-            if not directory.is_dir() or directory.suffix not in {".v3", ".v4"}:
+            if not directory.is_dir() or directory.suffix not in {".v3", ".v4", ".v5"}:
                 continue
             shutil.rmtree(directory)
             removed += 1

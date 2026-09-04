@@ -3342,104 +3342,64 @@ function PositionLifecycleCard({
 
   return (
     <div>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          gap: 12,
-          flexWrap: "wrap",
-          alignItems: "center",
-          marginBottom: 16,
-        }}
-      >
-        <div>
-          <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>
-            {isZh ? "持仓生命周期" : "Position Lifecycles"}
-          </h2>
-          <p style={sectionSubtitleStyle}>
-            {isZh
-              ? "每一行表示一段从买入到卖出的 round-trip；如果回测结束时仍持有，则按最后快照价格标记为 open。"
-              : "Each row represents one buy-to-sell round-trip. Positions still open at the end of the run are shown as open and marked to the latest snapshot price."}
-          </p>
-        </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <Badge tone="info">
-            {rows.length} {isZh ? "段生命周期" : rows.length === 1 ? "lifecycle" : "lifecycles"}
-          </Badge>
-          {canLoadMore ? (
-            <button
-              type="button"
-              onClick={loadMoreRows}
-              style={tableToggleButtonStyle}
-            >
-              {isZh ? "再显示 12 段" : "Show 12 More"}
-            </button>
-          ) : null}
-        </div>
-      </div>
-
-          {rows.length === 0 ? (
+      {rows.length === 0 ? (
         <div style={emptyStateStyle}>
           {isZh
             ? "这次回测还没有形成可识别的持仓生命周期"
             : "This backtest does not have identifiable position lifecycles yet"}
         </div>
-      ) : filteredRows.length === 0 ? (
-        <div style={emptyStateStyle}>
-          {isZh ? "当前筛选条件下没有匹配的生命周期" : "No lifecycles match the current filter."}
-        </div>
       ) : (
         <>
-          <div
-            className={styles.stats}
-          >
-            <div className={styles.stat}>
-              <div style={labelStyle}>{isZh ? "已闭环" : "Closed"}</div>
-              <div style={miniMetricValueStyle}>{closedRows.length}</div>
-            </div>
-            <div className={styles.stat}>
-              <div style={labelStyle}>{isZh ? "仍持有" : "Open"}</div>
-              <div style={miniMetricValueStyle}>{openRows.length}</div>
-            </div>
-            <div className={styles.stat}>
-              <div style={labelStyle}>{isZh ? "胜率" : "Win Rate"}</div>
-              <div style={miniMetricValueStyle}>{formatPercent(winRate, 2)}</div>
-            </div>
-            <div className={styles.stat}>
-              <div style={labelStyle}>{isZh ? "平均持有天数" : "Avg Hold Days"}</div>
-              <div style={miniMetricValueStyle}>
-                {averageHoldingDays == null ? "-" : averageHoldingDays.toLocaleString(locale, { maximumFractionDigits: 1 })}
+          <div className={styles.lifecycleSummary}>
+            <div className={styles.lifecycleStats}>
+              <div className={styles.stat}>
+                <div style={labelStyle}>{isZh ? "已闭环" : "Closed"}</div>
+                <div style={miniMetricValueStyle}>{closedRows.length}</div>
               </div>
-            </div>
+              <div className={styles.stat}>
+                <div style={labelStyle}>{isZh ? "仍持有" : "Open"}</div>
+                <div style={miniMetricValueStyle}>{openRows.length}</div>
+              </div>
+              <div className={styles.stat}>
+                <div style={labelStyle}>{isZh ? "胜率" : "Win Rate"}</div>
+                <div style={miniMetricValueStyle}>{formatPercent(winRate, 2)}</div>
+              </div>
+              <div className={styles.stat}>
+                <div style={labelStyle}>{isZh ? "平均持有天数" : "Avg Hold Days"}</div>
+                <div style={miniMetricValueStyle}>
+                  {averageHoldingDays == null ? "-" : averageHoldingDays.toLocaleString(locale, { maximumFractionDigits: 1 })}
+                </div>
+              </div>
               <div className={styles.stat}>
                 <div style={labelStyle}>{isZh ? "生命周期盈亏" : "Lifecycle PnL"}</div>
                 <div style={miniMetricValueStyle}>{formatCurrency(totalPnl, locale)}</div>
               </div>
             </div>
-
-          <div
-            style={{
-              marginBottom: 12,
-              display: "flex",
-              justifyContent: "space-between",
-              gap: 12,
-              flexWrap: "wrap",
-              alignItems: "center",
-            }}
-          >
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              {pnlFilterOptions.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => setPnlFilter(option.value)}
-                  style={lifecyclePnlFilterChipStyle(pnlFilter === option.value)}
-                >
-                  {option.label} {option.count}
-                </button>
-              ))}
+            <div className={styles.lifecycleToolbar}>
+              <div className={styles.lifecycleFilters}>
+                {pnlFilterOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setPnlFilter(option.value)}
+                    style={lifecyclePnlFilterChipStyle(pnlFilter === option.value)}
+                  >
+                    {option.label} {option.count}
+                  </button>
+                ))}
+              </div>
+              <div className={styles.lifecycleActions}>
+                <Badge tone="info">
+                  {rows.length} {isZh ? "段生命周期" : rows.length === 1 ? "lifecycle" : "lifecycles"}
+                </Badge>
+                {canLoadMore ? (
+                  <button type="button" onClick={loadMoreRows} style={tableToggleButtonStyle}>
+                    {isZh ? "再显示 12 段" : "Show 12 More"}
+                  </button>
+                ) : null}
+              </div>
             </div>
-            <div style={{ color: "rgba(148, 163, 184, 0.88)", fontSize: 13 }}>
+            <div className={styles.lifecycleScope}>
               {isZh
                 ? `当前显示 ${visibleRows.length} / ${filteredRows.length} 段生命周期${
                     pnlFilter === "all" ? "" : `（总计 ${rows.length} 段）`
@@ -3452,6 +3412,11 @@ function PositionLifecycleCard({
             </div>
           </div>
 
+          {filteredRows.length === 0 ? (
+            <div style={emptyStateStyle}>
+              {isZh ? "当前筛选条件下没有匹配的生命周期" : "No lifecycles match the current filter."}
+            </div>
+          ) : (
           <div className={styles.tableScroll}>
             <table
               style={{
@@ -3627,6 +3592,7 @@ function PositionLifecycleCard({
               </tbody>
             </table>
           </div>
+          )}
         </>
       )}
     </div>

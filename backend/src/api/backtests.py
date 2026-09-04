@@ -25,6 +25,7 @@ from src.models.tables import (
     Strategy,
     StrategyRun,
     SupportResistanceMaterialization,
+    SupportResistanceMaterializationEvent,
     SupportResistanceRegimeVersion,
     SupportResistanceRunEvent,
     SupportResistanceRunMaterialization,
@@ -87,7 +88,14 @@ class BacktestProgressOut(BaseModel):
     total_days: Optional[int] = None
     trade_date: Optional[str] = None
     finalizing_stage: Optional[
-        Literal["zone_versions", "regime_versions", "run_events", "backtest_details", "committing"]
+        Literal[
+            "zone_versions",
+            "regime_versions",
+            "materialization_events",
+            "run_events",
+            "backtest_details",
+            "committing",
+        ]
     ] = None
     completed_items: Optional[int] = Field(default=None, ge=0)
     total_items: Optional[int] = Field(default=None, ge=0)
@@ -1307,28 +1315,43 @@ def get_backtest_support_resistance(
     event_stmt = select(SupportResistanceRunEvent).where(
         SupportResistanceRunEvent.run_id == run_id
     )
+    materialization_event_stmt = select(SupportResistanceMaterializationEvent).where(
+        SupportResistanceMaterializationEvent.materialization_id == materialization.id
+    )
     regime_stmt = select(SupportResistanceRegimeVersion).where(
         SupportResistanceRegimeVersion.materialization_id == materialization.id
     )
     if normalized_symbol:
         zone_stmt = zone_stmt.where(SupportResistanceZoneVersion.symbol == normalized_symbol)
         event_stmt = event_stmt.where(SupportResistanceRunEvent.symbol == normalized_symbol)
+        materialization_event_stmt = materialization_event_stmt.where(
+            SupportResistanceMaterializationEvent.symbol == normalized_symbol
+        )
         regime_stmt = regime_stmt.where(SupportResistanceRegimeVersion.symbol == normalized_symbol)
     if zone_key:
         zone_stmt = zone_stmt.where(SupportResistanceZoneVersion.zone_key == zone_key)
         event_stmt = event_stmt.where(SupportResistanceRunEvent.zone_key == zone_key)
+        materialization_event_stmt = materialization_event_stmt.where(
+            SupportResistanceMaterializationEvent.zone_key == zone_key
+        )
     if start_date:
         zone_stmt = zone_stmt.where(
             (SupportResistanceZoneVersion.effective_to.is_(None))
             | (SupportResistanceZoneVersion.effective_to >= start_date)
         )
         event_stmt = event_stmt.where(SupportResistanceRunEvent.event_date >= start_date)
+        materialization_event_stmt = materialization_event_stmt.where(
+            SupportResistanceMaterializationEvent.event_date >= start_date
+        )
     if end_date:
         zone_stmt = zone_stmt.where(
             (SupportResistanceZoneVersion.effective_from <= end_date)
             | (SupportResistanceZoneVersion.source_metadata["first_pivot_date"].as_string() <= end_date.isoformat())
         )
         event_stmt = event_stmt.where(SupportResistanceRunEvent.event_date <= end_date)
+        materialization_event_stmt = materialization_event_stmt.where(
+            SupportResistanceMaterializationEvent.event_date <= end_date
+        )
 
     versions = db.execute(
         zone_stmt.order_by(
@@ -1345,6 +1368,18 @@ def get_backtest_support_resistance(
             SupportResistanceRunEvent.created_at,
         )
     ).scalars().all()
+    if int(materialization.audit_schema_version or 1) >= 2:
+        events.extend(db.execute(materialization_event_stmt).scalars().all())
+    events.sort(
+        key=lambda event: (
+            event.event_date,
+            event.symbol,
+            event.event_type,
+            event.zone_key or "",
+            event.setup or "",
+            json.dumps(event.payload or {}, sort_keys=True, separators=(",", ":")),
+        )
+    )
     regime_versions = db.execute(
         regime_stmt.order_by(
             SupportResistanceRegimeVersion.symbol,

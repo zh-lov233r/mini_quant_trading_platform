@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BacktestRunOut } from "@/types/backtest";
 import type { StrategyType } from "@/types/strategy";
-import { filterBacktestRuns } from "@/utils/backtestFilters";
+import { defaultBenchmarkForBasket, filterBacktestRuns } from "@/utils/backtestFilters";
 
 function run(overrides: Partial<BacktestRunOut>): BacktestRunOut {
   return {
@@ -51,5 +51,12 @@ describe("backtest run filtering", () => {
     const missing = run({ id: "run-3", strategy_id: "missing", strategy_name: "Archived Strategy" });
     expect(() => filterBacktestRuns([missing], strategyTypes, { query: "", status: "all", strategyType: "all" }))
       .toThrow("Missing strategy type");
+  });
+});
+
+describe("backtest basket defaults", () => {
+  it("uses a market-appropriate benchmark for each basket", () => {
+    expect(defaultBenchmarkForBasket({ symbols: ["600000.SH", "000001.SZ"] })).toBe("000001.SH");
+    expect(defaultBenchmarkForBasket({ symbols: ["AAPL", "MSFT"] })).toBe("SPY");
   });
 });

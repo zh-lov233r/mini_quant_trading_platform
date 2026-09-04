@@ -422,6 +422,7 @@ export interface StrategyDeleteOut {
   deleted_support_resistance_run_events: number;
   deleted_support_resistance_run_links: number;
   retained_support_resistance_materializations: number;
+  retained_support_resistance_materialization_events: number;
 }
 
 export interface StrategyCatalogItem {

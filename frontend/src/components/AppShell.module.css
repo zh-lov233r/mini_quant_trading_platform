@@ -73,6 +73,14 @@
   .sidebarFooter .localeToggleButton { display: inline-flex; }
 }
 
+@media (min-width: 1600px) {
+  /* Keep the content viewport stable while the optional desktop sidebar moves. */
+  .shellCollapsed .main {
+    padding-right: calc(clamp(16px,1.6vw,24px) + 72px);
+    padding-left: calc(clamp(16px,1.6vw,24px) + 72px);
+  }
+}
+
 @media (max-width: 767px) {
   .sidebar { display: none; }
   .main { margin-left: 0; padding: 0 12px 64px; }

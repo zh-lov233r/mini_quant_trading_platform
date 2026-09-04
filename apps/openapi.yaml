@@ -978,7 +978,7 @@ paths:
         - {in: query, name: end_date, required: false, schema: {type: string, format: date}}
       responses:
         "200":
-          description: Materialization identity, sparse zone versions, and run-scoped scoring/events
+          description: Materialization identity, sparse zone/regime versions, and the stable merge of shared lifecycle with run-scoped decision events
           content:
             application/json:
               schema:
@@ -2856,6 +2856,7 @@ components:
         - deleted_support_resistance_run_events
         - deleted_support_resistance_run_links
         - retained_support_resistance_materializations
+        - retained_support_resistance_materialization_events
       properties:
         strategy_id: {type: string, format: uuid}
         strategy_name: {type: string}
@@ -2869,6 +2870,7 @@ components:
         deleted_support_resistance_run_events: {type: integer, minimum: 0}
         deleted_support_resistance_run_links: {type: integer, minimum: 0}
         retained_support_resistance_materializations: {type: integer, minimum: 0}
+        retained_support_resistance_materialization_events: {type: integer, minimum: 0}
 
     StrategyValidation:
       type: object
@@ -3223,7 +3225,7 @@ components:
         trade_date: {type: string, format: date, nullable: true}
         finalizing_stage:
           type: string
-          enum: [zone_versions, regime_versions, run_events, backtest_details, committing]
+          enum: [zone_versions, regime_versions, materialization_events, run_events, backtest_details, committing]
           nullable: true
         completed_items: {type: integer, minimum: 0, nullable: true}
         total_items: {type: integer, minimum: 0, nullable: true}

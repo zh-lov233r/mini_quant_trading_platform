@@ -232,7 +232,7 @@ class BacktestJobServiceTests(unittest.TestCase):
             {
                 "phase": "finalizing",
                 "percent": 92.5,
-                "finalizing_stage": "run_events",
+                "finalizing_stage": "materialization_events",
                 "completed_items": 250,
                 "total_items": 1_000,
             },
@@ -254,7 +254,7 @@ class BacktestJobServiceTests(unittest.TestCase):
         )
         self.assertEqual(running["percent"], 85.0)
         self.assertEqual(finalizing["percent"], 92.5)
-        self.assertEqual(finalizing["finalizing_stage"], "run_events")
+        self.assertEqual(finalizing["finalizing_stage"], "materialization_events")
         self.assertEqual(finalizing["completed_items"], 250)
         self.assertEqual(finalizing["total_items"], 1_000)
         self.assertEqual(completed["percent"], 100.0)

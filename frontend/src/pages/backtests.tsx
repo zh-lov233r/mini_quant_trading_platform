@@ -29,7 +29,7 @@ import {
   summarizeStrategies,
 } from "@/utils/strategy";
 import { clampPageIndex, pageCount, paginateItems } from "@/utils/pagination";
-import { filterBacktestRuns } from "@/utils/backtestFilters";
+import { defaultBenchmarkForBasket, filterBacktestRuns, isAShareBasket } from "@/utils/backtestFilters";
 import styles from "@/styles/BacktestsPage.module.css";
 
 
@@ -64,14 +64,6 @@ const DEFAULT_RUN_PAGE_SIZE = 10;
 const RUN_PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
 const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const A_SHARE_DEFAULT_BENCHMARK = "000001.SH";
-const US_DEFAULT_BENCHMARKS = new Set(["SPY", "QQQ"]);
-
-function isAShareBasket(basket: StockBasketOut | null): boolean {
-  return Boolean(
-    basket?.symbols.length &&
-    basket.symbols.every((symbol) => symbol.endsWith(".SH") || symbol.endsWith(".SZ") || symbol.endsWith(".BJ"))
-  );
-}
 
 type DeleteNotice = {
   tone: "success" | "error";
@@ -156,6 +148,7 @@ function fieldBlock(
     <label
       style={{
         display: "grid",
+        gridTemplateRows: "auto minmax(0, 1fr) auto",
         gap: 8,
         minWidth: 0,
         width: "100%",
@@ -206,7 +199,9 @@ function fieldBlock(
       >
         {description}
       </span>
-      {input}
+      <div style={{ display: "grid", gap: 8, alignSelf: "end", width: "100%" }}>
+        {input}
+      </div>
     </label>
   );
 }
@@ -472,13 +467,9 @@ export default function BacktestsPage() {
   const selectedBasketIsAShare = isAShareBasket(selectedBasket);
 
   useEffect(() => {
-    if (!selectedBasketIsAShare) return;
-    setBenchmarkSymbol((current) =>
-      !current.trim() || US_DEFAULT_BENCHMARKS.has(current.trim().toUpperCase())
-        ? A_SHARE_DEFAULT_BENCHMARK
-        : current
-    );
-  }, [selectedBasketIsAShare]);
+    if (!selectedBasket) return;
+    setBenchmarkSymbol(defaultBenchmarkForBasket(selectedBasket));
+  }, [selectedBasket]);
 
   const runStats = useMemo(() => {
     const completed = runs.filter((run) => run.status === "completed");
@@ -639,7 +630,7 @@ export default function BacktestsPage() {
           aria-live={deleteNotice.tone === "error" ? "assertive" : "polite"}
           style={{
             position: "fixed",
-            top: "50%",
+            top: "clamp(72px, 18vh, 180px)",
             left: "50%",
             zIndex: 130,
             display: "flex",
@@ -647,7 +638,7 @@ export default function BacktestsPage() {
             gap: 12,
             width: "min(420px, calc(100vw - 32px))",
             padding: "16px 18px",
-            transform: "translate(-50%, -50%)",
+            transform: "translateX(-50%)",
             border: `1px solid ${deleteNotice.tone === "error" ? "rgba(251,113,133,.72)" : "rgba(52,211,153,.68)"}`,
             borderRadius: 13,
             background: deleteNotice.tone === "error" ? "rgba(127,29,29,.97)" : "rgba(6,78,59,.97)",
@@ -916,11 +907,11 @@ export default function BacktestsPage() {
                       isZh ? "基准标的" : "Benchmark Symbol",
                       isZh
                         ? selectedBasketIsAShare
-                          ? "A 股回测默认以上证指数为收益基准，结果页同时显示上证指数和深证成指"
-                          : "用于横向比较的收益基准；美股默认使用 SPY"
+                          ? "已根据 A 股组合自动选择上证指数；结果页同时显示上证指数和深证成指"
+                          : "已根据美股组合自动选择 SPY；仍可在提交前手动修改"
                         : selectedBasketIsAShare
-                          ? "A-share backtests default to the Shanghai Composite and also show the Shenzhen Component."
-                          : "Return benchmark used for comparison; US backtests default to SPY.",
+                          ? "Selected the Shanghai Composite for this A-share basket; results also show the Shenzhen Component."
+                          : "Selected SPY for this US basket; you can still edit it before submitting.",
                       <input
                         value={benchmarkSymbol}
                         onChange={(e) => setBenchmarkSymbol(e.target.value.toUpperCase())}
@@ -1594,14 +1585,14 @@ const responsiveTwoColGridStyle: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
   gap: 12,
-  alignItems: "start",
+  alignItems: "stretch",
 };
 
 const responsiveThreeColGridStyle: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
   gap: 12,
-  alignItems: "start",
+  alignItems: "stretch",
 };
 
 const paginationSummaryStyle: CSSProperties = {

@@ -21,7 +21,7 @@
 
 T 收盘确认的区域最早在 T+1 判断信号。行情优先前复权 OHLC，否则使用未复权数据。信号仍在下一有效交易日开盘成交；卖出优先、共享现金、费用、公司行动和确定性排序不变。
 
-仅保留 `support_bounce` 入场：前收盘在冻结支撑上沿上方，当前最低价触碰，收盘恢复到上沿加至少 0.25 ATR。上行/震荡允许，下行/过渡禁止。移除直接突破与突破回踩开关、触发参数及消费者；其他策略回踩规则不变。
+仅保留 `support_bounce` 入场：前收盘在冻结支撑上沿上方，当前最低价触碰，收盘恢复到上沿加至少 0.25 ATR。冻结支撑斜率必须大于等于 0；负斜率候选以 `falling_support_zone` 保留审计，但禁止入场。上行/震荡允许，下行/过渡禁止。移除直接突破与突破回踩开关、触发参数及消费者；其他策略回踩规则不变。
 
 同一个股可以在未改变的区域内反复交易。上一持仓平仓后，再次满足反弹条件可重新入场，不设置“每区一次”标志。现有持仓、强度、风险、大盘过滤及区域止损冷却仍生效。
 
@@ -45,13 +45,13 @@ SR 常态仅展示 K 线、成交量、支撑/压力区、买卖信号和成交�
 
 ## 持久化与缓存
 
-检测器 revision **13**、状态 revision **4**，算法族 `pivot-slope-regime-v3`。旧 revision 不可用于新计算。
+检测器 revision **14**、状态 revision **4**，算法族 `pivot-slope-regime-v3`。旧 revision 不可用于新计算。
 
-现有区域、状态和事件表保存阶段身份、确认日期、结束原因和破坏日证据。区域 key 包含阶段；只保存一次活动几何及终态，不改拟合依据。即便相邻阶段都是等待/过渡，状态证据也记录新起点。缓存回放恢复这些空阶段，并要求与冷计算决策/事件一致。
+审计格式 v2 新增 `support_resistance_materialization_events`。不可变生命周期事件（`touch`、`invalidation`、`phase_ended`、`regime_transition`、`entry_channel_started`、`entry_channel_ended`）与 zone/regime 按物化保存一次；候选、选择、拒绝、执行决策和评分结果继续按运行保存。区域 key 包含阶段；只保存一次活动几何及终态，不改拟合依据。旧物化继续关联历史运行，但不参与 v2 缓存命中。缓存复用必须把共享事件与运行事件按稳定顺序合并成与冷计算相同的 API 结果。
 
 `GET /api/backtests/{run_id}/support-resistance` 返回裁剪后的 `geometry`、可空 `formation_geometry`、固定成员/阶段元数据及真实事件，使用该 instrument 实际交易日查询行情。
 
-阶段 JSON 元数据不需要新增 schema 或 Alembic 迁移。空闲后端/worker 重启前重建原生扩展：
+仓库没有 Alembic 工作流。只有在确认准确数据库、完成备份并复核现有行数后，才可执行 `backend/utils/create_zzzzzz_support_resistance.sql`；应用不会自动运行该 DDL。空闲后端/worker 重启前重建原生扩展：
 
 ```bash
 .venv/bin/pip install --no-build-isolation --no-deps -e backend/native

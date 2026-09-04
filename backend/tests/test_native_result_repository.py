@@ -139,16 +139,28 @@ class NativeResultRepositoryTests(unittest.TestCase):
         )
 
     def test_full_persistence_is_idempotent_and_preserves_typed_audit(self) -> None:
+        performance = {}
         stats = persist_native_result(
             self.db,
             run_id=self.run.id,
             strategy_id=self.strategy.id,
             result=_result(),
             persist_level="full",
+            performance=performance,
         )
         self.db.commit()
         self.assertEqual((stats.signals, stats.transactions, stats.snapshots), (1, 1, 2))
         self.assertEqual(self._counts(), (1, 1, 2))
+        self.assertEqual(
+            set(performance),
+            {
+                "native_detail_validation_ms",
+                "native_detail_delete_ms",
+                "signal_persist_ms",
+                "transaction_persist_ms",
+                "snapshot_persist_ms",
+            },
+        )
         transaction = self.db.scalars(select(Transaction)).one()
         self.assertEqual(transaction.meta["setup_id"], "setup-1")
         self.assertEqual(transaction.meta["entry_signal_features"]["entry_history"][0]["stage_index"], 1)

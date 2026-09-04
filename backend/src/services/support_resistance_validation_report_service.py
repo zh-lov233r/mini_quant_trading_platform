@@ -21,6 +21,7 @@ from src.models.tables import (
     PortfolioSnapshot,
     ResearchExperiment,
     Signal,
+    SupportResistanceMaterializationEvent,
     SupportResistanceRegimeVersion,
     SupportResistanceRunEvent,
     SupportResistanceRunMaterialization,
@@ -102,6 +103,32 @@ def _normalized_signal_rows(db: Session, run_id: Any) -> list[tuple[Any, ...]]:
 
 
 def _normalized_event_rows(db: Session, run_id: Any) -> list[tuple[Any, ...]]:
+    rows = list(
+        db.execute(
+            select(SupportResistanceRunEvent).where(
+                SupportResistanceRunEvent.run_id == run_id
+            )
+        ).scalars()
+    )
+    rows.extend(
+        db.execute(
+            select(SupportResistanceMaterializationEvent)
+            .join(
+                SupportResistanceRunMaterialization,
+                SupportResistanceRunMaterialization.materialization_id
+                == SupportResistanceMaterializationEvent.materialization_id,
+            )
+            .where(SupportResistanceRunMaterialization.run_id == run_id)
+        ).scalars()
+    )
+    rows.sort(key=lambda row: (
+        row.event_date,
+        row.instrument_id or 0,
+        row.event_type,
+        row.zone_key or "",
+        row.setup or "",
+        canonical_json(row.payload or {}),
+    ))
     return [
         (
             row.instrument_id,
@@ -114,16 +141,7 @@ def _normalized_event_rows(db: Session, run_id: Any) -> list[tuple[Any, ...]]:
             round(float(row.score), 10) if row.score is not None else None,
             canonical_json(row.payload or {}),
         )
-        for row in db.execute(
-            select(SupportResistanceRunEvent)
-            .where(SupportResistanceRunEvent.run_id == run_id)
-            .order_by(
-                SupportResistanceRunEvent.event_date,
-                SupportResistanceRunEvent.instrument_id,
-                SupportResistanceRunEvent.event_type,
-                SupportResistanceRunEvent.zone_key,
-            )
-        ).scalars()
+        for row in rows
     ]
 
 
@@ -256,15 +274,28 @@ def cache_audit(db: Session, candidate: ExperimentCandidate) -> dict[str, Any]:
 
 def regime_audit(db: Session, run_id: Any) -> dict[str, Any]:
     transitions = _normalized_regime_rows(db, run_id)
+    event_types = {"candidate", "selection", "regime_rejection", "regime_transition"}
     events = list(
         db.execute(
             select(SupportResistanceRunEvent)
             .where(SupportResistanceRunEvent.run_id == run_id)
             .where(
                 SupportResistanceRunEvent.event_type.in_(
-                    {"candidate", "selection", "regime_rejection", "regime_transition"}
+                    event_types
                 )
             )
+        ).scalars()
+    )
+    events.extend(
+        db.execute(
+            select(SupportResistanceMaterializationEvent)
+            .join(
+                SupportResistanceRunMaterialization,
+                SupportResistanceRunMaterialization.materialization_id
+                == SupportResistanceMaterializationEvent.materialization_id,
+            )
+            .where(SupportResistanceRunMaterialization.run_id == run_id)
+            .where(SupportResistanceMaterializationEvent.event_type.in_(event_types))
         ).scalars()
     )
     state_transition_counts: dict[str, int] = defaultdict(int)

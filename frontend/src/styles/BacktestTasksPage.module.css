@@ -24,7 +24,7 @@
 .actions button { border-color:rgba(251,113,133,.48); background:rgba(136,19,55,.3); color:#fecdd3; }
 .actions .retryButton { border-color:rgba(56,189,248,.44); background:rgba(8,47,73,.62); color:#cffafe; }
 .actions button:disabled { opacity:.52; cursor:not-allowed; }
-.deleteNotice { position:fixed; top:50%; left:50%; z-index:130; display:flex; align-items:flex-start; gap:12px; width:min(420px,calc(100vw - 32px)); padding:16px 18px; transform:translate(-50%,-50%); border:1px solid; border-radius:13px; box-shadow:0 18px 54px rgba(2,6,23,.58); pointer-events:none; }
+.deleteNotice { position:fixed; top:clamp(72px,18vh,180px); left:50%; z-index:130; display:flex; align-items:flex-start; gap:12px; width:min(420px,calc(100vw - 32px)); padding:16px 18px; transform:translateX(-50%); border:1px solid; border-radius:13px; box-shadow:0 18px 54px rgba(2,6,23,.58); pointer-events:none; }
 .deleteNotice>span:first-child { font-size:18px; font-weight:900; }
 .deleteNotice>span:last-child { flex:1; line-height:1.5; }
 .deleteNoticeSuccess { border-color:rgba(52,211,153,.68); background:rgba(6,78,59,.97); color:#d1fae5; }

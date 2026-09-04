@@ -26,14 +26,18 @@ from src.services.backtest_worker_config import (
     resolve_backtest_intra_run_threads,
     resolve_effective_backtest_intra_run_threads,
 )
-from src.services.columnar_market_data_loader import build_market_dataset
+from src.services.columnar_market_data_loader import (
+    MarketDatasetPipeline,
+    annual_chunk_manifests,
+    close_market_dataset,
+)
 from src.services.support_resistance_risk_service import load_support_risk_context
 from src.services.market_data_maintenance_service import acquire_market_data_read_lock
 from src.services.native_result_repository import (
     NativePersistenceCancelledError,
     persist_native_result,
 )
-from src.services.native_support_state import NativeSupportState
+from src.services.native_support_state import NativeSupportHistory, NativeSupportState
 from src.services.prepared_dataset_service import (
     PREPARED_DATASET_SCHEMA_VERSION,
     PREPARED_INTEGER_INDEX,
@@ -77,10 +81,23 @@ SELECT
     ca.ex_date,
     ca.action_type,
     ca.split_from,
-    ca.split_to
+    ca.split_to,
+    price_coverage.bar_count,
+    price_coverage.adjusted_value_count
 FROM corporate_actions ca
 JOIN instruments i
   ON i.id = ca.instrument_id
+JOIN LATERAL (
+    SELECT
+        COUNT(*) AS bar_count,
+        COUNT(bars.open_fa)
+            + COUNT(bars.high_fa)
+            + COUNT(bars.low_fa)
+            + COUNT(bars.close_fa) AS adjusted_value_count
+    FROM eod_bars bars
+    WHERE bars.instrument_id = ca.instrument_id
+      AND bars.dt_ny BETWEEN :start_date AND ca.ex_date
+) price_coverage ON TRUE
 WHERE ca.ex_date BETWEEN :start_date AND :end_date
   AND ca.action_type IN ('split', 'reverse_split', 'stock_dividend')
   AND ca.split_from IS NOT NULL
@@ -353,7 +370,7 @@ def _load_split_adjustments_by_date(
     *,
     instrument_ids: list[int] | None = None,
 ) -> dict[date, dict[Any, float]]:
-    """Load per-symbol quantity adjustment factors for split-style corporate actions."""
+    """Load quantity adjustments only for price series that are entirely unadjusted."""
     normalized_symbols = _normalize_symbols(symbols)
     if instrument_ids is not None:
         normalized_instrument_ids = sorted({int(value) for value in instrument_ids})
@@ -379,6 +396,16 @@ def _load_split_adjustments_by_date(
         split_to = float(row["split_to"])
         if split_from <= 0 or split_to <= 0:
             continue
+
+        bar_count = int(row.get("bar_count") or 0)
+        adjusted_value_count = int(row.get("adjusted_value_count") or 0)
+        if adjusted_value_count == bar_count * 4 and bar_count > 0:
+            continue
+        if adjusted_value_count:
+            raise ValueError(
+                f"mixed adjusted and unadjusted OHLC before {symbol} corporate action "
+                f"on {trade_date.isoformat()}"
+            )
 
         quantity_factor = split_to / split_from
         day_adjustments = adjustments_by_date.setdefault(trade_date, {})
@@ -499,7 +526,7 @@ def _load_prepared_dataset(
     universe_policy: dict[str, Any] | None,
     supplied: dict[str, Any] | None,
     performance: dict[str, Any],
-) -> tuple[Any, dict[str, Any], str, Any | None]:
+) -> tuple[MarketDatasetPipeline, dict[str, Any], dict[str, Any], Any | None]:
     sql_read_ms = 0.0
     if supplied is None:
         manifest = build_prepared_dataset_manifest(
@@ -528,18 +555,18 @@ def _load_prepared_dataset(
         raise ValueError("prepared dataset instrument set is empty")
 
     cache = PreparedDatasetCache()
-    dataset = cache.open(manifest)
-    cache_status = "warm"
-    if dataset is None:
-        cache_status = "cold"
-        build_start = date.fromisoformat(str(manifest["date_range"][0]))
-        build_end = date.fromisoformat(str(manifest["date_range"][1]))
+    build_start = date.fromisoformat(str(manifest["date_range"][0]))
+    build_end = date.fromisoformat(str(manifest["date_range"][1]))
+    corporate_actions: list[list[Any]] = []
+    if not all(cache.metadata(chunk) is not None for chunk in annual_chunk_manifests(manifest)):
         actions_started = perf_counter()
         corporate_actions = _split_adjustments(
             db, instrument_ids=manifest_instrument_ids, start_date=build_start, end_date=build_end,
         )
         sql_read_ms += (perf_counter() - actions_started) * 1000.0
-        dataset = build_market_dataset(db, cache, manifest, performance, corporate_actions)
+    pipeline = MarketDatasetPipeline(
+        db, cache, manifest, performance, corporate_actions
+    )
     performance.update(
         sql_read_ms=round(
             sql_read_ms
@@ -554,21 +581,18 @@ def _load_prepared_dataset(
             float(performance.get("array_write_ms", 0.0)), 3
         ),
     )
-    coverage_start = date.fromisoformat(str(manifest["date_range"][0]))
-    coverage_end = date.fromisoformat(str(manifest["date_range"][1]))
-    hydration, materialization = _support_hydration(
-        db,
-        runtime=runtime,
-        symbols=symbols,
-        coverage_start=coverage_start,
-        coverage_end=coverage_end,
-    )
-    if hydration:
-        dataset.sidecar = {
-            **dict(dataset.sidecar),
-            "support_resistance_hydration": hydration,
-        }
-    return dataset, manifest, cache_status, materialization
+    try:
+        hydration, materialization = _support_hydration(
+            db,
+            runtime=runtime,
+            symbols=symbols,
+            coverage_start=build_start,
+            coverage_end=build_end,
+        )
+    except Exception:
+        pipeline.close()
+        raise
+    return pipeline, manifest, hydration, materialization
 
 
 def _native_support_state(
@@ -798,7 +822,7 @@ def run_backtest(
 
     try:
         acquire_market_data_read_lock(db, allow_draining=True)
-        dataset, manifest, cache_status, reusable_materialization = _load_prepared_dataset(
+        pipeline, manifest, support_hydration, reusable_materialization = _load_prepared_dataset(
             db,
             runtime=runtime,
             symbols=symbols,
@@ -809,31 +833,37 @@ def run_backtest(
             supplied=prepared_dataset,
             performance=performance,
         )
-        session_dates = sorted(
-            {
-                date.fromordinal(int(value))
-                for value in dataset.integers[:, PREPARED_INTEGER_INDEX["dt_ordinal"]]
-                if start_date.toordinal() <= int(value) <= end_date.toordinal()
-            }
-        )
-        if runtime["strategy_type"] == "support_resistance":
-            context = load_support_risk_context(db, runtime["params"]["risk"],
-                date.fromordinal(int(dataset.integers[:, PREPARED_INTEGER_INDEX["dt_ordinal"]].min())),
-                end_date)
-            dataset.sidecar = {**dataset.sidecar, "support_risk_context": context}
-            run.config_snapshot = {**run.config_snapshot, "support_risk_context": context}
+        session_dates: list[date] = []
+        support_history = NativeSupportHistory() if runtime["strategy_type"] == "support_resistance" else None
+        chunk_compute_ms: list[dict[str, Any]] = []
+        performance["chunk_compute_ms"] = chunk_compute_ms
+        coverage_start = date.fromisoformat(str(manifest["date_range"][0]))
+        coverage_end = date.fromisoformat(str(manifest["date_range"][1]))
+        support_context: dict[str, Any] | None = None
+        try:
+            if runtime["strategy_type"] == "support_resistance":
+                context = load_support_risk_context(
+                    db, runtime["params"]["risk"], coverage_start, end_date
+                )
+                support_context = context
+                run.config_snapshot = {**run.config_snapshot, "support_risk_context": context}
+        except Exception:
+            pipeline.close()
+            raise
 
         def control(completed: int, total: int) -> bool:
             cancelled = bool(cancel_check and cancel_check())
             if progress_callback is not None and not cancelled:
                 trade_date = session_dates[min(max(completed - 1, 0), len(session_dates) - 1)]
+                day_span = max((end_date - start_date).days, 1)
+                elapsed_days = max((trade_date - start_date).days, 0)
                 progress_callback(
                     {
                         "phase": "running",
                         "trade_date": trade_date.isoformat(),
                         "completed_days": completed,
-                        "total_days": total,
-                        "percent": round((completed / total) * 85.0, 3),
+                        "total_days": max(total, completed),
+                        "percent": round(min(elapsed_days / day_span, 1.0) * 85.0, 3),
                     }
                 )
             return cancelled
@@ -880,9 +910,7 @@ def run_backtest(
             return False
 
         try:
-            native_started = perf_counter()
-            native_result = quant_kernel.run_backtest(
-                dataset,
+            native_session = quant_kernel.create_backtest_session(
                 runtime,
                 {
                     "initial_cash": initial_cash,
@@ -896,12 +924,55 @@ def run_backtest(
                 control,
                 finalize_native,
             )
+            for chunk in pipeline:
+                dataset = chunk.dataset
+                if support_hydration:
+                    dataset.sidecar = {
+                        **dict(dataset.sidecar),
+                        "support_resistance_hydration": support_hydration,
+                    }
+                if support_context is not None:
+                    dataset.sidecar = {
+                        **dict(dataset.sidecar),
+                        "support_risk_context": support_context,
+                    }
+                session_dates.extend(sorted({
+                    date.fromordinal(int(value))
+                    for value in dataset.integers[:, PREPARED_INTEGER_INDEX["dt_ordinal"]]
+                    if start_date.toordinal() <= int(value) <= end_date.toordinal()
+                }))
+                compute_started = perf_counter()
+                try:
+                    native_session.consume(dataset)
+                    if support_history is not None:
+                        support_history.consume(dataset)
+                finally:
+                    compute_finished = perf_counter()
+                    pipeline.record_compute(compute_started, compute_finished)
+                    close_market_dataset(dataset)
+                chunk_compute_ms.append({
+                    "date_range": chunk.manifest["date_range"],
+                    "compute_ms": round((compute_finished - compute_started) * 1000.0, 3),
+                    "rows": len(dataset),
+                })
+            finish_started = perf_counter()
+            native_result = native_session.finish()
+            finish_ms = (perf_counter() - finish_started) * 1000.0
+            performance["native_finish_ms"] = round(finish_ms, 3)
             performance["native_kernel_ms"] = round(
-                (perf_counter() - native_started) * 1000.0,
+                sum(float(item["compute_ms"]) for item in chunk_compute_ms) + finish_ms,
                 3,
             )
         except quant_kernel.BacktestCancelledError as exc:
             raise BacktestCancelledError(str(exc)) from exc
+        finally:
+            pipeline.close()
+        cache_status = (
+            "warm"
+            if performance.get("chunk_load_ms")
+            and all(bool(item["cache_hit"]) for item in performance["chunk_load_ms"])
+            else "cold"
+        )
         if cancel_check is not None and cancel_check():
             raise BacktestCancelledError("backtest cancellation requested before persistence")
         if progress_callback is not None:
@@ -924,18 +995,20 @@ def run_backtest(
             result=native_result,
             persist_level=level,
             cancel_check=cancel_check,
+            performance=performance,
         )
         materialization = reusable_materialization
         if runtime["strategy_type"] == "support_resistance":
-            native_state = _native_support_state(native_result, dataset, check_finalization_cancel)
+            assert support_history is not None
+            native_state = _native_support_state(native_result, support_history, check_finalization_cancel)
             materialization = persist_support_resistance_run(
                 db,
                 run=run,
                 runtime=runtime,
                 state=native_state,
                 symbols=symbols,
-                coverage_start=date.fromisoformat(str(manifest["date_range"][0])),
-                coverage_end=date.fromisoformat(str(manifest["date_range"][1])),
+                coverage_start=coverage_start,
+                coverage_end=coverage_end,
                 persist_run_events=level == "full",
                 cancel_check=cancel_check,
                 progress_callback=report_persistence,
@@ -990,7 +1063,7 @@ def run_backtest(
                 ),
                 "prepared_dataset_status": cache_status,
                 "prepared_dataset_key": prepared_dataset_key(manifest),
-                "rows_loaded": len(dataset),
+                "rows_loaded": int(performance.get("rows_loaded", 0)),
                 "trading_days": int(summary["trading_days"]),
                 "signals_generated": int(summary["signal_count"]),
                 "trades_generated": int(summary["trade_count"]),

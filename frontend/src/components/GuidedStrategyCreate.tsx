@@ -26,6 +26,7 @@ import {
   cloneRecord,
   ENGINE_READY_TYPES,
   getPathValue,
+  parseGuidedNumberInput,
   setPathValue,
   STRATEGY_GUIDANCE,
   type GuidedFieldDefinition,
@@ -221,8 +222,9 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
     const next: FieldErrors = {};
     fields.forEach((field) => {
       if (field.kind === "boolean" || field.kind === "select" || field.kind === "text") return;
-      const value = Number(getPathValue(params, field.path));
-      if (!Number.isFinite(value)) {
+      const rawValue = getPathValue(params, field.path);
+      const value = Number(rawValue);
+      if (rawValue === "" || !Number.isFinite(value)) {
         next[field.path] = copy.errors.invalidNumber;
       } else if (field.integer && !Number.isInteger(value)) {
         next[field.path] = copy.errors.integerRequired;
@@ -468,14 +470,6 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
           />
           <span style={counterStyle}>{description.length}/500</span>
         </FieldShell>
-        <div style={{ ...readonlyCardStyle, gridColumn: "1 / -1" }}>
-          <div><strong>{copy.basics.universe}</strong></div>
-          <p style={{ ...mutedStyle, margin: 0 }}>{copy.basics.universeAtBacktest}</p>
-        </div>
-        <div style={{ ...readonlyCardStyle, gridColumn: "1 / -1" }}>
-          <div><strong>{copy.basics.status}</strong><div style={{ marginTop: 8 }}><Badge tone="warning">{copy.basics.draft}</Badge></div></div>
-          <p style={{ ...mutedStyle, margin: 0 }}>{copy.basics.draftHint}</p>
-        </div>
       </div>
     </section>
   );
@@ -527,11 +521,14 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
             <input
               id={fieldId(field.path)}
               type="number"
-              value={field.kind === "percent" ? Number(value ?? 0) * 100 : Number(value ?? 0)}
+              value={value === "" ? "" : field.kind === "percent" ? Number(value ?? 0) * 100 : Number(value ?? 0)}
               min={field.min === undefined ? undefined : field.kind === "percent" ? field.min * 100 : field.min}
               max={field.max === undefined ? undefined : field.kind === "percent" ? field.max * 100 : field.max}
               step={field.step ?? "any"}
-              onChange={(event) => updateField(field, field.kind === "percent" ? Number(event.target.value) / 100 : Number(event.target.value))}
+              onChange={(event) => {
+                const rawValue = event.target.value;
+                updateField(field, parseGuidedNumberInput(rawValue, field.kind === "percent"));
+              }}
               style={{ ...inputStyle(Boolean(error)), paddingRight: field.kind === "percent" ? 38 : 12 }}
             />
             {field.kind === "percent" ? <span style={unitStyle}>{copy.parameters.percentageUnit}</span> : null}
@@ -639,8 +636,6 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
         <div style={reviewGridStyle}>
           <ReviewItem label={copy.review.type} value={selectedType ? `${typeCopy[selectedType].title} · ${selectedType}` : "—"} />
           <ReviewItem label={copy.review.name} value={name || "—"} />
-          <ReviewItem label={copy.review.status} value="Draft" />
-          <ReviewItem label={copy.review.universe} value={copy.review.universeAtBacktest} />
           <ReviewItem label={copy.review.execution} value={copy.review.executionValue} wide />
         </div>
         <div style={{ ...validationStyle, borderColor: validation ? "rgba(34,197,94,.52)" : validationError ? "rgba(244,63,94,.5)" : "rgba(14,165,233,.4)" }}>

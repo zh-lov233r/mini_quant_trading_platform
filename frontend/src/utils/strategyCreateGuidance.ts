@@ -288,3 +288,9 @@ export function setPathValue(
 export function normalizeSymbols(value: string): string[] {
   return Array.from(new Set(value.split(/[\s,;]+/).map((item) => item.trim().toUpperCase()).filter(Boolean))).sort();
 }
+
+export function parseGuidedNumberInput(rawValue: string, percent: boolean): number | "" {
+  if (rawValue === "") return "";
+  const value = Number(rawValue);
+  return percent ? value / 100 : value;
+}

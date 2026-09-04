@@ -5,7 +5,7 @@ from sqlalchemy.engine import Engine
 
 
 EXPECTED_KERNEL_VERSION = "cpp-v1"
-EXPECTED_ABI_VERSION = 2
+EXPECTED_ABI_VERSION = 3
 EXPECTED_STRATEGY_TYPES = {
     "trend",
     "mean_reversion",

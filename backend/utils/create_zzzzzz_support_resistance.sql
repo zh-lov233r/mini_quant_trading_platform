@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS support_resistance_materializations (
   coverage_start DATE NOT NULL,
   coverage_end DATE NOT NULL,
   price_semantics VARCHAR(96) NOT NULL,
+  audit_schema_version INTEGER NOT NULL DEFAULT 2,
   status VARCHAR(16) NOT NULL DEFAULT 'building',
   statistics JSONB NOT NULL DEFAULT '{}'::jsonb,
   error_message TEXT,
@@ -22,6 +23,12 @@ CREATE TABLE IF NOT EXISTS support_resistance_materializations (
   CONSTRAINT ck_support_resistance_materializations_window
     CHECK (coverage_end >= coverage_start)
 );
+
+ALTER TABLE support_resistance_materializations
+  ADD COLUMN IF NOT EXISTS audit_schema_version INTEGER NOT NULL DEFAULT 1;
+
+ALTER TABLE support_resistance_materializations
+  ALTER COLUMN audit_schema_version SET DEFAULT 2;
 
 CREATE INDEX IF NOT EXISTS idx_support_resistance_materializations_lookup
   ON support_resistance_materializations
@@ -134,3 +141,25 @@ CREATE TABLE IF NOT EXISTS support_resistance_run_events (
 
 CREATE INDEX IF NOT EXISTS idx_support_resistance_run_events_filter
   ON support_resistance_run_events (run_id, symbol, zone_key, event_date);
+
+CREATE TABLE IF NOT EXISTS support_resistance_materialization_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  materialization_id UUID NOT NULL REFERENCES support_resistance_materializations(id) ON DELETE CASCADE,
+  instrument_id BIGINT REFERENCES instruments(id) ON DELETE SET NULL,
+  symbol TEXT NOT NULL,
+  event_date DATE NOT NULL,
+  event_type VARCHAR(32) NOT NULL,
+  zone_key VARCHAR(64),
+  setup VARCHAR(32),
+  selected BOOLEAN NOT NULL DEFAULT FALSE,
+  score NUMERIC(20, 10),
+  posterior_sample_count INTEGER,
+  lower_price NUMERIC(24, 10),
+  upper_price NUMERIC(24, 10),
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_support_resistance_materialization_events_filter
+  ON support_resistance_materialization_events
+  (materialization_id, symbol, zone_key, event_date);

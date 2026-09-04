@@ -17,6 +17,7 @@ from src.models.tables import (
     Instrument,
     StrategyRun,
     SupportResistanceMaterialization,
+    SupportResistanceMaterializationEvent,
     SupportResistanceRegimeVersion,
     SupportResistanceRunEvent,
     SupportResistanceRunMaterialization,
@@ -27,10 +28,24 @@ from src.services.support_resistance_service import (
     SupportResistanceSymbolState,
     normalized_detector_params,
 )
-from src.services.native_support_state import NativeSupportState, NativeSupportSymbol
+from src.services.native_support_state import (
+    NativeJson,
+    NativeSupportEvent,
+    NativeSupportState,
+    NativeSupportSymbol,
+)
 
 
 BATCH_INSERT_SIZE = 5_000
+AUDIT_SCHEMA_VERSION = 2
+MATERIALIZATION_EVENT_TYPES = frozenset({
+    "touch",
+    "invalidation",
+    "phase_ended",
+    "regime_transition",
+    "entry_channel_started",
+    "entry_channel_ended",
+})
 NUMERIC_24_10_ABS_LIMIT = 100_000_000_000_000.0
 NUMERIC_20_10_ABS_LIMIT = 10_000_000_000.0
 PersistenceProgressCallback = Callable[[str, int, int], None]
@@ -39,6 +54,7 @@ CancellationCheck = Callable[[], bool]
 _COPY_JSON_COLUMNS = {
     SupportResistanceZoneVersion: {"source_metadata"},
     SupportResistanceRegimeVersion: {"evidence"},
+    SupportResistanceMaterializationEvent: {"payload"},
     SupportResistanceRunEvent: {"payload"},
 }
 
@@ -90,6 +106,7 @@ def materialization_cache_key(
 ) -> str:
     return _hash_json(
         {
+            "audit_schema_version": AUDIT_SCHEMA_VERSION,
             "algorithm_version": algorithm_version,
             "detector_params": detector_params,
             "price_semantics": price_semantics,
@@ -121,6 +138,7 @@ def find_reusable_materialization(
         .where(SupportResistanceMaterialization.algorithm_version == algorithm_version)
         .where(SupportResistanceMaterialization.universe_hash == symbols_hash)
         .where(SupportResistanceMaterialization.price_semantics == price_semantics)
+        .where(SupportResistanceMaterialization.audit_schema_version == AUDIT_SCHEMA_VERSION)
         .where(SupportResistanceMaterialization.coverage_start == coverage_start)
         .where(SupportResistanceMaterialization.coverage_end == coverage_end)
         .where(SupportResistanceMaterialization.status == "completed")
@@ -258,6 +276,7 @@ def persist_support_resistance_run(
         .where(SupportResistanceMaterialization.algorithm_version == algorithm_version)
         .where(SupportResistanceMaterialization.universe_hash == symbols_hash)
         .where(SupportResistanceMaterialization.price_semantics == price_semantics)
+        .where(SupportResistanceMaterialization.audit_schema_version == AUDIT_SCHEMA_VERSION)
         .where(SupportResistanceMaterialization.coverage_start == coverage_start)
         .where(SupportResistanceMaterialization.coverage_end == coverage_end)
         .where(SupportResistanceMaterialization.invalidated_at.is_(None))
@@ -305,6 +324,7 @@ def persist_support_resistance_run(
                 coverage_start=coverage_start,
                 coverage_end=coverage_end,
                 price_semantics=price_semantics,
+                audit_schema_version=AUDIT_SCHEMA_VERSION,
                 status="building",
                 statistics={},
             )
@@ -321,6 +341,11 @@ def persist_support_resistance_run(
             db.execute(
                 delete(SupportResistanceRegimeVersion).where(
                     SupportResistanceRegimeVersion.materialization_id == materialization.id
+                )
+            )
+            db.execute(
+                delete(SupportResistanceMaterializationEvent).where(
+                    SupportResistanceMaterializationEvent.materialization_id == materialization.id
                 )
             )
 
@@ -364,13 +389,6 @@ def persist_support_resistance_run(
                 "support/resistance persistence could not resolve instrument identity for: "
                 + ", ".join(missing_instruments[:10])
             )
-        _validate_support_resistance_state_for_persistence(
-            materialization,
-            state,
-            instrument_ids,
-            persist_run_events=persist_run_events,
-            run=run,
-        )
         zone_version_total = (
             sum(len(symbol_state.zone_versions) for symbol_state in state.symbols.values())
             if should_write_zones
@@ -381,9 +399,17 @@ def persist_support_resistance_run(
             if should_write_zones
             else 0
         )
-        event_count_at_build = sum(len(symbol_state.events) for symbol_state in state.symbols.values())
-        run_event_total = event_count_at_build if persist_run_events else 0
-        total_items = zone_version_total + regime_version_total + run_event_total
+        materialization_event_total = (
+            _event_count(state, MATERIALIZATION_EVENT_TYPES) if should_write_zones else 0
+        )
+        run_event_total = (
+            _event_count(state, None, exclude=MATERIALIZATION_EVENT_TYPES)
+            if persist_run_events else 0
+        )
+        total_items = (
+            zone_version_total + regime_version_total
+            + materialization_event_total + run_event_total
+        )
         completed_items = 0
 
         if progress_callback is not None and zone_version_total:
@@ -427,6 +453,30 @@ def persist_support_resistance_run(
             completed_items += regime_count
             if performance is not None:
                 performance["support_resistance_regime_versions_ms"] = _elapsed_ms(regime_started)
+            if progress_callback is not None and materialization_event_total:
+                progress_callback("materialization_events", completed_items, total_items)
+            materialization_event_started = perf_counter()
+
+            def report_materialization_event_batch(written: int) -> None:
+                if progress_callback is not None:
+                    progress_callback(
+                        "materialization_events", completed_items + written, total_items
+                    )
+
+            materialization_event_count = _write_materialization_events(
+                db,
+                materialization,
+                state,
+                instrument_ids,
+                batch_size=batch_size,
+                batch_callback=report_materialization_event_batch,
+                cancel_check=cancel_check,
+            )
+            completed_items += materialization_event_count
+            if performance is not None:
+                performance["support_resistance_materialization_events_ms"] = _elapsed_ms(
+                    materialization_event_started
+                )
             materialization.statistics = {
                 "symbol_count": len(normalized_symbols),
                 "zone_version_count": version_count,
@@ -434,13 +484,14 @@ def persist_support_resistance_run(
                 "regime_timeline_count": sum(
                     1 for symbol_state in state.symbols.values() if symbol_state.history
                 ),
-                "event_count_at_build": event_count_at_build,
+                "materialization_event_count": materialization_event_count,
             }
             materialization.status = "completed"
             materialization.completed_at = datetime.now(timezone.utc)
         elif performance is not None:
             performance["support_resistance_zone_versions_ms"] = 0.0
             performance["support_resistance_regime_versions_ms"] = 0.0
+            performance["support_resistance_materialization_events_ms"] = 0.0
 
         if progress_callback is not None and run_event_total:
             progress_callback("run_events", completed_items, total_items)
@@ -469,6 +520,7 @@ def persist_support_resistance_run(
                     "support_resistance_zone_versions": zone_version_total,
                     "support_resistance_regime_versions": regime_version_total,
                     "support_resistance_run_events": event_count,
+                    "support_resistance_materialization_events": materialization_event_total,
                     "support_resistance_run_events_ms": _elapsed_ms(events_started),
                     "support_resistance_persist_total_ms": _elapsed_ms(persist_started),
                 }
@@ -494,23 +546,6 @@ def persist_support_resistance_run(
         raise
 
 
-def _validate_support_resistance_state_for_persistence(
-    materialization: SupportResistanceMaterialization,
-    state: SupportResistanceState | NativeSupportState,
-    instrument_ids: dict[str, int],
-    *,
-    persist_run_events: bool,
-    run: StrategyRun,
-) -> None:
-    for row in _zone_version_rows(materialization, state, instrument_ids):
-        _validate_strict_json(row["source_metadata"], "zone source_metadata")
-    for row in _regime_version_rows(materialization, state, instrument_ids):
-        _validate_strict_json(row["evidence"], "regime evidence")
-    if persist_run_events:
-        for row in _run_event_rows(run, materialization, state, instrument_ids):
-            _validate_run_event_row(row)
-
-
 def record_failed_materialization_after_rollback(
     db: Session,
     error: SupportResistanceMaterializationBuildError,
@@ -533,6 +568,7 @@ def record_failed_materialization_after_rollback(
             coverage_start=error.coverage_start,
             coverage_end=error.coverage_end,
             price_semantics=error.price_semantics,
+            audit_schema_version=AUDIT_SCHEMA_VERSION,
             status="failed",
             statistics={},
             error_message=error.detail,
@@ -803,9 +839,6 @@ def _replace_run_audit_rows(
     batch_callback: Callable[[int], None] | None = None,
     cancel_check: CancellationCheck | None = None,
 ) -> int:
-    if persist_run_events:
-        for row in _run_event_rows(run, materialization, state, instrument_ids):
-            _validate_run_event_row(row)
     if cancel_check is not None and cancel_check():
         raise SupportResistancePersistenceCancelledError(
             "backtest cancellation requested before support/resistance persistence"
@@ -827,7 +860,9 @@ def _replace_run_audit_rows(
     return _insert_in_batches(
         db,
         SupportResistanceRunEvent,
-        _run_event_rows(run, materialization, state, instrument_ids),
+        _validated_event_rows(
+            _run_event_rows(run, materialization, state, instrument_ids),
+        ),
         batch_size=batch_size,
         batch_callback=batch_callback,
         cancel_check=cancel_check,
@@ -843,27 +878,131 @@ def _run_event_rows(
     for state_key, symbol_state in sorted(state.symbols.items()):
         symbol, instrument_id = _state_identity(state_key, symbol_state, instrument_ids)
         for payload in symbol_state.events:
-            zone = payload.get("zone") or {}
-            score_evidence = payload.get("score_evidence") or {}
-            posterior_sample_count = score_evidence.get("resolved_samples")
-            if posterior_sample_count is None:
-                posterior_sample_count = payload.get("resolved_samples")
+            if _event_type(payload) in MATERIALIZATION_EVENT_TYPES:
+                continue
+            values = _event_values(payload)
             yield {
                 "run_id": run.id,
                 "materialization_id": materialization.id,
                 "instrument_id": instrument_id,
                 "symbol": symbol,
-                "event_date": date.fromisoformat(str(payload["event_date"])),
-                "event_type": str(payload["event_type"]),
-                "zone_key": payload.get("zone_key"),
-                "setup": payload.get("setup"),
-                "selected": payload.get("event_type") == "selection",
-                "score": payload.get("score"),
-                "posterior_sample_count": posterior_sample_count,
-                "lower_price": payload.get("lower") or zone.get("lower"),
-                "upper_price": payload.get("upper") or zone.get("upper"),
-                "payload": payload,
+                **values,
             }
+
+
+def _write_materialization_events(
+    db: Session,
+    materialization: SupportResistanceMaterialization,
+    state: SupportResistanceState | NativeSupportState,
+    instrument_ids: dict[str, int],
+    *,
+    batch_size: int,
+    batch_callback: Callable[[int], None] | None,
+    cancel_check: CancellationCheck | None,
+) -> int:
+    return _insert_in_batches(
+        db,
+        SupportResistanceMaterializationEvent,
+        _validated_event_rows(
+            _materialization_event_rows(materialization, state, instrument_ids)
+        ),
+        batch_size=batch_size,
+        batch_callback=batch_callback,
+        cancel_check=cancel_check,
+    )
+
+
+def _materialization_event_rows(
+    materialization: SupportResistanceMaterialization,
+    state: SupportResistanceState | NativeSupportState,
+    instrument_ids: dict[str, int],
+) -> Iterable[dict[str, Any]]:
+    for state_key, symbol_state in sorted(state.symbols.items()):
+        symbol, instrument_id = _state_identity(state_key, symbol_state, instrument_ids)
+        payloads = (
+            symbol_state.materialization_events
+            if isinstance(symbol_state, NativeSupportSymbol)
+            else symbol_state.events
+        )
+        for payload in payloads:
+            event_type = _event_type(payload)
+            if event_type not in MATERIALIZATION_EVENT_TYPES:
+                continue
+            values = _event_values(payload)
+            yield {
+                "materialization_id": materialization.id,
+                "instrument_id": instrument_id,
+                "symbol": symbol,
+                **values,
+            }
+
+
+def _validated_event_rows(rows: Iterable[dict[str, Any]]) -> Iterable[dict[str, Any]]:
+    for row in rows:
+        _validate_run_event_row(row)
+        yield row
+
+
+def _event_count(
+    state: SupportResistanceState | NativeSupportState,
+    include: frozenset[str] | None,
+    *,
+    exclude: frozenset[str] = frozenset(),
+) -> int:
+    if isinstance(state, NativeSupportState):
+        if include == MATERIALIZATION_EVENT_TYPES and not exclude:
+            return sum(
+                len(symbol_state.materialization_events)
+                for symbol_state in state.symbols.values()
+            )
+        if include is None and exclude == MATERIALIZATION_EVENT_TYPES:
+            return sum(len(symbol_state.events) for symbol_state in state.symbols.values())
+    return sum(
+        1
+        for symbol_state in state.symbols.values()
+        for payload in symbol_state.events
+        if (include is None or _event_type(payload) in include)
+        and _event_type(payload) not in exclude
+    )
+
+
+def _event_type(payload: dict[str, Any] | NativeSupportEvent) -> str:
+    return payload.event_type if isinstance(payload, NativeSupportEvent) else str(
+        payload.get("event_type")
+    )
+
+
+def _event_values(payload: dict[str, Any] | NativeSupportEvent) -> dict[str, Any]:
+    if isinstance(payload, NativeSupportEvent):
+        return {
+            "event_date": payload.event_date,
+            "event_type": payload.event_type,
+            "zone_key": payload.zone_key,
+            "setup": payload.setup,
+            "selected": payload.event_type == "selection",
+            "score": payload.score,
+            "posterior_sample_count": payload.posterior_sample_count,
+            "lower_price": payload.lower_price,
+            "upper_price": payload.upper_price,
+            "payload": payload.payload,
+        }
+    zone = payload.get("zone") or {}
+    score_evidence = payload.get("score_evidence") or {}
+    posterior_sample_count = score_evidence.get("resolved_samples")
+    if posterior_sample_count is None:
+        posterior_sample_count = payload.get("resolved_samples")
+    return {
+        "event_date": date.fromisoformat(str(payload["event_date"])),
+        "event_type": str(payload["event_type"]),
+        "zone_key": payload.get("zone_key"),
+        "setup": payload.get("setup"),
+        "selected": payload.get("event_type") == "selection",
+        "score": payload.get("score"),
+        "posterior_sample_count": posterior_sample_count,
+        "lower_price": payload.get("lower") or zone.get("lower"),
+        "upper_price": payload.get("upper") or zone.get("upper"),
+        "payload": payload,
+    }
 
 
 def _validate_run_event_row(row: dict[str, Any]) -> None:
@@ -894,6 +1033,19 @@ def _validate_run_event_row(row: dict[str, Any]) -> None:
 
 
 def _validate_strict_json(value: Any, label: str) -> None:
+    if isinstance(value, NativeJson):
+        try:
+            parsed = json.loads(
+                value.text,
+                parse_constant=lambda token: (_ for _ in ()).throw(
+                    ValueError(f"non-finite JSON constant: {token}")
+                ),
+            )
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError(f"{label} is not strict JSON") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(f"{label} must encode an object")
+        return
     try:
         json.dumps(value, allow_nan=False, default=str)
     except (TypeError, ValueError) as exc:
@@ -943,7 +1095,17 @@ def _insert_batch(
         )
     bind = db.get_bind()
     if bind.dialect.name != "postgresql":
-        db.execute(insert(model), rows)
+        json_columns = _COPY_JSON_COLUMNS.get(model, set())
+        values = [
+            {
+                key: json.loads(value.text)
+                if key in json_columns and isinstance(value, NativeJson)
+                else value
+                for key, value in row.items()
+            }
+            for row in rows
+        ]
+        db.execute(insert(model), values)
         return
     if bind.dialect.driver != "psycopg":
         raise RuntimeError("support/resistance COPY persistence requires postgresql+psycopg")
@@ -961,8 +1123,10 @@ def _insert_batch(
                     (
                         uuid4(),
                         *(
-                            json.dumps(
-                                row[column],
+                            value.text
+                            if isinstance((value := row[column]), NativeJson)
+                            else json.dumps(
+                                value,
                                 sort_keys=True,
                                 separators=(",", ":"),
                                 default=str,

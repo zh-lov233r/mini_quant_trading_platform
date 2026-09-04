@@ -6,9 +6,11 @@ import json
 from pathlib import Path
 import unittest
 
+import numpy as np
 import quant_kernel
 
 from src.services.strategy_registry import normalize_strategy_params
+from src.services.support_resistance_persistence_service import MATERIALIZATION_EVENT_TYPES
 from backend.tests import test_native_backtest_kernel as native_helpers
 
 
@@ -280,6 +282,46 @@ class NativeNineStrategyGoldenTests(unittest.TestCase):
                     self._fingerprint(result),
                     golden["strategies"][strategy_type],
                 )
+
+    def test_all_nine_chunked_sessions_match_one_shot_ledgers(self) -> None:
+        from src.services.prepared_dataset_service import PreparedDataset
+
+        options = {
+            "initial_cash": 100_000.0,
+            "commission_bps": 0.0,
+            "commission_min": 0.0,
+            "slippage_bps": 0.0,
+        }
+        for strategy_type, dataset, runtime in self._cases():
+            with self.subTest(strategy_type=strategy_type):
+                one_shot = quant_kernel.run_backtest(dataset, runtime, options)
+                midpoint = int(np.median(np.unique(dataset.integers[:, 3])))
+                session = quant_kernel.create_backtest_session(runtime, options)
+                for selected in (dataset.integers[:, 3] <= midpoint,
+                                 dataset.integers[:, 3] > midpoint):
+                    integers = np.array(dataset.integers[selected], order="F")
+                    _, inverse = np.unique(integers[:, 3], return_inverse=True)
+                    integers[:, 0] = inverse
+                    chunk = PreparedDataset.opened(
+                        integers,
+                        np.array(dataset.floats[selected], order="F"),
+                        dict(dataset.sidecar),
+                    )
+                    session.consume(chunk)
+                chunked = session.finish()
+                self.assertEqual(self._fingerprint(chunked), self._fingerprint(one_shot))
+
+    def test_support_event_materialization_flags_match_persistence_contract(self) -> None:
+        dataset, runtime = self._support_case()
+        result = quant_kernel.run_backtest(dataset, runtime, {})
+        events = result.support_resistance["events"]
+        self.assertEqual(
+            events["materialization_event"].tolist(),
+            [
+                int(event_type in MATERIALIZATION_EVENT_TYPES)
+                for event_type in events["event_type"]
+            ],
+        )
 
     def test_stateless_warmup_prefix_does_not_change_dated_ledgers(self) -> None:
         import numpy as np

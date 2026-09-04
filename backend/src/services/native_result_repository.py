@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import math
+from time import perf_counter
 from typing import Any, Callable, Iterable, Iterator, Literal, Sequence
 from uuid import UUID, uuid4
 
@@ -296,8 +297,10 @@ def persist_native_result(
     result: Any,
     persist_level: PersistLevel,
     cancel_check: Callable[[], bool] | None = None,
+    performance: dict[str, Any] | None = None,
 ) -> NativePersistStats:
     """Validate the complete typed result, then replace one run's details atomically."""
+    validation_started = perf_counter()
     signal_rows, transaction_rows, snapshot_rows = _prepared_rows(
         db,
         run_id=run_id,
@@ -305,37 +308,62 @@ def persist_native_result(
         result=result,
         persist_level=persist_level,
     )
+    if performance is not None:
+        performance["native_detail_validation_ms"] = round(
+            (perf_counter() - validation_started) * 1000.0, 3
+        )
     if cancel_check is not None and cancel_check():
         raise NativePersistenceCancelledError(
             "backtest cancellation requested before persistence"
         )
+    delete_started = perf_counter()
     db.execute(delete(Signal).where(Signal.run_id == run_id))
     db.execute(delete(Transaction).where(Transaction.run_id == run_id))
     db.execute(delete(PortfolioSnapshot).where(PortfolioSnapshot.run_id == run_id))
+    if performance is not None:
+        performance["native_detail_delete_ms"] = round(
+            (perf_counter() - delete_started) * 1000.0, 3
+        )
 
     bind = db.get_bind()
     if bind.dialect.name == "postgresql":
         if bind.dialect.driver != "psycopg":
             raise RuntimeError("native COPY persistence requires postgresql+psycopg")
+        signal_started = perf_counter()
         _copy_rows(
             db,
             "COPY signals (id,run_id,strategy_id,instrument_id,ts,symbol,signal,score,reason,features) FROM STDIN",
             signal_rows,
             cancel_check=cancel_check,
         )
+        if performance is not None:
+            performance["signal_persist_ms"] = round(
+                (perf_counter() - signal_started) * 1000.0, 3
+            )
+        transaction_started = perf_counter()
         _copy_rows(
             db,
             "COPY transactions (id,strategy_id,run_id,instrument_id,ts,symbol,side,qty,price,fee,order_id,meta) FROM STDIN",
             transaction_rows,
             cancel_check=cancel_check,
         )
+        if performance is not None:
+            performance["transaction_persist_ms"] = round(
+                (perf_counter() - transaction_started) * 1000.0, 3
+            )
+        snapshot_started = perf_counter()
         _copy_rows(
             db,
             "COPY portfolio_snapshots (id,run_id,ts,cash,equity,gross_exposure,net_exposure,drawdown,positions,metrics) FROM STDIN",
             snapshot_rows,
             cancel_check=cancel_check,
         )
+        if performance is not None:
+            performance["snapshot_persist_ms"] = round(
+                (perf_counter() - snapshot_started) * 1000.0, 3
+            )
     else:
+        signal_started = perf_counter()
         if signal_rows:
             values = [dict(zip(
                 ("id", "run_id", "strategy_id", "instrument_id", "ts", "symbol", "signal", "score", "reason", "features"),
@@ -348,6 +376,11 @@ def persist_native_result(
                 insert(Signal),
                 values,
             )
+        if performance is not None:
+            performance["signal_persist_ms"] = round(
+                (perf_counter() - signal_started) * 1000.0, 3
+            )
+        transaction_started = perf_counter()
         if transaction_rows:
             values = [dict(zip(
                 ("id", "strategy_id", "run_id", "instrument_id", "ts", "symbol", "side", "qty", "price", "fee", "order_id", "meta"),
@@ -360,6 +393,11 @@ def persist_native_result(
                 insert(Transaction),
                 values,
             )
+        if performance is not None:
+            performance["transaction_persist_ms"] = round(
+                (perf_counter() - transaction_started) * 1000.0, 3
+            )
+        snapshot_started = perf_counter()
         if snapshot_rows:
             values = [dict(zip(
                 ("id", "run_id", "ts", "cash", "equity", "gross_exposure", "net_exposure", "drawdown", "positions", "metrics"),
@@ -372,6 +410,10 @@ def persist_native_result(
             db.execute(
                 insert(PortfolioSnapshot),
                 values,
+            )
+        if performance is not None:
+            performance["snapshot_persist_ms"] = round(
+                (perf_counter() - snapshot_started) * 1000.0, 3
             )
     return NativePersistStats(
         signals=len(signal_rows),

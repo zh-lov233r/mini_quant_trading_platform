@@ -500,6 +500,7 @@ class SupportResistanceMaterialization(Base):
     coverage_start = Column(Date, nullable=False)
     coverage_end = Column(Date, nullable=False)
     price_semantics = Column(String(96), nullable=False)
+    audit_schema_version = Column(Integer, nullable=False, default=2, server_default="2")
     status = Column(String(16), nullable=False, default="building")
     statistics = Column(JSON_VARIANT, nullable=False, default=dict)
     error_message = Column(Text)
@@ -515,6 +516,12 @@ class SupportResistanceMaterialization(Base):
     )
     regime_versions = relationship(
         "SupportResistanceRegimeVersion",
+        back_populates="materialization",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    events = relationship(
+        "SupportResistanceMaterializationEvent",
         back_populates="materialization",
         cascade="all, delete-orphan",
         passive_deletes=True,
@@ -723,6 +730,47 @@ class SupportResistanceRunEvent(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     run = relationship("StrategyRun", back_populates="support_resistance_events")
+
+
+class SupportResistanceMaterializationEvent(Base):
+    __tablename__ = "support_resistance_materialization_events"
+    __table_args__ = (
+        Index(
+            "idx_support_resistance_materialization_events_filter",
+            "materialization_id",
+            "symbol",
+            "zone_key",
+            "event_date",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    materialization_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("support_resistance_materializations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    instrument_id = Column(
+        BigInteger,
+        ForeignKey("instruments.id", ondelete="SET NULL"),
+    )
+    symbol = Column(Text, nullable=False)
+    event_date = Column(Date, nullable=False)
+    event_type = Column(String(32), nullable=False)
+    zone_key = Column(String(64))
+    setup = Column(String(32))
+    selected = Column(Boolean, nullable=False, default=False)
+    score = Column(Numeric(20, 10))
+    posterior_sample_count = Column(Integer)
+    lower_price = Column(Numeric(24, 10))
+    upper_price = Column(Numeric(24, 10))
+    payload = Column(JSON_VARIANT, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    materialization = relationship(
+        "SupportResistanceMaterialization",
+        back_populates="events",
+    )
 
 
 class ResearchExperiment(Base):

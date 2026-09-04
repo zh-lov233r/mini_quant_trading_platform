@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import date
 import os
 from pathlib import Path
+from queue import Empty, Full, Queue
 import struct
+from threading import Event, Thread
 from time import perf_counter
 from typing import Any, Iterable
 
@@ -16,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from src.services.prepared_dataset_service import (
     PREPARED_DATE_SENTINEL, PREPARED_FLOAT_FIELDS, PREPARED_READ_PATH_REVISION,
-    PreparedDataset, PreparedDatasetCache,
+    PreparedDataset, PreparedDatasetCache, prepared_dataset_key,
 )
 
 READ_PATH_REVISION = PREPARED_READ_PATH_REVISION
@@ -155,9 +158,15 @@ def shard_manifests(instrument_ids: list[int], start: date, end: date) -> list[d
             for year in range(start.year, end.year + 1) for ids in buckets.values()]
 
 
-def canonicalize_rows(dataset: PreparedDataset) -> dict[str, Any]:
+def canonicalize_rows(
+    dataset: PreparedDataset,
+    *,
+    compact_dictionaries: bool = True,
+) -> dict[str, Any]:
     """Restore physical day-major layout, not merely a date-offset sidecar."""
     ints = dataset.integers
+    if not len(ints):
+        return {"date_offsets": [], "instrument_symbol_intervals": []}
     order = np.lexsort((ints[:, 1], ints[:, 3]))
     for column in range(ints.shape[1]):
         ints[:, column] = ints[order, column]
@@ -167,18 +176,19 @@ def canonicalize_rows(dataset: PreparedDataset) -> dict[str, Any]:
     ints[:, 0] = np.repeat(np.arange(len(days)), counts)
     if len(ints) > 1 and np.any((ints[1:, 3] == ints[:-1, 3]) & (ints[1:, 1] == ints[:-1, 1])):
         raise ValueError("duplicate prepared instrument/date")
-    for column, values, mapping in ((4, dataset._symbols, dataset._symbol_ids),
-                                    (5, dataset._asset_types, dataset._asset_type_ids),
-                                    (6, dataset._exchanges, dataset._exchange_ids)):
-        used, first = np.unique(ints[:, column], return_index=True)
-        ordered = used[np.argsort(first)]
-        remap = np.zeros(len(values), dtype=np.int64)
-        remap[ordered] = np.arange(len(ordered))
-        new_values = [values[int(index)] for index in ordered]
-        ints[:, column] = remap[ints[:, column]]
-        values[:] = new_values
-        mapping.clear()
-        mapping.update({value: index for index, value in enumerate(values)})
+    if compact_dictionaries:
+        for column, values, mapping in ((4, dataset._symbols, dataset._symbol_ids),
+                                        (5, dataset._asset_types, dataset._asset_type_ids),
+                                        (6, dataset._exchanges, dataset._exchange_ids)):
+            used, first = np.unique(ints[:, column], return_index=True)
+            ordered = used[np.argsort(first)]
+            remap = np.zeros(len(values), dtype=np.int64)
+            remap[ordered] = np.arange(len(ordered))
+            new_values = [values[int(index)] for index in ordered]
+            ints[:, column] = remap[ints[:, column]]
+            values[:] = new_values
+            mapping.clear()
+            mapping.update({value: index for index, value in enumerate(values)})
     symbol_order = np.lexsort((ints[:, 4], ints[:, 3]))
     dates, symbols = ints[symbol_order, 3], ints[symbol_order, 4]
     if len(ints) > 1 and np.any((dates[1:] == dates[:-1]) & (symbols[1:] == symbols[:-1])):
@@ -193,93 +203,417 @@ def canonicalize_rows(dataset: PreparedDataset) -> dict[str, Any]:
             "instrument_symbol_intervals": sorted(intervals)}
 
 
-def build_market_dataset(db: Session, cache: PreparedDatasetCache, manifest: dict[str, Any],
-                         performance: dict[str, Any], corporate_actions: list[Any]) -> PreparedDataset:
+
+@dataclass(frozen=True, slots=True)
+class MarketDatasetChunk:
+    dataset: PreparedDataset
+    manifest: dict[str, Any]
+    cache_hit: bool
+    load_ms: float
+
+
+_PIPELINE_END = object()
+
+
+def annual_chunk_manifests(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     start, end = map(date.fromisoformat, manifest["date_range"])
-    ids = [int(value) for value in manifest["instrument_ids"]]
-    parts = shard_manifests(ids, start, end)
-    shards = PreparedDatasetCache(cache.root / "shards")
-    workers = read_setting("BACKTEST_READ_WORKERS", 4, 1, 4)
-    work_mem = read_setting("BACKTEST_READ_WORK_MEM_MB", 128, 4, 512)
-    read_started = perf_counter()
-    engine = db.get_bind()
-    # Parallel readers import one snapshot. Caller holds the maintenance lock.
-    with engine.connect().execution_options(isolation_level="REPEATABLE READ") as connection:
-        connection.exec_driver_sql("SET TRANSACTION READ ONLY")
-        metadata = {}
-        for row in connection.execute(text("""
-            SELECT id, ticker_canonical, asset_type, exchange, listed_at, delisted_at
-            FROM instruments WHERE id = ANY(:ids) ORDER BY id
-        """), {"ids": ids}).mappings():
-            metadata[int(row["id"])] = {
-                "symbol": str(row["ticker_canonical"]).upper(), "asset_type": row["asset_type"],
-                "exchange": row["exchange"], "listed": row["listed_at"].toordinal() if row["listed_at"] else PREPARED_DATE_SENTINEL,
-                "delisted": row["delisted_at"].toordinal() if row["delisted_at"] else PREPARED_DATE_SENTINEL, "intervals": [],
-            }
-        if set(metadata) != set(ids):
-            raise ValueError("prepared instrument metadata is incomplete")
-        for row in connection.execute(text("""
-            SELECT instrument_id, symbol, valid_from, valid_to FROM symbol_history
-            WHERE instrument_id = ANY(:ids) AND is_primary = TRUE
-            ORDER BY instrument_id, valid_from, id
-        """), {"ids": ids}).mappings():
-            metadata[int(row["instrument_id"])]["intervals"].append((str(row["symbol"]).upper(),
-                row["valid_from"].toordinal(), row["valid_to"].toordinal() if row["valid_to"] else date.max.toordinal()))
-        snapshot = connection.exec_driver_sql("SELECT pg_export_snapshot()").scalar_one()
-        performance["sql_read_ms"] = float(performance.get("sql_read_ms", 0.0)) + (perf_counter() - read_started) * 1000
-        def load_part(part):
-            existing = shards.open(part)
-            if existing is not None:
-                return existing, True
-            def prepare(temporary):
-                path = temporary / "wire.bin"
-                with engine.connect().execution_options(isolation_level="REPEATABLE READ") as reader:
-                    reader.exec_driver_sql("SET TRANSACTION READ ONLY")
-                    with reader.connection.driver_connection.cursor() as cursor:
-                        cursor.execute(sql.SQL("SET TRANSACTION SNAPSHOT {}").format(sql.Literal(snapshot)))
-                        cursor.execute(sql.SQL("SET LOCAL work_mem = {}").format(sql.Literal(f"{work_mem}MB")))
-                        with cursor.copy("COPY (" + FEATURE_RANGE_SQL + ") TO STDOUT (FORMAT BINARY)",
-                                         {"instrument_ids": part["instrument_ids"],
-                                          "start_date": date.fromisoformat(part["date_range"][0]),
-                                          "end_date": date.fromisoformat(part["date_range"][1])}) as stream:
-                            count = spool_copy(stream, path)
-                def writer(dataset):
-                    encode_wire(dataset, path, metadata)
-                    path.unlink()
-                return count, writer
-            return shards.build(part, prepare=prepare), False
-        shards_started = perf_counter()
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            loaded = list(executor.map(load_part, parts))
-        performance["shard_load_ms"] = (perf_counter() - shards_started) * 1000
-    performance["read_workers"], performance["read_work_mem_mb"] = workers, work_mem
-    performance["shards_hit"] = sum(hit for _, hit in loaded)
-    performance["shards_built"] = sum(not hit for _, hit in loaded)
-    selected = [(part, np.flatnonzero((part.integers[:, 3] >= start.toordinal()) &
-                                    (part.integers[:, 3] <= end.toordinal()))) for part, _ in loaded]
+    parent_key = prepared_dataset_key(manifest)
+    return [
+        {
+            **manifest,
+            "date_range": [
+                max(start, date(year, 1, 1)).isoformat(),
+                min(end, date(year, 12, 31)).isoformat(),
+            ],
+            "pipeline_parent_key": parent_key,
+        }
+        for year in range(start.year, end.year + 1)
+    ]
+
+
+class MarketDatasetPipeline:
+    """One-chunk-ahead producer using one exported PostgreSQL snapshot."""
+
+    def __init__(
+        self,
+        db: Session,
+        cache: PreparedDatasetCache,
+        manifest: dict[str, Any],
+        performance: dict[str, Any],
+        corporate_actions: list[Any],
+    ) -> None:
+        self.engine = db.get_bind()
+        self.cache = cache
+        self.manifest = manifest
+        self.performance = performance
+        self.corporate_actions = corporate_actions
+        self.queue: Queue[Any] = Queue(maxsize=1)
+        self.stop = Event()
+        self.started_at = perf_counter()
+        self.consumer_wait_ms = 0.0
+        self.load_intervals: list[tuple[float, float]] = []
+        self.compute_intervals: list[tuple[float, float]] = []
+        self.thread = Thread(target=self._produce, name="backtest-data-producer", daemon=True)
+        self.thread.start()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> MarketDatasetChunk:
+        wait_started = perf_counter()
+        item = self.queue.get()
+        self.consumer_wait_ms += (perf_counter() - wait_started) * 1000.0
+        if item is _PIPELINE_END:
+            self._finish_metrics()
+            raise StopIteration
+        if isinstance(item, BaseException):
+            self._finish_metrics()
+            raise item
+        return item
+
+    def close(self) -> None:
+        self.stop.set()
+        while self.thread.is_alive():
+            try:
+                _close_pipeline_item(self.queue.get_nowait())
+            except Empty:
+                pass
+            self.thread.join(timeout=0.05)
+        while True:
+            try:
+                _close_pipeline_item(self.queue.get_nowait())
+            except Empty:
+                break
+        self._finish_metrics()
+
+    def record_compute(self, started_at: float, finished_at: float) -> None:
+        self.compute_intervals.append((started_at, finished_at))
+
+    def _finish_metrics(self) -> None:
+        self.performance["consumer_wait_ms"] = round(self.consumer_wait_ms, 3)
+        self.performance["pipeline_wall_ms"] = round(
+            (perf_counter() - self.started_at) * 1000.0, 3
+        )
+        self.performance["pipeline_overlap_ms"] = round(
+            _interval_overlap_ms(self.load_intervals, self.compute_intervals), 3
+        )
+
+    def _offer(self, item: Any) -> bool:
+        while not self.stop.is_set():
+            started = perf_counter()
+            try:
+                self.queue.put(item, timeout=0.05)
+                self.performance["producer_wait_ms"] = round(
+                    float(self.performance.get("producer_wait_ms", 0.0))
+                    + (perf_counter() - started) * 1000.0,
+                    3,
+                )
+                return True
+            except Full:
+                self.performance["producer_wait_ms"] = round(
+                    float(self.performance.get("producer_wait_ms", 0.0))
+                    + (perf_counter() - started) * 1000.0,
+                    3,
+                )
+        return False
+
+    def _produce(self) -> None:
+        try:
+            self._produce_chunks()
+        except BaseException as exc:
+            self._offer(exc)
+        finally:
+            self._offer(_PIPELINE_END)
+
+    def _produce_chunks(self) -> None:
+        ids = [int(value) for value in self.manifest["instrument_ids"]]
+        chunk_manifests = annual_chunk_manifests(self.manifest)
+        workers = read_setting("BACKTEST_READ_WORKERS", 4, 1, 4)
+        work_mem = read_setting("BACKTEST_READ_WORK_MEM_MB", 128, 4, 512)
+        self.performance["read_workers"] = workers
+        self.performance["read_work_mem_mb"] = work_mem
+        self.performance["chunk_count"] = 0
+        self.performance["shards_hit"] = 0
+        self.performance["shards_built"] = 0
+        self.performance["rows_loaded"] = 0
+        chunk_timings: list[dict[str, Any]] = []
+        self.performance["chunk_load_ms"] = chunk_timings
+        if all(self.cache.metadata(chunk) is not None for chunk in chunk_manifests):
+            for chunk_manifest in chunk_manifests:
+                chunk_started = perf_counter()
+                dataset = self.cache.open(chunk_manifest)
+                if dataset is None:
+                    raise RuntimeError("prepared dataset disappeared after cache preflight")
+                chunk_finished = perf_counter()
+                elapsed = (chunk_finished - chunk_started) * 1000.0
+                self.load_intervals.append((chunk_started, chunk_finished))
+                chunk_timings.append({
+                    "date_range": chunk_manifest["date_range"],
+                    "load_ms": round(elapsed, 3),
+                    "cache_hit": True,
+                    "rows": len(dataset),
+                })
+                self.performance["chunk_count"] += 1
+                self.performance["rows_loaded"] += len(dataset)
+                if not len(dataset):
+                    close_market_dataset(dataset)
+                    continue
+                if "first_chunk_ready_ms" not in self.performance:
+                    self.performance["first_chunk_ready_ms"] = round(
+                        (perf_counter() - self.started_at) * 1000.0, 3
+                    )
+                if not self._offer(MarketDatasetChunk(
+                    dataset, chunk_manifest, True, elapsed
+                )):
+                    close_market_dataset(dataset)
+                    return
+            if not self.performance["rows_loaded"]:
+                raise ValueError("no daily feature data found for the backtest universe and window")
+            return
+        read_started = perf_counter()
+        with self.engine.connect().execution_options(isolation_level="REPEATABLE READ") as connection:
+            connection.exec_driver_sql("SET TRANSACTION READ ONLY")
+            metadata = _instrument_metadata(connection, ids)
+            snapshot = connection.exec_driver_sql("SELECT pg_export_snapshot()").scalar_one()
+            self.performance["sql_read_ms"] = round(
+                float(self.performance.get("sql_read_ms", 0.0))
+                + (perf_counter() - read_started) * 1000.0,
+                3,
+            )
+            dictionaries = _stable_dictionaries(metadata)
+            shards = PreparedDatasetCache(self.cache.root / "shards")
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                for chunk_manifest in chunk_manifests:
+                    if self.stop.is_set():
+                        return
+                    chunk_started = perf_counter()
+                    existing = self.cache.open(chunk_manifest)
+                    cache_hit = existing is not None
+                    if existing is None:
+                        existing, hits, builds = _build_pipeline_chunk(
+                            self.engine,
+                            snapshot,
+                            metadata,
+                            dictionaries,
+                            shards,
+                            self.cache,
+                            chunk_manifest,
+                            self.corporate_actions,
+                            executor,
+                            work_mem,
+                            self.stop,
+                            self.performance,
+                        )
+                        self.performance["shards_hit"] += hits
+                        self.performance["shards_built"] += builds
+                    chunk_finished = perf_counter()
+                    elapsed = (chunk_finished - chunk_started) * 1000.0
+                    self.load_intervals.append((chunk_started, chunk_finished))
+                    chunk_timings.append({
+                        "date_range": chunk_manifest["date_range"],
+                        "load_ms": round(elapsed, 3),
+                        "cache_hit": cache_hit,
+                        "rows": len(existing),
+                    })
+                    self.performance["chunk_count"] += 1
+                    self.performance["rows_loaded"] += len(existing)
+                    if not len(existing):
+                        close_market_dataset(existing)
+                        continue
+                    if "first_chunk_ready_ms" not in self.performance:
+                        self.performance["first_chunk_ready_ms"] = round(
+                            (perf_counter() - self.started_at) * 1000.0, 3
+                        )
+                    if not self._offer(MarketDatasetChunk(
+                        existing, chunk_manifest, cache_hit, elapsed
+                    )):
+                        close_market_dataset(existing)
+                        return
+            if not self.performance["rows_loaded"]:
+                raise ValueError("no daily feature data found for the backtest universe and window")
+
+
+def close_market_dataset(dataset: PreparedDataset) -> None:
+    for array in (dataset.integers, dataset.floats):
+        mmap = getattr(array, "_mmap", None)
+        if mmap is not None:
+            mmap.close()
+
+
+def _close_pipeline_item(item: Any) -> None:
+    if isinstance(item, MarketDatasetChunk):
+        close_market_dataset(item.dataset)
+
+
+def _interval_overlap_ms(
+    load_intervals: list[tuple[float, float]],
+    compute_intervals: list[tuple[float, float]],
+) -> float:
+    return sum(
+        max(min(load_end, compute_end) - max(load_start, compute_start), 0.0)
+        for load_start, load_end in load_intervals
+        for compute_start, compute_end in compute_intervals
+    ) * 1000.0
+
+
+def _instrument_metadata(connection: Any, ids: list[int]) -> dict[int, dict[str, Any]]:
+    metadata: dict[int, dict[str, Any]] = {}
+    for row in connection.execute(text("""
+        SELECT id, ticker_canonical, asset_type, exchange, listed_at, delisted_at
+        FROM instruments WHERE id = ANY(:ids) ORDER BY id
+    """), {"ids": ids}).mappings():
+        metadata[int(row["id"])] = {
+            "symbol": str(row["ticker_canonical"]).upper(),
+            "asset_type": row["asset_type"],
+            "exchange": row["exchange"],
+            "listed": row["listed_at"].toordinal() if row["listed_at"] else PREPARED_DATE_SENTINEL,
+            "delisted": row["delisted_at"].toordinal() if row["delisted_at"] else PREPARED_DATE_SENTINEL,
+            "intervals": [],
+        }
+    if set(metadata) != set(ids):
+        raise ValueError("prepared instrument metadata is incomplete")
+    for row in connection.execute(text("""
+        SELECT instrument_id, symbol, valid_from, valid_to FROM symbol_history
+        WHERE instrument_id = ANY(:ids) AND is_primary = TRUE
+        ORDER BY instrument_id, valid_from, id
+    """), {"ids": ids}).mappings():
+        metadata[int(row["instrument_id"])]["intervals"].append((
+            str(row["symbol"]).upper(),
+            row["valid_from"].toordinal(),
+            row["valid_to"].toordinal() if row["valid_to"] else date.max.toordinal(),
+        ))
+    return metadata
+
+
+def _stable_dictionaries(metadata: dict[int, dict[str, Any]]) -> dict[str, list[str]]:
+    return {
+        "symbols": sorted({
+            value
+            for item in metadata.values()
+            for value in [item["symbol"], *(interval[0] for interval in item["intervals"])]
+        }),
+        "asset_types": sorted({str(item["asset_type"] or "") for item in metadata.values()}),
+        "exchanges": sorted({str(item["exchange"] or "") for item in metadata.values()}),
+    }
+
+
+def _build_pipeline_chunk(
+    engine: Any,
+    snapshot: str,
+    metadata: dict[int, dict[str, Any]],
+    dictionaries: dict[str, list[str]],
+    shards: PreparedDatasetCache,
+    cache: PreparedDatasetCache,
+    manifest: dict[str, Any],
+    corporate_actions: list[Any],
+    executor: ThreadPoolExecutor,
+    work_mem: int,
+    stop: Event,
+    performance: dict[str, Any],
+) -> tuple[PreparedDataset, int, int]:
+    start, end = map(date.fromisoformat, manifest["date_range"])
+    parts = shard_manifests([int(value) for value in manifest["instrument_ids"]], start, end)
+
+    def load_part(part: dict[str, Any]) -> tuple[PreparedDataset, bool]:
+        if stop.is_set():
+            raise RuntimeError("backtest data pipeline stopped")
+        existing = shards.open(part)
+        if existing is not None:
+            return existing, True
+
+        def prepare(temporary: Path):
+            path = temporary / "wire.bin"
+            with engine.connect().execution_options(isolation_level="REPEATABLE READ") as reader:
+                reader.exec_driver_sql("SET TRANSACTION READ ONLY")
+                with reader.connection.driver_connection.cursor() as cursor:
+                    cursor.execute(sql.SQL("SET TRANSACTION SNAPSHOT {}").format(sql.Literal(snapshot)))
+                    cursor.execute(sql.SQL("SET LOCAL work_mem = {}").format(sql.Literal(f"{work_mem}MB")))
+                    with cursor.copy(
+                        "COPY (" + FEATURE_RANGE_SQL + ") TO STDOUT (FORMAT BINARY)",
+                        {
+                            "instrument_ids": part["instrument_ids"],
+                            "start_date": date.fromisoformat(part["date_range"][0]),
+                            "end_date": date.fromisoformat(part["date_range"][1]),
+                        },
+                    ) as stream:
+                        count = spool_copy(stream, path)
+
+            def writer(dataset: PreparedDataset):
+                encode_wire(dataset, path, metadata)
+                path.unlink()
+
+            return count, writer
+
+        return shards.build(part, prepare=prepare), False
+
+    shards_started = perf_counter()
+    loaded = list(executor.map(load_part, parts))
+    performance["shard_load_ms"] = round(
+        float(performance.get("shard_load_ms", 0.0))
+        + (perf_counter() - shards_started) * 1000.0,
+        3,
+    )
+    selected = [
+        (
+            part,
+            np.flatnonzero(
+                (part.integers[:, 3] >= start.toordinal())
+                & (part.integers[:, 3] <= end.toordinal())
+            ),
+        )
+        for part, _ in loaded
+    ]
     row_count = sum(len(indices) for _, indices in selected)
-    if not row_count:
-        raise ValueError("no daily feature data found for the backtest universe and window")
-    def writer(dataset):
+    def writer(dataset: PreparedDataset):
         write_started = perf_counter()
+        dataset._symbols[:] = dictionaries["symbols"]
+        dataset._asset_types[:] = dictionaries["asset_types"]
+        dataset._exchanges[:] = dictionaries["exchanges"]
+        dataset._symbol_ids.update({value: index for index, value in enumerate(dataset._symbols)})
+        dataset._asset_type_ids.update({value: index for index, value in enumerate(dataset._asset_types)})
+        dataset._exchange_ids.update({value: index for index, value in enumerate(dataset._exchanges)})
         index = 0
         for part, indices in selected:
             end_index = index + len(indices)
-            dataset.integers[index:end_index], dataset.floats[index:end_index] = part.integers[indices], part.floats[indices]
-            for column, name, values, mapping in ((4, "symbols", dataset._symbols, dataset._symbol_ids),
-                                                  (5, "asset_types", dataset._asset_types, dataset._asset_type_ids),
-                                                  (6, "exchanges", dataset._exchanges, dataset._exchange_ids)):
-                remap = np.array([dataset._dictionary_id(value, values, mapping) for value in part.sidecar[name]], dtype=np.int64)
-                dataset.integers[index:end_index, column] = remap[dataset.integers[index:end_index, column]]
+            dataset.integers[index:end_index] = part.integers[indices]
+            dataset.floats[index:end_index] = part.floats[indices]
+            for column, name, values, mapping in (
+                (4, "symbols", dataset._symbols, dataset._symbol_ids),
+                (5, "asset_types", dataset._asset_types, dataset._asset_type_ids),
+                (6, "exchanges", dataset._exchanges, dataset._exchange_ids),
+            ):
+                remap = np.array(
+                    [dataset._dictionary_id(value, values, mapping) for value in part.sidecar[name]],
+                    dtype=np.int64,
+                )
+                dataset.integers[index:end_index, column] = remap[
+                    dataset.integers[index:end_index, column]
+                ]
             index = end_index
-            part.integers._mmap.close()
-            part.floats._mmap.close()
-        sidecar = canonicalize_rows(dataset)
-        sidecar["corporate_actions"] = corporate_actions
-        performance["array_write_ms"] = float(performance.get("array_write_ms", 0.0)) + (perf_counter() - write_started) * 1000
+        sidecar = canonicalize_rows(dataset, compact_dictionaries=False)
+        sidecar["corporate_actions"] = [
+            action for action in corporate_actions
+            if start.isoformat() <= str(action[0]) <= end.isoformat()
+        ]
+        performance["array_write_ms"] = round(
+            float(performance.get("array_write_ms", 0.0))
+            + (perf_counter() - write_started) * 1000.0,
+            3,
+        )
         return sidecar
+
     try:
-        return cache.build(manifest, row_count=row_count, writer=writer, performance=performance)
+        dataset = cache.build(
+            manifest,
+            row_count=row_count,
+            writer=writer,
+            performance=performance,
+        )
+        return (
+            dataset,
+            sum(1 for _, hit in loaded if hit),
+            sum(1 for _, hit in loaded if not hit),
+        )
     finally:
         for part, _ in loaded:
             part.integers._mmap.close()

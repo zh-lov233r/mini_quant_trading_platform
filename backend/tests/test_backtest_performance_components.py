@@ -17,6 +17,12 @@ from src.services.backtest_engine import (
     _load_prepared_dataset,
     _load_split_adjustments_by_date,
 )
+from src.services.columnar_market_data_loader import (
+    MarketDatasetPipeline,
+    _interval_overlap_ms,
+    annual_chunk_manifests,
+    close_market_dataset,
+)
 from src.services.backtest_equity_service import (
     build_downsampled_chart_query,
     build_downsampled_snapshot_ids_query,
@@ -36,11 +42,89 @@ from backend.utils.benchmark_backtests import (
 
 
 class BacktestPerformanceComponentTests(unittest.TestCase):
+    def test_annual_pipeline_chunks_clip_edges_and_keep_full_universe(self) -> None:
+        manifest = {
+            "instrument_ids": [3, 7],
+            "date_range": ["2024-10-15", "2026-02-03"],
+            "feature_set": ["daily_features"],
+        }
+
+        chunks = annual_chunk_manifests(manifest)
+
+        self.assertEqual(
+            [chunk["date_range"] for chunk in chunks],
+            [
+                ["2024-10-15", "2024-12-31"],
+                ["2025-01-01", "2025-12-31"],
+                ["2026-01-01", "2026-02-03"],
+            ],
+        )
+        self.assertTrue(all(chunk["instrument_ids"] == [3, 7] for chunk in chunks))
+        self.assertEqual(len({chunk["pipeline_parent_key"] for chunk in chunks}), 1)
+
+    def test_pipeline_overlap_counts_only_simultaneous_load_and_compute(self) -> None:
+        self.assertAlmostEqual(
+            _interval_overlap_ms(
+                [(0.0, 2.0), (3.0, 5.0)],
+                [(1.0, 4.0), (6.0, 7.0)],
+            ),
+            2_000.0,
+        )
+
+    def test_warm_annual_pipeline_yields_chunks_in_order_with_depth_one(self) -> None:
+        manifest = {
+            "instrument_ids": [1],
+            "date_range": ["2024-12-31", "2025-01-02"],
+            "feature_set": ["daily_features"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            cache = PreparedDatasetCache(Path(directory))
+            for chunk_manifest, trade_day in zip(
+                annual_chunk_manifests(manifest),
+                (date(2024, 12, 31), date(2025, 1, 2)),
+                strict=True,
+            ):
+                cache.build(
+                    chunk_manifest,
+                    row_count=1,
+                    writer=lambda dataset, trade_day=trade_day: (
+                        encode_prepared_snapshot(
+                            dataset,
+                            0,
+                            {
+                                "instrument_id": 1,
+                                "symbol": "AAA",
+                                "dt_ny": trade_day,
+                                "close": 10.0,
+                            },
+                        )
+                        or {"date_offsets": [[trade_day.isoformat(), 0, 1]]}
+                    ),
+                )
+            performance = {}
+            pipeline = MarketDatasetPipeline(
+                MagicMock(), cache, manifest, performance, []
+            )
+            chunks = list(pipeline)
+            pipeline.close()
+            try:
+                self.assertEqual(pipeline.queue.maxsize, 1)
+                self.assertEqual(
+                    [chunk.manifest["date_range"] for chunk in chunks],
+                    [["2024-12-31", "2024-12-31"], ["2025-01-01", "2025-01-02"]],
+                )
+                self.assertEqual(performance["chunk_count"], 2)
+                self.assertEqual(performance["rows_loaded"], 2)
+                self.assertTrue(all(item["cache_hit"] for item in performance["chunk_load_ms"]))
+            finally:
+                for chunk in chunks:
+                    close_market_dataset(chunk.dataset)
+
     def test_native_warm_dataset_opens_without_source_scan(self) -> None:
         performance: dict[str, object] = {}
         cache = MagicMock()
-        dataset = SimpleNamespace(sidecar={})
-        cache.open.return_value = dataset
+        cache.metadata.return_value = {"row_count": 1}
+        pipeline = object()
         db = MagicMock()
         resolved_universe = SimpleNamespace(manifest=lambda: {}, instrument_ids=[1])
 
@@ -50,11 +134,11 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
                 return_value=cache,
             ),
             patch(
-                "src.services.backtest_engine.build_market_dataset",
-                autospec=True,
+                "src.services.backtest_engine.MarketDatasetPipeline",
+                return_value=pipeline,
             ) as loader_class,
         ):
-            loaded, _manifest, status, materialization = _load_prepared_dataset(
+            loaded, _manifest, hydration, materialization = _load_prepared_dataset(
                 db,
                 runtime={"strategy_type": "trend"},
                 symbols=["AAA"],
@@ -66,11 +150,11 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
                 performance=performance,
             )
 
-        self.assertIs(loaded, dataset)
-        self.assertEqual(status, "warm")
+        self.assertIs(loaded, pipeline)
+        self.assertEqual(hydration, {})
         self.assertIsNone(materialization)
         db.execute.assert_not_called()
-        loader_class.assert_not_called()
+        loader_class.assert_called_once()
         self.assertEqual(performance, {
             "sql_read_ms": 0.0,
             "row_conversion_ms": 0.0,
@@ -79,22 +163,22 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
 
     def test_cold_preparation_uses_columnar_builder_without_count(self) -> None:
         db, cache = MagicMock(), MagicMock()
-        cache.open.return_value = None
-        dataset = SimpleNamespace(sidecar={})
+        cache.metadata.return_value = None
+        pipeline = object()
         performance = {}
         with (
             patch("src.services.backtest_engine.PreparedDatasetCache", return_value=cache),
-            patch("src.services.backtest_engine.build_market_dataset", return_value=dataset) as build,
+            patch("src.services.backtest_engine.MarketDatasetPipeline", return_value=pipeline) as build,
             patch("src.services.backtest_engine._split_adjustments", return_value=[]),
         ):
-            loaded, manifest, status, _ = _load_prepared_dataset(
+            loaded, manifest, hydration, _ = _load_prepared_dataset(
                 db, runtime={"strategy_type": "trend"}, symbols=["AAA"],
                 resolved_universe=SimpleNamespace(manifest=lambda: {}, instrument_ids=[1]),
                 start_date=date(2025, 1, 2), end_date=date(2025, 1, 2),
                 universe_policy=None, supplied=None, performance=performance,
             )
-        self.assertIs(loaded, dataset)
-        self.assertEqual(status, "cold")
+        self.assertIs(loaded, pipeline)
+        self.assertEqual(hydration, {})
         self.assertEqual(manifest["date_range"], ["2025-01-02", "2025-01-02"])
         db.execute.assert_not_called()
         build.assert_called_once()
@@ -217,6 +301,8 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
                 "ex_date": date(2025, 1, 3),
                 "split_from": 1,
                 "split_to": 2,
+                "bar_count": 2,
+                "adjusted_value_count": 0,
             }
         ]
 
@@ -231,6 +317,53 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
         self.assertEqual(result, {date(2025, 1, 3): {7: 2.0}})
         params = db.execute.call_args.args[1]
         self.assertEqual(params["instrument_ids"], [7])
+
+    def test_split_adjustments_skip_forward_adjusted_price_series(self) -> None:
+        db = MagicMock()
+        db.execute.return_value.mappings.return_value.all.return_value = [
+            {
+                "instrument_id": 7,
+                "symbol": "ORLY",
+                "ex_date": date(2025, 6, 10),
+                "split_from": 1,
+                "split_to": 15,
+                "bar_count": 100,
+                "adjusted_value_count": 400,
+            }
+        ]
+
+        result = _load_split_adjustments_by_date(
+            db,
+            [],
+            date(2025, 1, 1),
+            date(2025, 7, 31),
+            instrument_ids=[7],
+        )
+
+        self.assertEqual(result, {})
+
+    def test_split_adjustments_reject_mixed_price_semantics(self) -> None:
+        db = MagicMock()
+        db.execute.return_value.mappings.return_value.all.return_value = [
+            {
+                "instrument_id": 7,
+                "symbol": "MIXED",
+                "ex_date": date(2025, 1, 3),
+                "split_from": 1,
+                "split_to": 2,
+                "bar_count": 2,
+                "adjusted_value_count": 1,
+            }
+        ]
+
+        with self.assertRaisesRegex(ValueError, "mixed adjusted and unadjusted OHLC"):
+            _load_split_adjustments_by_date(
+                db,
+                [],
+                date(2025, 1, 1),
+                date(2025, 1, 4),
+                instrument_ids=[7],
+            )
 
     def test_engine_performance_has_non_overlapping_phases_and_throughput(self) -> None:
         performance = {
@@ -383,7 +516,7 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
             self.assertTrue(all(not array.writeable for array in arrays))
             self.assertEqual(cache.metadata(manifest)["sidecar"]["date_offsets"][1][1], 1)
 
-            data_path = next(Path(directory).glob("*.v4/integers.npy"))
+            data_path = next(Path(directory).glob(f"*.{PREPARED_DATASET_SCHEMA_VERSION}/integers.npy"))
             data_path.write_bytes(b"corrupt")
             rebuilt = cache.build(manifest, row_count=2, writer=writer)
             self.assertEqual(writes, 2)
@@ -445,7 +578,10 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
 
             with self.assertRaises(RuntimeError):
                 cache.build(manifest, row_count=1, writer=writer)
-            self.assertEqual(list(Path(directory).glob("*.v4")), [])
+            self.assertEqual(
+                list(Path(directory).glob(f"*.{PREPARED_DATASET_SCHEMA_VERSION}")),
+                [],
+            )
 
     def test_prepared_dataset_invalidation_removes_generated_versions(self) -> None:
         manifest = {

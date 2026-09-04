@@ -383,6 +383,7 @@ struct SignalRecord {
     std::optional<PatternSetup> pattern_setup;
     std::string pattern_setup_json;
     std::string strength_json;
+    std::int64_t date_ordinal = 0;
     bool has_entry_channel = false;
     double entry_channel_lower = std::numeric_limits<double>::quiet_NaN();
     double entry_channel_upper = std::numeric_limits<double>::quiet_NaN();
@@ -393,6 +394,18 @@ struct SignalRecord {
     support_resistance::JsonObject support_metadata;
     std::optional<support_resistance::EntryChannel> support_entry_channel;
     std::optional<support_resistance::Setup> support_setup_kind;
+};
+
+struct SupportAuditRecord {
+    std::int32_t date_ordinal = 0;
+    std::string event_type;
+    std::string zone_key;
+    std::string setup;
+    double score = std::numeric_limits<double>::quiet_NaN();
+    std::int64_t posterior_sample_count = -1;
+    double lower_price = std::numeric_limits<double>::quiet_NaN();
+    double upper_price = std::numeric_limits<double>::quiet_NaN();
+    std::string payload_json;
 };
 
 struct KernelResult {
@@ -483,6 +496,15 @@ struct KernelResult {
 
     std::vector<std::int64_t> support_event_instrument_id;
     std::vector<std::int32_t> support_event_symbol_id;
+    std::vector<std::uint8_t> support_event_materialization;
+    std::vector<std::int32_t> support_event_date_ordinal;
+    std::vector<std::string> support_event_type;
+    std::vector<std::string> support_event_zone_key;
+    std::vector<std::string> support_event_setup;
+    std::vector<double> support_event_score;
+    std::vector<std::int64_t> support_event_posterior_sample_count;
+    std::vector<double> support_event_lower_price;
+    std::vector<double> support_event_upper_price;
     std::vector<std::string> support_event_json;
     std::vector<std::int64_t> support_zone_instrument_id;
     std::vector<std::int32_t> support_zone_symbol_id;
@@ -816,10 +838,10 @@ std::vector<SessionRange> session_ranges(
 
 void attach_history_sessions(
     DatasetView& dataset,
-    const std::vector<SessionRange>& sessions
+    const std::vector<SessionRange>& sessions,
+    std::unordered_map<std::int64_t, std::int32_t>& history_by_instrument
 ) {
     dataset.history_sessions.assign(static_cast<std::size_t>(dataset.integers.rows), 0);
-    std::unordered_map<std::int64_t, std::int32_t> history_by_instrument;
     for (const SessionRange& session : sessions) {
         for (py::ssize_t row = session.begin; row < session.end; ++row) {
             const std::int64_t instrument = dataset.integers.at(row, kInstrumentId);
@@ -1115,7 +1137,8 @@ std::optional<SignalRecord> evaluate_pattern_signal(
     py::ssize_t row,
     const StrategyConfig& strategy,
     const PatternState& state,
-    const Position* position
+    const Position* position,
+    std::int64_t output_session_index
 ) {
     const PatternConfig& config = *strategy.pattern;
     const std::int32_t symbol_id = static_cast<std::int32_t>(dataset.integers.at(row, kSymbolId));
@@ -1132,13 +1155,14 @@ std::optional<SignalRecord> evaluate_pattern_signal(
     );
     if (!decision) return std::nullopt;
     SignalRecord result{
-        dataset.integers.at(row, kSessionIndex), dataset.integers.at(row, kInstrumentId),
+        output_session_index, dataset.integers.at(row, kInstrumentId),
         dataset.integers.at(row, kTimestampUs), symbol_id,
         decision->buy ? Action::Buy : Action::Sell,
         decision->score.value_or(std::numeric_limits<double>::quiet_NaN()),
         std::numeric_limits<double>::quiet_NaN(), 0, true, decision->reason,
     };
     result.dataset_row = row;
+    result.date_ordinal = dataset.integers.at(row, kDateOrdinal);
     result.position = position_view.quantity;
     result.average_entry_price = position_view.average_entry_price.value_or(
         std::numeric_limits<double>::quiet_NaN()
@@ -1163,9 +1187,9 @@ std::optional<SignalRecord> evaluate_signal(
     py::ssize_t row,
     const StrategyConfig& config,
     const Position* position,
-    std::int64_t processed_session
+    std::int64_t processed_session,
+    std::int64_t output_session_index
 ) {
-    const std::int64_t session = dataset.integers.at(row, kSessionIndex);
     const std::int64_t instrument = dataset.integers.at(row, kInstrumentId);
     const std::int32_t symbol = static_cast<std::int32_t>(dataset.integers.at(row, kSymbolId));
     if (symbol < 0 || static_cast<std::size_t>(symbol) >= dataset.symbols.size()) {
@@ -1333,10 +1357,11 @@ std::optional<SignalRecord> evaluate_signal(
     }
 
     SignalRecord result{
-        session, instrument, dataset.integers.at(row, kTimestampUs), symbol,
+        output_session_index, instrument, dataset.integers.at(row, kTimestampUs), symbol,
         *action, raw_score, strength_score, 0, true, std::move(reason)
     };
     result.dataset_row = row;
+    result.date_ordinal = dataset.integers.at(row, kDateOrdinal);
     result.position = quantity;
     result.average_entry_price = average_entry.value_or(
         std::numeric_limits<double>::quiet_NaN()
@@ -1491,15 +1516,105 @@ support_resistance::Bar support_bar(
     };
 }
 
+const support_resistance::JsonValue* json_field(
+    const support_resistance::JsonObject& value,
+    const char* key
+) {
+    return support_resistance::find(value, key);
+}
+
+std::string json_string_field(
+    const support_resistance::JsonObject& value,
+    const char* key
+) {
+    const auto* item = json_field(value, key);
+    if (item == nullptr) return {};
+    const auto* text = std::get_if<std::string>(&item->value);
+    return text == nullptr ? std::string{} : *text;
+}
+
+double json_number_field(
+    const support_resistance::JsonObject& value,
+    const char* key
+) {
+    const auto* item = json_field(value, key);
+    if (item == nullptr) return std::numeric_limits<double>::quiet_NaN();
+    if (const auto* number = std::get_if<double>(&item->value)) return *number;
+    if (const auto* integer = std::get_if<std::int64_t>(&item->value)) {
+        return static_cast<double>(*integer);
+    }
+    return std::numeric_limits<double>::quiet_NaN();
+}
+
+std::int64_t json_integer_field(
+    const support_resistance::JsonObject& value,
+    const char* key
+) {
+    const auto* item = json_field(value, key);
+    if (item == nullptr) return -1;
+    const auto* integer = std::get_if<std::int64_t>(&item->value);
+    return integer == nullptr ? -1 : *integer;
+}
+
+const support_resistance::JsonObject* json_object_field(
+    const support_resistance::JsonObject& value,
+    const char* key
+) {
+    const auto* item = json_field(value, key);
+    return item == nullptr
+        ? nullptr : std::get_if<support_resistance::JsonObject>(&item->value);
+}
+
+SupportAuditRecord support_audit_record(
+    const support_resistance::JsonObject& event
+) {
+    SupportAuditRecord result;
+    const std::string event_date = json_string_field(event, "event_date");
+    if (event_date.empty()) throw std::runtime_error("support audit event is missing event_date");
+    result.date_ordinal = support_resistance::date_ordinal(event_date);
+    result.event_type = json_string_field(event, "event_type");
+    if (result.event_type.empty()) throw std::runtime_error("support audit event is missing event_type");
+    result.zone_key = json_string_field(event, "zone_key");
+    result.setup = json_string_field(event, "setup");
+    result.score = json_number_field(event, "score");
+    result.posterior_sample_count = json_integer_field(event, "resolved_samples");
+    if (const auto* evidence = json_object_field(event, "score_evidence")) {
+        const std::int64_t resolved = json_integer_field(*evidence, "resolved_samples");
+        if (resolved >= 0) result.posterior_sample_count = resolved;
+    }
+    result.lower_price = json_number_field(event, "lower");
+    result.upper_price = json_number_field(event, "upper");
+    if (const auto* zone = json_object_field(event, "zone")) {
+        if (!std::isfinite(result.lower_price)) {
+            result.lower_price = json_number_field(*zone, "lower");
+        }
+        if (!std::isfinite(result.upper_price)) {
+            result.upper_price = json_number_field(*zone, "upper");
+        }
+    }
+    result.payload_json = support_resistance::json(event);
+    return result;
+}
+
+bool is_materialization_event(const std::string& event_type) {
+    return event_type == "touch"
+        || event_type == "invalidation"
+        || event_type == "phase_ended"
+        || event_type == "regime_transition"
+        || event_type == "entry_channel_started"
+        || event_type == "entry_channel_ended";
+}
+
 std::optional<SignalRecord> evaluate_support_resistance_signal(
     const DatasetView& dataset,
     py::ssize_t row,
     const StrategyConfig& strategy,
     const Position* position,
     std::int64_t formal_day_index,
+    std::int64_t output_session_index,
     support_resistance::SymbolState& state,
     bool emit_signals,
-    std::vector<std::string>& audit_events
+    std::vector<SupportAuditRecord>& audit_events
 ) {
     support_resistance::Bar bar = support_bar(dataset, row);
     const auto market = dataset.support_risk_context.market.find(bar.date_ordinal);
@@ -1521,14 +1636,14 @@ std::optional<SignalRecord> evaluate_support_resistance_signal(
         state, bar, position_view, strategy.support_resistance, emit_signals
     );
     // Events are output-only. Keep compact JSON, not the whole run's object trees.
-    for (const auto& event : state.events) audit_events.push_back(support_resistance::json(event));
+    for (const auto& event : state.events) audit_events.push_back(support_audit_record(event));
     state.events.clear();
     if (!emit_signals || !decision) return std::nullopt;
     const Action action = decision->action == support_resistance::Action::Buy
         ? Action::Buy : Action::Sell;
     const double score = decision->score.value_or(std::numeric_limits<double>::quiet_NaN());
     SignalRecord result{
-        dataset.integers.at(row, kSessionIndex),
+        output_session_index,
         dataset.integers.at(row, kInstrumentId),
         dataset.integers.at(row, kTimestampUs),
         static_cast<std::int32_t>(dataset.integers.at(row, kSymbolId)),
@@ -1540,6 +1655,7 @@ std::optional<SignalRecord> evaluate_support_resistance_signal(
         decision->reason,
     };
     result.dataset_row = row;
+    result.date_ordinal = dataset.integers.at(row, kDateOrdinal);
     result.position = position == nullptr ? 0.0 : position->quantity;
     result.average_entry_price = position == nullptr
         ? std::numeric_limits<double>::quiet_NaN()
@@ -2007,34 +2123,131 @@ double gross_exposure(
     return result;
 }
 
-std::shared_ptr<KernelResult> run_native_backtest(
-    const DatasetView& dataset,
-    const StrategyConfig& strategy,
-    const std::optional<UniversePolicy>& universe_policy,
-    const std::vector<SessionRange>& warmup_sessions,
-    const std::vector<SessionRange>& sessions,
-    double initial_cash,
-    const CostConfig& costs,
-    int requested_thread_count,
-    const py::object& control_callback,
-    const py::object& finalizing_callback
-) {
-    auto result = std::make_shared<KernelResult>();
-    result->initial_cash = initial_cash;
-    result->symbols = dataset.symbols;
-    result->trading_days = static_cast<std::int64_t>(sessions.size());
-    result->has_universe_membership = universe_policy.has_value();
-    double cash = initial_cash;
-    double peak_equity = initial_cash;
+struct BacktestState {
+    StrategyConfig strategy;
+    std::optional<UniversePolicy> universe_policy;
+    double initial_cash;
+    CostConfig costs;
+    std::int64_t start_ordinal;
+    std::int64_t end_ordinal;
+    std::int64_t expected_sessions;
+    py::object control_callback;
+    py::object finalizing_callback;
+    std::shared_ptr<KernelResult> result = std::make_shared<KernelResult>();
+    double cash;
+    double peak_equity;
     std::map<std::int64_t, Position> positions;
     std::map<std::int64_t, double> last_marks;
     std::map<std::int64_t, std::int64_t> delisted_ordinals;
     std::map<std::int64_t, PatternState> pattern_states;
     std::map<std::int64_t, support_resistance::SymbolState> support_states;
-    std::map<std::int64_t, std::vector<std::string>> support_events;
+    std::map<std::int64_t, std::vector<SupportAuditRecord>> support_events;
     std::map<std::int64_t, std::int32_t> latest_symbol_ids;
+    std::unordered_map<std::int64_t, std::int32_t> history_by_instrument;
     std::vector<SignalRecord> pending;
-    const bool has_control_callback = !control_callback.is_none();
+    int requested_thread_count;
+    std::unique_ptr<DayParallelExecutor> executor;
+    std::int64_t all_session_count = 0;
+    std::int64_t formal_session_count = 0;
+    std::int64_t last_date_ordinal = std::numeric_limits<std::int64_t>::min();
+    std::vector<std::string> asset_types;
+    std::vector<std::string> exchanges;
+    bool consumed = false;
+    bool finished = false;
+
+    BacktestState(
+        StrategyConfig strategy_value,
+        std::optional<UniversePolicy> universe_policy_value,
+        double initial_cash_value,
+        CostConfig costs_value,
+        std::int64_t start_ordinal_value,
+        std::int64_t end_ordinal_value,
+        int requested_thread_count,
+        std::int64_t expected_sessions_value,
+        py::object control_callback_value,
+        py::object finalizing_callback_value
+    ) : strategy(std::move(strategy_value)),
+        universe_policy(std::move(universe_policy_value)),
+        initial_cash(initial_cash_value), costs(costs_value),
+        start_ordinal(start_ordinal_value), end_ordinal(end_ordinal_value),
+        expected_sessions(expected_sessions_value),
+        control_callback(std::move(control_callback_value)),
+        finalizing_callback(std::move(finalizing_callback_value)),
+        cash(initial_cash_value), peak_equity(initial_cash_value),
+        requested_thread_count(requested_thread_count) {
+        result->initial_cash = initial_cash;
+        result->has_universe_membership = universe_policy.has_value();
+    }
+};
+
+void consume_native_backtest(BacktestState& state, DatasetView& dataset) {
+    if (state.finished) throw std::runtime_error("backtest session is already finished");
+    std::vector<SessionRange> all_sessions = session_ranges(
+        dataset, std::numeric_limits<std::int64_t>::min(), state.end_ordinal
+    );
+    if (all_sessions.empty()) return;
+    if (all_sessions.front().date_ordinal <= state.last_date_ordinal) {
+        throw std::invalid_argument(
+            "backtest chunks must be strictly chronological and non-overlapping"
+        );
+    }
+    for (SessionRange& session : all_sessions) {
+        session.session_index = state.all_session_count++;
+    }
+    state.last_date_ordinal = all_sessions.back().date_ordinal;
+    attach_history_sessions(dataset, all_sessions, state.history_by_instrument);
+    std::vector<SessionRange> warmup_sessions;
+    std::vector<SessionRange> sessions;
+    for (const SessionRange& session : all_sessions) {
+        if (session.date_ordinal < state.start_ordinal) warmup_sessions.push_back(session);
+        else sessions.push_back(session);
+    }
+    py::ssize_t maximum_session_rows = 0;
+    for (const SessionRange& session : all_sessions) {
+        maximum_session_rows = std::max(
+            maximum_session_rows, session.end - session.begin
+        );
+    }
+    const std::size_t actual_thread_count = maximum_session_rows
+            >= static_cast<py::ssize_t>(
+                state.requested_thread_count * kRowsPerThreadThreshold
+            )
+        ? static_cast<std::size_t>(state.requested_thread_count)
+        : 1;
+    if (!state.executor
+        || (state.executor->thread_count() == 1 && actual_thread_count > 1)) {
+        state.executor = std::make_unique<DayParallelExecutor>(actual_thread_count);
+        state.result->intra_run_threads = static_cast<std::int32_t>(
+            state.executor->thread_count()
+        );
+    }
+    auto& result = state.result;
+    auto& strategy = state.strategy;
+    auto& universe_policy = state.universe_policy;
+    auto& cash = state.cash;
+    auto& peak_equity = state.peak_equity;
+    auto& positions = state.positions;
+    auto& last_marks = state.last_marks;
+    auto& delisted_ordinals = state.delisted_ordinals;
+    auto& pattern_states = state.pattern_states;
+    auto& support_states = state.support_states;
+    auto& support_events = state.support_events;
+    auto& latest_symbol_ids = state.latest_symbol_ids;
+    auto& pending = state.pending;
+    auto& executor = *state.executor;
+    const CostConfig& costs = state.costs;
+    const bool has_control_callback = !state.control_callback.is_none();
+    const py::object& control_callback = state.control_callback;
+    if (!state.consumed) {
+        result->symbols = dataset.symbols;
+        state.asset_types = dataset.asset_types;
+        state.exchanges = dataset.exchanges;
+        state.consumed = true;
+    } else if (result->symbols != dataset.symbols
+        || state.asset_types != dataset.asset_types
+        || state.exchanges != dataset.exchanges) {
+        throw std::invalid_argument("backtest chunk dictionaries differ");
+    }
     for (py::ssize_t row = 0; row < dataset.integers.rows; ++row) {
         const std::int64_t instrument = dataset.integers.at(row, kInstrumentId);
         latest_symbol_ids[instrument] = static_cast<std::int32_t>(
@@ -2069,19 +2282,6 @@ std::shared_ptr<KernelResult> run_native_backtest(
 
     {
         py::gil_scoped_release release;
-        py::ssize_t maximum_session_rows = 0;
-        for (const SessionRange& session : warmup_sessions) {
-            maximum_session_rows = std::max(maximum_session_rows, session.end - session.begin);
-        }
-        for (const SessionRange& session : sessions) {
-            maximum_session_rows = std::max(maximum_session_rows, session.end - session.begin);
-        }
-        const std::size_t actual_thread_count = maximum_session_rows
-                >= static_cast<py::ssize_t>(requested_thread_count * kRowsPerThreadThreshold)
-            ? static_cast<std::size_t>(requested_thread_count)
-            : 1;
-        DayParallelExecutor executor(actual_thread_count);
-        result->intra_run_threads = static_cast<std::int32_t>(executor.thread_count());
         const SteadyClock::time_point warmup_started = SteadyClock::now();
         if (is_pattern_strategy(strategy)) {
             for (const SessionRange& session : warmup_sessions) {
@@ -2119,6 +2319,7 @@ std::shared_ptr<KernelResult> run_native_backtest(
                         strategy,
                         nullptr,
                         -1,
+                        session.session_index,
                         *states[static_cast<std::size_t>(row - session.begin)],
                         false,
                         support_events.at(dataset.integers.at(row, kInstrumentId))
@@ -2126,7 +2327,7 @@ std::shared_ptr<KernelResult> run_native_backtest(
                 });
             }
         }
-        result->warmup_ms = elapsed_milliseconds(warmup_started);
+        result->warmup_ms += elapsed_milliseconds(warmup_started);
         for (std::size_t day = 0; day < sessions.size(); ++day) {
             const SessionRange& session = sessions[day];
             std::map<std::int64_t, py::ssize_t> rows;
@@ -2296,9 +2497,7 @@ std::shared_ptr<KernelResult> run_native_backtest(
                             support_states.at(signal->instrument_id),
                             *signal->support_entry_channel,
                             *signal->support_setup_kind,
-                            static_cast<std::int32_t>(
-                                dataset.integers.at(signal->dataset_row, kDateOrdinal)
-                            ),
+                            static_cast<std::int32_t>(signal->date_ordinal),
                             static_cast<std::int32_t>(session.date_ordinal),
                             *mark,
                             order.price,
@@ -2317,7 +2516,8 @@ std::shared_ptr<KernelResult> run_native_backtest(
                 ) / new_quantity;
                 if (position == positions.end()) {
                     Position created{
-                        new_quantity, new_average, static_cast<std::int64_t>(day),
+                        new_quantity, new_average,
+                        state.formal_session_count + static_cast<std::int64_t>(day),
                         static_cast<std::int32_t>(dataset.integers.at(row->second, kSymbolId)),
                         session.date_ordinal, signal->pattern_setup, {}, "", std::nullopt,
                     };
@@ -2398,7 +2598,7 @@ std::shared_ptr<KernelResult> run_native_backtest(
                         );
                         decision = evaluate_pattern_signal(
                             dataset, row, strategy, state,
-                            position_views[offset]
+                            position_views[offset], session.session_index
                         );
                     } else if (strategy.kind == StrategyKind::SupportResistance) {
                         decision = evaluate_support_resistance_signal(
@@ -2406,7 +2606,8 @@ std::shared_ptr<KernelResult> run_native_backtest(
                             row,
                             strategy,
                             position_views[offset],
-                            static_cast<std::int64_t>(day),
+                            state.formal_session_count + static_cast<std::int64_t>(day),
+                            session.session_index,
                             *day_support_states[offset],
                             true,
                             support_events.at(dataset.integers.at(row, kInstrumentId))
@@ -2415,7 +2616,8 @@ std::shared_ptr<KernelResult> run_native_backtest(
                         decision = evaluate_signal(
                             dataset, row, strategy,
                             position_views[offset],
-                            static_cast<std::int64_t>(day)
+                            state.formal_session_count + static_cast<std::int64_t>(day),
+                            session.session_index
                         );
                     }
                     if (!decision) return;
@@ -2516,12 +2718,32 @@ std::shared_ptr<KernelResult> run_native_backtest(
 
             if (has_control_callback) {
                 py::gil_scoped_acquire acquire;
-                if (py::cast<bool>(control_callback(day + 1, sessions.size()))) {
+                const std::int64_t completed = state.formal_session_count
+                    + static_cast<std::int64_t>(day) + 1;
+                const std::int64_t total = state.expected_sessions > 0
+                    ? state.expected_sessions : completed;
+                if (py::cast<bool>(control_callback(completed, total))) {
                     throw BacktestCancelled("native backtest cancellation requested");
                 }
             }
         }
     }
+    state.formal_session_count += static_cast<std::int64_t>(sessions.size());
+    result->trading_days = state.formal_session_count;
+}
+
+std::shared_ptr<KernelResult> finish_native_backtest(BacktestState& state) {
+    if (state.finished) throw std::runtime_error("backtest session is already finished");
+    if (!state.consumed || state.formal_session_count == 0) {
+        throw std::invalid_argument("prepared dataset has no rows inside the backtest window");
+    }
+    state.finished = true;
+    auto& result = state.result;
+    auto& strategy = state.strategy;
+    auto& support_states = state.support_states;
+    auto& support_events = state.support_events;
+    auto& latest_symbol_ids = state.latest_symbol_ids;
+    const py::object& finalizing_callback = state.finalizing_callback;
     if (strategy.kind == StrategyKind::SupportResistance) {
         const std::size_t total = support_states.size();
         const bool has_finalizing_callback = !finalizing_callback.is_none();
@@ -2542,12 +2764,39 @@ std::shared_ptr<KernelResult> run_native_backtest(
             for (auto& event : support_events.at(instrument)) {
                 result->support_event_instrument_id.push_back(instrument);
                 result->support_event_symbol_id.push_back(symbol_id);
-                result->support_event_json.push_back(std::move(event));
+                result->support_event_materialization.push_back(
+                    is_materialization_event(event.event_type) ? 1 : 0
+                );
+                result->support_event_date_ordinal.push_back(event.date_ordinal);
+                result->support_event_type.push_back(std::move(event.event_type));
+                result->support_event_zone_key.push_back(std::move(event.zone_key));
+                result->support_event_setup.push_back(std::move(event.setup));
+                result->support_event_score.push_back(event.score);
+                result->support_event_posterior_sample_count.push_back(
+                    event.posterior_sample_count
+                );
+                result->support_event_lower_price.push_back(event.lower_price);
+                result->support_event_upper_price.push_back(event.upper_price);
+                result->support_event_json.push_back(std::move(event.payload_json));
             }
             for (const auto& event : state.events) {
+                SupportAuditRecord record = support_audit_record(event);
                 result->support_event_instrument_id.push_back(instrument);
                 result->support_event_symbol_id.push_back(symbol_id);
-                result->support_event_json.push_back(support_resistance::json(event));
+                result->support_event_materialization.push_back(
+                    is_materialization_event(record.event_type) ? 1 : 0
+                );
+                result->support_event_date_ordinal.push_back(record.date_ordinal);
+                result->support_event_type.push_back(std::move(record.event_type));
+                result->support_event_zone_key.push_back(std::move(record.zone_key));
+                result->support_event_setup.push_back(std::move(record.setup));
+                result->support_event_score.push_back(record.score);
+                result->support_event_posterior_sample_count.push_back(
+                    record.posterior_sample_count
+                );
+                result->support_event_lower_price.push_back(record.lower_price);
+                result->support_event_upper_price.push_back(record.upper_price);
+                result->support_event_json.push_back(std::move(record.payload_json));
             }
             support_events.erase(instrument);
             for (const support_resistance::JsonObject& version : state.zone_versions) {
@@ -2563,26 +2812,22 @@ std::shared_ptr<KernelResult> run_native_backtest(
             checkpoint(total - support_states.size());
         }
     }
-    result->final_equity = result->equity_value.empty() ? initial_cash : result->equity_value.back();
-    result->total_return = initial_cash == 0.0 ? 0.0 : result->final_equity / initial_cash - 1.0;
+    result->final_equity = result->equity_value.empty()
+        ? state.initial_cash : result->equity_value.back();
+    result->total_return = state.initial_cash == 0.0
+        ? 0.0 : result->final_equity / state.initial_cash - 1.0;
     return result;
 }
 
-std::shared_ptr<KernelResult> run_backtest_binding(
-    const py::object& dataset,
+std::shared_ptr<BacktestState> create_backtest_state(
     const py::dict& strategy,
     const py::dict& options,
     const py::object& control_callback,
-    const py::object& finalizing_callback
+    const py::object& finalizing_callback,
+    std::int64_t expected_sessions_override = 0
 ) {
-    DatasetView view = parse_dataset(dataset);
-    const StrategyConfig config = parse_strategy(strategy);
-    const std::optional<UniversePolicy> universe_policy = parse_universe_policy(strategy);
-    if (universe_policy && (view.asset_types.empty() || view.exchanges.empty())) {
-        throw std::invalid_argument(
-            "dynamic universe requires prepared dataset asset/exchange mappings"
-        );
-    }
+    StrategyConfig config = parse_strategy(strategy);
+    std::optional<UniversePolicy> universe_policy = parse_universe_policy(strategy);
     const double initial_cash = number_or(options, "initial_cash", 100'000.0);
     CostConfig costs{
         number_or(options, "commission_bps", 1.0),
@@ -2608,23 +2853,61 @@ std::shared_ptr<KernelResult> run_backtest_binding(
     if (thread_count < 1 || thread_count > kMaximumThreadCount) {
         throw std::invalid_argument("thread_count must be between 1 and 16");
     }
+    const std::int64_t expected_sessions = expected_sessions_override > 0
+        ? expected_sessions_override
+        : static_cast<std::int64_t>(integer_or(options, "expected_sessions", 0));
+    return std::make_shared<BacktestState>(
+        std::move(config), std::move(universe_policy), initial_cash, costs,
+        start, end, thread_count, expected_sessions,
+        control_callback, finalizing_callback
+    );
+}
+
+void consume_backtest_binding(
+    BacktestState& state,
+    const py::object& dataset
+) {
+    DatasetView view = parse_dataset(dataset);
+    if (state.universe_policy && (view.asset_types.empty() || view.exchanges.empty())) {
+        throw std::invalid_argument(
+            "dynamic universe requires prepared dataset asset/exchange mappings"
+        );
+    }
+    consume_native_backtest(state, view);
+}
+
+std::shared_ptr<KernelResult> run_backtest_binding(
+    const py::object& dataset,
+    const py::dict& strategy,
+    const py::dict& options,
+    const py::object& control_callback,
+    const py::object& finalizing_callback
+) {
+    DatasetView view = parse_dataset(dataset);
     const std::vector<SessionRange> all_sessions = session_ranges(
-        view, std::numeric_limits<std::int64_t>::min(), end
+        view,
+        std::numeric_limits<std::int64_t>::min(),
+        option_ordinal(
+            options, "end_ordinal", "end_date", std::numeric_limits<std::int64_t>::max()
+        )
     );
-    std::vector<SessionRange> warmup_sessions;
-    std::vector<SessionRange> sessions;
-    for (const SessionRange& session : all_sessions) {
-        if (session.date_ordinal < start) warmup_sessions.push_back(session);
-        else sessions.push_back(session);
-    }
-    if (sessions.empty()) {
-        throw std::invalid_argument("prepared dataset has no rows inside the backtest window");
-    }
-    attach_history_sessions(view, all_sessions);
-    return run_native_backtest(
-        view, config, universe_policy, warmup_sessions, sessions,
-        initial_cash, costs, thread_count, control_callback, finalizing_callback
+    const std::int64_t start = option_ordinal(
+        options, "start_ordinal", "start_date", std::numeric_limits<std::int64_t>::min()
     );
+    const std::int64_t expected_sessions = static_cast<std::int64_t>(std::count_if(
+        all_sessions.begin(), all_sessions.end(),
+        [start](const SessionRange& session) { return session.date_ordinal >= start; }
+    ));
+    auto state = create_backtest_state(
+        strategy, options, control_callback, finalizing_callback, expected_sessions
+    );
+    if (state->universe_policy && (view.asset_types.empty() || view.exchanges.empty())) {
+        throw std::invalid_argument(
+            "dynamic universe requires prepared dataset asset/exchange mappings"
+        );
+    }
+    consume_native_backtest(*state, view);
+    return finish_native_backtest(*state);
 }
 
 template <typename T>
@@ -2800,6 +3083,21 @@ void bind_backtest(py::module_& module) {
             py::dict events;
             events["instrument_id"] = vector_view(owner, value.support_event_instrument_id);
             events["symbol_id"] = vector_view(owner, value.support_event_symbol_id);
+            events["materialization_event"] = vector_view(
+                owner, value.support_event_materialization
+            );
+            events["event_date_ordinal"] = vector_view(
+                owner, value.support_event_date_ordinal
+            );
+            events["event_type"] = value.support_event_type;
+            events["zone_key"] = value.support_event_zone_key;
+            events["setup"] = value.support_event_setup;
+            events["score"] = vector_view(owner, value.support_event_score);
+            events["posterior_sample_count"] = vector_view(
+                owner, value.support_event_posterior_sample_count
+            );
+            events["lower_price"] = vector_view(owner, value.support_event_lower_price);
+            events["upper_price"] = vector_view(owner, value.support_event_upper_price);
             events["payload_json"] = py::cast(JsonColumn{owner.cast<std::shared_ptr<KernelResult>>(), &value.support_event_json});
             py::dict zones;
             zones["instrument_id"] = vector_view(owner, value.support_zone_instrument_id);
@@ -2815,6 +3113,18 @@ void bind_backtest(py::module_& module) {
             result["regime_versions"] = std::move(regimes);
             return std::move(result);
         });
+    py::class_<BacktestState, std::shared_ptr<BacktestState>>(module, "BacktestSession")
+        .def("consume", &consume_backtest_binding, py::arg("dataset"))
+        .def("finish", &finish_native_backtest);
+    module.def(
+        "create_backtest_session",
+        &create_backtest_state,
+        py::arg("strategy"),
+        py::arg("options") = py::dict(),
+        py::arg("control_callback") = py::none(),
+        py::arg("finalizing_callback") = py::none(),
+        py::arg("expected_sessions_override") = 0
+    );
     module.def(
         "run_backtest",
         &run_backtest_binding,

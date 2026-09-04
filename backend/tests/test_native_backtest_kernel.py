@@ -102,6 +102,51 @@ class NativeBacktestKernelTests(unittest.TestCase):
         }
         return dataset
 
+    def _chunked_result(
+        self,
+        dataset: PreparedDataset,
+        runtime: dict[str, object],
+        *,
+        split_after: date,
+        options: dict[str, object],
+    ):
+        session = quant_kernel.create_backtest_session(runtime, options)
+        for selected in (
+            dataset.integers[:, 3] <= split_after.toordinal(),
+            dataset.integers[:, 3] > split_after.toordinal(),
+        ):
+            integers = np.array(dataset.integers[selected], order="F")
+            if not len(integers):
+                continue
+            _, inverse = np.unique(integers[:, 3], return_inverse=True)
+            integers[:, 0] = inverse
+            first = date.fromordinal(int(integers[:, 3].min())).isoformat()
+            last = date.fromordinal(int(integers[:, 3].max())).isoformat()
+            sidecar = dict(dataset.sidecar)
+            sidecar["corporate_actions"] = [
+                action for action in sidecar.get("corporate_actions", [])
+                if first <= str(action[0]) <= last
+            ]
+            chunk = PreparedDataset.opened(
+                integers,
+                np.array(dataset.floats[selected], order="F"),
+                sidecar,
+            )
+            session.consume(chunk)
+        return session.finish()
+
+    def _assert_results_equal(self, expected, actual) -> None:
+        self.assertEqual(expected.summary, actual.summary)
+        for section in ("signals", "trades", "equity", "positions"):
+            expected_columns = dict(getattr(expected, section))
+            actual_columns = dict(getattr(actual, section))
+            self.assertEqual(set(expected_columns), set(actual_columns))
+            for key, expected_values in expected_columns.items():
+                if isinstance(expected_values, np.ndarray):
+                    np.testing.assert_equal(expected_values, actual_columns[key])
+                else:
+                    self.assertEqual(expected_values, actual_columns[key])
+
     def _runtime(self) -> dict[str, object]:
         return {
             "strategy_id": "native-backtest",
@@ -736,6 +781,76 @@ class NativeBacktestKernelTests(unittest.TestCase):
         self.assertEqual(result.summary["trade_count"], 0)
         self.assertEqual(result.trades["instrument_id"].tolist(), [])
 
+    def test_chunk_boundaries_preserve_pending_fills_actions_delisting_and_symbols(self) -> None:
+        options = {
+            "initial_cash": 1_000.0,
+            "commission_bps": 0.0,
+            "commission_min": 0.0,
+            "slippage_bps": 0.0,
+        }
+        cases = []
+
+        t_plus_one = self._dataset(self._market_days())
+        cases.append(("t_plus_one", t_plus_one, date(2025, 1, 1)))
+
+        split_action = self._dataset(
+            self._market_days(),
+            split_adjustments=[["2025-01-03", 1, 2.0]],
+        )
+        cases.append(("corporate_action", split_action, date(2025, 1, 2)))
+
+        delisted_days = self._market_days()
+        delisted_days[0][1]["AAA"]["delisted_at"] = date(2025, 1, 2)
+        delisted_days[1][1]["AAA"]["delisted_at"] = date(2025, 1, 2)
+        del delisted_days[2][1]["AAA"]
+        cases.append(("delisting", self._dataset(delisted_days), date(2025, 1, 2)))
+
+        renamed_days = self._market_days()
+        for _, snapshots in renamed_days[1:]:
+            renamed = snapshots.pop("AAA")
+            renamed["symbol"] = "AAB"
+            snapshots["AAB"] = renamed
+            ordered = sorted(
+                snapshots.items(), key=lambda item: int(item[1]["instrument_id"])
+            )
+            snapshots.clear()
+            snapshots.update(ordered)
+        cases.append(("symbol_change", self._dataset(renamed_days), date(2025, 1, 1)))
+
+        for label, dataset, split_after in cases:
+            with self.subTest(case=label):
+                expected = quant_kernel.run_backtest(dataset, self._runtime(), options)
+                actual = self._chunked_result(
+                    dataset,
+                    self._runtime(),
+                    split_after=split_after,
+                    options=options,
+                )
+                self._assert_results_equal(expected, actual)
+        missing_days = self._single_symbol_days("mean_reversion")
+        missing_days[1][1]["ONLY"]["open"] = None
+        missing_days[1][1]["ONLY"]["zscore_20"] = None
+        missing_dataset = self._dataset(missing_days)
+        missing_runtime = self._single_symbol_runtime("mean_reversion")
+        self._assert_results_equal(
+            quant_kernel.run_backtest(missing_dataset, missing_runtime, options),
+            self._chunked_result(
+                missing_dataset,
+                missing_runtime,
+                split_after=date(2025, 2, 1),
+                options=options,
+            ),
+        )
+        self.assertEqual(
+            self._chunked_result(
+                t_plus_one,
+                self._runtime(),
+                split_after=date(2025, 1, 1),
+                options=options,
+            ).trades["session_index"].tolist()[0],
+            1,
+        )
+
     def test_split_adjustment_changes_quantity_and_average_before_sell(self) -> None:
         days = self._market_days()
         result = quant_kernel.run_backtest(
@@ -1187,21 +1302,26 @@ class NativeBacktestKernelTests(unittest.TestCase):
             else:
                 expected[reason_columns[str(reason)]] += 1
 
-        result = quant_kernel.run_backtest(
-            self._dataset(days),
-            runtime,
-            {
-                "initial_cash": 1_000.0,
-                "start_date": first_day,
-                "end_date": trade_day,
-            },
-        )
+        dataset = self._dataset(days)
+        options = {
+            "initial_cash": 1_000.0,
+            "start_date": first_day,
+            "end_date": trade_day,
+        }
+        result = quant_kernel.run_backtest(dataset, runtime, options)
         membership = result.universe_membership
         self.assertIsNotNone(membership)
         for column, count in expected.items():
             self.assertEqual(int(membership[column][-1]), count)
         self.assertEqual(result.signals["instrument_id"].tolist(), [1])
         self.assertEqual(result.signals["action"].tolist(), [1])
+        chunked = self._chunked_result(
+            dataset,
+            runtime,
+            split_after=trade_day - timedelta(days=1),
+            options=options,
+        )
+        self._assert_results_equal(result, chunked)
 
         window_only = quant_kernel.run_backtest(
             self._dataset(days),

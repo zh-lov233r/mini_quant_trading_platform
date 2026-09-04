@@ -19,7 +19,7 @@ namespace sr = quant_kernel::support_resistance;
 namespace quant_kernel {
 namespace {
 
-constexpr int kDetectorImplementationRevision = 13;
+constexpr int kDetectorImplementationRevision = 14;
 constexpr int kRegimeLogicRevision = 4;
 constexpr const char* kEntryChannelSemantics = "support_upper_to_resistance_lower_v1";
 

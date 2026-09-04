@@ -36,7 +36,7 @@ The public final decision is normalized to `validated`, `not_validated`, or `inc
 In addition to existing metrics, the v3 report covers days, duration, and transitions for all four regimes; zero-overlap and zero-gap timeline checks; candidate, admitted, rejected, filled, and return results by regime/setup; confirmed-downtrend exits and their post-exit/drawdown impact; and exact replay equality for both zone and regime caches. Any regime timeline integrity error fails the materialization before it can enter a research result.
 
 
-The current detector revision is 13 and state-logic revision is 4. Annual folds schedule 24 trials (2 candidates × 3 years × 4 sample/cost combinations), followed by at most 6 final trials. Start a new study; do not continue an earlier multi-mode protocol or reuse its materializations. For the read-only funnel, rejection-return audit, and optional market filtering, see [Strategy rules](support-resistance-strategy.md).
+The current detector revision is 14 and state-logic revision is 4. Annual folds schedule 24 trials (2 candidates × 3 years × 4 sample/cost combinations), followed by at most 6 final trials. Start a new study; do not continue an earlier multi-mode protocol or reuse its materializations. For the read-only funnel, rejection-return audit, and optional market filtering, see [Strategy rules](support-resistance-strategy.md).
 
 ## Reports
 

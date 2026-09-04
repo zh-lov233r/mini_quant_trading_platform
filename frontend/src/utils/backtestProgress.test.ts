@@ -19,6 +19,9 @@ describe("backtest progress presentation", () => {
   it("provides bilingual phase labels", () => {
     expect(backtestPhaseLabel("preparing", true)).toBe("准备数据");
     expect(backtestPhaseLabel("finalizing", false)).toBe("Finalizing");
+    expect(backtestFinalizingStageLabel("materialization_events", false)).toBe(
+      "Writing shared lifecycle events",
+    );
     expect(backtestFinalizingStageLabel("run_events", true)).toBe("写入生命周期事件");
     expect(backtestFinalizingStageLabel("committing", false)).toBe("Committing backtest results");
   });

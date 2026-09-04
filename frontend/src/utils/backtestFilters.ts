@@ -1,5 +1,17 @@
 import type { BacktestRunOut } from "@/types/backtest";
+import type { StockBasketOut } from "@/types/stock-basket";
 import type { StrategyType } from "@/types/strategy";
+
+export function isAShareBasket(basket: Pick<StockBasketOut, "symbols"> | null): boolean {
+  return Boolean(
+    basket?.symbols.length
+    && basket.symbols.every((symbol) => symbol.endsWith(".SH") || symbol.endsWith(".SZ") || symbol.endsWith(".BJ"))
+  );
+}
+
+export function defaultBenchmarkForBasket(basket: Pick<StockBasketOut, "symbols">): string {
+  return isAShareBasket(basket) ? "000001.SH" : "SPY";
+}
 
 export interface BacktestRunFilters {
   query: string;

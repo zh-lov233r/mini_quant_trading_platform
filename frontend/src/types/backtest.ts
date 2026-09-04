@@ -26,6 +26,7 @@ export type BacktestProgressPhase =
 export type BacktestFinalizingStage =
   | "zone_versions"
   | "regime_versions"
+  | "materialization_events"
   | "run_events"
   | "backtest_details"
   | "committing";

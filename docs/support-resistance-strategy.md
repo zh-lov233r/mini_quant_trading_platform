@@ -21,7 +21,7 @@ Phase identity is independent of the uptrend/downtrend/range/transition classifi
 
 A zone confirmed at the T close is first eligible for a signal on T+1. Signals use forward-adjusted OHLC where available, otherwise unadjusted OHLC. Fills remain at the next valid session open; SELL-first, shared cash, costs, corporate actions and deterministic sorting are unchanged.
 
-Only `support_bounce` entries remain: previous close above a frozen support upper edge, current low touching it, and close recovering at least 0.25 ATR above it. Uptrend/range permit entry; downtrend/transition do not. Direct breakout and breakout-retest switches, triggers and consumers are removed; other strategies' retest rules are unchanged.
+Only `support_bounce` entries remain: previous close above a frozen support upper edge, current low touching it, and close recovering at least 0.25 ATR above it. The frozen support slope must be non-negative; a negative slope keeps the candidate in audit with `falling_support_zone` but cannot enter. Uptrend/range permit entry; downtrend/transition do not. Direct breakout and breakout-retest switches, triggers and consumers are removed; other strategies' retest rules are unchanged.
 
 A stock may trade repeatedly in the same unchanged zone. After a prior position is closed, another qualifying bounce can enter again. There is no once-per-zone flag. Existing holdings, strength, risk, market filters and the zone-specific stop cooldown still apply.
 
@@ -45,13 +45,13 @@ Trade-linked zones are selected by persisted entry/exit evidence; “Show all zo
 
 ## Persistence and cache
 
-Detector revision **13**, regime revision **4**, algorithm family `pivot-slope-regime-v3`. Old revisions cannot serve new calculations.
+Detector revision **14**, regime revision **4**, algorithm family `pivot-slope-regime-v3`. Old revisions cannot serve new calculations.
 
-Existing zone, regime and event tables store phase identity, confirmation, end reason and break-day evidence. Zone keys include phase identity. Store one active geometry and a terminal record; never rewrite fitting evidence. Regime evidence records phase starts even when consecutive phases are both waiting/transition. Cache replay restores these empty phases and must match cold decisions/events.
+Audit schema v2 adds `support_resistance_materialization_events`. Immutable lifecycle events (`touch`, `invalidation`, `phase_ended`, `regime_transition`, `entry_channel_started`, and `entry_channel_ended`) are stored once with zone/regime rows; candidates, selections, rejections, execution decisions, and score outcomes remain run-scoped. Zone keys include phase identity. Store one active geometry and a terminal record; never rewrite fitting evidence. Old materializations remain linked to historical runs but are excluded from v2 cache lookup. Cache replay must merge shared and run events into the same stable API ordering as a cold calculation.
 
 `GET /api/backtests/{run_id}/support-resistance` returns clipped `geometry` and nullable `formation_geometry`, immutable members/phase metadata and recorded events. Source bars are queried on actual instrument sessions.
 
-No new schema or Alembic migration is required for phase JSON metadata. Rebuild the native extension before restarting idle backend/workers:
+The repository has no Alembic workflow. Apply `backend/utils/create_zzzzzz_support_resistance.sql` only after confirming the exact database, backing it up, and reviewing existing row counts; the application never runs this DDL automatically. Rebuild the native extension before restarting idle backend/workers:
 
 ```bash
 .venv/bin/pip install --no-build-isolation --no-deps -e backend/native

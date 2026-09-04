@@ -43,6 +43,7 @@ BacktestProgressPhase = Literal[
 BACKTEST_FINALIZING_STAGES = {
     "zone_versions",
     "regime_versions",
+    "materialization_events",
     "run_events",
     "backtest_details",
     "committing",
