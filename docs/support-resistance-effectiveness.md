@@ -27,13 +27,16 @@ The JSON output contains yearly eligible membership and exclusion observations. 
 
 ## Fixed candidate and time budget
 
-Discovery runs `support_bounce`, `resistance_breakout`, and `breakout_retest` independently. Each mode has four frozen v3 detector profiles covering minimum line Pivot count/span, inlier tolerance, slope cap, zone half-width, and recency half-life, plus three frozen trigger profiles: 12 candidates and 48 trials per mode, 144 trials total. The four-regime classifier adds no tunable parameter. A discovery champion requires positive 2020 base and stress excess returns before deterministic ordering by excess return, Sharpe, drawdown, concentration, and parameter hash.
+Discovery runs the tradable `support_bounce` and `breakout_retest` modes independently; `resistance_breakout` is audit-only and receives no trial budget. Each mode has four frozen v3 detector profiles covering minimum line Pivot count/span, inlier tolerance, slope cap, zone half-width, and recency half-life, plus three frozen trigger profiles: 12 candidates and 48 trials per mode, 96 trials total. The four-regime classifier adds no tunable parameter. A discovery champion requires positive 2020 base and stress excess returns before deterministic ordering by excess return, Sharpe, drawdown, concentration, and parameter hash.
 
-The default plus three mode champions enter the 2021, 2022, and 2023 folds. A calibrated champion must have positive base excess return in all three folds and is frozen by median annual excess return, worst drawdown, stress decay, then hash. The final child runs only out-of-sample trials. It adds `base_cache_replay`, which has the same costs as `base`, so events, signals, transactions, positions, and NAV can be compared exactly. Total scheduled trials are at most 198; unused capacity is never reassigned.
+The default plus two mode champions enter the 2021, 2022, and 2023 folds. A calibrated champion must have positive base excess return in all three folds and is frozen by median annual excess return, worst drawdown, stress decay, then hash. The final child runs only out-of-sample trials. It adds `base_cache_replay`, which has the same costs as `base`, so events, signals, transactions, positions, and NAV can be compared exactly. Total scheduled trials are at most 138; unused capacity is never reassigned.
 
 The public final decision is normalized to `validated`, `not_validated`, or `inconclusive`; internal evidence still records whether a default or calibrated candidate passed. Each passing candidate must satisfy all pre-registered return, drawdown, event-alpha, sample-count, annual-count, P&L-concentration, annual-fold, and cache-equivalence gates. A failed final holdout is not used to redefine filters or parameters.
 
 In addition to existing metrics, the v3 report covers days, duration, and transitions for all four regimes; zero-overlap and zero-gap timeline checks; candidate, admitted, rejected, filled, and return results by regime/setup; confirmed-downtrend exits and their post-exit/drawdown impact; and exact replay equality for both zone and regime caches. Any regime timeline integrity error fails the materialization before it can enter a research result.
+
+
+The current detector revision is 12. Annual folds schedule 36 trials (3 candidates × 3 years × 4 sample/cost combinations), followed by at most 6 final trials. Start a new study; do not continue the old three-mode protocol. For the read-only funnel and rejection-return audit and optional market filtering, see [Strategy rules](support-resistance-strategy.md).
 
 ## Reports
 

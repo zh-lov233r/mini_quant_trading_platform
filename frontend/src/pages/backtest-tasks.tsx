@@ -14,6 +14,7 @@ import { DenseDataTable, type DenseDataColumn } from "@/components/workspace/Den
 import { SelectControl } from "@/components/workspace/SelectControl";
 import { WorkspaceConfirmDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
+import motion from "@/styles/Motion.module.css";
 import type {
   BacktestTask,
   BacktestTaskPage,
@@ -179,7 +180,7 @@ export default function BacktestTasksPage() {
     <AppShell
       title={isZh ? "回测任务中心" : "Backtest Task Center"}
       subtitle={isZh ? "统一查看普通回测、研究 Trial 与验证回测的调度和执行进度。" : "Monitor scheduling and execution across manual, research-trial, and verification backtests."}
-      actions={<button type="button" className={styles.refreshButton} onClick={() => void refresh(true)}>{isZh ? "刷新" : "Refresh"}</button>}
+      actions={<button type="button" className={`${motion.control} ${styles.refreshButton}`} onClick={() => void refresh(true)}>{isZh ? "刷新" : "Refresh"}</button>}
     >
       <WorkspaceConfirmDialog
         open={pendingCancel !== null}
@@ -260,7 +261,7 @@ export default function BacktestTasksPage() {
         {error ? <p role="alert" className={styles.error}>{error}</p> : null}
         {loading && page.items.length === 0 ? <p className={styles.empty}>{isZh ? "正在加载任务…" : "Loading tasks…"}</p> : null}
         {!loading || page.items.length > 0 ? (
-          <>
+          <div className={motion.enter}>
             <div className={styles.desktopTable}>
               <DenseDataTable
                 columns={columns}
@@ -280,7 +281,7 @@ export default function BacktestTasksPage() {
               {page.items.length ? page.items.map((item) => <TaskCard key={item.task_key} task={item} isZh={isZh} locale={locale} deletingRunId={deletingRunId} onCancel={setPendingCancel} onRetry={setPendingRetry} onDelete={setPendingDelete} />) : <p className={styles.empty}>{isZh ? "没有匹配的回测任务。" : "No matching backtest tasks."}</p>}
               {page.total > pagination.pageSize ? <MobilePager pagination={pagination} total={page.total} setPagination={setPagination} isZh={isZh} /> : null}
             </div>
-          </>
+          </div>
         ) : null}
       </section>
     </AppShell>
@@ -304,7 +305,7 @@ function TaskWindow({ task }: { task: BacktestTask }) {
 }
 
 function TaskActions({ task, isZh, deletingRunId, onCancel, onRetry, onDelete }: { task: BacktestTask; isZh: boolean; deletingRunId: string | null; onCancel: (task: BacktestTask) => void; onRetry: (task: BacktestTask) => void; onDelete: (task: BacktestTask) => void }) {
-  return <div className={styles.actions}>{task.run_id ? <Link href={`/backtests/${encodeURIComponent(task.run_id)}`}>{isZh ? "查看" : "View"}</Link> : null}{task.experiment_id ? <Link href={`/research/${encodeURIComponent(task.experiment_id)}`}>{isZh ? "实验" : "Experiment"}</Link> : null}{task.retryable ? <button type="button" className={styles.retryButton} onClick={() => onRetry(task)}>{isZh ? "重试" : "Retry"}</button> : null}{task.cancellable ? <button type="button" onClick={() => onCancel(task)}>{isZh ? "取消" : "Cancel"}</button> : null}{task.deletable ? <button type="button" disabled={deletingRunId === task.run_id} onClick={() => onDelete(task)}>{deletingRunId === task.run_id ? (isZh ? "删除中…" : "Deleting…") : (isZh ? "删除" : "Delete")}</button> : null}</div>;
+  return <div className={styles.actions}>{task.run_id ? <Link href={`/backtests/${encodeURIComponent(task.run_id)}`}>{isZh ? "查看" : "View"}</Link> : null}{task.experiment_id ? <Link href={`/research/${encodeURIComponent(task.experiment_id)}`}>{isZh ? "实验" : "Experiment"}</Link> : null}{task.retryable ? <button type="button" className={`${motion.control} ${styles.retryButton}`} onClick={() => onRetry(task)}>{isZh ? "重试" : "Retry"}</button> : null}{task.cancellable ? <button className={motion.control} type="button" onClick={() => onCancel(task)}>{isZh ? "取消" : "Cancel"}</button> : null}{task.deletable ? <button className={motion.control} type="button" disabled={deletingRunId === task.run_id} onClick={() => onDelete(task)}>{deletingRunId === task.run_id ? (isZh ? "删除中…" : "Deleting…") : (isZh ? "删除" : "Delete")}</button> : null}</div>;
 }
 
 function TaskCard({ task, isZh, locale, deletingRunId, onCancel, onRetry, onDelete }: { task: BacktestTask; isZh: boolean; locale: string; deletingRunId: string | null; onCancel: (task: BacktestTask) => void; onRetry: (task: BacktestTask) => void; onDelete: (task: BacktestTask) => void }) {
@@ -317,7 +318,7 @@ function HealthCard({ title, healthy, state, detail }: { title: string; healthy:
 
 function MobilePager({ pagination, total, setPagination, isZh }: { pagination: PaginationState; total: number; setPagination: (next: PaginationState | ((current: PaginationState) => PaginationState)) => void; isZh: boolean }) {
   const pages = Math.max(1, Math.ceil(total / pagination.pageSize));
-  return <div className={styles.mobilePager}><button type="button" disabled={pagination.pageIndex === 0} onClick={() => setPagination((current) => ({ ...current, pageIndex: current.pageIndex - 1 }))}>{isZh ? "上一页" : "Previous"}</button><span>{pagination.pageIndex + 1} / {pages}</span><button type="button" disabled={pagination.pageIndex + 1 >= pages} onClick={() => setPagination((current) => ({ ...current, pageIndex: current.pageIndex + 1 }))}>{isZh ? "下一页" : "Next"}</button></div>;
+  return <div className={styles.mobilePager}><button className={motion.control} type="button" disabled={pagination.pageIndex === 0} onClick={() => setPagination((current) => ({ ...current, pageIndex: current.pageIndex - 1 }))}>{isZh ? "上一页" : "Previous"}</button><span>{pagination.pageIndex + 1} / {pages}</span><button className={motion.control} type="button" disabled={pagination.pageIndex + 1 >= pages} onClick={() => setPagination((current) => ({ ...current, pageIndex: current.pageIndex + 1 }))}>{isZh ? "下一页" : "Next"}</button></div>;
 }
 
 function sourceLabel(source: BacktestTaskSource, isZh: boolean): string {

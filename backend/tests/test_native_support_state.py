@@ -3,9 +3,13 @@ from __future__ import annotations
 from datetime import date
 import json
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import numpy as np
 
+from src.services.native_support_state import NativeSupportState
+from src.services.prepared_dataset_service import PREPARED_INTEGER_FIELDS
 from src.services.backtest_engine import _native_support_state
 from src.services.prepared_dataset_service import PREPARED_INTEGER_INDEX
 
@@ -21,7 +25,11 @@ class _FakeResult:
 
     def __init__(self, symbols, support_resistance):
         self.symbols = symbols
-        self.support_resistance = support_resistance
+        self.support_resistance = None if support_resistance is None else {
+            **{key: {"instrument_id": _numpy_column([]), "symbol_id": _numpy_column([]), "payload_json": []}
+               for key in ("events", "zone_versions", "regime_versions")},
+            **support_resistance,
+        }
 
 
 class _FakeDataset:
@@ -77,19 +85,19 @@ class NativeSupportStateTests(unittest.TestCase):
         self.assertEqual(len(state.symbols["11"].events), 2)
         self.assertEqual(len(state.symbols["12"].events), 1)
         self.assertEqual(len(state.symbols["12"].zone_versions), 1)
-        self.assertEqual(state.symbols["11"].regime_versions, [])
+        self.assertEqual(list(state.symbols["11"].regime_versions), [])
         self.assertEqual(state.symbols["11"].instrument_id, 11)
         self.assertEqual(state.symbols["11"].symbol, "AAPL")
         self.assertEqual(
-            state.symbols["11"].history, [{"dt_ny": date(2026, 7, 30)}]
+            list(state.symbols["11"].history), [{"dt_ny": date(2026, 7, 30)}]
         )
 
     def test_missing_support_resistance_payload(self):
         state = _native_support_state(
             _FakeResult(["AAPL", "MSFT"], None), self._dataset()
         )
-        self.assertEqual(state.symbols["11"].events, [])
-        self.assertEqual(state.symbols["12"].events, [])
+        self.assertEqual(list(state.symbols["11"].events), [])
+        self.assertEqual(list(state.symbols["12"].events), [])
 
     def test_reused_ticker_keeps_instrument_states_separate(self):
         dataset = self._dataset()
@@ -108,8 +116,51 @@ class NativeSupportStateTests(unittest.TestCase):
         state = _native_support_state(_FakeResult(["SAME"], support), dataset)
 
         self.assertEqual(set(state.symbols), {"11", "12"})
-        self.assertEqual(state.symbols["11"].events, [{"event": "old identity"}])
-        self.assertEqual(state.symbols["12"].events, [{"event": "new identity"}])
+        self.assertEqual(list(state.symbols["11"].events), [{"event": "old identity"}])
+        self.assertEqual(list(state.symbols["12"].events), [{"event": "new identity"}])
+
+
+class NativeSupportStateLazyTests(unittest.TestCase):
+    def _fixture(self):
+        integers = np.zeros((4, len(PREPARED_INTEGER_FIELDS)), dtype=np.int64, order="F")
+        integers[:, PREPARED_INTEGER_INDEX["instrument_id"]] = [1, 2, 1, 2]
+        integers[:, PREPARED_INTEGER_INDEX["symbol_id"]] = [0, 0, 1, 0]
+        integers[:, PREPARED_INTEGER_INDEX["dt_ordinal"]] = [date(2025, 1, 1).toordinal()] * 2 + [date(2025, 1, 3).toordinal()] * 2
+        payloads = Mock()
+        payloads.__len__ = Mock(return_value=3)
+        payloads.__getitem__ = Mock(side_effect=['{"value":1}', '{"value":2}', '{"value":3}'])
+        empty = {"instrument_id": np.array([], dtype=np.int64), "symbol_id": [], "payload_json": []}
+        result = SimpleNamespace(symbols=["REUSED", "RENAMED"], support_resistance={
+            "events": {"instrument_id": np.array([1, 1, 2]), "symbol_id": [1, 1, 0], "payload_json": payloads},
+            "zone_versions": empty, "regime_versions": empty,
+        })
+        return result, SimpleNamespace(integers=integers), payloads
+
+    def test_audit_decoding_is_lazy_and_preserves_identity_and_session_order(self):
+        result, dataset, payloads = self._fixture()
+        state = NativeSupportState(result, dataset)
+        self.assertEqual(set(state.symbols), {"1", "2"})
+        self.assertEqual(state.symbols["1"].symbol, "RENAMED")
+        self.assertEqual(state.symbols["2"].symbol, "REUSED")
+        self.assertEqual(len(state.symbols["1"].events), 2)
+        payloads.__getitem__.assert_not_called()
+        self.assertEqual(list(state.symbols["1"].events), [{"value": 1}, {"value": 2}])
+        self.assertEqual(list(state.symbols["2"].events), [{"value": 3}])
+        self.assertEqual(list(state.symbols["1"].history), [
+            {"dt_ny": date(2025, 1, 1)}, {"dt_ny": date(2025, 1, 3)},
+        ])
+
+    def test_cancel_is_checked_before_decode_and_misaligned_columns_fail(self):
+        result, dataset, payloads = self._fixture()
+        cancel = Mock()
+        state = NativeSupportState(result, dataset, cancel)
+        cancel.side_effect = RuntimeError("cancelled")
+        with self.assertRaisesRegex(RuntimeError, "cancelled"):
+            next(iter(state.symbols["1"].events))
+        payloads.__getitem__.assert_not_called()
+        result.support_resistance["events"]["symbol_id"] = [1]
+        with self.assertRaisesRegex(ValueError, "column lengths differ"):
+            NativeSupportState(result, dataset)
 
 
 if __name__ == "__main__":

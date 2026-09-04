@@ -1,6 +1,6 @@
 import type { StrategyType } from "@/types/strategy";
 
-export type GuidedFieldKind = "number" | "percent" | "boolean" | "select";
+export type GuidedFieldKind = "number" | "percent" | "boolean" | "select" | "text";
 
 export interface GuidedFieldDefinition {
   key: string;
@@ -96,6 +96,10 @@ export const STRATEGY_GUIDANCE: Record<Exclude<StrategyType, "custom">, Strategy
   island_reversal: {
     signal: [
       ...commonSignal,
+      { key: "previousBodyAtrMin", path: "signal.previous_body_atr_min", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "breakoutBodyAtrMin", path: "signal.breakout_body_atr_min", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "exhaustionBodyAtrMax", path: "signal.exhaustion_body_atr_max", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "islandBodyAtrMax", path: "signal.island_body_atr_max", kind: "number", min: 0.01, step: 0.1, advanced: true },
       { key: "downtrendLookback", path: "signal.downtrend_lookback", kind: "number", integer: true, min: 1, step: 1 },
       { key: "downtrendMinDropPct", path: "signal.downtrend_min_drop_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 },
       { key: "leftGapMinPct", path: "signal.left_gap_min_pct", kind: "percent", min: 0.0001, max: 1, step: 0.1 },
@@ -119,6 +123,8 @@ export const STRATEGY_GUIDANCE: Record<Exclude<StrategyType, "custom">, Strategy
   double_bottom: {
     signal: [
       ...commonSignal,
+      { key: "reboundVolumeRatioMin", path: "signal.rebound_volume_ratio_min", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "reboundVolumeRatioMax", path: "signal.rebound_volume_ratio_max", kind: "number", min: 0.01, step: 0.1, advanced: true },
       { key: "downtrendLookback", path: "signal.downtrend_lookback", kind: "number", integer: true, min: 1, step: 1 },
       { key: "downtrendMinDropPct", path: "signal.downtrend_min_drop_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 },
       { key: "downtrendMaxUpDayRatio", path: "signal.downtrend_max_up_day_ratio", kind: "percent", min: 0.0001, max: 1, step: 1, advanced: true },
@@ -149,6 +155,15 @@ export const STRATEGY_GUIDANCE: Record<Exclude<StrategyType, "custom">, Strategy
   head_shoulders_bottom: {
     signal: [
       ...commonSignal,
+      { key: "platformBars", path: "signal.platform_bars", kind: "number", min: 3, step: 1, integer: true, advanced: true },
+      { key: "platformRangeAtrMax", path: "signal.platform_range_atr_max", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "platformDriftAtrMax", path: "signal.platform_drift_atr_max", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "reboundVolumeRatioMin", path: "signal.rebound_volume_ratio_min", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "reboundVolumeRatioMax", path: "signal.rebound_volume_ratio_max", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "downtrendMinDropPct", path: "signal.downtrend_min_drop_pct", kind: "percent", min: 0.0001, max: 0.9999, step: 0.1, advanced: true },
+      { key: "headVolumeRatioMax", path: "signal.head_volume_ratio_max", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "rightShoulderVolumeRatioMax", path: "signal.right_shoulder_volume_ratio_max", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "breakoutBufferPct", path: "signal.breakout_buffer_pct", kind: "percent", min: 0, max: 0.9999, step: 0.1, advanced: true },
       { key: "downtrendLookback", path: "signal.downtrend_lookback", kind: "number", integer: true, min: 1, step: 1 },
       { key: "headDepthMinPct", path: "signal.head_depth_min_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 },
       { key: "shoulderTolerancePct", path: "signal.shoulder_tolerance_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 },
@@ -163,6 +178,12 @@ export const STRATEGY_GUIDANCE: Record<Exclude<StrategyType, "custom">, Strategy
   rounded_bottom: {
     signal: [
       ...commonSignal,
+      { key: "weakeningBufferPct", path: "signal.weakening_buffer_pct", kind: "percent", min: 0.0001, max: 0.9999, step: 0.1, advanced: true },
+      { key: "vertexPositionMin", path: "signal.vertex_position_min", kind: "percent", min: 0.0001, max: 0.9999, step: 0.1, advanced: true },
+      { key: "vertexPositionMax", path: "signal.vertex_position_max", kind: "percent", min: 0.0001, max: 0.9999, step: 0.1, advanced: true },
+      { key: "rightVolumeRatioMin", path: "signal.right_volume_ratio_min", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "pullbackVolumeRatioMax", path: "signal.pullback_volume_ratio_max", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "breakoutBufferPct", path: "signal.breakout_buffer_pct", kind: "percent", min: 0, max: 0.9999, step: 0.1, advanced: true },
       { key: "minLookback", path: "signal.min_lookback", kind: "number", integer: true, min: 3, step: 1 },
       { key: "maxLookback", path: "signal.max_lookback", kind: "number", integer: true, min: 3, step: 1 },
       { key: "minDepthPct", path: "signal.min_depth_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 },
@@ -177,6 +198,17 @@ export const STRATEGY_GUIDANCE: Record<Exclude<StrategyType, "custom">, Strategy
   v_reversal: {
     signal: [
       ...commonSignal,
+      { key: "consolidationRangeAtrMax", path: "signal.consolidation_range_atr_max", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "consolidationDriftAtrMax", path: "signal.consolidation_drift_atr_max", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "breakoutBufferPct", path: "signal.breakout_buffer_pct", kind: "percent", min: 0, max: 0.9999, step: 0.1, advanced: true },
+      { key: "bearishBodyAtrMin", path: "signal.bearish_body_atr_min", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "pivotMaxBars", path: "signal.pivot_max_bars", kind: "number", min: 1, step: 1, integer: true, advanced: true },
+      { key: "reversalMinAtr", path: "signal.reversal_min_atr", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "continuationVolumeRatioMin", path: "signal.continuation_volume_ratio_min", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "breakoutVolumeRatioMin", path: "signal.breakout_volume_ratio_min", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "retestVolumeRatioMax", path: "signal.retest_volume_ratio_max", kind: "number", min: 0.01, step: 0.1, advanced: true },
+      { key: "supportTolerancePct", path: "signal.support_tolerance_pct", kind: "percent", min: 0.0001, max: 0.9999, step: 0.1, advanced: true },
+      { key: "bearishReversalVolumeRatioMin", path: "signal.bearish_reversal_volume_ratio_min", kind: "number", min: 0.01, step: 0.1, advanced: true },
       { key: "downtrendLookback", path: "signal.downtrend_lookback", kind: "number", integer: true, min: 1, step: 1 },
       { key: "downtrendMinDropPct", path: "signal.downtrend_min_drop_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 },
       { key: "reversalMinReturnPct", path: "signal.reversal_min_return_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 },
@@ -191,6 +223,8 @@ export const STRATEGY_GUIDANCE: Record<Exclude<StrategyType, "custom">, Strategy
   support_resistance: {
     signal: [
       ...commonSignal,
+      { key: "maxZonesPerKind", path: "signal.max_zones_per_kind", kind: "number", integer: true, min: 1, max: 5, step: 1 },
+      { key: "pivotToleranceAtr", path: "signal.pivot_tolerance_atr", kind: "number", min: 0, max: 0.1, step: 0.01, advanced: true },
       { key: "supportBounceEnabled", path: "signal.support_bounce_enabled", kind: "boolean" },
       { key: "resistanceBreakoutEnabled", path: "signal.resistance_breakout_enabled", kind: "boolean" },
       { key: "breakoutRetestEnabled", path: "signal.breakout_retest_enabled", kind: "boolean" },
@@ -208,14 +242,17 @@ export const STRATEGY_GUIDANCE: Record<Exclude<StrategyType, "custom">, Strategy
       { key: "breakoutVolumeRatioMin", path: "signal.breakout_volume_ratio_min", kind: "number", min: 0.01, step: 0.1 },
       { key: "retestWindow", path: "signal.retest_window", kind: "number", integer: true, min: 1, step: 1, advanced: true },
       { key: "retestVolumeRatioMax", path: "signal.retest_volume_ratio_max", kind: "number", min: 0.01, step: 0.1, advanced: true },
-      { key: "scoreOutcomeWindow", path: "signal.score_outcome_window", kind: "number", integer: true, min: 1, step: 1, advanced: true },
-      { key: "scoreTargetAtr", path: "signal.score_target_atr", kind: "number", min: 0.01, step: 0.1, advanced: true },
-      { key: "scoreStopAtr", path: "signal.score_stop_atr", kind: "number", min: 0.01, step: 0.1, advanced: true },
     ],
     risk: [
-      ...commonRisk,
+      { key: "maxPositions", path: "risk.max_positions", kind: "number", integer: true, min: 1, step: 1 },
+      { key: "positionNotionalCap", path: "risk.position_size_pct", kind: "percent", min: 0.0001, max: 1, step: 1 },
+      { key: "riskPerTradePct", path: "risk.risk_per_trade_pct", kind: "percent", min: 0.0001, max: 1, step: 0.1 },
+      { key: "stopCooldownSessions", path: "risk.stop_cooldown_sessions", kind: "number", integer: true, min: 0, step: 1 },
+      { key: "breakEvenAtR", path: "risk.break_even_at_r", kind: "number", min: 0.01, step: 0.1 },
+      { key: "marketFilterEnabled", path: "risk.market_filter_enabled", kind: "boolean" },
+      { key: "marketFilterSymbol", path: "risk.market_filter_symbol", kind: "text" },
       { key: "stopLossAtr", path: "risk.stop_loss_atr", kind: "number", min: 0.01, step: 0.1 },
-      { key: "maxLossPct", path: "risk.max_loss_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 },
+      { key: "stopReferencePct", path: "risk.max_loss_pct", kind: "percent", min: 0.0001, max: 1, step: 0.5 },
       { key: "takeProfitAtr", path: "risk.take_profit_atr", kind: "number", min: 0.01, step: 0.1 },
       { key: "minRewardRisk", path: "risk.min_reward_risk", kind: "number", min: 0.01, step: 0.1, advanced: true },
       { key: "maxHoldingDays", path: "risk.max_holding_days", kind: "number", integer: true, min: 1, step: 1, advanced: true },

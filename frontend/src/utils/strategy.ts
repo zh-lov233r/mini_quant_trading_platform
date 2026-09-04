@@ -95,8 +95,8 @@ export function getStrategyTemplateCopy(
       return {
         label: isZh ? "双底形态" : "Double Bottom",
         description: isZh
-          ? "保守版双底形态策略，确认长期下跌后的双底、放量突破颈线与缩量回踩。"
-          : "Conservative double-bottom strategy focused on a confirmed neckline breakout and low-volume retest after a prolonged decline.",
+          ? "双底策略分阶段确认缩量右底、右侧回踩和放量收盘突破颈线，右底不得低于左底。"
+          : "Staged double bottom: low-volume right bottom, right-side pullback, then volume-backed closing neckline breakout; no lower right low.",
       };
     case "head_shoulders_bottom":
       return {
@@ -118,7 +118,7 @@ export function getStrategyTemplateCopy(
         label: isZh ? "支撑 / 压力区域" : "Support / Resistance Zones",
         description: isZh
           ? "使用已确认 Pivot 与 ATR 聚类识别动态价格区，仅在支撑与压力内沿通道中交易反弹/回踩；压力突破只做审计。"
-          : "Dynamic confirmed-Pivot and ATR-clustered zones for support bounces, resistance breakouts, and breakout retests.",
+          : "Dynamic confirmed-Pivot and ATR-clustered zones for support bounces and breakout retests; direct breakouts are audit-only.",
       };
     case "custom":
       return {

@@ -75,7 +75,9 @@ from src.services.support_resistance_service import (
     SupportResistanceState,
     entry_price_is_inside_channel,
     project_entry_channel,
+    native_support_resistance,
 )
+from src.services.support_resistance_risk_service import load_support_risk_context
 
 
 log = logging.getLogger("paper_trading")
@@ -327,6 +329,28 @@ def run_paper_trading(
                 if (replay_date := _support_resistance_bar_date(bar)) is not None
             ]
             coverage_start = min(replay_dates) if replay_dates else trade_date
+            context = load_support_risk_context(db, runtime["params"]["risk"], coverage_start,
+                trade_date)
+            run.config_snapshot = {**run.config_snapshot, "support_risk_context": context}
+            for snapshot in snapshots.values():
+                snapshot["support_risk_context"] = context
+                snapshot["support_stopped_zones"] = {}
+            snapshots_by_instrument = {int(snapshot["instrument_id"]): snapshot
+                for snapshot in snapshots.values() if snapshot.get("instrument_id") is not None}
+            stop_signals = db.execute(select(Signal, StrategyRun).join(
+                StrategyRun, StrategyRun.id == Signal.run_id,
+            ).where(Signal.strategy_id == strategy.id, Signal.signal == "SELL",
+                StrategyRun.mode == "paper", Signal.ts >= datetime.combine(coverage_start,
+                    datetime.min.time(), tzinfo=timezone.utc),
+                Signal.ts < datetime.combine(trade_date + timedelta(days=1), datetime.min.time(), tzinfo=NEW_YORK)
+            ).order_by(Signal.ts.asc())).all()
+            for old_signal, old_run in stop_signals:
+                if (old_run.config_snapshot or {}).get("paper_trading", {}).get("portfolio_name") != allocation_cfg.portfolio_name:
+                    continue
+                frozen = (old_signal.features or {}).get("support_resistance", {})
+                snapshot = snapshots_by_instrument.get(old_signal.instrument_id)
+                if snapshot is not None and frozen.get("exit_reason_code") == "stop":
+                    snapshot["support_stopped_zones"][frozen["zone_key"]] = old_signal.ts.astimezone(NEW_YORK).date()
             reusable = find_reusable_materialization(
                 db,
                 runtime=runtime,
@@ -892,14 +916,25 @@ def process_pending_support_resistance_entries(
             touched_runs.add(run.id)
             processed += 1
             continue
-        target_value = min(
-            sleeve.cash,
-            _account_cash(account),
-            sleeve.equity * float(risk_cfg["position_size_pct"]),
-        )
+        sizing = native_support_resistance.size_entry(event.metadata["support_resistance"],
+            ask_price, sleeve.equity, min(sleeve.cash, _account_cash(account)), risk_cfg)
+        if sizing["quantity"] <= 0:
+            _update_signal_paper_execution(signal, status="skipped", reason_code=sizing["reason_code"])
+            touched_runs.add(run.id)
+            processed += 1
+            continue
+        limit_price = _round_limit_price_down(min(float(projected_channel["upper"]), sizing["maximum_entry_price"]))
+        if limit_price < ask_price:
+            _update_signal_paper_execution(signal, status="skipped", reason_code="risk_limit_below_ask")
+            touched_runs.add(run.id)
+            processed += 1
+            continue
+        sizing = native_support_resistance.size_entry(event.metadata["support_resistance"],
+            limit_price, sleeve.equity, min(sleeve.cash, _account_cash(account)), risk_cfg)
+        target_value = sizing["quantity"] * limit_price
         qty = _estimate_paper_buy_qty(
             target_value,
-            ask_price,
+            limit_price,
             allow_fractional=allocation_cfg.allow_fractional,
         )
         if qty <= 0:
@@ -907,7 +942,6 @@ def process_pending_support_resistance_entries(
             touched_runs.add(run.id)
             processed += 1
             continue
-        limit_price = _round_limit_price_down(float(projected_channel["upper"]))
         outcome = _submit_paper_order(
             db=db,
             strategy=strategy,
@@ -1413,6 +1447,7 @@ def _prepare_support_resistance_paper_entries(
         if event.action != "BUY" or not isinstance(support_resistance, dict):
             continue
         event.metadata = dict(event.metadata)
+        event.metadata["support_resistance"] = {**support_resistance, "instrument_id": event.instrument_id}
         event.metadata["paper_execution"] = {
             "status": "pending" if submit_orders else "dry_run",
             "eligible_trade_date": eligible_trade_date.isoformat(),

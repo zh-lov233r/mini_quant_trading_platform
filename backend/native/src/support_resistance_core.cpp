@@ -110,6 +110,19 @@ std::string quantized_decimal_string(const std::string& input) {
     return scaled_integer;
 }
 
+void append_json(std::string& output, const JsonValue& value);
+
+void append_object(std::string& output, const JsonObject& value) {
+    output.push_back('{');
+    for (std::size_t index = 0; index < value.size(); ++index) {
+        if (index > 0U) output.push_back(',');
+        output += json_string(value[index].first);
+        output.push_back(':');
+        append_json(output, value[index].second);
+    }
+    output.push_back('}');
+}
+
 void append_json(std::string& output, const JsonValue& value) {
     if (std::holds_alternative<std::nullptr_t>(value.value)) {
         output += "null";
@@ -133,15 +146,7 @@ void append_json(std::string& output, const JsonValue& value) {
         }
         output.push_back(']');
     } else {
-        const JsonObject& object_value = std::get<JsonObject>(value.value);
-        output.push_back('{');
-        for (std::size_t index = 0; index < object_value.size(); ++index) {
-            if (index > 0U) output.push_back(',');
-            output += json_string(object_value[index].first);
-            output.push_back(':');
-            append_json(output, object_value[index].second);
-        }
-        output.push_back('}');
+        append_object(output, std::get<JsonObject>(value.value));
     }
 }
 
@@ -298,15 +303,15 @@ std::optional<FitResult> fit_pivot_line(
 }
 
 std::vector<const Pivot*> zone_member_pivots(const SymbolState& state, const Zone& zone) {
-    std::set<std::string> member_keys(zone.pivot_keys.begin(), zone.pivot_keys.end());
     std::vector<const Pivot*> result;
     for (const Pivot& pivot : state.pivots) {
-        if (member_keys.contains(pivot.pivot_key)) result.push_back(&pivot);
+        if (pivot.kind == zone.source_kind) result.push_back(&pivot);
     }
     std::sort(result.begin(), result.end(), [](const Pivot* left, const Pivot* right) {
         return std::tuple(left->session_index, left->trade_date_ordinal, left->pivot_key)
             < std::tuple(right->session_index, right->trade_date_ordinal, right->pivot_key);
     });
+    if (result.size() > 4U) result.erase(result.begin(), result.end() - 4);
     return result;
 }
 
@@ -317,13 +322,14 @@ std::string direction(double delta, double tolerance) {
 }
 
 std::string pivot_direction(const std::vector<const Pivot*>& pivots, double half_width_ratio) {
-    const Pivot& previous = *pivots[pivots.size() - 2U];
-    const Pivot& latest = *pivots.back();
-    const double tolerance = std::max(
-        ((previous.atr + latest.atr) / 2.0) * half_width_ratio,
-        1e-12
-    );
-    return direction(latest.price - previous.price, tolerance);
+    std::vector<std::pair<double, double>> changes;
+    for (std::size_t i = 0; i < pivots.size(); ++i) {
+        for (std::size_t j = i + 1; j < pivots.size(); ++j) {
+            const double atr = (pivots[i]->atr + pivots[j]->atr) / 2.0;
+            changes.emplace_back((pivots[j]->price - pivots[i]->price) / atr, 1.0);
+        }
+    }
+    return direction(weighted_median(std::move(changes)), half_width_ratio);
 }
 
 const Zone* best_boundary(
@@ -373,6 +379,7 @@ RegimeEvidence classify_market_regime(
     result.payload = object({
         {"lower_zone_key", nullable(result.lower_zone_key)},
         {"upper_zone_key", nullable(result.upper_zone_key)},
+        {"evidence_trade_date", iso_date(bar.date_ordinal)},
         {"close", bar.close},
     });
     auto finish = [&](Regime regime, std::string reason) {
@@ -414,14 +421,12 @@ RegimeEvidence classify_market_regime(
     set(result.payload, "upper_boundary_direction", upper_boundary_direction);
     set(result.payload, "lower_pivot_direction", lower_pivot_direction);
     set(result.payload, "upper_pivot_direction", upper_pivot_direction);
-    set(result.payload, "lower_pivot_keys", JsonArray{
-        lower_pivots[lower_pivots.size() - 2U]->pivot_key,
-        lower_pivots.back()->pivot_key,
-    });
-    set(result.payload, "upper_pivot_keys", JsonArray{
-        upper_pivots[upper_pivots.size() - 2U]->pivot_key,
-        upper_pivots.back()->pivot_key,
-    });
+    JsonArray lower_keys, upper_keys;
+    for (const Pivot* pivot : lower_pivots) lower_keys.emplace_back(pivot->pivot_key);
+    for (const Pivot* pivot : upper_pivots) upper_keys.emplace_back(pivot->pivot_key);
+    set(result.payload, "lower_pivot_keys", std::move(lower_keys));
+    set(result.payload, "upper_pivot_keys", std::move(upper_keys));
+    set(result.payload, "pivot_structure_semantics", "latest_four_confirmed_swings");
     const std::array<std::string, 4> directions = {
         lower_boundary_direction,
         upper_boundary_direction,
@@ -490,65 +495,32 @@ Strength build_strength(
     double hold_margin_atr,
     std::optional<double> volume_ratio,
     std::optional<double> retest_volume_ratio,
-    double reward_risk
+    double reward_risk,
+    const Zone& zone
 ) {
     std::vector<StrengthComponent> components;
-    const double reward_weight = setup == Setup::ResistanceBreakout ? 0.20 : 0.30;
-    const StrengthComponent reward = strength_component(
-        "reward_risk",
-        reward_risk,
-        reward_weight,
-        config.min_reward_risk,
-        config.min_reward_risk * 2.0
-    );
-    if (setup == Setup::SupportBounce) {
-        components = {
-            strength_component(
-                "confirmation_atr",
-                confirmation_atr,
-                0.70,
-                config.bounce_confirmation_atr,
-                config.bounce_confirmation_atr * 2.0
-            ),
-            reward,
-        };
-    } else if (setup == Setup::ResistanceBreakout) {
-        components = {
-            strength_component(
-                "confirmation_atr",
-                confirmation_atr,
-                0.45,
-                config.breakout_confirmation_atr,
-                config.breakout_confirmation_atr * 2.0
-            ),
-            strength_component(
-                "volume_ratio",
-                volume_ratio.value_or(0.0),
-                0.35,
-                config.breakout_volume_ratio_min,
-                config.breakout_volume_ratio_min * 2.0
-            ),
-            reward,
-        };
+    components = {
+        strength_component("reward_risk", reward_risk, 0.25,
+            config.min_reward_risk, config.min_reward_risk * 2.0),
+        strength_component("pivot_count", zone.pivot_count, 0.15,
+            config.min_line_pivots - 1.0, config.min_line_pivots + 3.0),
+        strength_component("touch_count", zone.touch_count, 0.10, 0.0, 3.0),
+        strength_component("fit_residual_atr", zone.fit_residual_atr, 0.15,
+            config.line_inlier_tolerance_atr, 0.0, false),
+    };
+    if (setup == Setup::ResistanceBreakout) {
+        components.push_back(strength_component("confirmation_atr", confirmation_atr,
+            0.20, config.breakout_confirmation_atr, config.breakout_confirmation_atr * 2.0));
+        components.push_back(strength_component("volume_ratio", volume_ratio.value_or(0.0),
+            0.15, config.breakout_volume_ratio_min, config.breakout_volume_ratio_min * 2.0));
     } else {
-        components = {
-            strength_component(
-                "hold_margin_atr",
-                hold_margin_atr,
-                0.35,
-                0.0,
-                config.bounce_confirmation_atr
-            ),
-            strength_component(
-                "retest_volume_ratio",
-                retest_volume_ratio.value_or(0.0),
-                0.35,
-                config.retest_volume_ratio_max,
-                0.0,
-                false
-            ),
-            reward,
-        };
+        const double ideal = setup == Setup::SupportBounce ? config.bounce_confirmation_atr : 0.0;
+        components.push_back(strength_component("support_proximity_atr", confirmation_atr,
+            0.20, ideal + 2.0, ideal, false));
+        components.push_back(setup == Setup::SupportBounce
+            ? strength_component("volume_ratio", volume_ratio.value_or(0.0), 0.15, 0.5, 1.5)
+            : strength_component("retest_volume_ratio", retest_volume_ratio.value_or(0.0),
+                0.15, config.retest_volume_ratio_max, 0.0, false));
     }
     double weighted = 0.0;
     double total = 0.0;
@@ -561,7 +533,7 @@ Strength build_strength(
         score,
         config.min_strength_score,
         score >= config.min_strength_score,
-        "support_resistance:" + std::string(name(setup)) + ":v1",
+        "support_resistance:" + std::string(name(setup)) + ":v2",
         std::move(components),
     };
 }
@@ -592,6 +564,12 @@ const JsonValue* find(const JsonObject& value, const std::string& key) {
 std::string json(const JsonValue& value) {
     std::string output;
     append_json(output, value);
+    return output;
+}
+
+std::string json(const JsonObject& value) {
+    std::string output;
+    append_object(output, value);
     return output;
 }
 
@@ -735,14 +713,8 @@ EntryChannel build_entry_channel(
             )) {
             continue;
         }
-        const double inner_edge = zone.role == ZoneRole::Support ? zone.upper : zone.lower;
-        const bool eligible = zone.role == ZoneRole::Support ? inner_edge <= close : inner_edge >= close;
-        if (!eligible) continue;
-        ChannelCandidate candidate{
-            &zone,
-            zone.role == ZoneRole::Support ? close - inner_edge : inner_edge - close,
-        };
-        (zone.role == ZoneRole::Support ? supports : resistances).push_back(candidate);
+        if (zone.upper <= close) supports.push_back({&zone, close - zone.upper});
+        if (zone.lower >= close) resistances.push_back({&zone, zone.lower - close});
     }
     std::sort(supports.begin(), supports.end(), less);
     std::sort(resistances.begin(), resistances.end(), less);
@@ -916,6 +888,8 @@ JsonObject candidate_json(const Candidate& candidate) {
         {"stop_price", candidate.stop_price},
         {"target_price", candidate.target_price},
         {"reward_risk", candidate.reward_risk},
+        {"overhead_count", candidate.overhead_count},
+        {"target_source", candidate.overhead_count == 0 ? "atr_fallback" : "overhead_zone"},
         {"reason", candidate.reason},
         {"strength_inputs", candidate.strength_inputs},
         {"strength", strength_json(candidate.strength)},
@@ -1050,8 +1024,11 @@ void record_regime_version(
         }
     }
     state.current_regime = evidence.regime;
+    if (previous && *previous == evidence.regime) {
+        state.current_regime_evidence = *get<JsonObject>(state.regime_versions.back(), "evidence");
+        return;
+    }
     state.current_regime_evidence = evidence.payload;
-    if (previous && *previous == evidence.regime) return;
     JsonObject payload = object({
         {"version", state.regime_versions.size() + 1U},
         {"effective_from", iso_date(effective_from)},
@@ -1101,46 +1078,60 @@ void record_cached_lifecycle_events(SymbolState& state, std::int32_t trade_date_
     }
 }
 
-void resolve_prior_outcomes(
-    SymbolState& state,
-    const Bar& bar,
-    int session_index,
-    const Config& config
-) {
+std::optional<Decision> resolve_exit(const PositionView&, const Bar&, const Config&,
+    const RegimeEvidence&, const SymbolState&);
+
+double entry_stop(const JsonObject& frozen) {
+    double stop = *number(frozen, "stop_price");
+    if (const auto* zone = get<JsonObject>(frozen, "zone")) {
+        stop = std::max(stop, number(*zone, "lower").value_or(stop)
+            + std::max(number(*zone, "slope_per_session").value_or(0.0), 0.0));
+    }
+    return stop;
+}
+
+void resolve_prior_outcomes(SymbolState& state, const Bar& bar, int session_index,
+    const Config& config, const RegimeEvidence& regime) {
     std::vector<PendingOutcome> remaining;
-    for (const PendingOutcome& outcome : state.pending_outcomes) {
-        const int elapsed = session_index - outcome.origin_session_index;
-        const bool hit_target = bar.high >= outcome.target;
-        const bool hit_stop = bar.low <= outcome.stop;
+    for (PendingOutcome outcome : state.pending_outcomes) {
         SetupStats& stats = state.stats.at(outcome.setup);
-        std::optional<std::string> result;
-        if (hit_target && hit_stop) {
-            ++stats.losses;
-            result = "loss_same_day_both";
-        } else if (hit_stop) {
-            ++stats.losses;
-            result = "loss";
-        } else if (hit_target) {
-            ++stats.wins;
-            result = "win";
-        } else if (elapsed >= config.score_outcome_window) {
-            ++stats.censored;
-            result = "censored";
+        std::string result;
+        if (!outcome.exit_reason.empty()) {
+            if (outcome.exit_reason == "max_holding") { ++stats.censored; result = "censored"; }
+            else if (bar.open > outcome.entry_price) { ++stats.wins; result = "win"; }
+            else { ++stats.losses; result = "loss"; }
         } else {
-            remaining.push_back(outcome);
+            if (outcome.entry_price == 0.0) {
+                outcome.stop = entry_stop(outcome.frozen);
+                if (bar.open < outcome.channel_lower || bar.open > outcome.channel_upper
+                    || bar.open <= outcome.stop
+                    || (outcome.target - bar.open) / (bar.open - outcome.stop) < config.min_reward_risk) {
+                    result = "entry_rejected";
+                } else outcome.entry_price = bar.open;
+            }
+            if (result.empty()) {
+                PositionView position{1.0, outcome.entry_price,
+                    session_index - outcome.origin_session_index - 1,
+                    object({{"support_resistance", outcome.frozen}})};
+                if (const auto decision = resolve_exit(position, bar, config, regime, state)) {
+                    outcome.exit_reason = *get<std::string>(decision->support_resistance, "exit_reason_code");
+                }
+                remaining.push_back(std::move(outcome));
+                continue;
+            }
         }
-        if (result) {
-            state.events.push_back(object({
-                {"event_date", iso_date(bar.date_ordinal)},
-                {"event_type", "score_outcome"},
-                {"zone_key", outcome.zone_key},
-                {"setup", std::string(name(outcome.setup))},
-                {"origin_date", iso_date(outcome.origin_date_ordinal)},
-                {"result", *result},
-                {"posterior", stats.posterior()},
-                {"resolved_samples", stats.resolved()},
-            }));
-        }
+        state.events.push_back(object({
+            {"event_date", iso_date(bar.date_ordinal)}, {"event_type", "score_outcome"},
+            {"zone_key", outcome.zone_key}, {"setup", std::string(name(outcome.setup))},
+            {"origin_date", iso_date(outcome.origin_date_ordinal)}, {"result", result},
+            {"entry_price", outcome.entry_price}, {"exit_price", bar.open},
+            {"exit_reason_code", outcome.exit_reason},
+            {"return_pct", outcome.entry_price > 0.0 ? bar.open / outcome.entry_price - 1.0 : 0.0},
+            {"posterior", stats.posterior()}, {"resolved_samples", stats.resolved()},
+            {"censored", stats.censored},
+            {"sampling", "one_active_episode_per_instrument_setup"},
+            {"semantics", "gross_next_open_setup_outcome_not_portfolio_performance"},
+        }));
     }
     state.pending_outcomes = std::move(remaining);
 }
@@ -1161,7 +1152,7 @@ Candidate candidate_payload(
     });
     std::vector<double> overhead;
     for (const Zone& candidate : zones) {
-        if (candidate.role == ZoneRole::Resistance && candidate.zone_key != zone.zone_key
+        if (candidate.status == ZoneStatus::Active && candidate.zone_key != zone.zone_key
             && candidate.lower > entry) {
             overhead.push_back(candidate.lower);
         }
@@ -1203,7 +1194,8 @@ Candidate candidate_payload(
         {"censored", stats.censored},
         {"resolved_samples", stats.resolved()},
         {"alpha", stats.wins + 1},
-        {"beta", stats.losses + 1},
+        {"beta", stats.losses + stats.censored + 1},
+        {"semantics", "positive_resolved_return_by_horizon_censored_as_non_success"},
     });
     result.entry_eligible = eligible;
     result.risk_eligible = eligible;
@@ -1213,6 +1205,7 @@ Candidate candidate_payload(
     result.stop_price = stop;
     result.target_price = target;
     result.reward_risk = reward_risk;
+    result.overhead_count = static_cast<int>(overhead.size());
     result.reason = std::move(reason);
     result.strength_inputs = object({
         {"confirmation_atr", confirmation_atr},
@@ -1228,7 +1221,8 @@ Candidate candidate_payload(
         hold_margin_atr,
         volume_ratio,
         retest_volume_ratio,
-        reward_risk
+        reward_risk,
+        zone
     );
     return result;
 }
@@ -1246,12 +1240,12 @@ std::vector<Candidate> detect_candidates(
     std::vector<Candidate> candidates;
     for (const Zone& zone : zones) {
         std::optional<Setup> setup;
-        const bool breakout = zone.role == ZoneRole::Resistance && previous_close
+        const bool breakout = previous_close
             && *previous_close <= zone.upper + config.breakout_confirmation_atr * bar.atr_14
             && bar.close > zone.upper + config.breakout_confirmation_atr * bar.atr_14
             && bar.volume_sma_20 > 0.0
             && bar.volume >= config.breakout_volume_ratio_min * bar.volume_sma_20;
-        if (zone.role == ZoneRole::Support && config.support_bounce_enabled && previous_close
+        if (config.support_bounce_enabled && previous_close
             && *previous_close > zone.upper && bar.low <= zone.upper
             && bar.close >= zone.upper + config.bounce_confirmation_atr * bar.atr_14) {
             setup = Setup::SupportBounce;
@@ -1392,7 +1386,8 @@ std::optional<Decision> resolve_exit(
     const PositionView& position,
     const Bar& bar,
     const Config& config,
-    const RegimeEvidence& regime
+    const RegimeEvidence& regime,
+    const SymbolState& state
 ) {
     if (!position.entry_signal_features) return std::nullopt;
     const JsonObject* frozen = get<JsonObject>(*position.entry_signal_features, "support_resistance");
@@ -1405,18 +1400,39 @@ std::optional<Decision> resolve_exit(
     std::optional<double> zone_line;
     if (const JsonObject* zone = get<JsonObject>(*frozen, "zone")) {
         zone_line = number(*zone, "lower");
+        if (zone_line) {
+            const double slope = number(*zone, "slope_per_session").value_or(0.0);
+            int elapsed = position.holding_days.value_or(0) + 1;
+            if (const auto* signal_date = get<std::string>(*frozen, "signal_date")) {
+                const auto ordinal = date_ordinal(*signal_date);
+                elapsed = 1 + static_cast<int>(std::count_if(state.history.begin(), state.history.end(),
+                    [&](const Bar& past) { return past.date_ordinal > ordinal; }));
+            }
+            zone_line = *zone_line + std::max(slope, 0.0) * elapsed;
+        }
     }
     double stop = std::max(
         *entry - config.stop_loss_atr * *atr,
         *entry * (1.0 - config.max_loss_pct)
     );
     if (zone_line) stop = std::max(stop, *zone_line);
+    const double initial_stop = number(*frozen, "stop_price").value_or(stop);
+    stop = std::max(stop, initial_stop);
+    const double initial_risk = *entry - initial_stop;
+    if (const auto* signal_date = get<std::string>(*frozen, "signal_date")) {
+        const auto ordinal = date_ordinal(*signal_date);
+        if (initial_risk > 0.0 && std::any_of(state.history.begin(), state.history.end(),
+            [&](const Bar& past) {
+                return past.date_ordinal > ordinal
+                    && past.close >= *entry + config.break_even_at_r * initial_risk;
+            })) stop = std::max(stop, *entry);
+    }
     const std::optional<double> target_value = number(*frozen, "target_price");
     const double target = target_value && *target_value != 0.0
         ? *target_value
         : *entry + config.take_profit_atr * *atr;
     std::optional<std::string> reason;
-    if (bar.close < stop) reason = "closed below the frozen zone-aware invalidation line";
+    if (bar.close < stop) reason = "closed below the projected zone-aware stop";
     else if (bar.close >= target) reason = "reached the frozen support/resistance target";
     else if (regime.regime == Regime::Downtrend) reason = "confirmed downtrend regime";
     else if (position.holding_days.value_or(0) >= config.max_holding_days) {
@@ -1424,6 +1440,7 @@ std::optional<Decision> resolve_exit(
     }
     if (!reason) return std::nullopt;
     JsonObject metadata = *frozen;
+    set(metadata, "exit_reason_code", bar.close < stop ? "stop" : (bar.close >= target ? "target" : (regime.regime == Regime::Downtrend ? "downtrend" : "max_holding")));
     set(metadata, "exit_stop_price", stop);
     set(metadata, "exit_target_price", target);
     set(metadata, "exit_regime", std::string(name(regime.regime)));
@@ -1458,7 +1475,7 @@ void apply_current_bar_zone_state(
         zone.last_inside = inside;
         const auto breakout = state.breakouts.find(key);
         const ZoneRole role = zone.role;
-        if (role == ZoneRole::Resistance && bar.close > zone.upper) {
+        if (role == ZoneRole::Resistance && bar.close >= zone.center) {
             zone.role = ZoneRole::Support;
             state.events.push_back(object({
                 {"event_date", iso_date(bar.date_ordinal)},
@@ -1472,7 +1489,7 @@ void apply_current_bar_zone_state(
                     && session_index == breakout->second.breakout_session_index
                         ? "confirmed_breakout" : "close_above_resistance"},
             }));
-        } else if (role == ZoneRole::Support && bar.close < zone.lower) {
+        } else if (role == ZoneRole::Support && bar.close < zone.center) {
             zone.role = ZoneRole::Resistance;
             state.events.push_back(object({
                 {"event_date", iso_date(bar.date_ordinal)},
@@ -1519,7 +1536,12 @@ void confirm_pivots(SymbolState& state, const Config& config) {
         const double extreme = kind == PivotKind::High
             ? *std::max_element(values.begin(), values.end())
             : *std::min_element(values.begin(), values.end());
-        if (price != extreme || std::count(values.begin(), values.end(), extreme) != 1) continue;
+        const double tolerance = config.pivot_tolerance_atr * candidate.atr_14;
+        const auto first = std::find_if(values.begin(), values.end(), [&](double value) {
+            return std::abs(value - extreme) <= tolerance;
+        });
+        if (std::abs(price - extreme) > tolerance
+            || std::distance(values.begin(), first) != config.pivot_left_bars) continue;
         const std::string key = std::string(name(kind)) + ":" + iso_date(candidate.date_ordinal);
         if (std::any_of(state.pivots.begin(), state.pivots.end(), [&](const Pivot& pivot) {
             return pivot.pivot_key == key;
@@ -1567,7 +1589,8 @@ const Zone* match_zone(
 std::string zone_signature(const Zone& zone, ZoneStatus status) {
     return std::string(name(zone.role)) + "|" + std::string(name(status)) + "|"
         + json(strings(zone.pivot_keys)) + "|" + std::to_string(zone.anchor_session_index)
-        + "|" + json(zone.anchor_center) + "|" + json(zone.slope_per_session);
+        + "|" + json(zone.anchor_center) + "|" + json(zone.slope_per_session)
+        + "|" + json(zone.anchor_lower) + "|" + json(zone.anchor_upper);
 }
 
 void record_zone_version(
@@ -1594,134 +1617,120 @@ void rebuild_zones(SymbolState& state, const Bar& bar, const Config& config) {
         }),
         state.pivots.end()
     );
-    const double half_width = config.zone_half_width_atr * bar.atr_14;
     std::map<std::string, Zone> old_zones;
-    for (const auto& [key, zone] : state.zones) {
-        old_zones.emplace(key, project_zone(zone, current_index));
-    }
-    std::map<std::string, Zone> rebuilt;
-    for (const auto [source_kind, default_role] : {
-            std::pair(PivotKind::Low, ZoneRole::Support),
-            std::pair(PivotKind::High, ZoneRole::Resistance),
-        }) {
+    for (const auto& [key, zone] : state.zones) old_zones.emplace(key, project_zone(zone, current_index));
+    std::map<std::string, Zone> selected;
+    for (const PivotKind source_kind : {PivotKind::Low, PivotKind::High}) {
         std::vector<const Pivot*> pivots;
         for (const Pivot& pivot : state.pivots) {
             if (pivot.kind == source_kind) pivots.push_back(&pivot);
         }
-        std::sort(pivots.begin(), pivots.end(), [](const Pivot* left, const Pivot* right) {
-            return std::tuple(left->session_index, left->trade_date_ordinal, left->pivot_key)
-                < std::tuple(right->session_index, right->trade_date_ordinal, right->pivot_key);
+        std::sort(pivots.begin(), pivots.end(), [](const Pivot* a, const Pivot* b) {
+            return std::tie(a->session_index, a->pivot_key) < std::tie(b->session_index, b->pivot_key);
         });
-        const std::optional<FitResult> fit = fit_pivot_line(pivots, current_index, config);
-        if (!fit || !valid_zone_values(
-                fit->center,
-                fit->center - half_width,
-                fit->center + half_width,
-                bar.atr_14,
-                fit->slope
-            )) {
-            continue;
-        }
-        std::vector<std::string> pivot_keys;
-        for (const Pivot* pivot : fit->inliers) pivot_keys.push_back(pivot->pivot_key);
-        std::sort(pivot_keys.begin(), pivot_keys.end());
-        const Zone* matched = match_zone(
-            old_zones, source_kind, fit->center, half_width, pivot_keys
-        );
-        std::vector<Pivot> cluster;
-        for (const Pivot* pivot : fit->inliers) cluster.push_back(*pivot);
-        std::string key = matched == nullptr
-            ? new_zone_key(source_kind, cluster)
-            : matched->zone_key;
-        if (matched == nullptr) {
-            const std::string effective = iso_date(bar.date_ordinal);
-            const bool same_day = std::any_of(
-                state.zone_versions.begin(), state.zone_versions.end(),
-                [&](const JsonObject& version) {
-                    const std::string* version_key = get<std::string>(version, "zone_key");
-                    const std::string* version_date = get<std::string>(version, "effective_from");
-                    return version_key && version_date && *version_key == key
-                        && *version_date == effective;
+        std::map<std::vector<std::string>, FitResult> fits;
+        std::set<std::vector<std::string>> tried;
+        auto add_fit = [&](const std::vector<const Pivot*>& members) {
+            std::vector<std::string> keys;
+            for (const Pivot* pivot : members) keys.push_back(pivot->pivot_key);
+            if (!tried.insert(keys).second) return;
+            auto fit = fit_pivot_line(members, current_index, config);
+            if (!fit) return;
+            keys.clear();
+            for (const Pivot* pivot : fit->inliers) keys.push_back(pivot->pivot_key);
+            fits.emplace(std::move(keys), std::move(*fit));
+        };
+        add_fit(pivots);
+        for (std::size_t i = 0; i < pivots.size(); ++i) {
+            for (std::size_t j = i + 1; j < pivots.size(); ++j) {
+                const int span = pivots[j]->session_index - pivots[i]->session_index;
+                if (span < config.min_line_span_sessions) continue;
+                const double slope = (pivots[j]->price - pivots[i]->price) / span;
+                std::vector<const Pivot*> members;
+                for (const Pivot* pivot : pivots) {
+                    const double residual = std::abs(pivot->price - pivots[i]->price
+                        - slope * (pivot->session_index - pivots[i]->session_index));
+                    if (residual <= config.line_inlier_tolerance_atr * pivot->atr) members.push_back(pivot);
                 }
-            );
-            if (same_day) key = revived_zone_key(key, bar.date_ordinal);
+                add_fit(members);
+            }
         }
-        ZoneRole role;
-        if (matched != nullptr) role = matched->role;
-        else if (bar.close > fit->center + half_width) role = ZoneRole::Support;
-        else if (bar.close < fit->center - half_width) role = ZoneRole::Resistance;
-        else role = default_role;
-        Zone zone;
-        if (matched != nullptr && matched->pivot_keys == pivot_keys) {
-            zone = *matched;
-            zone.role = role;
-            zone.status = ZoneStatus::Active;
-            zone.touch_count = std::max(
-                static_cast<int>(fit->inliers.size()), matched->touch_count
-            );
-        } else {
-            const double center = stored_zone_price(fit->center);
-            const double stored_half_width = stored_zone_price(half_width);
-            const auto dates = std::minmax_element(
-                fit->inliers.begin(), fit->inliers.end(), [](const Pivot* left, const Pivot* right) {
-                    return left->trade_date_ordinal < right->trade_date_ordinal;
-                }
-            );
-            zone = Zone{
-                key,
-                source_kind,
-                role,
-                ZoneStatus::Active,
-                center,
-                stored_zone_price(center - stored_half_width),
-                stored_zone_price(center + stored_half_width),
-                stored_zone_price(bar.atr_14),
-                pivot_keys,
-                static_cast<int>(fit->inliers.size()),
-                std::max(
-                    static_cast<int>(fit->inliers.size()),
-                    matched == nullptr ? 0 : matched->touch_count
-                ),
-                (*dates.first)->trade_date_ordinal,
-                (*dates.second)->trade_date_ordinal,
-                matched == nullptr ? bar.date_ordinal : matched->valid_from_ordinal,
-                current_index,
-                center,
-                stored_zone_price(center - stored_half_width),
-                stored_zone_price(center + stored_half_width),
-                stored_zone_price(fit->slope),
-                stored_zone_price(fit->residual_atr),
-                fit->total_weight,
-                matched == nullptr ? false : matched->last_inside,
-                0,
+        std::vector<std::pair<std::vector<std::string>, FitResult>> ordered(fits.begin(), fits.end());
+        std::sort(ordered.begin(), ordered.end(), [&](const auto& a, const auto& b) {
+            const auto quality = [&](const auto& item) {
+                const auto& fit = item.second;
+                return std::tuple(-static_cast<int>(fit.inliers.size()),
+                    -fit.total_weight / fit.inliers.size(), fit.residual_atr,
+                    std::abs(fit.center - bar.close), item.first);
             };
-        }
-        rebuilt.emplace(key, std::move(zone));
-    }
-
-    std::map<std::string, Zone> selected;
-    for (const PivotKind source_kind : {PivotKind::Low, PivotKind::High}) {
-        std::vector<const Zone*> zones;
-        for (const auto& [unused, zone] : rebuilt) {
-            static_cast<void>(unused);
-            if (zone.source_kind == source_kind) zones.push_back(&zone);
-        }
-        std::sort(zones.begin(), zones.end(), [&](const Zone* left, const Zone* right) {
-            return std::tuple(
-                -left->pivot_count,
-                -left->recency_weight,
-                left->fit_residual_atr,
-                std::abs(left->center - bar.close),
-                left->zone_key
-            ) < std::tuple(
-                -right->pivot_count,
-                -right->recency_weight,
-                right->fit_residual_atr,
-                std::abs(right->center - bar.close),
-                right->zone_key
-            );
+            return quality(a) < quality(b);
         });
-        if (!zones.empty()) selected.emplace(zones.front()->zone_key, *zones.front());
+        int count = 0;
+        std::set<std::string> used_old;
+        for (const auto& [member_keys, fit] : ordered) {
+            if (count >= config.max_zones_per_kind) break;
+            double half_width = config.zone_half_width_atr * bar.atr_14;
+            for (const Pivot* pivot : fit.inliers) {
+                half_width = std::max(half_width, std::abs(pivot->price - fit.center
+                    - fit.slope * (pivot->session_index - current_index)));
+            }
+            if (!valid_zone_values(fit.center, fit.center - half_width, fit.center + half_width,
+                    bar.atr_14, fit.slope)) continue;
+            // Overlapping fits of the same boundary do not consume additional slots.
+            if (std::any_of(selected.begin(), selected.end(), [&](const auto& item) {
+                const Zone& zone = item.second;
+                return zone.source_kind == source_kind && zone.lower <= fit.center + half_width
+                    && zone.upper >= fit.center - half_width;
+            })) continue;
+            std::vector<std::string> keys = member_keys;
+            std::sort(keys.begin(), keys.end());
+            std::map<std::string, Zone> available;
+            for (const auto& [key, old] : old_zones) {
+                if (!used_old.contains(key)) available.emplace(key, old);
+            }
+            const Zone* matched = match_zone(available, source_kind, fit.center, half_width, keys);
+            Zone zone;
+            const bool unchanged = matched && matched->pivot_keys == keys
+                && bar.atr_14 >= matched->atr * 0.5 && bar.atr_14 <= matched->atr * 2.0;
+            if (unchanged) {
+                zone = *matched;
+            } else {
+                std::vector<Pivot> cluster;
+                for (const Pivot* pivot : fit.inliers) cluster.push_back(*pivot);
+                zone.zone_key = matched ? matched->zone_key : new_zone_key(source_kind, cluster);
+                if (!matched && std::any_of(state.zone_versions.begin(), state.zone_versions.end(),
+                    [&](const JsonObject& version) {
+                        const auto* key = get<std::string>(version, "zone_key");
+                        const auto* day = get<std::string>(version, "effective_from");
+                        return key && day && *key == zone.zone_key && *day == iso_date(bar.date_ordinal);
+                    })) zone.zone_key = revived_zone_key(zone.zone_key, bar.date_ordinal);
+                zone.source_kind = source_kind;
+                zone.center = zone.anchor_center = stored_zone_price(fit.center);
+                zone.lower = zone.anchor_lower = stored_zone_price(fit.center - half_width);
+                zone.upper = zone.anchor_upper = stored_zone_price(fit.center + half_width);
+                zone.atr = stored_zone_price(bar.atr_14);
+                zone.anchor_session_index = current_index;
+                zone.slope_per_session = stored_zone_price(fit.slope);
+                zone.pivot_keys = keys;
+                zone.pivot_count = static_cast<int>(fit.inliers.size());
+                zone.touch_count = matched ? matched->touch_count : 0;
+                zone.last_inside = matched ? matched->last_inside : false;
+                zone.first_pivot_date_ordinal = fit.inliers.front()->trade_date_ordinal;
+                zone.last_pivot_date_ordinal = fit.inliers.back()->trade_date_ordinal;
+                zone.valid_from_ordinal = matched ? matched->valid_from_ordinal : bar.date_ordinal;
+                // Residuals use the same persisted NUMERIC scale as zone prices.
+                zone.fit_residual_atr = stored_zone_price(fit.residual_atr);
+            }
+            // A positive fit can round to zero at the persisted NUMERIC(24,10) scale.
+            if (!valid_zone_values(zone.center, zone.lower, zone.upper, zone.atr,
+                    zone.slope_per_session)) continue;
+            if (!unchanged) zone.recency_weight = fit.total_weight / fit.inliers.size();
+            zone.role = bar.close >= zone.center ? ZoneRole::Support : ZoneRole::Resistance;
+            zone.status = ZoneStatus::Active;
+            if (matched) used_old.insert(matched->zone_key);
+            selected.emplace(zone.zone_key, std::move(zone));
+            ++count;
+        }
     }
     for (const auto& [key, old] : old_zones) {
         if (selected.contains(key)) continue;
@@ -1874,10 +1883,13 @@ std::optional<Decision> advance_symbol(
     } else {
         regime = classify_market_regime(state, frozen_zones, bar, config);
         record_regime_version(state, bar.date_ordinal, regime);
+        // Both fresh and cached runs cite the same sparse interval-start evidence.
+        // Classification itself still uses today's close and prior confirmed pivots.
+        regime.payload = state.current_regime_evidence;
     }
 
     const std::optional<Decision> exit_decision = position.quantity > 0.0
-        ? resolve_exit(position, bar, config, regime)
+        ? resolve_exit(position, bar, config, regime, state)
         : std::nullopt;
     std::vector<Candidate> candidates = detect_candidates(
         state, bar, frozen_zones, session_index, config
@@ -1885,9 +1897,31 @@ std::optional<Decision> advance_symbol(
     apply_regime_entry_policy(
         state, candidates, regime, entry_channel, bar.date_ordinal
     );
+    if (exit_decision) {
+        const auto* reason = get<std::string>(exit_decision->support_resistance, "exit_reason_code");
+        const auto* key = get<std::string>(exit_decision->support_resistance, "zone_key");
+        if (reason && key && *reason == "stop") state.stopped_zones[*key] = session_index;
+    }
+    for (Candidate& candidate : candidates) {
+        const auto stopped = state.stopped_zones.find(candidate.zone_key);
+        if (stopped != state.stopped_zones.end()
+            && session_index >= stopped->second
+            && session_index - stopped->second <= config.stop_cooldown_sessions) {
+            candidate.entry_eligible = false;
+            candidate.rejection_reason = "zone_stop_cooldown";
+        }
+        if (config.market_filter_enabled && (!bar.market_close || !bar.market_sma_200
+                || *bar.market_close < *bar.market_sma_200)) {
+            candidate.entry_eligible = false;
+            candidate.rejection_reason = bar.market_close && bar.market_sma_200
+                ? "market_below_sma_200" : "missing_market_filter_data";
+        }
+        set(candidate.regime_evidence, "market_close", nullable(bar.market_close));
+        set(candidate.regime_evidence, "market_sma_200", nullable(bar.market_sma_200));
+    }
     const Candidate* selected = select_candidate(candidates);
 
-    resolve_prior_outcomes(state, bar, session_index, config);
+    resolve_prior_outcomes(state, bar, session_index, config, regime);
     for (const Candidate& candidate : candidates) {
         JsonObject event = object({
             {"event_date", iso_date(bar.date_ordinal)},
@@ -1897,14 +1931,22 @@ std::optional<Decision> advance_symbol(
             set(event, item.first, item.second);
         }
         state.events.push_back(std::move(event));
-        state.pending_outcomes.push_back(PendingOutcome{
-            candidate.setup,
-            candidate.zone_key,
-            bar.date_ordinal,
-            session_index,
-            bar.close + config.score_target_atr * bar.atr_14,
-            bar.close - config.score_stop_atr * bar.atr_14,
-        });
+        if (candidate.entry_eligible && candidate.strength.passes_threshold
+            && std::none_of(state.pending_outcomes.begin(), state.pending_outcomes.end(),
+                [&](const PendingOutcome& outcome) { return outcome.setup == candidate.setup; })) {
+            const auto channel = project_entry_channel(candidate.entry_channel);
+            PendingOutcome outcome{candidate.setup, candidate.zone_key, bar.date_ordinal,
+                session_index, candidate.target_price, candidate.stop_price};
+            outcome.channel_lower = channel.lower;
+            outcome.channel_upper = channel.upper;
+            outcome.frozen = object({
+                {"zone_key", candidate.zone_key}, {"zone", zone_snapshot(candidate.zone)},
+                {"signal_date", iso_date(bar.date_ordinal)}, {"entry_atr", bar.atr_14},
+                {"entry_close", bar.close}, {"stop_price", candidate.stop_price},
+                {"target_price", candidate.target_price},
+            });
+            state.pending_outcomes.push_back(std::move(outcome));
+        }
     }
     JsonArray candidate_setups;
     for (const Candidate& candidate : candidates) {
@@ -1946,6 +1988,7 @@ std::optional<Decision> advance_symbol(
         {"selected_setup", std::string(name(selected->setup))},
         {"candidate_setups", candidate_setups},
         {"zone", zone_snapshot(selected->zone)},
+        {"signal_date", iso_date(bar.date_ordinal)},
         {"entry_atr", bar.atr_14},
         {"entry_close", bar.close},
         {"stop_price", selected->stop_price},
@@ -1969,6 +2012,44 @@ std::optional<Decision> advance_symbol(
         selected->setup,
     };
     return decision;
+}
+
+EntrySizing size_entry(const JsonObject& frozen, double price, double equity, double cash,
+    double position_cap, const Config& config, double commission_bps,
+    double commission_min, double slippage_bps) {
+    EntrySizing result;
+    const auto stop = number(frozen, "stop_price");
+    const auto target = number(frozen, "target_price");
+    if (!stop || !target) throw std::invalid_argument("support entry requires stop_price and target_price");
+    result.stop = entry_stop(frozen);
+    result.maximum_entry_price = (*target + config.min_reward_risk * result.stop)
+        / (1.0 + config.min_reward_risk);
+    if (!std::isfinite(price) || price <= result.stop || equity <= 0.0 || cash <= 0.0) {
+        result.reason_code = "invalid_execution_risk";
+        return result;
+    }
+    const double bps = commission_bps / 10'000.0;
+    const double exit_stop = result.stop * (1.0 - slippage_bps / 10'000.0);
+    const double exit_target = *target * (1.0 - slippage_bps / 10'000.0);
+    const double loss = price - exit_stop;
+    const double budget = equity * config.risk_per_trade_pct;
+    // Each min-commission combination is a linear upper bound on quantity.
+    const double quantity = std::max(0.0, std::min({
+        equity * position_cap / price, cash / (price * (1.0 + bps)),
+        (cash - commission_min) / price,
+        budget / (loss + bps * (price + exit_stop)),
+        (budget - commission_min) / (loss + bps * price),
+        (budget - commission_min) / (loss + bps * exit_stop),
+        (budget - 2.0 * commission_min) / loss,
+    }));
+    auto fee = [&](double value) { return std::max(quantity * value * bps, commission_min); };
+    result.planned_loss = quantity * loss + fee(price) + fee(exit_stop);
+    result.reward_risk = result.planned_loss > 0.0
+        ? (quantity * (exit_target - price) - fee(price) - fee(exit_target)) / result.planned_loss : 0.0;
+    result.reason_code = quantity <= 0.0 ? "insufficient_risk_budget"
+        : (result.reward_risk < config.min_reward_risk ? "net_reward_risk_below_minimum" : "risk_sized_entry");
+    if (quantity > 0.0 && result.reward_risk >= config.min_reward_risk) result.quantity = quantity;
+    return result;
 }
 
 void record_execution_rejection(

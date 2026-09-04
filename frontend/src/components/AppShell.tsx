@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
 import { useI18n } from "@/i18n/provider";
+import motion from "@/styles/Motion.module.css";
 
 import styles from "./AppShell.module.css";
 import CompactPageHeader from "./CompactPageHeader";
@@ -108,7 +109,7 @@ export default function AppShell({
                 <span className={styles.navLabel}>{label}</span>
               </Link>
             </Tooltip.Trigger>
-            {!mobile ? <Tooltip.Portal><Tooltip.Content side="right" sideOffset={9} className="workspace-tooltip">{label}</Tooltip.Content></Tooltip.Portal> : null}
+            {!mobile ? <Tooltip.Portal><Tooltip.Content side="right" sideOffset={9} className={`workspace-tooltip ${motion.popover}`}>{label}</Tooltip.Content></Tooltip.Portal> : null}
           </Tooltip.Root>
         );
       })}
@@ -131,7 +132,7 @@ export default function AppShell({
                   <ChevronIcon direction={sidebarCollapsed ? "right" : "left"} />
                 </button>
               </Tooltip.Trigger>
-              <Tooltip.Portal><Tooltip.Content side="right" sideOffset={9} className="workspace-tooltip">{sidebarCollapsed ? (isZh ? "展开导航" : "Expand navigation") : (isZh ? "收起导航" : "Collapse navigation")}</Tooltip.Content></Tooltip.Portal>
+              <Tooltip.Portal><Tooltip.Content side="right" sideOffset={9} className={`workspace-tooltip ${motion.popover}`}>{sidebarCollapsed ? (isZh ? "展开导航" : "Expand navigation") : (isZh ? "收起导航" : "Collapse navigation")}</Tooltip.Content></Tooltip.Portal>
             </Tooltip.Root>
           </div>
           {navContent()}

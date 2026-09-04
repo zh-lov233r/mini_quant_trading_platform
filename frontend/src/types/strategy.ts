@@ -115,6 +115,10 @@ export interface MomentumBreakoutStrategyParams {
 
 export interface IslandReversalStrategyParams {
   signal: {
+    previous_body_atr_min: number;
+    breakout_body_atr_min: number;
+    exhaustion_body_atr_max: number;
+    island_body_atr_max: number;
     min_strength_score: number;
     downtrend_lookback: number;
     downtrend_min_drop_pct: number;
@@ -155,6 +159,8 @@ export interface IslandReversalStrategyParams {
 
 export interface DoubleBottomStrategyParams {
   signal: {
+    rebound_volume_ratio_min: number;
+    rebound_volume_ratio_max: number;
     min_strength_score: number;
     downtrend_lookback: number;
     downtrend_min_drop_pct: number;
@@ -218,6 +224,11 @@ interface StagedBottomStrategyParamsBase {
 
 export interface HeadShouldersBottomStrategyParams extends StagedBottomStrategyParamsBase {
   signal: {
+    platform_bars: number;
+    platform_range_atr_max: number;
+    platform_drift_atr_max: number;
+    rebound_volume_ratio_min: number;
+    rebound_volume_ratio_max: number;
     min_strength_score: number;
     downtrend_lookback: number;
     downtrend_min_drop_pct: number;
@@ -232,11 +243,12 @@ export interface HeadShouldersBottomStrategyParams extends StagedBottomStrategyP
     breakout_volume_ratio_min: number;
     breakout_buffer_pct: number;
   };
-  metadata: StagedBottomStrategyParamsBase["metadata"] & { algorithm_version: "confirmed-pivots-v1" };
+  metadata: StagedBottomStrategyParamsBase["metadata"] & { algorithm_version: "confirmed-pivots-v2" };
 }
 
 export interface RoundedBottomStrategyParams extends StagedBottomStrategyParamsBase {
   signal: {
+    weakening_buffer_pct: number;
     min_strength_score: number;
     min_lookback: number;
     max_lookback: number;
@@ -252,11 +264,15 @@ export interface RoundedBottomStrategyParams extends StagedBottomStrategyParamsB
     breakout_volume_ratio_min: number;
     breakout_buffer_pct: number;
   };
-  metadata: StagedBottomStrategyParamsBase["metadata"] & { algorithm_version: "log-quadratic-v1" };
+  metadata: StagedBottomStrategyParamsBase["metadata"] & { algorithm_version: "log-quadratic-v2" };
 }
 
 export interface VReversalStrategyParams extends StagedBottomStrategyParamsBase {
   signal: {
+    consolidation_range_atr_max: number;
+    consolidation_drift_atr_max: number;
+    breakout_buffer_pct: number;
+    bearish_body_atr_min: number;
     min_strength_score: number;
     downtrend_lookback: number;
     downtrend_min_drop_pct: number;
@@ -274,7 +290,7 @@ export interface VReversalStrategyParams extends StagedBottomStrategyParamsBase 
     support_tolerance_pct: number;
     bearish_reversal_volume_ratio_min: number;
   };
-  metadata: StagedBottomStrategyParamsBase["metadata"] & { algorithm_version: "volume-v-reversal-v1" };
+  metadata: StagedBottomStrategyParamsBase["metadata"] & { algorithm_version: "volume-v-reversal-v2" };
 }
 
 export interface SupportResistanceStrategyParams {
@@ -288,6 +304,8 @@ export interface SupportResistanceStrategyParams {
     detection_window: number;
     min_line_pivots: number;
     min_line_span_sessions: number;
+    max_zones_per_kind: number;
+    pivot_tolerance_atr: number;
     line_inlier_tolerance_atr: number;
     max_abs_slope_atr_per_session: number;
     zone_half_width_atr: number;
@@ -297,9 +315,6 @@ export interface SupportResistanceStrategyParams {
     breakout_volume_ratio_min: number;
     retest_window: number;
     retest_volume_ratio_max: number;
-    score_outcome_window: number;
-    score_target_atr: number;
-    score_stop_atr: number;
   };
   universe: { symbols: string[]; selection_mode: string };
   risk: {
@@ -310,6 +325,11 @@ export interface SupportResistanceStrategyParams {
     take_profit_atr: number;
     min_reward_risk: number;
     max_holding_days: number;
+    risk_per_trade_pct: number;
+    stop_cooldown_sessions: number;
+    break_even_at_r: number;
+    market_filter_enabled: boolean;
+    market_filter_symbol: string;
   };
   execution: { timeframe: "1d"; rebalance: "daily"; run_at: "close" };
   metadata: {

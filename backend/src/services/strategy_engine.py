@@ -245,6 +245,8 @@ def _prepared_day_input(
                 "entry_trade_date",
                 "position_holding_days",
                 "entry_signal_features",
+                "support_risk_context",
+                "support_stopped_zones",
             )
         }
         raw_hydration = current.get("support_resistance_hydration")

@@ -27,6 +27,7 @@ from src.services.support_resistance_service import (
     SupportResistanceSymbolState,
     normalized_detector_params,
 )
+from src.services.native_support_state import NativeSupportState, NativeSupportSymbol
 
 
 BATCH_INSERT_SIZE = 5_000
@@ -229,7 +230,7 @@ def persist_support_resistance_run(
     *,
     run: StrategyRun,
     runtime: dict[str, Any],
-    state: SupportResistanceState,
+    state: SupportResistanceState | NativeSupportState,
     symbols: list[str],
     coverage_start: date,
     coverage_end: date,
@@ -493,7 +494,7 @@ def persist_support_resistance_run(
 
 def _validate_support_resistance_state_for_persistence(
     materialization: SupportResistanceMaterialization,
-    state: SupportResistanceState,
+    state: SupportResistanceState | NativeSupportState,
     instrument_ids: dict[str, int],
     *,
     persist_run_events: bool,
@@ -546,7 +547,7 @@ def record_failed_materialization_after_rollback(
 def _write_zone_versions(
     db: Session,
     materialization: SupportResistanceMaterialization,
-    state: SupportResistanceState,
+    state: SupportResistanceState | NativeSupportState,
     instrument_ids: dict[str, int],
     *,
     batch_size: int = BATCH_INSERT_SIZE,
@@ -571,7 +572,7 @@ def _write_zone_versions(
 def _write_regime_versions(
     db: Session,
     materialization: SupportResistanceMaterialization,
-    state: SupportResistanceState,
+    state: SupportResistanceState | NativeSupportState,
     instrument_ids: dict[str, int],
     *,
     batch_size: int = BATCH_INSERT_SIZE,
@@ -591,7 +592,7 @@ def _write_regime_versions(
 
 def _regime_version_rows(
     materialization: SupportResistanceMaterialization,
-    state: SupportResistanceState,
+    state: SupportResistanceState | NativeSupportState,
     instrument_ids: dict[str, int],
 ) -> Iterable[dict[str, Any]]:
     for state_key, symbol_state in sorted(state.symbols.items()):
@@ -657,7 +658,7 @@ def _validate_regime_versions(
 
 def _zone_version_rows(
     materialization: SupportResistanceMaterialization,
-    state: SupportResistanceState,
+    state: SupportResistanceState | NativeSupportState,
     instrument_ids: dict[str, int],
 ) -> Iterable[dict[str, Any]]:
     for state_key, symbol_state in sorted(state.symbols.items()):
@@ -785,20 +786,16 @@ def _replace_run_audit_rows(
     *,
     run: StrategyRun,
     materialization: SupportResistanceMaterialization,
-    state: SupportResistanceState,
+    state: SupportResistanceState | NativeSupportState,
     instrument_ids: dict[str, int],
     persist_run_events: bool = True,
     batch_size: int = BATCH_INSERT_SIZE,
     batch_callback: Callable[[int], None] | None = None,
     cancel_check: CancellationCheck | None = None,
 ) -> int:
-    rows = (
-        list(_run_event_rows(run, materialization, state, instrument_ids))
-        if persist_run_events
-        else []
-    )
-    for row in rows:
-        _validate_run_event_row(row)
+    if persist_run_events:
+        for row in _run_event_rows(run, materialization, state, instrument_ids):
+            _validate_run_event_row(row)
     if cancel_check is not None and cancel_check():
         raise SupportResistancePersistenceCancelledError(
             "backtest cancellation requested before support/resistance persistence"
@@ -820,7 +817,7 @@ def _replace_run_audit_rows(
     return _insert_in_batches(
         db,
         SupportResistanceRunEvent,
-        rows,
+        _run_event_rows(run, materialization, state, instrument_ids),
         batch_size=batch_size,
         batch_callback=batch_callback,
         cancel_check=cancel_check,
@@ -830,7 +827,7 @@ def _replace_run_audit_rows(
 def _run_event_rows(
     run: StrategyRun,
     materialization: SupportResistanceMaterialization,
-    state: SupportResistanceState,
+    state: SupportResistanceState | NativeSupportState,
     instrument_ids: dict[str, int],
 ) -> Iterable[dict[str, Any]]:
     for state_key, symbol_state in sorted(state.symbols.items()):
@@ -975,7 +972,7 @@ def _elapsed_ms(started_at: float) -> float:
 
 def _state_identity(
     state_key: str,
-    symbol_state: SupportResistanceSymbolState,
+    symbol_state: SupportResistanceSymbolState | NativeSupportSymbol,
     instrument_ids: dict[str, int],
 ) -> tuple[str, int | None]:
     symbol = str(symbol_state.symbol or state_key).upper()

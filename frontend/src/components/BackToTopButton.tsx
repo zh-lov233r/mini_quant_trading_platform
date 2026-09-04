@@ -1,8 +1,13 @@
 import { useEffect, useState } from "react";
 
 import { useI18n } from "@/i18n/provider";
+import motion from "@/styles/Motion.module.css";
 
 const VISIBILITY_THRESHOLD = 280;
+
+export function scrollToPageTop() {
+  window.scrollTo({ top: 0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+}
 
 export default function BackToTopButton() {
   const { messages } = useI18n();
@@ -28,7 +33,11 @@ export default function BackToTopButton() {
       type="button"
       aria-label={label}
       title={label}
-      onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+      className={`${motion.control} ${motion.backToTop}`}
+      data-visible={visible}
+      tabIndex={visible ? 0 : -1}
+      aria-hidden={!visible}
+      onClick={scrollToPageTop}
       style={{
         position: "fixed",
         right: "var(--workspace-floating-right, 24px)",
@@ -45,10 +54,6 @@ export default function BackToTopButton() {
         boxShadow: "0 18px 42px rgba(2, 6, 23, 0.28)",
         backdropFilter: "blur(10px)",
         cursor: visible ? "pointer" : "default",
-        opacity: visible ? 1 : 0,
-        pointerEvents: visible ? "auto" : "none",
-        transform: visible ? "translateY(0)" : "translateY(12px)",
-        transition: "opacity 180ms ease, transform 180ms ease",
         fontSize: 14,
         fontWeight: 700,
         fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",

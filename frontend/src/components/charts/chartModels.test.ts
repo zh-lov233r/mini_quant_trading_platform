@@ -18,7 +18,7 @@ import {
   normalizeZoneOverlays,
   toChartTime,
 } from "./chartModels";
-import { chooseMarkerLabelPlacement, visibleZonePriceRange } from "./overlayPrimitive";
+import { chooseMarkerLabelPlacement, markerLabelCandidates, visibleZonePriceRange } from "./overlayPrimitive";
 
 describe("chart models", () => {
   it("normalizes, sorts, deduplicates, and filters equity points", () => {
@@ -453,4 +453,12 @@ it("plots persisted high/low pivot members once and only within the loaded candl
   expect(markers.every(marker => marker.showText)).toBe(true);
   expect(markers.map(marker => marker.price)).toEqual([12, 8]);
   expect(markers[0].description).toContain("非当日信号");
+});
+
+it("keeps crowded right-edge lifecycle labels inside the chart", () => {
+  const candidates = markerLabelCandidates(970, 120, 1000);
+  expect(candidates).toEqual([{ left: 834, right: 978 }]);
+  const placement = chooseMarkerLabelPlacement([[{ left: 800, right: 960 }]], candidates);
+  expect(placement.bounds.right).toBeLessThanOrEqual(998);
+  expect(placement.lane).toBe(1);
 });

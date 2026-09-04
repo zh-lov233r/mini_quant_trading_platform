@@ -68,7 +68,7 @@ worker 使用 `FOR UPDATE SKIP LOCKED` claim，维护 heartbeat/lease，每个�
 
 ## 图表加载与渲染
 
-列表页每 4 秒轮询 active run，并显示复用的无障碍百分比进度条。详情页在 queued/running 时只轮询 summary 和 worker status，不请求权益、比较曲线、信号或交易；只有进入 `completed` 后才独立加载这些 payload，并分别保留 error 状态。比较曲线加载失败时仍保留策略曲线，并显示非阻断警告。failed/cancelled 会停止轮询并保留终态进度。manager 自动执行不可用时，列表和详情会优先提示“仍可排队，但执行暂停”；可用时则显示 active/configured 进程数、可用槽位和排队任务数。
+列表页每 4 秒轮询 active run，并显示复用的无障碍百分比进度条。详情页不显示顶部执行进度面板，执行进度可在列表页或任务中心查看。回测概览中的“最新快照”默认收起，展开后显示时间、现金、权益和回撤。详情页在 queued/running 时只轮询 summary 和 worker status，不请求权益、比较曲线、信号或交易；只有进入 `completed` 后才独立加载这些 payload，并分别保留 error 状态。比较曲线加载失败时仍保留策略曲线，并显示非阻断警告。failed/cancelled 会停止轮询并保留终态进度。manager 自动执行不可用时，列表和详情会优先提示“仍可排队，但执行暂停”；可用时则显示 active/configured 进程数、可用槽位和排队任务数。
 
 回测完成后，详情页先读取最新 100 笔成交，让下方明细尽快可用；随后沿不透明 transaction cursor 每批最多读取 500 笔，直到总览图与个股盈亏覆盖整个 run。页面显示“已加载/总数”，尾部分页失败时保留已有标记，并可从失败 cursor 继续。权益图中的信号与成交标记继续保留形状、颜色、筛选、计数和悬浮详情，但绘图区不再重复显示 `BUY`/`SELL` 文字。成交表初始渲染最新 10 笔，每次增加 10 笔；生命周期初始只基于最新 100 笔成交并显示 12 段，需要时每次把计算范围扩大 100 笔并再显示 12 段。由于生命周期口径有意保持局部，界面始终显示其当前使用的成交数与 run 总成交数。
 
@@ -135,6 +135,14 @@ Paper 日信号会把有界历史和当前组合状态转换为内存 v4 列式�
 冻结 golden fixture 保存九个策略切换前的 oracle 和纯 STL 重构前完整账本结果。`native_nine_strategy_golden.json` 对固定 `20 symbols × 120 sessions` 矩阵中的全部 typed signals/trades/equity/positions/audit vector 计算指纹，并记录用于恢复 oracle 的准确 base commit 与 diff digest。原生测试还按 `1e-10` 数值容差覆盖逐日排序、原因、metadata、分阶段审计和支撑/压力生命周期证据；Paper 测试会在全部 mock Alpaca 的前提下比较日评估与同日回测信号契约。这些检查是语义回归证据，不等于数据库规模性能门槛。
 
 支撑/压力使用不包含 Python 头文件的 `support_resistance_core.hpp/.cpp` 纯 STL 状态机实现 cache identity、完整 Pivot zone identity、`1e-10` half-up 价格规范化、确定性加权 Theil-Sen 拟合、冻结几何、四状态演进、pending outcome、posterior 证据、入场通道、退出和 typed 审计。`support_resistance_kernel.cpp` 只在释放 GIL 前转换 Python 边界 DTO，并在计算结束后转换 typed 结果。Python 只查询并锁定缓存表、hydrate 原生输入，并把最终 typed vector 适配为持久化行；不存在另一套 detector 或交易状态机。`run_backtest` 的 S/R warmup 和正式 session 计算全程无 GIL，唯一计算期获取点是每个正式 session 一次的 control callback。
+
+### 支撑/压力审计收尾
+
+仅用于输出的事件在每个标的/交易日计算后序列化并释放对象树，保留全部事件及原有 instrument/顺序。JSON 对象编码按引用读取，不再深复制对象。最终审计导出和状态释放均释放 GIL；内部可选的 `finalizing_callback(completed_instruments, total_instruments)` 在标的之间检查取消，不额外调用日级 control callback。心跳线程可以在导出期间继续运行。
+
+原生审计 JSON 列是只读惰性序列：索引/迭代只转换一条字符串，显式 `tolist()` 才物化整列。持久化保留紧凑的分标的交易日期，按需解析审计行，并通过已有的每批 5,000 行流程写入运行事件。几何、身份、严格 JSON 校验及事务回滚保持不变。原始审计输出仍随任务规模增长；本次移除的是重复的全量对象树，不是审计本身，也不意味着总内存与任务规模无关。
+
+沿用已有进度结构：原生导出为 85–88%，明细准备为 88%，区域/状态/事件持久化为 90–98%，提交为 99%。导出计数单位是标的，持久化计数单位是该阶段组内的行。惰性解析期间与写入批次前均检查取消。无需数据库 schema 变更或重置。使用 `.venv/bin/pip install --no-build-isolation --no-deps -e backend/native` 重编译本地 wheel，待活动任务停止后重启回测 manager。已取消的运行保持取消，重编译不会重试它们。为验收启动后端时继续关闭两个 paper scheduler 开关。
 
 只读基准预检：
 

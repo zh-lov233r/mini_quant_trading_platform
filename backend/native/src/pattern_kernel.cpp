@@ -185,6 +185,10 @@ PatternConfig parse_pattern_config(const py::dict& runtime) {
             number_or(signal, "left_volume_ratio_max"), number_or(signal, "right_volume_ratio_min"),
             integer_or(signal, "retest_window"), number_or(signal, "retest_volume_ratio_max"),
             number_or(signal, "support_tolerance_pct"),
+            number_or(signal, "previous_body_atr_min"),
+            number_or(signal, "breakout_body_atr_min"),
+            number_or(signal, "exhaustion_body_atr_max"),
+            number_or(signal, "island_body_atr_max"),
         };
         config.history_limit = std::max(40, value.downtrend_lookback + value.max_island_bars + value.retest_window + 2);
         config.signal = value;
@@ -200,6 +204,8 @@ PatternConfig parse_pattern_config(const py::dict& runtime) {
             number_or(signal, "breakout_volume_ratio_min"), integer_or(signal, "max_breakout_bars_after_right_bottom"),
             number_or(signal, "breakout_buffer_pct"), integer_or(signal, "retest_window"),
             number_or(signal, "retest_volume_ratio_max"), number_or(signal, "support_tolerance_pct"),
+            number_or(signal, "rebound_volume_ratio_min"),
+            number_or(signal, "rebound_volume_ratio_max"),
         };
         config.history_limit = std::max(
             40, value.downtrend_lookback + value.max_bottom_spacing + value.left_bottom_before_bars
@@ -215,6 +221,11 @@ PatternConfig parse_pattern_config(const py::dict& runtime) {
             number_or(signal, "shoulder_tolerance_pct"), number_or(signal, "head_depth_min_pct"),
             number_or(signal, "head_volume_ratio_max"), number_or(signal, "right_shoulder_volume_ratio_max"),
             number_or(signal, "breakout_volume_ratio_min"), number_or(signal, "breakout_buffer_pct"),
+            integer_or(signal, "platform_bars"),
+            number_or(signal, "platform_range_atr_max"),
+            number_or(signal, "platform_drift_atr_max"),
+            number_or(signal, "rebound_volume_ratio_min"),
+            number_or(signal, "rebound_volume_ratio_max"),
         };
         config.history_limit = std::max(40, value.downtrend_lookback + 2 * value.max_segment_bars + value.pivot_right_bars + 10);
         config.signal = value;
@@ -228,6 +239,7 @@ PatternConfig parse_pattern_config(const py::dict& runtime) {
             integer_or(signal, "min_pullback_spacing"), number_or(signal, "right_volume_ratio_min"),
             number_or(signal, "pullback_volume_ratio_max"), number_or(signal, "breakout_volume_ratio_min"),
             number_or(signal, "breakout_buffer_pct"),
+            number_or(signal, "weakening_buffer_pct"),
         };
         config.history_limit = std::max(40, value.max_lookback + value.pivot_right_bars + 10);
         config.signal = value;
@@ -242,6 +254,10 @@ PatternConfig parse_pattern_config(const py::dict& runtime) {
             number_or(signal, "breakout_volume_ratio_min"), integer_or(signal, "retest_window"),
             number_or(signal, "retest_volume_ratio_max"), number_or(signal, "support_tolerance_pct"),
             number_or(signal, "bearish_reversal_volume_ratio_min"),
+            number_or(signal, "consolidation_range_atr_max"),
+            number_or(signal, "consolidation_drift_atr_max"),
+            number_or(signal, "breakout_buffer_pct"),
+            number_or(signal, "bearish_body_atr_min"),
         };
         config.history_limit = std::max(
             40, value.downtrend_lookback + value.continuation_window + value.consolidation_max_bars

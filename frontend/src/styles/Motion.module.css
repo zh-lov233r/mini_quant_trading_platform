@@ -1,0 +1,86 @@
+.control {
+  transition: color var(--motion-fast) ease, background-color var(--motion-fast) ease, border-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease, scale var(--motion-fast) ease;
+}
+.control:focus-visible { outline: 2px solid #67e8f9; outline-offset: 3px; }
+.control:active:not(:disabled):not([data-disabled]):not([aria-disabled="true"]) { scale: .98; }
+@media (hover: hover) and (pointer: fine) {
+  .control:hover:not(:disabled):not([data-disabled]):not([aria-disabled="true"]) { box-shadow: 0 0 0 1px rgba(148,163,184,.24); }
+}
+
+.card {
+  border-radius: 18px;
+  box-shadow: 0 14px 36px rgba(2,6,23,.24);
+  transition: transform var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) ease;
+}
+.card:focus-visible {
+  outline: 2px solid rgb(var(--workspace-card-accent, 94,234,212));
+  outline-offset: 3px;
+  transform: translateY(-2px);
+  box-shadow: 0 0 0 1px rgba(var(--workspace-card-accent, 94,234,212),.38), 0 16px 36px rgba(2,6,23,.32);
+}
+@media (hover: hover) and (pointer: fine) {
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0 0 1px rgba(var(--workspace-card-accent, 94,234,212),.38), 0 16px 36px rgba(2,6,23,.32);
+  }
+}
+
+/* Opacity only: page ancestors must not change fixed/sticky or chart coordinates. */
+.enter { animation: fadeIn var(--motion-enter) var(--motion-ease); }
+.kpis > * { animation: fadeIn var(--motion-enter) var(--motion-ease) backwards; }
+.kpis > :nth-child(2) { animation-delay: 30ms; }
+.kpis > :nth-child(3) { animation-delay: 60ms; }
+.kpis > :nth-child(4) { animation-delay: 90ms; }
+
+.overlay[data-state="open"] { animation: fadeIn var(--motion-surface) ease; }
+.overlay[data-state="closed"] { animation: fadeOut var(--motion-fast) ease; }
+.dialog[data-state="open"] { animation: dialogIn var(--motion-surface) var(--motion-ease); }
+.dialog[data-state="closed"] { animation: dialogOut var(--motion-fast) ease; }
+.drawer[data-state="open"] { animation: drawerIn var(--motion-surface) var(--motion-ease); }
+.drawer[data-state="closed"] { animation: drawerOut var(--motion-fast) ease; }
+.popover {
+  transform-origin: var(--radix-select-content-transform-origin, var(--radix-popover-content-transform-origin, var(--radix-dropdown-menu-content-transform-origin, var(--radix-tooltip-content-transform-origin))));
+  --surface-x: 0px;
+  --surface-y: -4px;
+}
+.popover[data-side="top"] { --surface-y: 4px; }
+.popover[data-side="left"] { --surface-x: 4px; --surface-y: 0px; }
+.popover[data-side="right"] { --surface-x: -4px; --surface-y: 0px; }
+.popover[data-state="open"],.popover[data-state="delayed-open"],.popover[data-state="instant-open"] { animation: popoverIn var(--motion-surface) var(--motion-ease); }
+.popover[data-state="closed"] { animation: fadeOut var(--motion-fast) ease; }
+
+.skeleton > div { animation: skeletonPulse 1600ms ease-in-out infinite alternate; }
+.progress { transition: width var(--motion-enter) ease; }
+.progress[data-phase="completed"],.progress[data-phase="failed"],.progress[data-phase="cancelled"] { transition: none; }
+.notice { animation: noticeFade 3200ms ease both; }
+.backToTop { transition: opacity var(--motion-surface) ease, transform var(--motion-surface) ease, scale var(--motion-fast) ease; }
+.backToTop[data-visible="false"] { opacity: 0; pointer-events: none; transform: translateY(12px); }
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+@keyframes dialogIn { from { opacity: 0; transform: translate(-50%,calc(-50% + 8px)) scale(.985); } to { opacity: 1; transform: translate(-50%,-50%) scale(1); } }
+@keyframes dialogOut { from { opacity: 1; transform: translate(-50%,-50%) scale(1); } to { opacity: 0; transform: translate(-50%,calc(-50% + 4px)) scale(.99); } }
+@keyframes drawerIn { from { opacity: 0; transform: translateX(-12px); } to { opacity: 1; transform: none; } }
+@keyframes drawerOut { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(-8px); } }
+@keyframes popoverIn { from { opacity: 0; transform: translate(var(--surface-x),var(--surface-y)) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes skeletonPulse { from { opacity: .65; } to { opacity: 1; } }
+@keyframes noticeFade {
+  /* 180ms entrance and exit within the existing 3200ms lifetime. */
+  0% { opacity: 0; transform: translate(-50%,calc(-50% + 4px)); }
+  5.625%,94.375% { opacity: 1; transform: translate(-50%,-50%); }
+  100% { opacity: 0; transform: translate(-50%,calc(-50% - 4px)); }
+}
+@media (max-width: 767px) {
+  .dialog[data-state="open"] { animation-name: mobileDialogIn; }
+  .dialog[data-state="closed"] { animation-name: mobileDialogOut; }
+}
+@keyframes mobileDialogIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes mobileDialogOut { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(4px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .control,.card,.progress,.backToTop { transition: none; }
+  .control:active:not(:disabled):not([data-disabled]):not([aria-disabled="true"]) { scale: none; }
+  .card:hover,.card:focus-visible,.backToTop[data-visible="false"] { transform: none; }
+  .enter,.kpis > *,.skeleton > div,.notice,
+  .overlay[data-state],.dialog[data-state],.drawer[data-state],.popover[data-state] { animation: none; }
+}

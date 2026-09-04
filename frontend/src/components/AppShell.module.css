@@ -1,3 +1,13 @@
+.iconButton { composes: control from "../styles/Motion.module.css"; }
+.mobileMenuButton { composes: control from "../styles/Motion.module.css"; }
+.navLink { composes: control from "../styles/Motion.module.css"; }
+.quickCreate { composes: control from "../styles/Motion.module.css"; }
+.localeButton { composes: control from "../styles/Motion.module.css"; }
+.pageActionLink { composes: control from "../styles/Motion.module.css"; }
+.pageHeader { composes: enter from "../styles/Motion.module.css"; }
+.content { composes: enter from "../styles/Motion.module.css"; }
+.dialogOverlay { composes: overlay from "../styles/Motion.module.css"; }
+.navDialogContent { composes: drawer from "../styles/Motion.module.css"; }
 .shell { --workspace-sidebar-width: 216px; min-height: 100vh; color: #e2e8f0; background: radial-gradient(circle at top left, rgba(45,212,191,.14), transparent 25%), radial-gradient(circle at top right, rgba(251,191,36,.08), transparent 20%), linear-gradient(180deg,#030712 0%,#07111c 42%,#0b1523 100%); font-family: "Avenir Next","Segoe UI","Helvetica Neue",sans-serif; }
 .shellCollapsed { --workspace-sidebar-width: 72px; }
 .shellCollapsed .brand { display: none; }
@@ -7,7 +17,7 @@
 .shellCollapsed .sidebarFooter .localeChoiceButton { display: none; }
 .shellCollapsed .sidebarFooter .localeToggleButton { display: inline-flex; }
 .shellCollapsed .localeLongLabel { display: none; }
-.sidebar { position: fixed; inset: 0 auto 0 0; z-index: 40; width: var(--workspace-sidebar-width); display: flex; flex-direction: column; gap: 14px; padding: 14px 10px; border-right: 1px solid rgba(71,85,105,.34); background: rgba(3,7,18,.94); box-shadow: 14px 0 36px rgba(2,6,23,.24); backdrop-filter: blur(14px); transition: width 180ms ease; }
+.sidebar { position: fixed; inset: 0 auto 0 0; z-index: 40; width: var(--workspace-sidebar-width); display: flex; flex-direction: column; gap: 14px; padding: 14px 10px; border-right: 1px solid rgba(71,85,105,.34); background: rgba(3,7,18,.94); box-shadow: 14px 0 36px rgba(2,6,23,.24); backdrop-filter: blur(14px); transition: width var(--motion-surface) ease; }
 .brandRow,.sidebarFooter,.navLink,.quickCreate,.mobileTopbar,.pageHeaderRow,.pageActions,.headerControls,.localeSwitch { display: flex; align-items: center; }
 .brandRow { min-height: 42px; justify-content: space-between; gap: 8px; }
 .brand { min-width: 0; color: #f8fafc; text-decoration: none; font-size: 13px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; overflow: hidden; }
@@ -28,7 +38,7 @@
 .localeButton { flex: 1; min-width: 0; padding: 6px 7px; border: 0; border-radius: 7px; background: transparent; color: #94a3b8; cursor: pointer; font-size: 11px; font-weight: 800; }
 .localeButtonActive { background: rgba(8,145,178,.9); color: #f8fafc; }
 .localeToggleButton { display: none; width: 36px; height: 36px; flex: none; align-items: center; justify-content: center; padding: 0; }
-.main { min-width: 0; min-height: 100vh; margin-left: var(--workspace-sidebar-width); padding: 16px clamp(16px,1.6vw,24px) 52px; transition: margin-left 180ms ease; }
+.main { min-width: 0; min-height: 100vh; margin-left: var(--workspace-sidebar-width); padding: 16px clamp(16px,1.6vw,24px) 52px; transition: margin-left var(--motion-surface) ease; }
 .mobileTopbar { display: none; }
 .mobileLocaleSwitch { display: none; }
 .pageHeader { margin-bottom: 14px; padding: 13px 16px; border: 1px solid rgba(71,85,105,.3); border-radius: 16px; background: rgba(5,10,18,.8); box-shadow: 0 12px 34px rgba(2,6,23,.34); backdrop-filter: blur(8px); }

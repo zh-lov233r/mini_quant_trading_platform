@@ -5,18 +5,12 @@ import { createStockBasket, listStockBaskets, updateStockBasket } from "@/api/st
 import AppShell, { PageActionLink } from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
+import { StockBasketSelector } from "@/components/StockBasketSelector";
 import { SelectControl } from "@/components/workspace/SelectControl";
 import { WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
 import type { StockBasketCreate, StockBasketOut } from "@/types/stock-basket";
 import { formatDateTime } from "@/utils/strategy";
-
-function parseSymbols(raw: string): string[] {
-  return raw
-    .split(/[\s,，]+/)
-    .map((item) => item.trim().toUpperCase())
-    .filter(Boolean);
-}
 
 function formatSymbolPreview(symbols: string[], limit = 20): string {
   if (symbols.length <= limit) {
@@ -30,12 +24,10 @@ export function StockBasketForm({ basket, onSaved }: { basket: StockBasketOut | 
   const isZh = locale === "zh-CN";
   const [name, setName] = useState(basket?.name ?? "");
   const [description, setDescription] = useState(basket?.description ?? "");
-  const [symbolsText, setSymbolsText] = useState(() => basket?.symbols.join("\n") ?? "");
-  const [editingSymbols, setEditingSymbols] = useState(!basket);
+  const [symbols, setSymbols] = useState<string[]>(() => basket?.symbols.slice() ?? []);
   const [status, setStatus] = useState(basket?.status ?? "active");
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const symbols = useMemo(() => parseSymbols(symbolsText), [symbolsText]);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -45,7 +37,7 @@ export function StockBasketForm({ basket, onSaved }: { basket: StockBasketOut | 
       return;
     }
     if (symbols.length === 0) {
-      setSubmitError(isZh ? "请至少输入一个股票代码" : "Please enter at least one symbol");
+      setSubmitError(isZh ? "请至少添加一只股票" : "Please add at least one stock");
       return;
     }
 
@@ -85,6 +77,7 @@ export function StockBasketForm({ basket, onSaved }: { basket: StockBasketOut | 
         <input
           aria-label={isZh ? "组合名称" : "Basket name"}
           value={name}
+          maxLength={128}
           onChange={(e) => setName(e.target.value)}
           placeholder={isZh ? "组合名称，例如 Mega Cap Core" : "Basket name, for example Mega Cap Core"}
           style={inputStyle}
@@ -92,6 +85,7 @@ export function StockBasketForm({ basket, onSaved }: { basket: StockBasketOut | 
         <textarea
           aria-label={isZh ? "组合说明" : "Basket description"}
           value={description}
+          maxLength={500}
           onChange={(e) => setDescription(e.target.value)}
           placeholder={
             isZh
@@ -101,36 +95,6 @@ export function StockBasketForm({ basket, onSaved }: { basket: StockBasketOut | 
           rows={4}
           style={{ ...inputStyle, resize: "vertical" }}
         />
-        {basket ? (
-          <button
-            type="button"
-            aria-expanded={editingSymbols}
-            aria-controls="basket-symbols"
-            onClick={() => setEditingSymbols((open) => !open)}
-            style={{ ...buttonStyle, justifySelf: "start", minHeight: 44 }}
-          >
-            {editingSymbols
-              ? (isZh ? "收起股票代码" : "Collapse Symbols")
-              : (isZh ? `编辑股票代码（${symbols.length} 只）` : `Edit Symbols (${symbols.length})`)}
-          </button>
-        ) : null}
-        {/* Mount large editable text only on demand: Safari AX text reads can synchronously spell-check it. */}
-        {editingSymbols ? <textarea
-          id="basket-symbols"
-          aria-label={isZh ? "股票代码" : "Symbols"}
-          value={symbolsText}
-          onChange={(e) => setSymbolsText(e.target.value)}
-          placeholder={
-            isZh
-              ? "输入股票代码，用空格、换行或逗号分隔"
-              : "Enter symbols separated by spaces, new lines, or commas"
-          }
-          spellCheck={false}
-          autoCorrect="off"
-          autoCapitalize="none"
-          rows={6}
-          style={{ ...inputStyle, resize: "vertical" }}
-        /> : null}
         <SelectControl
           aria-label={isZh ? "股票组合状态" : "Basket status"}
           value={status}
@@ -142,23 +106,7 @@ export function StockBasketForm({ basket, onSaved }: { basket: StockBasketOut | 
           ]}
         />
 
-        <div
-          style={{
-            padding: 14,
-            borderRadius: 16,
-            background: "rgba(15, 23, 42, 0.72)",
-            border: "1px solid rgba(71, 85, 105, 0.3)",
-            color: "rgba(148, 163, 184, 0.9)",
-            lineHeight: 1.6,
-            fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-            fontSize: 13,
-          }}
-        >
-          {isZh ? "预览" : "Preview"}: {symbols.slice(0, 12).join(", ")}
-          {symbols.length > 12
-            ? ` +${symbols.length - 12}`
-            : ""}
-        </div>
+        <StockBasketSelector symbols={symbols} onChange={setSymbols} />
 
         <button type="submit" disabled={submitting} style={buttonStyle}>
           {submitting ? (isZh ? "保存中..." : "Saving...") : isZh ? "保存到股票库" : "Save Basket"}

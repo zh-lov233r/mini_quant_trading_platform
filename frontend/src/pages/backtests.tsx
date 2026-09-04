@@ -16,6 +16,7 @@ import { SearchableSelect } from "@/components/workspace/SearchableSelect";
 import { SelectControl } from "@/components/workspace/SelectControl";
 import { WorkspaceConfirmDialog, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
+import motion from "@/styles/Motion.module.css";
 import type { BacktestCreate, BacktestPersistLevel, BacktestRunOut, BacktestWorkerStatus } from "@/types/backtest";
 import type { StockBasketOut } from "@/types/stock-basket";
 import type { StrategyOut, StrategyType } from "@/types/strategy";
@@ -35,6 +36,7 @@ import styles from "@/styles/BacktestsPage.module.css";
 function actionButton(label: string, onClick: () => void) {
   return (
     <button
+      className={motion.control}
       type="button"
       onClick={onClick}
       style={{
@@ -679,7 +681,7 @@ export default function BacktestsPage() {
       ) : null}
 
       {!loading && !error ? (
-        <>
+        <div className={motion.enter}>
           <section
             style={{
               display: "grid",
@@ -1085,6 +1087,8 @@ export default function BacktestsPage() {
                 ) : null}
 
                 <button
+
+                  className={motion.control}
                   type="submit"
                   disabled={submitting}
                   style={{
@@ -1241,6 +1245,7 @@ export default function BacktestsPage() {
                     ]} />
                   </label>
                   <button
+                    className={motion.control}
                     type="button"
                     disabled={!hasRunFilters}
                     onClick={() => {
@@ -1291,7 +1296,10 @@ export default function BacktestsPage() {
                       <div key={run.id} style={{ position: "relative" }}>
                       <Link
                         href={`/backtests/${encodeURIComponent(run.id)}`}
+                        className={motion.card}
                         style={{
+                          ...{ "--workspace-card-accent": categoryPresentation.accentRgb },
+                          display: "block",
                           textDecoration: "none",
                           color: "inherit",
                         }}
@@ -1474,6 +1482,7 @@ export default function BacktestsPage() {
                       </Link>
                       {TERMINAL_RUN_STATUSES.has(run.status) ? (
                         <button
+                          className={motion.control}
                           type="button"
                           aria-label={isZh ? `删除 ${run.strategy_name || "回测"}` : `Delete ${run.strategy_name || "backtest"}`}
                           disabled={deletingRunId !== null}
@@ -1524,7 +1533,7 @@ export default function BacktestsPage() {
                         disabled={runPageIndex === 0}
                         onClick={() => setRunPageIndex((current) => Math.max(0, current - 1))}
                         style={paginationButtonStyle}
-                        className={styles.paginationButton}
+                        className={`${motion.control} ${styles.paginationButton}`}
                       >
                         {isZh ? "上一页" : "Previous"}
                       </button>
@@ -1533,7 +1542,7 @@ export default function BacktestsPage() {
                         disabled={runPageIndex >= runPageCount - 1}
                         onClick={() => setRunPageIndex((current) => Math.min(runPageCount - 1, current + 1))}
                         style={paginationButtonStyle}
-                        className={styles.paginationButton}
+                        className={`${motion.control} ${styles.paginationButton}`}
                       >
                         {isZh ? "下一页" : "Next"}
                       </button>
@@ -1545,7 +1554,7 @@ export default function BacktestsPage() {
                 </div>
               )}
           </section>
-        </>
+        </div>
       ) : null}
     </AppShell>
   );

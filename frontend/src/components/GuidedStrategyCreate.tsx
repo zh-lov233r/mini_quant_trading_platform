@@ -13,6 +13,7 @@ import {
 import { listStockBaskets } from "@/api/stock-baskets";
 import type { StockBasketOut } from "@/types/stock-basket";
 import { SearchableSelect } from "@/components/workspace/SearchableSelect";
+import { StrategyUniversePicker } from "@/components/StrategyUniversePicker";
 import Badge from "@/components/Badge";
 import { SelectControl } from "@/components/workspace/SelectControl";
 import { useI18n } from "@/i18n/provider";
@@ -231,7 +232,7 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
   const validateFields = (fields: GuidedFieldDefinition[]): FieldErrors => {
     const next: FieldErrors = {};
     fields.forEach((field) => {
-      if (field.kind === "boolean" || field.kind === "select") return;
+      if (field.kind === "boolean" || field.kind === "select" || field.kind === "text") return;
       const value = Number(getPathValue(params, field.path));
       if (!Number.isFinite(value)) {
         next[field.path] = copy.errors.invalidNumber;
@@ -271,8 +272,10 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
         if (selectedType === "head_shoulders_bottom" && Number(getPathValue(params, "signal.max_segment_bars")) < Number(getPathValue(params, "signal.min_segment_bars"))) next["signal.max_segment_bars"] = copy.errors.segmentRange;
         if (selectedType === "rounded_bottom" && Number(getPathValue(params, "signal.max_lookback")) < Number(getPathValue(params, "signal.min_lookback"))) next["signal.max_lookback"] = copy.errors.lookbackRange;
         if (selectedType === "v_reversal" && Number(getPathValue(params, "signal.consolidation_max_bars")) < Number(getPathValue(params, "signal.consolidation_min_bars"))) next["signal.consolidation_max_bars"] = copy.errors.consolidationRange;
+        if (["double_bottom", "head_shoulders_bottom"].includes(selectedType) && Number(getPathValue(params, "signal.rebound_volume_ratio_min")) > Number(getPathValue(params, "signal.rebound_volume_ratio_max"))) next["signal.rebound_volume_ratio_max"] = copy.errors.reboundVolumeRange;
+        if (selectedType === "rounded_bottom" && Number(getPathValue(params, "signal.vertex_position_min")) > Number(getPathValue(params, "signal.vertex_position_max"))) next["signal.vertex_position_max"] = copy.errors.vertexRange;
         if (selectedType === "support_resistance") {
-          const modes = ["support_bounce_enabled", "resistance_breakout_enabled", "breakout_retest_enabled"];
+          const modes = ["support_bounce_enabled", "breakout_retest_enabled"];
           if (!modes.some((key) => Boolean(getPathValue(params, `signal.${key}`)))) next["signal.support_bounce_enabled"] = copy.errors.supportMode;
           const covered = Number(getPathValue(params, "signal.pivot_left_bars")) + Number(getPathValue(params, "signal.pivot_right_bars")) + 1;
           if (Number(getPathValue(params, "signal.detection_window")) < covered) next["signal.detection_window"] = copy.errors.detectionWindow;
@@ -483,22 +486,17 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
             const basket = baskets.find((item) => item.id === id);
             if (basket) { setSymbolsText(basket.symbols.join(", ")); invalidate(); }
           }} ariaLabel={isZh ? "选择现有股票组合" : "Choose a saved basket"} placeholder={isZh ? "选择组合" : "Choose basket"} searchPlaceholder={isZh ? "搜索组合" : "Search baskets"} emptyText={isZh ? "没有匹配组合" : "No matching baskets"} options={[
-            { value: "", label: isZh ? "手动输入股票" : "Manual symbols" },
+            { value: "", label: isZh ? "自定义股票池" : "Custom stock universe" },
             ...baskets.filter((item) => item.status === "active").map((item) => ({ value: item.id, label: item.name, description: String(item.symbol_count) })),
           ]} />
           {basketError ? <span role="alert">{basketError}</span> : null}
         </FieldShell>
-        <FieldShell label={copy.basics.universe} hint={copy.basics.universeEmpty} inputId={fieldId("symbols")} full>
-          <textarea
-            id={fieldId("symbols")}
-            value={symbolsText}
-            rows={3}
-            onChange={(event) => { setBasketId(""); setSymbolsText(event.target.value); invalidate(); }}
-            placeholder={copy.basics.universePlaceholder}
-            style={{ ...inputStyle(false), resize: "vertical" }}
-          />
-          {symbols.length ? <span style={recognizedStyle}>{interpolate(copy.basics.universeCount, { count: symbols.length, symbols: symbols.join(", ") })}</span> : null}
-        </FieldShell>
+        <div role="group" aria-labelledby="strategy-universe-label" style={{ ...fieldShellStyle, gridColumn: "1 / -1" }}>
+          <span id="strategy-universe-label" style={labelStyle}>{copy.basics.universe}</span>
+          <StrategyUniversePicker symbols={symbols} onChange={(next) => {
+            setBasketId(""); setSymbolsText(next.join(", ")); invalidate();
+          }} />
+        </div>
         <div style={{ ...readonlyCardStyle, gridColumn: "1 / -1" }}>
           <div><strong>{copy.basics.status}</strong><div style={{ marginTop: 8 }}><Badge tone="warning">{copy.basics.draft}</Badge></div></div>
           <p style={{ ...mutedStyle, margin: 0 }}>{copy.basics.draftHint}</p>
@@ -546,6 +544,9 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
             invalid={Boolean(error)}
             options={options.map((option) => ({ value: String(option.value), label: option.label }))}
           />
+        ) : field.kind === "text" ? (
+          <input id={fieldId(field.path)} value={String(value ?? "")} style={inputStyle(Boolean(error))}
+            onChange={(event) => updateField(field, event.target.value)} />
         ) : (
           <div style={{ position: "relative" }}>
             <input
@@ -603,8 +604,8 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
               <strong>{isZh ? "固定四状态规则" : "Fixed Four-Regime Policy"}</strong>
               <p style={{ ...mutedStyle, margin: "8px 0 0" }}>
                 {isZh
-                  ? "v3 将每个交易日唯一归入上行、下行、震荡或过渡。上行允许全部三种入场，震荡仅允许支撑反弹，下行与过渡保留候选审计但暂停买入；确认下行触发下一有效交易日开盘退出。状态规则没有额外可调参数。"
-                  : "V3 assigns every session to exactly one uptrend, downtrend, range, or transition. Uptrends admit all three entries, ranges admit support bounces only, and downtrend/transition keep rejected candidates for audit; a confirmed downtrend exits at the next valid open. The regime policy adds no tunable parameter."}
+                  ? "v3 将每个交易日唯一归入上行、下行、震荡或过渡。上行允许反弹和回踩，直接突破仅审计，震荡仅允许支撑反弹，下行与过渡保留候选审计但暂停买入；确认下行触发下一有效交易日开盘退出。状态规则没有额外可调参数。"
+                  : "V3 assigns every session to exactly one uptrend, downtrend, range, or transition. Uptrends admit bounces and retests; direct breakouts are audit-only, ranges admit support bounces only, and downtrend/transition keep rejected candidates for audit; a confirmed downtrend exits at the next valid open. The regime policy adds no tunable parameter."}
               </p>
             </div>
             <p style={{ ...mutedStyle, margin: 0 }}>
@@ -815,7 +816,6 @@ const inputStyle = (error: boolean): CSSProperties => ({ boxSizing: "border-box"
 const hintStyle: CSSProperties = { color: "#8291a5", fontSize: 12, lineHeight: 1.5, fontFamily: font };
 const errorStyle: CSSProperties = { color: "#fda4af", fontSize: 12, lineHeight: 1.5, fontFamily: font };
 const counterStyle: CSSProperties = { alignSelf: "flex-end", color: "#64748b", fontSize: 12 };
-const recognizedStyle: CSSProperties = { color: "#a5f3fc", fontSize: 12, lineHeight: 1.5 };
 const readonlyCardStyle: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 18, alignItems: "center", padding: 16, borderRadius: 14, border: "1px solid rgba(245,158,11,.28)", background: "rgba(120,53,15,.1)" };
 const mutedStyle: CSSProperties = { color: "#94a3b8", fontFamily: font };
 const switchStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 9, minHeight: 44, padding: "0 12px", borderRadius: 12, border: "1px solid rgba(71,85,105,.5)", background: "#07111c", cursor: "pointer", fontFamily: font };

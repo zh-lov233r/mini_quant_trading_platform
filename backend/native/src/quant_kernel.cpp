@@ -741,7 +741,7 @@ py::dict prepared_day_market(
         }
         for (const char* key : {
             "position", "avg_entry_price", "entry_trade_date",
-            "position_holding_days", "entry_signal_features"
+            "position_holding_days", "entry_signal_features", "support_risk_context", "support_stopped_zones"
         }) {
             snapshot[py::str(key)] = position.contains(key)
                 ? py::reinterpret_borrow<py::object>(position[key])

@@ -14,6 +14,7 @@ import MetricCard from "@/components/MetricCard";
 import { SelectControl } from "@/components/workspace/SelectControl";
 import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogStack as ContextStack, DialogStat as ContextStat, DialogStats as ContextStats, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
+import motion from "@/styles/Motion.module.css";
 import type { StrategyCatalogItem, StrategyOut, StrategyType } from "@/types/strategy";
 import {
   formatDateTime,
@@ -174,7 +175,7 @@ export default function StrategiesPage() {
       {deleteError && <p style={{ color: "#fda4af" }}>{deleteError}</p>}
 
       {!loading && !error ? (
-        <>
+        <div className={motion.enter}>
           <section
             style={{
               display: "grid",
@@ -263,7 +264,7 @@ export default function StrategiesPage() {
             >
               <button
                 type="button"
-                className="strategy-category-filter"
+                className={`${motion.control} strategy-category-filter`}
                 aria-pressed={typeFilter === "all"}
                 onClick={() => setTypeFilter("all")}
                 style={{
@@ -307,7 +308,7 @@ export default function StrategiesPage() {
                   <button
                     key={entry.strategyType}
                     type="button"
-                    className="strategy-category-filter"
+                    className={`${motion.control} strategy-category-filter`}
                     aria-pressed={selected}
                     onClick={() => setTypeFilter(entry.strategyType)}
                     style={{
@@ -546,7 +547,9 @@ export default function StrategiesPage() {
                       return (
                         <article
                           key={item.id}
+                          className={motion.card}
                           style={{
+                            ...{ "--workspace-card-accent": categoryPresentation.accentRgb },
                             display: "flex",
                             flexDirection: "column",
                             height: "100%",
@@ -556,7 +559,6 @@ export default function StrategiesPage() {
                             background:
                               `radial-gradient(circle at top right, rgba(${categoryPresentation.accentRgb}, 0.16), transparent 34%), linear-gradient(140deg, rgba(8,15,24,0.96), rgba(15,23,42,0.9))`,
                             color: "#e2e8f0",
-                            boxShadow: "0 14px 36px rgba(2, 6, 23, 0.24)",
                             cursor: "pointer",
                             position: "relative",
                             overflow: "hidden",
@@ -778,6 +780,7 @@ export default function StrategiesPage() {
                                 {isZh ? "基于此新建" : "Create From"}
                               </Link>
                               <button
+                                className={motion.control}
                                 type="button"
                                 onClick={(event) => {
                                   event.stopPropagation();
@@ -841,7 +844,7 @@ export default function StrategiesPage() {
               </>
             );
           })()}
-        </>
+        </div>
       ) : null}
     </AppShell>
   );

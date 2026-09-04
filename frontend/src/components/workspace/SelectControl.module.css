@@ -1,3 +1,5 @@
+.trigger { composes: control from "../../styles/Motion.module.css"; }
+.content { composes: popover from "../../styles/Motion.module.css"; }
 .trigger {
   display: inline-flex;
   align-items: center;
@@ -18,7 +20,7 @@
   font-size: 14px;
   line-height: 1.35;
   text-align: left;
-  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+  transition: border-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease, background-color var(--motion-fast) ease, scale var(--motion-fast) ease;
 }
 
 .trigger:hover:not([data-disabled]) {
@@ -69,7 +71,7 @@
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
-  transition: transform 140ms ease, stroke 140ms ease;
+  transition: transform var(--motion-fast) ease, stroke var(--motion-fast) ease;
 }
 
 .trigger[data-state="open"] .chevron {

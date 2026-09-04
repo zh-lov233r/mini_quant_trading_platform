@@ -57,6 +57,10 @@ struct IslandConfig {
     int retest_window;
     double retest_volume_ratio_max;
     double support_tolerance_pct;
+    double previous_body_atr_min;
+    double breakout_body_atr_min;
+    double exhaustion_body_atr_max;
+    double island_body_atr_max;
 };
 
 struct DoubleBottomConfig {
@@ -78,6 +82,8 @@ struct DoubleBottomConfig {
     int retest_window;
     double retest_volume_ratio_max;
     double support_tolerance_pct;
+    double rebound_volume_ratio_min;
+    double rebound_volume_ratio_max;
 };
 
 struct HeadShouldersConfig {
@@ -93,6 +99,11 @@ struct HeadShouldersConfig {
     double right_shoulder_volume_ratio_max;
     double breakout_volume_ratio_min;
     double breakout_buffer_pct;
+    int platform_bars;
+    double platform_range_atr_max;
+    double platform_drift_atr_max;
+    double rebound_volume_ratio_min;
+    double rebound_volume_ratio_max;
 };
 
 struct RoundedBottomConfig {
@@ -109,6 +120,7 @@ struct RoundedBottomConfig {
     double pullback_volume_ratio_max;
     double breakout_volume_ratio_min;
     double breakout_buffer_pct;
+    double weakening_buffer_pct;
 };
 
 struct VReversalConfig {
@@ -127,6 +139,10 @@ struct VReversalConfig {
     double retest_volume_ratio_max;
     double support_tolerance_pct;
     double bearish_reversal_volume_ratio_min;
+    double consolidation_range_atr_max;
+    double consolidation_drift_atr_max;
+    double breakout_buffer_pct;
+    double bearish_body_atr_min;
 };
 
 using PatternSignalConfig = std::variant<

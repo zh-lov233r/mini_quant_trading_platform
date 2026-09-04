@@ -43,6 +43,7 @@ interface Props {
   showVolume?: boolean;
   height?: number;
   ariaLabel?: string;
+  framed?: boolean;
 }
 
 type CandleApi = ISeriesApi<"Candlestick">;
@@ -61,6 +62,7 @@ export default function CandlestickLightweightChart({
   showVolume = true,
   height = 384,
   ariaLabel,
+  framed = true,
 }: Props) {
   const isZh = locale === "zh-CN";
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -321,8 +323,8 @@ export default function CandlestickLightweightChart({
         width: "100%",
         minHeight: height,
         overflow: "hidden",
-        borderRadius: 18,
-        border: "1px solid rgba(71, 85, 105, 0.24)",
+        borderRadius: framed ? 18 : 0,
+        border: framed ? "1px solid rgba(71, 85, 105, 0.24)" : "none",
         background: "rgba(3, 7, 18, 0.96)",
       }}
     >

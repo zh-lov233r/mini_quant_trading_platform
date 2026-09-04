@@ -1,3 +1,6 @@
+.toolButton { composes: control from "../../styles/Motion.module.css"; }
+.sortButton { composes: control from "../../styles/Motion.module.css"; }
+.columnMenu { composes: popover from "../../styles/Motion.module.css"; }
 .frame { min-width: 0; display: grid; gap: 8px; }
 .wrapper { min-width: 0; overflow: auto; border: 1px solid rgba(71, 85, 105, 0.28); border-radius: 13px; background: rgba(8, 15, 24, 0.72); }
 .toolbar,.pagination,.toolbarActions { display: flex; align-items: center; gap: 8px; }

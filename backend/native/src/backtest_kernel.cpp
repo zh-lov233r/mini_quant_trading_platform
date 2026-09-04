@@ -272,6 +272,7 @@ struct DatasetView {
     std::vector<std::int32_t> history_sessions;
     std::map<std::int64_t, std::map<std::int64_t, double>> split_adjustments;
     py::dict support_resistance_hydration;
+    support_resistance::RiskContext support_risk_context;
 };
 
 struct SessionRange {
@@ -771,6 +772,9 @@ DatasetView parse_dataset(const py::object& dataset) {
         view.support_resistance_hydration = py::cast<py::dict>(
             sidecar["support_resistance_hydration"]
         );
+    }
+    if (sidecar.contains("support_risk_context")) {
+        view.support_risk_context = parse_support_risk_context(py::cast<py::dict>(sidecar["support_risk_context"]));
     }
     return view;
 }
@@ -1494,9 +1498,15 @@ std::optional<SignalRecord> evaluate_support_resistance_signal(
     const Position* position,
     std::int64_t formal_day_index,
     support_resistance::SymbolState& state,
-    bool emit_signals
+    bool emit_signals,
+    std::vector<std::string>& audit_events
 ) {
-    const support_resistance::Bar bar = support_bar(dataset, row);
+    support_resistance::Bar bar = support_bar(dataset, row);
+    const auto market = dataset.support_risk_context.market.find(bar.date_ordinal);
+    if (market != dataset.support_risk_context.market.end()) {
+        bar.market_close = market->second.first;
+        bar.market_sma_200 = market->second.second;
+    }
     support_resistance::PositionView position_view;
     if (position != nullptr) {
         position_view.quantity = position->quantity;
@@ -1510,6 +1520,9 @@ std::optional<SignalRecord> evaluate_support_resistance_signal(
     const std::optional<support_resistance::Decision> decision = support_resistance::advance_symbol(
         state, bar, position_view, strategy.support_resistance, emit_signals
     );
+    // Events are output-only. Keep compact JSON, not the whole run's object trees.
+    for (const auto& event : state.events) audit_events.push_back(support_resistance::json(event));
+    state.events.clear();
     if (!emit_signals || !decision) return std::nullopt;
     const Action action = decision->action == support_resistance::Action::Buy
         ? Action::Buy : Action::Sell;
@@ -2003,7 +2016,8 @@ std::shared_ptr<KernelResult> run_native_backtest(
     double initial_cash,
     const CostConfig& costs,
     int requested_thread_count,
-    const py::object& control_callback
+    const py::object& control_callback,
+    const py::object& finalizing_callback
 ) {
     auto result = std::make_shared<KernelResult>();
     result->initial_cash = initial_cash;
@@ -2017,6 +2031,7 @@ std::shared_ptr<KernelResult> run_native_backtest(
     std::map<std::int64_t, std::int64_t> delisted_ordinals;
     std::map<std::int64_t, PatternState> pattern_states;
     std::map<std::int64_t, support_resistance::SymbolState> support_states;
+    std::map<std::int64_t, std::vector<std::string>> support_events;
     std::map<std::int64_t, std::int32_t> latest_symbol_ids;
     std::vector<SignalRecord> pending;
     const bool has_control_callback = !control_callback.is_none();
@@ -2048,6 +2063,7 @@ std::shared_ptr<KernelResult> run_native_backtest(
                 );
             }
             support_states.emplace(instrument, std::move(state));
+            support_events.try_emplace(instrument);
         }
     }
 
@@ -2104,7 +2120,8 @@ std::shared_ptr<KernelResult> run_native_backtest(
                         nullptr,
                         -1,
                         *states[static_cast<std::size_t>(row - session.begin)],
-                        false
+                        false,
+                        support_events.at(dataset.integers.at(row, kInstrumentId))
                     ));
                 });
             }
@@ -2236,8 +2253,8 @@ std::shared_ptr<KernelResult> run_native_backtest(
                 const double desired = equity_before * strategy.position_size_pct * target_fraction;
                 const double incremental = std::max(desired - current_quantity * *mark, 0.0);
                 const double target = std::min(cash, incremental);
-                const BuyEstimate order = estimate_buy(target, *mark, costs);
-                const double cash_out = order.notional + order.fee;
+                BuyEstimate order = estimate_buy(target, *mark, costs);
+                double cash_out = order.notional + order.fee;
                 if (order.quantity <= 0.0 || cash_out <= 0.0 || cash_out > cash) continue;
                 if (strategy.kind == StrategyKind::SupportResistance) {
                     const double projected_lower = signal->entry_channel_lower
@@ -2255,6 +2272,19 @@ std::shared_ptr<KernelResult> run_native_backtest(
                         rejection_reason = "projected_inner_edges_crossed";
                     } else if (order.price < projected_lower || order.price > projected_upper) {
                         rejection_reason = "entry_price_outside_valid_channel";
+                    }
+                    if (rejection_reason.empty()) {
+                        const auto sizing = support_resistance::size_entry(signal->support_metadata,
+                            order.price, equity_before, cash, strategy.position_size_pct,
+                            strategy.support_resistance, costs.commission_bps, costs.commission_min,
+                            costs.slippage_bps);
+                        if (sizing.quantity <= 0.0) rejection_reason = sizing.reason_code;
+                        else {
+                            order.quantity = sizing.quantity;
+                            order.notional = order.quantity * order.price;
+                            order.fee = commission(order.notional, costs);
+                            cash_out = order.notional + order.fee;
+                        }
                     }
                     if (!rejection_reason.empty()) {
                         if (!signal->support_entry_channel || !signal->support_setup_kind) {
@@ -2378,7 +2408,8 @@ std::shared_ptr<KernelResult> run_native_backtest(
                             position_views[offset],
                             static_cast<std::int64_t>(day),
                             *day_support_states[offset],
-                            true
+                            true,
+                            support_events.at(dataset.integers.at(row, kInstrumentId))
                         );
                     } else {
                         decision = evaluate_signal(
@@ -2492,13 +2523,33 @@ std::shared_ptr<KernelResult> run_native_backtest(
         }
     }
     if (strategy.kind == StrategyKind::SupportResistance) {
-        for (const auto& [instrument, state] : support_states) {
+        const std::size_t total = support_states.size();
+        const bool has_finalizing_callback = !finalizing_callback.is_none();
+        py::gil_scoped_release release;
+        auto checkpoint = [&](std::size_t completed) {
+            if (!has_finalizing_callback) return;
+            py::gil_scoped_acquire acquire;
+            if (py::cast<bool>(finalizing_callback(completed, total))) {
+                throw BacktestCancelled("native backtest cancellation requested during finalization");
+            }
+        };
+        checkpoint(0);
+        while (!support_states.empty()) {
+            auto node = support_states.extract(support_states.begin());
+            const auto instrument = node.key();
+            const auto& state = node.mapped();
             const std::int32_t symbol_id = latest_symbol_ids.at(instrument);
-            for (const support_resistance::JsonObject& event : state.events) {
+            for (auto& event : support_events.at(instrument)) {
+                result->support_event_instrument_id.push_back(instrument);
+                result->support_event_symbol_id.push_back(symbol_id);
+                result->support_event_json.push_back(std::move(event));
+            }
+            for (const auto& event : state.events) {
                 result->support_event_instrument_id.push_back(instrument);
                 result->support_event_symbol_id.push_back(symbol_id);
                 result->support_event_json.push_back(support_resistance::json(event));
             }
+            support_events.erase(instrument);
             for (const support_resistance::JsonObject& version : state.zone_versions) {
                 result->support_zone_instrument_id.push_back(instrument);
                 result->support_zone_symbol_id.push_back(symbol_id);
@@ -2509,6 +2560,7 @@ std::shared_ptr<KernelResult> run_native_backtest(
                 result->support_regime_symbol_id.push_back(symbol_id);
                 result->support_regime_version_json.push_back(support_resistance::json(version));
             }
+            checkpoint(total - support_states.size());
         }
     }
     result->final_equity = result->equity_value.empty() ? initial_cash : result->equity_value.back();
@@ -2520,7 +2572,8 @@ std::shared_ptr<KernelResult> run_backtest_binding(
     const py::object& dataset,
     const py::dict& strategy,
     const py::dict& options,
-    const py::object& control_callback
+    const py::object& control_callback,
+    const py::object& finalizing_callback
 ) {
     DatasetView view = parse_dataset(dataset);
     const StrategyConfig config = parse_strategy(strategy);
@@ -2570,7 +2623,7 @@ std::shared_ptr<KernelResult> run_backtest_binding(
     attach_history_sessions(view, all_sessions);
     return run_native_backtest(
         view, config, universe_policy, warmup_sessions, sessions,
-        initial_cash, costs, thread_count, control_callback
+        initial_cash, costs, thread_count, control_callback, finalizing_callback
     );
 }
 
@@ -2586,10 +2639,27 @@ py::array_t<T> vector_view(const py::object& owner, std::vector<T>& values) {
     return result;
 }
 
+struct JsonColumn {
+    std::shared_ptr<KernelResult> owner;
+    const std::vector<std::string>* values;
+};
+
 }  // namespace
 
 void bind_backtest(py::module_& module) {
     py::register_exception<BacktestCancelled>(module, "BacktestCancelledError");
+    py::class_<JsonColumn>(module, "JsonColumn")
+        .def("__len__", [](const JsonColumn& column) { return column.values->size(); })
+        .def("__getitem__", [](const JsonColumn& column, py::ssize_t index) {
+            const auto size = static_cast<py::ssize_t>(column.values->size());
+            if (index < 0) index += size;
+            if (index < 0 || index >= size) throw py::index_error();
+            return column.values->at(static_cast<std::size_t>(index));
+        })
+        .def("__iter__", [](const JsonColumn& column) {
+            return py::make_iterator(column.values->begin(), column.values->end());
+        }, py::keep_alive<0, 1>())
+        .def("tolist", [](const JsonColumn& column) { return py::cast(*column.values); });
     py::class_<KernelResult, std::shared_ptr<KernelResult>>(module, "KernelResult")
         .def_property_readonly("summary", [](py::object owner) {
             const KernelResult& value = owner.cast<const KernelResult&>();
@@ -2730,15 +2800,15 @@ void bind_backtest(py::module_& module) {
             py::dict events;
             events["instrument_id"] = vector_view(owner, value.support_event_instrument_id);
             events["symbol_id"] = vector_view(owner, value.support_event_symbol_id);
-            events["payload_json"] = value.support_event_json;
+            events["payload_json"] = py::cast(JsonColumn{owner.cast<std::shared_ptr<KernelResult>>(), &value.support_event_json});
             py::dict zones;
             zones["instrument_id"] = vector_view(owner, value.support_zone_instrument_id);
             zones["symbol_id"] = vector_view(owner, value.support_zone_symbol_id);
-            zones["payload_json"] = value.support_zone_version_json;
+            zones["payload_json"] = py::cast(JsonColumn{owner.cast<std::shared_ptr<KernelResult>>(), &value.support_zone_version_json});
             py::dict regimes;
             regimes["instrument_id"] = vector_view(owner, value.support_regime_instrument_id);
             regimes["symbol_id"] = vector_view(owner, value.support_regime_symbol_id);
-            regimes["payload_json"] = value.support_regime_version_json;
+            regimes["payload_json"] = py::cast(JsonColumn{owner.cast<std::shared_ptr<KernelResult>>(), &value.support_regime_version_json});
             py::dict result;
             result["events"] = std::move(events);
             result["zone_versions"] = std::move(zones);
@@ -2751,7 +2821,8 @@ void bind_backtest(py::module_& module) {
         py::arg("dataset"),
         py::arg("strategy"),
         py::arg("options") = py::dict(),
-        py::arg("control_callback") = py::none()
+        py::arg("control_callback") = py::none(),
+        py::arg("finalizing_callback") = py::none()
     );
 }
 

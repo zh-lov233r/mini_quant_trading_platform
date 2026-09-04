@@ -6,6 +6,8 @@
 
 namespace quant_kernel {
 
+support_resistance::RiskContext parse_support_risk_context(const pybind11::dict& payload);
+
 support_resistance::Config parse_support_resistance_config(
     const pybind11::dict& signal,
     const pybind11::dict& risk

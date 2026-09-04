@@ -53,6 +53,41 @@ std::optional<double> volume_ratio(const PatternBar& bar) {
     return *bar.volume / *bar.volume_sma_20;
 }
 
+std::optional<double> body_atr(const PatternBar& bar) {
+    if (!bar.open || !bar.close || !bar.atr_14 || *bar.atr_14 <= 0.0) return std::nullopt;
+    return std::abs(*bar.close - *bar.open) / *bar.atr_14;
+}
+
+std::optional<double> mean_volume_ratio(const std::vector<PatternBar>& bars, int start, int end) {
+    if (end < start) return std::nullopt;
+    double sum = 0.0;
+    for (int index = start; index <= end; ++index) {
+        const auto ratio = volume_ratio(bars[index]);
+        if (!ratio) return std::nullopt;
+        sum += *ratio;
+    }
+    return sum / (end - start + 1);
+}
+
+struct PricePlatform { int start; int end; double low; double high; };
+
+std::optional<PricePlatform> price_platform(
+    const std::vector<PatternBar>& bars, int start, int end, double max_range, double max_drift
+) {
+    if (start < 0 || end < start) return std::nullopt;
+    const auto atr = bars[end].atr_14;
+    if (!atr || *atr <= 0.0 || !bars[start].close || !bars[end].close) return std::nullopt;
+    double low = std::numeric_limits<double>::infinity(), high = -low;
+    for (int index = start; index <= end; ++index) {
+        if (!bars[index].high || !bars[index].low) return std::nullopt;
+        low = std::min(low, *bars[index].low);
+        high = std::max(high, *bars[index].high);
+    }
+    if (high - low > max_range * *atr
+        || std::abs(*bars[end].close - *bars[start].close) > max_drift * *atr) return std::nullopt;
+    return PricePlatform{start, end, low, high};
+}
+
 PatternValue pattern_value(std::optional<double> value) {
     return value ? PatternValue(*value) : PatternValue{};
 }
@@ -143,18 +178,18 @@ std::optional<double> recent_atr(const std::vector<PatternBar>& bars, int end, i
     return total / window;
 }
 
-std::vector<int> confirmed_pivot_lows(const std::vector<PatternBar>& bars, int left, int right) {
+std::vector<int> confirmed_pivots(const std::vector<PatternBar>& bars, int left, int right, bool highs = false) {
     std::vector<int> pivots;
     for (int index = left; index < static_cast<int>(bars.size()) - right; ++index) {
-        const auto low = bars[static_cast<std::size_t>(index)].low;
+        const auto low = highs ? bars[index].high : bars[index].low;
         if (!low) continue;
         bool all = true;
         bool any = false;
         for (int position = index - left; position <= index + right; ++position) {
             if (position == index) continue;
-            const auto neighbor = bars[static_cast<std::size_t>(position)].low;
-            if (!neighbor || *low > *neighbor) all = false;
-            if (neighbor && *low < *neighbor) any = true;
+            const auto neighbor = highs ? bars[position].high : bars[position].low;
+            if (!neighbor || (highs ? *low < *neighbor : *low > *neighbor)) all = false;
+            if (neighbor && (highs ? *low > *neighbor : *low < *neighbor)) any = true;
         }
         if (all && any) pivots.push_back(index);
     }
@@ -276,15 +311,8 @@ std::optional<PatternDecision> common_position_exit(
         && *current.close >= *position.average_entry_price + config.risk.take_profit_atr * *current.atr_14) {
         reason = "price reached the ATR take-profit target";
         stage = "take_profit";
-    } else if (config.kind == PatternKind::VReversal) {
-        const auto& signal = std::get<VReversalConfig>(config.signal);
-        const auto ratio = volume_ratio(current);
-        if (setup.stage_index < 3 && current.close && current.open && *current.close < *current.open
-            && ratio && *ratio >= signal.bearish_reversal_volume_ratio_min) {
-            reason = "high-volume bearish reversal invalidated the V setup";
-            stage = "bearish_volume_failure";
-        }
     }
+
     if (!reason) return std::nullopt;
     setup.exit_stage = stage;
     return PatternDecision{
@@ -402,8 +430,8 @@ std::optional<DoubleBottomRightCandidate> build_double_bottom_right(
     const auto right_ratio = volume_ratio(right);
     if (!right.low || !right_ratio || *right_ratio > config.second_bottom_volume_ratio_max) return std::nullopt;
     const double distance = std::abs(*right.low - left.left_low) / std::max(*right.low, left.left_low);
-    if (distance > config.bottom_tolerance_pct
-        || *right.low < left.left_low * (1.0 - config.bottom_tolerance_pct)) return std::nullopt;
+    if (*right.low < left.left_low
+        || *right.low > left.left_low * (1.0 + config.bottom_tolerance_pct)) return std::nullopt;
     const double floor = std::min(left.left_low, *right.low);
     if (right_index - left.left_index <= 1) return std::nullopt;
     for (int index = left.left_index + 1; index < right_index; ++index) {
@@ -414,8 +442,11 @@ std::optional<DoubleBottomRightCandidate> build_double_bottom_right(
     if (!neckline_index || !bars[static_cast<std::size_t>(*neckline_index)].high) return std::nullopt;
     const double neckline = *bars[static_cast<std::size_t>(*neckline_index)].high;
     if (neckline < std::max(left.left_low, *right.low) * (1.0 + config.neckline_min_rebound_pct)) return std::nullopt;
-    const auto rebound = up_day_ratio(bars, left.left_index, right_index);
+    const auto rebound = up_day_ratio(bars, left.left_index, *neckline_index);
     if (!rebound || *rebound < config.rebound_up_day_ratio_min) return std::nullopt;
+    const auto rebound_volume = mean_volume_ratio(bars, left.left_index + 1, *neckline_index);
+    if (!rebound_volume || *rebound_volume < config.rebound_volume_ratio_min
+        || *rebound_volume > config.rebound_volume_ratio_max) return std::nullopt;
     return DoubleBottomRightCandidate{
         left.left_index, *neckline_index, right_index, left.left_low, *right.low,
         neckline, distance, *rebound
@@ -432,7 +463,7 @@ std::optional<DoubleBottomPattern> build_double_bottom_pattern(
     const PatternBar& bar = bars[static_cast<std::size_t>(breakout_index)];
     const auto ratio = volume_ratio(bar);
     const double threshold = candidate.neckline * (1.0 + config.breakout_buffer_pct);
-    if (!bar.high || !bar.close || !bar.volume || !ratio || *bar.high <= threshold
+    if (!bar.close || !bar.volume || !ratio || *bar.close <= threshold
         || *ratio < config.breakout_volume_ratio_min) return std::nullopt;
     return DoubleBottomPattern{
         candidate.left_index, candidate.neckline_index, candidate.right_index, breakout_index,
@@ -469,6 +500,7 @@ void advance_double_bottom(PatternState& state, const DoubleBottomConfig& config
     std::vector<DoubleBottomRightCandidate> active;
     for (const auto& candidate : state.double_bottom_right) {
         if (current > candidate.right_index + config.max_breakout_bars_after_right_bottom) continue;
+        if (!state.bars.back().low || *state.bars.back().low < candidate.right_low) continue;
         const auto pattern = build_double_bottom_pattern(state.bars, candidate, current, config);
         if (!pattern) {
             active.push_back(candidate);
@@ -514,13 +546,24 @@ bool double_bottom_right_pullback(
 ) {
     const int current = static_cast<int>(bars.size()) - 1;
     const int start = candidate.right_index + config.left_bottom_after_bars + 1;
-    if (current < start + 1) return false;
+    if (current < start + 1 || current > candidate.right_index + config.retest_window) return false;
     const double halfway = candidate.right_low + (candidate.neckline - candidate.right_low) * 0.5;
     double maximum_close = 0.0;
     for (int index = start; index < current; ++index) {
         maximum_close = std::max(maximum_close, bars[static_cast<std::size_t>(index)].close.value_or(0.0));
     }
     if (maximum_close < halfway) return false;
+    const auto high_index = highest_index(bars, candidate.right_index + 1, current - 1);
+    if (!high_index) return false;
+    const auto rebound_volume = mean_volume_ratio(bars, candidate.right_index + 1, *high_index);
+    if (!rebound_volume || *rebound_volume < config.rebound_volume_ratio_min
+        || *rebound_volume > config.rebound_volume_ratio_max) return false;
+    double maximum_volume = 0.0;
+    for (int index = candidate.right_index + 1; index < current; ++index) {
+        if (!bars[index].volume) return false;
+        maximum_volume = std::max(maximum_volume, *bars[index].volume);
+    }
+    if (!bars.back().volume || *bars.back().volume > maximum_volume * config.retest_volume_ratio_max) return false;
     const auto qualifies = [&](int index) {
         const PatternBar& bar = bars[static_cast<std::size_t>(index)];
         const auto previous_close = bars[static_cast<std::size_t>(index - 1)].close;
@@ -561,6 +604,7 @@ PatternSetup double_bottom_setup(
         {"neckline_price", candidate.neckline},
         {"neckline_trade_date", neckline_date},
         {"rebound_up_day_ratio", candidate.rebound_ratio},
+        {"rebound_volume_ratio", pattern_value(mean_volume_ratio(state.bars, candidate.left_index + 1, candidate.neckline_index))},
         {"right_bottom_low", candidate.right_low},
         {"right_bottom_trade_date", right_date},
     };
@@ -696,253 +740,303 @@ std::optional<PatternDecision> evaluate_double_bottom(
     };
 }
 
+std::optional<PricePlatform> head_platform(
+    const std::vector<PatternBar>& bars, int left, int head, const HeadShouldersConfig& signal
+) {
+    if (head - left < signal.min_segment_bars || head - left > signal.max_segment_bars
+        || !bars[left].low || !bars[head].low
+        || *bars[head].low > *bars[left].low * (1.0 - signal.head_depth_min_pct)
+        || !downtrend_context(bars, left, signal.downtrend_lookback, signal.downtrend_min_drop_pct)) return std::nullopt;
+    const auto volume = volume_ratio(bars[head]);
+    if (!volume || *volume > signal.head_volume_ratio_max) return std::nullopt;
+    for (int end = std::min(head - 1, left + signal.platform_bars - 1); end >= left; --end) {
+        auto platform = price_platform(bars, end - signal.platform_bars + 1, end,
+            signal.platform_range_atr_max, signal.platform_drift_atr_max);
+        if (platform) return platform;
+    }
+    return std::nullopt;
+}
+
 std::optional<PatternDecision> evaluate_head_shoulders(
-    const PatternConfig& config,
-    const std::string& symbol,
-    const PatternState& state,
-    const PatternPositionView& position
+    const PatternConfig& config, const std::string& symbol,
+    const PatternState& state, const PatternPositionView& position
 ) {
     if (auto exit = common_position_exit(config, state, position)) return exit;
     const auto& signal = std::get<HeadShouldersConfig>(config.signal);
     const auto& bars = state.bars;
-    const auto pivots = confirmed_pivot_lows(bars, signal.pivot_left_bars, signal.pivot_right_bars);
-    if (pivots.size() < 2U) return std::nullopt;
+    const auto pivots = confirmed_pivots(bars, signal.pivot_left_bars, signal.pivot_right_bars);
     const int current = static_cast<int>(bars.size()) - 1;
-    for (int offset = static_cast<int>(pivots.size()) - 2; offset >= 0; --offset) {
-        const int left = pivots[static_cast<std::size_t>(offset)];
-        const int head = pivots[static_cast<std::size_t>(offset + 1)];
-        const int gap = head - left;
-        const auto left_low = bars[static_cast<std::size_t>(left)].low;
-        const auto head_low = bars[static_cast<std::size_t>(head)].low;
-        if (gap < signal.min_segment_bars || gap > signal.max_segment_bars || !left_low || !head_low
-            || *head_low > *left_low * (1.0 - signal.head_depth_min_pct)
-            || !downtrend_context(bars, left, signal.downtrend_lookback, signal.downtrend_min_drop_pct)) continue;
-        const auto head_volume = volume_ratio(bars[static_cast<std::size_t>(head)]);
-        if (!head_volume || *head_volume > signal.head_volume_ratio_max) continue;
-        if (current != head + signal.pivot_right_bars) continue;
-        const double quality = std::min(
-            (*left_low - *head_low) / std::max(*left_low * signal.head_depth_min_pct, 1e-12), 1.0
-        );
-        const std::string left_date = iso_date(bars[static_cast<std::size_t>(left)].date_ordinal);
-        const std::string head_date = iso_date(bars[static_cast<std::size_t>(head)].date_ordinal);
-        PatternSetup setup = build_setup(
-            config, symbol, 1, "head_candidate",
-            {{"head", head_date}, {"left_shoulder", left_date}},
-            *head_low, {left_date, head_date},
-            {{"head_low", *head_low}, {"left_shoulder_low", *left_low}}
-        );
-        return buy_decision(
-            "confirmed a low-volume head candidate", std::move(setup), quality, quality,
-            1.0 - *head_volume / signal.head_volume_ratio_max, 1.0 / 3.0
-        );
-    }
-    if (pivots.size() < 3U) return std::nullopt;
+    // Evaluate the complete structure first: a shoulder confirmation and breakout
+    // on the same session must yield the highest cumulative target.
     for (int offset = static_cast<int>(pivots.size()) - 3; offset >= 0; --offset) {
-        const int left = pivots[static_cast<std::size_t>(offset)];
-        const int head = pivots[static_cast<std::size_t>(offset + 1)];
-        const int shoulder = pivots[static_cast<std::size_t>(offset + 2)];
-        if (head - left < signal.min_segment_bars || head - left > signal.max_segment_bars
-            || shoulder - head < signal.min_segment_bars || shoulder - head > signal.max_segment_bars) continue;
-        const auto left_low = bars[static_cast<std::size_t>(left)].low;
-        const auto head_low = bars[static_cast<std::size_t>(head)].low;
-        const auto shoulder_low = bars[static_cast<std::size_t>(shoulder)].low;
-        if (!left_low || !head_low || !shoulder_low) continue;
-        const double shoulder_distance = std::abs(*shoulder_low - *left_low) / *left_low;
+        const int left = pivots[offset], head = pivots[offset + 1], shoulder = pivots[offset + 2];
+        const auto platform = head_platform(bars, left, head, signal);
+        if (!platform || shoulder - head < signal.min_segment_bars
+            || shoulder - head > signal.max_segment_bars) continue;
+        const double left_low = *bars[left].low, head_low = *bars[head].low, shoulder_low = *bars[shoulder].low;
+        const double shoulder_distance = std::abs(shoulder_low - left_low) / left_low;
         if (shoulder_distance > signal.shoulder_tolerance_pct
-            || *head_low > std::min(*left_low, *shoulder_low) * (1.0 - signal.head_depth_min_pct)) continue;
-        const auto shoulder_volume = volume_ratio(bars[static_cast<std::size_t>(shoulder)]);
+            || head_low > shoulder_low * (1.0 - signal.head_depth_min_pct)) continue;
+        bool held = true;
+        for (int index = head + 1; index <= current; ++index) {
+            if (!bars[index].low || *bars[index].low < head_low) held = false;
+        }
+        if (!held) continue;
+        const auto shoulder_volume = volume_ratio(bars[shoulder]);
         if (!shoulder_volume || *shoulder_volume > signal.right_shoulder_volume_ratio_max) continue;
-        const auto first_high_index = highest_index(bars, left, head);
-        const auto second_high_index = highest_index(bars, head, shoulder);
-        if (!first_high_index || !second_high_index || *first_high_index == *second_high_index) continue;
-        const auto first_high = bars[static_cast<std::size_t>(*first_high_index)].high;
-        const auto second_high = bars[static_cast<std::size_t>(*second_high_index)].high;
+        const auto first_high = highest_index(bars, left, head - 1);
+        const auto second_high = highest_index(bars, head + 1, shoulder - 1);
         if (!first_high || !second_high) continue;
-        const double neckline = project_line(*first_high_index, *first_high, *second_high_index, *second_high, current);
-        const std::string left_date = iso_date(bars[static_cast<std::size_t>(left)].date_ordinal);
-        const std::string head_date = iso_date(bars[static_cast<std::size_t>(head)].date_ordinal);
-        PatternObject anchors{
-            {"head", head_date},
-            {"left_shoulder", left_date},
-            {"neckline_1", iso_date(bars[static_cast<std::size_t>(*first_high_index)].date_ordinal)},
-            {"neckline_2", iso_date(bars[static_cast<std::size_t>(*second_high_index)].date_ordinal)},
-            {"right_shoulder", iso_date(bars[static_cast<std::size_t>(shoulder)].date_ordinal)},
-        };
-        PatternObject fields{{"head_low", *head_low}, {"neckline_price", neckline}};
-        const double structure = std::max(0.0, 1.0 - shoulder_distance / signal.shoulder_tolerance_pct);
-        if (current == shoulder + signal.pivot_right_bars) {
-            PatternSetup setup = build_setup(
-                config, symbol, 2, "right_shoulder", std::move(anchors), *head_low,
-                {left_date, head_date}, std::move(fields)
-            );
-            return buy_decision(
-                "confirmed a low-volume right shoulder", std::move(setup), structure, structure,
-                std::max(0.0, 1.0 - *shoulder_volume / signal.right_shoulder_volume_ratio_max),
-                2.0 / 3.0
-            );
+        const auto rebound_volume = mean_volume_ratio(bars, head + 1, *second_high);
+        if (!rebound_volume || *rebound_volume < signal.rebound_volume_ratio_min
+            || *rebound_volume > signal.rebound_volume_ratio_max) continue;
+        bool recovered = false;
+        for (int index = head + 1; index <= *second_high; ++index) {
+            if (bars[index].close && *bars[index].close >= platform->low && *bars[index].close <= platform->high) recovered = true;
         }
-        const auto close = bars.back().close;
+        if (!recovered) continue;
+        const double neckline = project_line(*first_high, *bars[*first_high].high,
+            *second_high, *bars[*second_high].high, current);
         const auto current_volume = volume_ratio(bars.back());
-        if (!close || !current_volume || *close < neckline * (1.0 + signal.breakout_buffer_pct)
-            || *current_volume < signal.breakout_volume_ratio_min) continue;
-        PatternSetup setup = build_setup(
-            config, symbol, 3, "neckline_breakout", std::move(anchors), *head_low,
-            {left_date, head_date}, std::move(fields)
-        );
-        return buy_decision(
-            "broke above the projected neckline on confirming volume", std::move(setup), structure,
-            std::min(std::max((*close / neckline - 1.0) / std::max(signal.breakout_buffer_pct * 2.0, 1e-12), 0.0), 1.0),
-            std::min(*current_volume / (signal.breakout_volume_ratio_min * 2.0), 1.0), 1.0
-        );
+        const bool breakout = bars.back().close && current_volume
+            && *bars.back().close > neckline * (1.0 + signal.breakout_buffer_pct)
+            && *current_volume >= signal.breakout_volume_ratio_min;
+        if (!breakout && current != shoulder + signal.pivot_right_bars) continue;
+        const int stage = breakout ? 3 : 2;
+        const std::string left_date = iso_date(bars[left].date_ordinal), head_date = iso_date(bars[head].date_ordinal);
+        PatternObject anchors{
+            {"head", head_date}, {"left_shoulder", left_date},
+            {"platform_start", iso_date(bars[platform->start].date_ordinal)},
+            {"platform_end", iso_date(bars[platform->end].date_ordinal)},
+            {"neckline_1", iso_date(bars[*first_high].date_ordinal)},
+            {"neckline_2", iso_date(bars[*second_high].date_ordinal)},
+            {"right_shoulder", iso_date(bars[shoulder].date_ordinal)},
+        };
+        PatternObject fields{{"head_low", head_low}, {"neckline_price", neckline},
+            {"platform_low", platform->low}, {"platform_high", platform->high},
+            {"head_volume_ratio", *volume_ratio(bars[head])}, {"rebound_volume_ratio", *rebound_volume}};
+        PatternSetup setup = build_setup(config, symbol, stage,
+            breakout ? "neckline_breakout" : "right_shoulder", std::move(anchors), head_low,
+            {left_date, head_date}, std::move(fields));
+        const double structure = std::max(0.0, 1.0 - shoulder_distance / signal.shoulder_tolerance_pct);
+        return buy_decision(breakout ? "closed above the projected neckline on confirming volume"
+            : "confirmed a low-volume right shoulder after platform recovery", std::move(setup),
+            structure, breakout ? std::clamp((*bars.back().close / neckline - 1.0)
+                / std::max(signal.breakout_buffer_pct * 2.0, 1e-12), 0.0, 1.0) : structure, breakout ? std::min(*current_volume / (signal.breakout_volume_ratio_min * 2.0), 1.0)
+                : std::max(0.0, 1.0 - *shoulder_volume / signal.right_shoulder_volume_ratio_max), stage / 3.0);
+    }
+    for (int offset = static_cast<int>(pivots.size()) - 2; offset >= 0; --offset) {
+        const int left = pivots[offset], head = pivots[offset + 1];
+        if (current != head + signal.pivot_right_bars) continue;
+        const auto platform = head_platform(bars, left, head, signal);
+        if (!platform) continue;
+        const double left_low = *bars[left].low, head_low = *bars[head].low;
+        const std::string left_date = iso_date(bars[left].date_ordinal), head_date = iso_date(bars[head].date_ordinal);
+        PatternSetup setup = build_setup(config, symbol, 1, "head_candidate",
+            {{"head", head_date}, {"left_shoulder", left_date},
+             {"platform_start", iso_date(bars[platform->start].date_ordinal)},
+             {"platform_end", iso_date(bars[platform->end].date_ordinal)}},
+            head_low, {left_date, head_date},
+            {{"head_low", head_low}, {"left_shoulder_low", left_low},
+             {"platform_low", platform->low}, {"platform_high", platform->high},
+             {"head_volume_ratio", *volume_ratio(bars[head])}});
+        const double quality = std::min((left_low - head_low) / (left_low * signal.head_depth_min_pct), 1.0);
+        return buy_decision("confirmed a low-volume head candidate below a left-shoulder platform",
+            std::move(setup), quality, quality, 1.0 - *volume_ratio(bars[head]) / signal.head_volume_ratio_max, 1.0 / 3.0);
     }
     return std::nullopt;
 }
 
-std::optional<int> v_anchor(const std::vector<PatternBar>& bars, const VReversalConfig& config) {
-    for (int index = static_cast<int>(bars.size()) - 1;
-         index >= std::max(config.downtrend_lookback - 1, 0); --index) {
-        const PatternBar& bar = bars[static_cast<std::size_t>(index)];
+struct VAnchor { int pivot; int reversal; };
+
+std::optional<VAnchor> v_anchor(const std::vector<PatternBar>& bars, const VReversalConfig& config) {
+    std::optional<VAnchor> result;
+    for (int index = config.downtrend_lookback - 1; index < static_cast<int>(bars.size()); ++index) {
+        const auto& bar = bars[index];
         const auto ratio = volume_ratio(bar);
-        if (!bar.open || !bar.close || !bar.low || !bar.atr_14 || !ratio
-            || *bar.atr_14 == 0.0 || *bar.low == 0.0 || *bar.close <= *bar.open
-            || (*bar.close - *bar.low) / *bar.low < config.reversal_min_return_pct
-            || (*bar.close - *bar.low) / *bar.atr_14 < config.reversal_min_atr
-            || *ratio < config.pivot_volume_ratio_min) continue;
-        std::optional<double> minimum_low;
+        if (!bar.open || !bar.close || !bar.atr_14 || *bar.atr_14 <= 0.0 || !ratio
+            || *bar.close <= *bar.open || *ratio < config.pivot_volume_ratio_min) continue;
+        int pivot = index;
+        bool missing = false;
         for (int item = std::max(0, index - config.pivot_max_bars + 1); item <= index; ++item) {
-            const auto low = bars[static_cast<std::size_t>(item)].low;
-            if (low) minimum_low = minimum_low ? std::min(*minimum_low, *low) : *low;
+            if (!bars[item].low) { missing = true; break; }
+            if (!bars[pivot].low || *bars[item].low < *bars[pivot].low) pivot = item;
         }
-        if (!minimum_low || *bar.low > *minimum_low) continue;
-        std::optional<double> maximum_close;
-        for (int item = std::max(0, index - config.downtrend_lookback); item < index; ++item) {
-            const auto close = bars[static_cast<std::size_t>(item)].close;
-            if (close) maximum_close = maximum_close ? std::max(*maximum_close, *close) : *close;
+        if (missing || !bars[pivot].low || *bars[pivot].low <= 0.0) continue;
+        const double low = *bars[pivot].low;
+        if ((*bar.close - low) / low < config.reversal_min_return_pct
+            || (*bar.close - low) / *bar.atr_14 < config.reversal_min_atr) continue;
+        double maximum = 0.0;
+        for (int item = std::max(0, pivot - config.downtrend_lookback); item < pivot; ++item) {
+            if (!bars[item].close) { missing = true; break; }
+            maximum = std::max(maximum, *bars[item].close);
         }
-        if (!maximum_close || (*maximum_close - *bar.low) / *maximum_close < config.downtrend_min_drop_pct) continue;
-        return index;
+        if (missing || maximum <= 0.0 || (maximum - low) / maximum < config.downtrend_min_drop_pct) continue;
+        for (int item = pivot + 1; item < static_cast<int>(bars.size()); ++item) {
+            if (!bars[item].low || *bars[item].low < low) missing = true;
+        }
+        // Preserve the first qualifying reversal for the same low so later
+        // high-volume continuation bars do not restart stage 1.
+        if (!missing && (!result || pivot > result->pivot)) result = VAnchor{pivot, index};
+    }
+    return result;
+}
+
+struct VBreakout { int index; PricePlatform platform; };
+
+std::optional<VBreakout> v_breakout(
+    const std::vector<PatternBar>& bars, int reversal, const VReversalConfig& signal, int end
+) {
+    for (int breakout = end; breakout >= reversal + signal.consolidation_min_bars + 1; --breakout) {
+        const auto& bar = bars[breakout];
+        const auto ratio = volume_ratio(bar);
+        if (!bar.close || !bar.volume || !ratio || *ratio < signal.breakout_volume_ratio_min) continue;
+        for (int length = signal.consolidation_max_bars; length >= signal.consolidation_min_bars; --length) {
+            const int start = breakout - length;
+            if (start <= reversal) continue;
+            const auto platform = price_platform(bars, start, breakout - 1,
+                signal.consolidation_range_atr_max, signal.consolidation_drift_atr_max);
+            if (platform && *bar.close > platform->high * (1.0 + signal.breakout_buffer_pct)) {
+                return VBreakout{breakout, *platform};
+            }
+        }
     }
     return std::nullopt;
 }
 
-std::optional<std::pair<int, double>> v_retest(
-    const std::vector<PatternBar>& bars,
-    int anchor,
-    const VReversalConfig& config
-) {
-    const int current = static_cast<int>(bars.size()) - 1;
-    const PatternBar& current_bar = bars.back();
-    if (!current_bar.low || !current_bar.close || !current_bar.volume) return std::nullopt;
-    const int first_breakout = std::max(anchor + config.consolidation_min_bars + 1, current - config.retest_window);
-    for (int breakout = first_breakout; breakout < current; ++breakout) {
-        const int start = std::max(anchor + 1, breakout - config.consolidation_max_bars);
-        const int size = breakout - start;
-        if (size < config.consolidation_min_bars || size > config.consolidation_max_bars) continue;
-        double top = -std::numeric_limits<double>::infinity();
-        bool missing = false;
-        for (int item = start; item < breakout; ++item) {
-            const auto high = bars[static_cast<std::size_t>(item)].high;
-            if (!high) { missing = true; break; }
-            top = std::max(top, *high);
-        }
-        if (missing) continue;
-        const PatternBar& breakout_bar = bars[static_cast<std::size_t>(breakout)];
-        const auto breakout_ratio = volume_ratio(breakout_bar);
-        if (!breakout_bar.close || !breakout_ratio || !breakout_bar.volume
-            || *breakout_bar.close <= top || *breakout_ratio < config.breakout_volume_ratio_min) continue;
-        if (*current_bar.low >= top * (1.0 - config.support_tolerance_pct)
-            && *current_bar.close >= top
-            && *current_bar.volume <= *breakout_bar.volume * config.retest_volume_ratio_max) {
-            return std::pair{breakout, top};
-        }
+bool v_continuous(const std::vector<PatternBar>& bars, int start, int end, double minimum_volume) {
+    if (start < 1 || !bars[start - 1].close) return false;
+    double previous = *bars[start - 1].close;
+    for (int index = start; index <= end; ++index) {
+        const auto& bar = bars[index];
+        const auto ratio = volume_ratio(bar);
+        if (!bar.close || !bar.open || *bar.close <= *bar.open || *bar.close <= previous
+            || !ratio || *ratio < minimum_volume) return false;
+        previous = *bar.close;
     }
-    return std::nullopt;
+    return true;
 }
 
 std::optional<PatternDecision> evaluate_v_reversal(
-    const PatternConfig& config,
-    const std::string& symbol,
-    const PatternState& state,
-    const PatternPositionView& position
+    const PatternConfig& config, const std::string& symbol,
+    const PatternState& state, const PatternPositionView& position
 ) {
     if (auto exit = common_position_exit(config, state, position)) return exit;
     const auto& signal = std::get<VReversalConfig>(config.signal);
     const auto& bars = state.bars;
-    const auto anchor_index = v_anchor(bars, signal);
-    if (!anchor_index) return std::nullopt;
     const int current = static_cast<int>(bars.size()) - 1;
-    const PatternBar& anchor = bars[static_cast<std::size_t>(*anchor_index)];
-    const double anchor_low = *anchor.low;
-    const double anchor_close = *anchor.close;
-    const std::string anchor_date = iso_date(anchor.date_ordinal);
-    PatternObject anchors{{"pivot", anchor_date}};
-    PatternObject fields{{"pivot_low", anchor_low}};
-    const double reversal_return = (anchor_close - anchor_low) / anchor_low;
-    const double anchor_volume = volume_ratio(anchor).value_or(signal.pivot_volume_ratio_min);
-    if (current == *anchor_index) {
-        PatternSetup setup = build_setup(
-            config, symbol, 1, "volume_pivot", std::move(anchors), anchor_low,
-            {anchor_date}, std::move(fields)
-        );
-        const double quality = std::min(reversal_return / (signal.reversal_min_return_pct * 2.0), 1.0);
-        return buy_decision(
-            "confirmed a high-volume V reversal pivot", std::move(setup), quality, quality,
-            std::min(anchor_volume / (signal.pivot_volume_ratio_min * 2.0), 1.0), 1.0 / 3.0
-        );
+    const auto anchor = v_anchor(bars, signal);
+    if (!anchor) return std::nullopt;
+    const auto& bar = bars.back();
+    const double low = *bars[anchor->pivot].low, reversal_close = *bars[anchor->reversal].close;
+    const std::string pivot_date = iso_date(bars[anchor->pivot].date_ordinal);
+    const auto breakout = v_breakout(bars, anchor->reversal, signal, current);
+    const auto ratio = volume_ratio(bar);
+    const auto body = body_atr(bar);
+    if (position.quantity > 0.0 && position.setup && position.setup->stage_index < 3 && !breakout
+        && body && *body >= signal.bearish_body_atr_min && bar.close && bar.open && *bar.close < *bar.open
+        && ratio && *ratio >= signal.bearish_reversal_volume_ratio_min
+        && current >= anchor->reversal + 2
+        && v_continuous(bars, current - 2, current - 1, signal.continuation_volume_ratio_min)) {
+        auto setup = *position.setup;
+        setup.exit_stage = "bearish_volume_failure";
+        setup.anchors["failure"] = iso_date(bar.date_ordinal);
+        payload_fields(setup)["bearish_body_atr"] = *body;
+        payload_fields(setup)["bearish_volume_ratio"] = *ratio;
+        return PatternDecision{false, "high-volume bearish candle before a confirmed V-top breakout", std::move(setup), std::nullopt, {{"price_confirmation", 1.0}, {"stage_confirmation", 1.0},
+                {"structure_quality", 1.0}, {"volume_quality", 1.0}}};
     }
-    const int distance = current - *anchor_index;
-    const PatternBar& current_bar = bars.back();
-    bool continuous = distance >= 2;
-    std::optional<double> previous_close;
-    for (int item = *anchor_index + 1; continuous && item <= current; ++item) {
-        const PatternBar& bar = bars[static_cast<std::size_t>(item)];
-        const auto ratio = volume_ratio(bar);
-        if (!bar.close || !bar.open || *bar.close <= *bar.open || !ratio
-            || *ratio < signal.continuation_volume_ratio_min
-            || (previous_close && *bar.close <= *previous_close)) continuous = false;
-        previous_close = bar.close;
+    PatternObject anchors{{"pivot", pivot_date}, {"reversal", iso_date(bars[anchor->reversal].date_ordinal)}};
+    PatternObject fields{{"pivot_low", low}};
+    int stage = 0;
+    std::string key, reason;
+    double volume_quality = 0.0;
+    if (breakout && breakout->index < current && current - breakout->index <= signal.retest_window) {
+        const double top = breakout->platform.high;
+        const double floor = top * (1.0 - signal.support_tolerance_pct);
+        bool held = true;
+        for (int index = breakout->index + 1; index < current; ++index) {
+            if (!bars[index].close || *bars[index].close < floor) held = false;
+        }
+        if (held && bar.low && bar.close && bar.volume && *bar.low >= floor
+            && *bar.low <= top * (1.0 + signal.support_tolerance_pct) && *bar.close >= top
+            && *bar.volume <= *bars[breakout->index].volume * signal.retest_volume_ratio_max) {
+            stage = 3; key = "top_breakout_retest";
+            reason = "low-volume retest touched and held the V consolidation top";
+            anchors["breakout"] = iso_date(bars[breakout->index].date_ordinal);
+            anchors["consolidation_start"] = iso_date(bars[breakout->platform.start].date_ordinal);
+            anchors["consolidation_end"] = iso_date(bars[breakout->platform.end].date_ordinal);
+            anchors["retest"] = iso_date(bar.date_ordinal);
+            fields["consolidation_top"] = top;
+            fields["consolidation_low"] = breakout->platform.low;
+            fields["retest_low"] = *bar.low;
+            volume_quality = std::max(0.0, 1.0 - *bar.volume / (*bars[breakout->index].volume * signal.retest_volume_ratio_max));
+        }
     }
-    const auto current_ratio = volume_ratio(current_bar);
-    if (distance >= 2 && distance <= signal.continuation_window && continuous
-        && current_bar.close && current_bar.open && *current_bar.close > *current_bar.open
-        && *current_bar.close > anchor_close && current_ratio
-        && *current_ratio >= signal.continuation_volume_ratio_min) {
-        PatternSetup setup = build_setup(
-            config, symbol, 2, "continuation", std::move(anchors), anchor_low,
-            {anchor_date}, std::move(fields)
-        );
-        const double quality = std::min(
-            (*current_bar.close / anchor_close - 1.0) / std::max(signal.reversal_min_return_pct, 1e-12), 1.0
-        );
-        return buy_decision(
-            "continued higher with confirming volume after the V pivot", std::move(setup), quality, quality,
-            std::min(*current_ratio / (signal.continuation_volume_ratio_min * 2.0), 1.0), 2.0 / 3.0
-        );
+    const int distance = current - anchor->reversal;
+    if (stage == 0 && distance >= 2 && distance <= signal.continuation_window
+        && v_continuous(bars, anchor->reversal + 1, current, signal.continuation_volume_ratio_min)) {
+        stage = 2; key = "continuation"; reason = "continued higher with confirming volume after the V pivot";
+        volume_quality = std::min(*ratio / (signal.continuation_volume_ratio_min * 2.0), 1.0);
     }
-    const auto retest = v_retest(bars, *anchor_index, signal);
-    if (!retest || !current_bar.close) return std::nullopt;
-    const int breakout_index = retest->first;
-    const double top = retest->second;
-    const PatternBar& breakout = bars[static_cast<std::size_t>(breakout_index)];
-    anchors["breakout"] = iso_date(breakout.date_ordinal);
-    fields["consolidation_top"] = top;
-    PatternSetup setup = build_setup(
-        config, symbol, 3, "top_breakout_retest", std::move(anchors), anchor_low,
-        {anchor_date}, std::move(fields)
-    );
-    const double breakout_ratio = volume_ratio(breakout).value_or(signal.breakout_volume_ratio_min);
-    const double volume_quality = std::max(
-        0.0, 1.0 - current_bar.volume.value_or(0.0)
-            / std::max(breakout.volume.value_or(1.0) * signal.retest_volume_ratio_max, 1e-12)
-    );
-    const double price_quality = std::min(
-        std::max((*current_bar.close - top) / std::max(top * signal.support_tolerance_pct, 1e-12), 0.0), 1.0
-    );
-    return buy_decision(
-        "low-volume retest held the V consolidation top", std::move(setup),
-        std::min(breakout_ratio / (signal.breakout_volume_ratio_min * 2.0), 1.0),
-        price_quality, volume_quality, 1.0
-    );
+    if (stage == 0 && current == anchor->reversal) {
+        stage = 1; key = "volume_pivot"; reason = "confirmed a high-volume V reversal within the pivot window";
+        volume_quality = std::min(*ratio / (signal.pivot_volume_ratio_min * 2.0), 1.0);
+    }
+    if (stage == 0) return std::nullopt;
+    auto setup = build_setup(config, symbol, stage, key, std::move(anchors), low, {pivot_date}, std::move(fields));
+    double structure = std::min((reversal_close - low) / low / (signal.reversal_min_return_pct * 2.0), 1.0);
+    double price = structure;
+    if (stage == 2) {
+        structure = price = std::min((*bars.back().close / reversal_close - 1.0) / signal.reversal_min_return_pct, 1.0);
+    } else if (stage == 3) {
+        structure = std::min(*volume_ratio(bars[breakout->index]) / (signal.breakout_volume_ratio_min * 2.0), 1.0);
+        price = std::clamp((*bars.back().close - breakout->platform.high)
+            / std::max(breakout->platform.high * signal.support_tolerance_pct, 1e-12), 0.0, 1.0);
+    }
+    return buy_decision(reason, std::move(setup), structure, price, volume_quality, stage / 3.0);
+}
+
+std::optional<PatternDecision> rounded_weakness_exit(
+    const PatternConfig& config, const PatternState& state, const PatternPositionView& position
+) {
+    if (position.quantity <= 0.0 || !position.setup || position.setup->stage_index >= 3) return std::nullopt;
+    const auto& signal = std::get<RoundedBottomConfig>(config.signal);
+    const auto& bars = state.bars;
+    if (bars.empty() || !bars.back().close) return std::nullopt;
+    const auto bottom = pattern_text(position.setup->anchors, "bottom");
+    if (!bottom) return std::nullopt;
+    const auto highs = confirmed_pivots(bars, signal.pivot_left_bars, signal.pivot_right_bars, true);
+    const auto lows = confirmed_pivots(bars, signal.pivot_left_bars, signal.pivot_right_bars);
+    for (int offset = static_cast<int>(highs.size()) - 2; offset >= 0; --offset) {
+        const int first = highs[offset], second = highs[offset + 1];
+        if (iso_date(bars[first].date_ordinal) <= *bottom
+            || *bars[second].high > *bars[first].high * (1.0 - signal.weakening_buffer_pct)) continue;
+        std::optional<int> pullback;
+        for (int low : lows) if (low > first && low < second) pullback = low;
+        if (!pullback || *bars.back().close > *bars[*pullback].low * (1.0 - signal.weakening_buffer_pct)) continue;
+        bool recovered = false;
+        for (int index = first + 1; index < static_cast<int>(bars.size()); ++index) {
+            const auto ratio = volume_ratio(bars[index]);
+            if (bars[index].close && ratio
+                && *bars[index].close > *bars[first].high * (1.0 + signal.breakout_buffer_pct)
+                && *ratio >= signal.breakout_volume_ratio_min) recovered = true;
+        }
+        if (recovered) continue;
+        auto setup = *position.setup;
+        setup.exit_stage = "right_side_failure";
+        setup.anchors["failure_peak"] = iso_date(bars[first].date_ordinal);
+        setup.anchors["lower_high"] = iso_date(bars[second].date_ordinal);
+        setup.anchors["failure_pullback"] = iso_date(bars[*pullback].date_ordinal);
+        setup.anchors["failure"] = iso_date(bars.back().date_ordinal);
+        payload_fields(setup)["failure_peak_price"] = *bars[first].high;
+        payload_fields(setup)["lower_high_price"] = *bars[second].high;
+        payload_fields(setup)["failure_support_price"] = *bars[*pullback].low;
+        return PatternDecision{false, "rounded-bottom right side formed a lower high and closed below pullback support",
+            std::move(setup), std::nullopt, {{"price_confirmation", 1.0}, {"stage_confirmation", 1.0},
+                {"structure_quality", 1.0}, {"volume_quality", 1.0}}};
+    }
+    return std::nullopt;
 }
 
 std::optional<PatternDecision> evaluate_rounded_bottom(
@@ -952,6 +1046,7 @@ std::optional<PatternDecision> evaluate_rounded_bottom(
     const PatternPositionView& position
 ) {
     if (auto exit = common_position_exit(config, state, position)) return exit;
+    if (auto exit = rounded_weakness_exit(config, state, position)) return exit;
     const auto& signal = std::get<RoundedBottomConfig>(config.signal);
     const auto& bars = state.bars;
     const int count = static_cast<int>(bars.size());
@@ -985,14 +1080,20 @@ std::optional<PatternDecision> evaluate_rounded_bottom(
     }
     const double depth = left_rim > 0.0 ? (left_rim - bottom_close) / left_rim : 0.0;
     if (depth < signal.min_depth_pct) return std::nullopt;
-    const auto pivots = confirmed_pivot_lows(bars, signal.pivot_left_bars, signal.pivot_right_bars);
+    const auto pivots = confirmed_pivots(bars, signal.pivot_left_bars, signal.pivot_right_bars);
     std::vector<int> qualified;
+    std::vector<int> rebound_peaks;
     for (int pivot : pivots) {
         if (pivot <= bottom_index) continue;
         const auto pivot_volume = volume_ratio(bars[static_cast<std::size_t>(pivot)]);
         double surge = 0.0;
-        for (int item = std::max(bottom_index + 1, pivot - 5); item < pivot; ++item) {
-            surge = std::max(surge, volume_ratio(bars[static_cast<std::size_t>(item)]).value_or(0.0));
+        const int leg_start = qualified.empty() ? bottom_index + 1 : qualified.back() + 1;
+        const auto peak = highest_index(bars, leg_start, pivot - 1);
+        if (!peak) continue;
+        for (int item = leg_start; item <= *peak; ++item) {
+            if (bars[item].close && bars[item - 1].close && *bars[item].close > *bars[item - 1].close) {
+                surge = std::max(surge, volume_ratio(bars[item]).value_or(0.0));
+            }
         }
         if (!pivot_volume || *pivot_volume > signal.pullback_volume_ratio_max
             || surge < signal.right_volume_ratio_min) continue;
@@ -1000,16 +1101,20 @@ std::optional<PatternDecision> evaluate_rounded_bottom(
             if (pivot - qualified.back() < signal.min_pullback_spacing) continue;
             const auto low = bars[static_cast<std::size_t>(pivot)].low;
             const auto previous_low = bars[static_cast<std::size_t>(qualified.back())].low;
-            if (!low || !previous_low || *low <= *previous_low) continue;
+            if (!low || !previous_low || *low <= *previous_low
+                || *bars[*peak].high <= *bars[rebound_peaks.back()].high) continue;
         }
         qualified.push_back(pivot);
+        rebound_peaks.push_back(*peak);
     }
     const std::string bottom_date = iso_date(bars[static_cast<std::size_t>(bottom_index)].date_ordinal);
     std::vector<std::string> pullbacks;
-    for (int index = 0; index < std::min<int>(2, qualified.size()); ++index) {
+    for (int index = 0; index < static_cast<int>(qualified.size()); ++index) {
         pullbacks.push_back(iso_date(bars[static_cast<std::size_t>(qualified[static_cast<std::size_t>(index)])].date_ordinal));
     }
-    PatternObject anchors{{"bottom", bottom_date}, {"pullbacks", pullbacks}};
+    std::vector<std::string> peaks;
+    for (int peak : rebound_peaks) peaks.push_back(iso_date(bars[peak].date_ordinal));
+    PatternObject anchors{{"bottom", bottom_date}, {"pullbacks", pullbacks}, {"rebound_peaks", peaks}};
     PatternObject fields{
         {"depth_pct", depth},
         {"r_squared", r_squared},
@@ -1020,26 +1125,29 @@ std::optional<PatternDecision> evaluate_rounded_bottom(
         std::max((r_squared - signal.min_r_squared) / std::max(1.0 - signal.min_r_squared, 1e-12), 0.0), 1.0
     );
     const int current = count - 1;
-    for (int stage = 1; stage <= std::min<int>(2, qualified.size()); ++stage) {
-        const int pivot = qualified[static_cast<std::size_t>(stage - 1)];
-        if (current != pivot + signal.pivot_right_bars) continue;
-        const std::string key = stage == 1 ? "first_right_pullback" : "second_right_pullback";
-        PatternSetup setup = build_setup(
-            config, symbol, stage, key, anchors, bottom_close, {bottom_date}, fields
-        );
-        const double ratio = volume_ratio(bars[static_cast<std::size_t>(pivot)]).value_or(signal.pullback_volume_ratio_max);
-        return buy_decision(
-            "confirmed a higher low-volume pullback on the bowl's right side", std::move(setup), structure,
-            std::min(depth / (signal.min_depth_pct * 2.0), 1.0),
-            std::max(0.0, 1.0 - ratio / signal.pullback_volume_ratio_max),
-            static_cast<double>(stage) / 3.0
-        );
-    }
     const auto close = bars.back().close;
     const auto current_ratio = volume_ratio(bars.back());
     if (qualified.size() < 2U || !close || !current_ratio
-        || *close < left_rim * (1.0 + signal.breakout_buffer_pct)
-        || *current_ratio < signal.breakout_volume_ratio_min) return std::nullopt;
+        || *close <= left_rim * (1.0 + signal.breakout_buffer_pct)
+        || *current_ratio < signal.breakout_volume_ratio_min) {
+        for (int index = static_cast<int>(qualified.size()) - 1; index >= 0; --index) {
+            const int pivot = qualified[index];
+            const int stage = index == 0 ? 1 : 2;
+            if (current != pivot + signal.pivot_right_bars) continue;
+            const std::string key = stage == 1 ? "first_right_pullback" : "second_right_pullback";
+            PatternSetup setup = build_setup(
+                config, symbol, stage, key, anchors, bottom_close, {bottom_date}, fields
+            );
+            const double ratio = volume_ratio(bars[static_cast<std::size_t>(pivot)]).value_or(signal.pullback_volume_ratio_max);
+            return buy_decision(
+                "confirmed a higher low-volume pullback on the bowl's right side", std::move(setup), structure,
+                std::min(depth / (signal.min_depth_pct * 2.0), 1.0),
+                std::max(0.0, 1.0 - ratio / signal.pullback_volume_ratio_max),
+                static_cast<double>(stage) / 3.0
+            );
+        }
+        return std::nullopt;
+    }
     PatternSetup setup = build_setup(
         config, symbol, 3, "rim_breakout", std::move(anchors), bottom_close,
         {bottom_date}, std::move(fields)
@@ -1080,8 +1188,14 @@ bool island_downtrend(const std::vector<PatternBar>& bars, int index, const Isla
         const auto anchor_close = bars[static_cast<std::size_t>(anchor)].close;
         if (anchor_close && *anchor_close > 0.0) lookback_return = *bar.close / *anchor_close - 1.0;
     }
-    return (lookback_return && *lookback_return <= -config.downtrend_min_drop_pct)
-        || (bar.close && bar.sma_50 && *bar.close < *bar.sma_50);
+    return lookback_return && *lookback_return <= -config.downtrend_min_drop_pct;
+}
+
+bool island_left_candles(const std::vector<PatternBar>& bars, int index, const IslandConfig& config) {
+    const auto& previous = bars[index - 1];
+    const auto previous_body = body_atr(previous), left_body = body_atr(bars[index]);
+    return previous_body && left_body && *previous.close < *previous.open
+        && *previous_body >= config.previous_body_atr_min && *left_body <= config.exhaustion_body_atr_max;
 }
 
 std::optional<IslandPatternMatch> latest_island(
@@ -1093,7 +1207,9 @@ std::optional<IslandPatternMatch> latest_island(
     for (int breakout_index = count - 1; breakout_index >= config.min_island_bars + 1; --breakout_index) {
         const PatternBar& breakout = bars[static_cast<std::size_t>(breakout_index)];
         const auto breakout_ratio = volume_ratio(breakout);
+        const auto breakout_body = body_atr(breakout);
         if (!breakout.open || !breakout.close || !breakout.low || !breakout.volume || !breakout_ratio
+            || !breakout_body || *breakout_body < config.breakout_body_atr_min
             || *breakout.close <= *breakout.open || *breakout_ratio < config.right_volume_ratio_min) continue;
         const int latest_left = breakout_index - config.min_island_bars;
         const int earliest_left = std::max(1, breakout_index - config.max_island_bars);
@@ -1105,6 +1221,7 @@ std::optional<IslandPatternMatch> latest_island(
                 || *left.close >= *left.open || *previous_low <= 0.0) continue;
             const double left_gap = (*previous_low - *left.high) / *previous_low;
             if (left_gap < config.left_gap_min_pct || *left_ratio > config.left_volume_ratio_max
+                || !island_left_candles(bars, left_index, config)
                 || !island_downtrend(bars, left_index, config)
                 || breakout_index - left_index < config.min_island_bars) continue;
             double island_high = -std::numeric_limits<double>::infinity();
@@ -1112,6 +1229,10 @@ std::optional<IslandPatternMatch> latest_island(
             bool invalid = false;
             for (int item = left_index; item < breakout_index; ++item) {
                 const PatternBar& island_bar = bars[static_cast<std::size_t>(item)];
+                if (item > left_index) {
+                    const auto body = body_atr(island_bar);
+                    if (!body || *body > config.island_body_atr_max) invalid = true;
+                }
                 island_high = std::max(island_high, island_bar.high.value_or(-std::numeric_limits<double>::infinity()));
                 island_low = std::min(island_low, island_bar.low.value_or(std::numeric_limits<double>::infinity()));
                 if (island_bar.high.value_or(std::numeric_limits<double>::infinity()) >= *previous_low) invalid = true;
@@ -1141,6 +1262,7 @@ std::optional<IslandExhaustion> island_exhaustion(
         || *previous_low <= 0.0 || *bar.close >= *bar.open) return std::nullopt;
     const double gap = (*previous_low - *bar.high) / *previous_low;
     if (gap < config.left_gap_min_pct || *ratio > config.left_volume_ratio_max
+        || !island_left_candles(bars, index, config)
         || !island_downtrend(bars, index, config)) return std::nullopt;
     return IslandExhaustion{index, *bar.high, *bar.low, gap, *ratio};
 }
@@ -1252,6 +1374,9 @@ std::optional<PatternDecision> evaluate_island(
                 {"island_high", pattern->island_high},
                 {"island_low", pattern->island_low},
                 {"left_gap_pct", pattern->left_gap_pct},
+                {"previous_body_atr", *body_atr(state.bars[pattern->left_gap_index - 1])},
+                {"exhaustion_body_atr", *body_atr(state.bars[pattern->left_gap_index])},
+                {"breakout_body_atr", *body_atr(state.bars[pattern->breakout_index])},
             }
         );
         score = pattern->left_gap_pct * 100.0 + pattern->breakout_gap_pct * 100.0
@@ -1267,6 +1392,8 @@ std::optional<PatternDecision> evaluate_island(
                 {"island_low", exhaustion->low},
                 {"left_gap_pct", exhaustion->left_gap_pct},
                 {"left_volume_ratio", exhaustion->volume_ratio},
+                {"previous_body_atr", *body_atr(state.bars[exhaustion->index - 1])},
+                {"exhaustion_body_atr", *body_atr(state.bars[exhaustion->index])},
             }
         );
         score = exhaustion->left_gap_pct * 100.0;

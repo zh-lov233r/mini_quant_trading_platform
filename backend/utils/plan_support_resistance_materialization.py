@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+from math import ceil
 from datetime import date
 from hashlib import sha256
 from pathlib import Path
@@ -107,6 +108,11 @@ def estimate(rows: list[dict[str, Any]], params: dict[str, Any]) -> dict[str, An
         "symbols_loaded": sorted(states),
         "estimated_zone_version_count": sum(len(state.zone_versions) for state in states.values()),
         "estimated_run_event_count": sum(len(state.events) for state in states.values()),
+        "estimated_regime_version_count": sum(len(state.regime_versions) for state in states.values()),
+        "estimated_copy_batches": sum(ceil(sum(len(getattr(state, field)) for state in states.values()) / 5000)
+            for field in ("zone_versions", "regime_versions", "events")),
+        "active_zone_count": sum(len(state.zones) for state in states.values()),
+        "max_zones_per_kind": params["signal"]["max_zones_per_kind"],
     }
 
 

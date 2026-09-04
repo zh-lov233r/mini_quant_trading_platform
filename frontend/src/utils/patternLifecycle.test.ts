@@ -78,7 +78,7 @@ describe("pattern lifecycle markers", () => {
 
   it("finds the island bottom inside the two gaps and marks its reversal", () => {
     const setup = {
-      anchors: { left_gap: "2025-01-02", breakout: "2025-01-07" },
+      anchors: { left_gap_trade_date: "2025-01-02", breakout_trade_date: "2025-01-07" },
       island_low: 8,
       breakout_gap_low: 13,
     };
@@ -89,4 +89,32 @@ describe("pattern lifecycle markers", () => {
       ["Reversal Confirmed", "2025-01-07", 13],
     ]);
   });
+  it("shows confirmed weakness anchors and the SELL reason only within the lifecycle", () => {
+    const first = signal("rounded_bottom", 2, "2025-01-03T21:00:00Z", { anchors: { bottom: "2025-01-02" } });
+    const exit = signal("rounded_bottom", 2, "2025-01-07T21:00:00Z", {
+      anchors: { failure_peak: "2025-01-03", lower_high: "2025-01-06", failure_pullback: "2025-01-02" },
+      failure_peak_price: 14, lower_high_price: 13, failure_support_price: 10, exit_stage: "right_side_failure",
+    });
+    exit.signal = "SELL";
+    const selection = selectLifecyclePattern([first, exit], first, "TEST", "2025-01-07");
+    expect(selection?.latestSignal).toBe(first);
+    expect(buildPatternLifecycleMarkers(selection, bars, "en-US").map((m) => [m.label, m.price])).toContainEqual(["Confirmed Lower High", 13]);
+    expect(buildPatternLifecycleMarkers(selection, bars, "zh-CN").map((m) => m.label)).toContain("右侧走弱退出");
+    expect(selectLifecyclePattern([first, exit], first, "TEST", "2025-01-06")?.exitSignal).toBeNull();
+  });
+
+  it("marks the platform and consolidation bounds from audit prices", () => {
+    const head = signal("head_shoulders_bottom", 2, "2025-01-07T21:00:00Z", {
+      anchors: { platform_start: "2025-01-02", platform_end: "2025-01-06" }, platform_low: 10, platform_high: 14,
+    });
+    expect(buildPatternLifecycleMarkers(selectLifecyclePattern([head], head, "TEST", null), bars, "en-US")
+      .map((m) => [m.label, m.price])).toContainEqual(["Left Platform Floor", 10]);
+    const v = signal("v_reversal", 3, "2025-01-07T21:00:00Z", {
+      anchors: { consolidation_start: "2025-01-02", consolidation_end: "2025-01-06", reversal: "2025-01-03" },
+      consolidation_low: 9, consolidation_top: 14,
+    });
+    expect(buildPatternLifecycleMarkers(selectLifecyclePattern([v], v, "TEST", null), bars, "en-US")
+      .map((m) => [m.label, m.price])).toContainEqual(["Range Ceiling", 14]);
+  });
+
 });

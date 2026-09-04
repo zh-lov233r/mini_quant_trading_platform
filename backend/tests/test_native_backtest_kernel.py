@@ -6,6 +6,7 @@ import gc
 import json
 import math
 from pathlib import Path
+import sys
 import threading
 import unittest
 
@@ -542,8 +543,8 @@ class NativeBacktestKernelTests(unittest.TestCase):
             self._pattern_bar(1, 116, 117, 114, 115, 100),
             self._pattern_bar(2, 111, 112, 108, 110, 100),
             self._pattern_bar(3, 101, 102, 98, 100, 80),
-            self._pattern_bar(4, 101, 108, 100, 106, 90),
-            self._pattern_bar(5, 107, 112, 105, 109, 95),
+            self._pattern_bar(4, 101, 108, 100, 106, 110),
+            self._pattern_bar(5, 107, 112, 105, 109, 120),
             self._pattern_bar(6, 108, 109, 104, 106, 90),
             self._pattern_bar(7, 101, 102, 99, 100, 70),
             self._pattern_bar(8, 102, 105, 101, 104, 90),
@@ -606,7 +607,7 @@ class NativeBacktestKernelTests(unittest.TestCase):
             "breakout_volume_ratio_min": 1.2,
             "max_breakout_bars_after_right_bottom": 6,
             "breakout_buffer_pct": 0.005,
-            "retest_window": 3,
+            "retest_window": 5,
             "retest_volume_ratio_max": 0.8,
             "support_tolerance_pct": 0.02,
         }
@@ -616,7 +617,7 @@ class NativeBacktestKernelTests(unittest.TestCase):
             (
                 "head_shoulders_bottom",
                 head_shoulders,
-                {"signal": {"pivot_left_bars": 1, "pivot_right_bars": 1, "downtrend_lookback": 2, "min_segment_bars": 2, "max_segment_bars": 10}},
+                {"signal": {"platform_bars": 3, "pivot_left_bars": 1, "pivot_right_bars": 1, "downtrend_lookback": 2, "min_segment_bars": 2, "max_segment_bars": 10}},
             ),
             ("rounded_bottom", rounded, {"signal": {"min_lookback": 80, "max_lookback": 120, "min_r_squared": 0.70}}),
             ("v_reversal", v_reversal, {}),
@@ -978,6 +979,90 @@ class NativeBacktestKernelTests(unittest.TestCase):
                 control,
             )
         self.assertEqual(calls, [(1, 3), (2, 3)])
+
+    def test_support_finalization_is_cancellable_without_extra_daily_callbacks(self) -> None:
+        days = self._pattern_matrix_days(
+            [self._pattern_bar(0, 100.0, 101.0, 99.0, 100.0, 100.0)],
+            symbol_count=2, session_count=3,
+        )
+        runtime = {"strategy_type": "support_resistance", "params": normalize_strategy_params("support_resistance", {})}
+        daily = []
+        finalizing = []
+
+        def finalize(completed, total):
+            finalizing.append((completed, total))
+            return completed == 1
+
+        with self.assertRaisesRegex(quant_kernel.BacktestCancelledError, "during finalization"):
+            quant_kernel.run_backtest(
+                self._dataset(days), runtime, {},
+                lambda completed, total: daily.append((completed, total)) or False,
+                finalize,
+            )
+        self.assertEqual(daily, [(1, 3), (2, 3), (3, 3)])
+        self.assertEqual(finalizing, [(0, 2), (1, 2)])
+
+    def test_support_json_column_is_read_only_and_keeps_result_alive(self) -> None:
+        days = self._pattern_matrix_days(
+            [self._pattern_bar(0, 100.0, 101.0, 99.0, 100.0, 100.0)],
+            symbol_count=2, session_count=3,
+        )
+        runtime = {"strategy_type": "support_resistance", "params": normalize_strategy_params("support_resistance", {})}
+        finalizing = []
+        result = quant_kernel.run_backtest(
+            self._dataset(days), runtime, {}, None,
+            lambda completed, total: finalizing.append((completed, total)) or False,
+        )
+        payloads = result.support_resistance["events"]["payload_json"]
+        self.assertNotIsInstance(payloads, list)
+        expected = payloads.tolist()
+        self.assertGreater(len(expected), 0)
+        del result
+        gc.collect()
+        self.assertEqual(list(payloads), expected)
+        self.assertEqual(payloads[-1], expected[-1])
+        with self.assertRaises(IndexError):
+            payloads[len(payloads)]
+        with self.assertRaises(TypeError):
+            payloads[0] = "{}"
+        self.assertEqual(finalizing, [(0, 2), (1, 2), (2, 2)])
+
+    def test_support_finalization_releases_gil_for_heartbeat(self) -> None:
+        days = self._pattern_matrix_days(
+            [self._pattern_bar(0, 100.0, 101.0, 99.0, 100.0, 100.0)],
+            symbol_count=1000, session_count=3,
+        )
+        dataset = self._dataset(days)
+        runtime = {"strategy_type": "support_resistance", "params": normalize_strategy_params("support_resistance", {})}
+        ready, exporting, heartbeat = threading.Event(), threading.Event(), threading.Event()
+        observed = []
+
+        def observe():
+            ready.set()
+            exporting.wait()
+            heartbeat.set()
+
+        def finalize(completed, total):
+            if completed == 0:
+                exporting.set()
+            if completed == total:
+                observed.append(heartbeat.is_set())
+            return False
+
+        observer = threading.Thread(target=observe)
+        interval = sys.getswitchinterval()
+        try:
+            # The tiny Python callbacks must not supply an incidental thread switch.
+            sys.setswitchinterval(1.0)
+            observer.start()
+            ready.wait()
+            quant_kernel.run_backtest(dataset, runtime, {}, None, finalize)
+        finally:
+            exporting.set()
+            observer.join(timeout=2.0)
+            sys.setswitchinterval(interval)
+        self.assertEqual(observed, [True])
+        self.assertFalse(observer.is_alive())
 
     def test_parallel_control_callback_still_runs_once_per_day(self) -> None:
         calls: list[tuple[int, int]] = []

@@ -23,6 +23,10 @@ export default function App({ Component, pageProps }: AppProps) {
           }
 
           :root {
+            --motion-fast: 120ms;
+            --motion-surface: 180ms;
+            --motion-enter: 240ms;
+            --motion-ease: cubic-bezier(.2,.8,.2,1);
             --workspace-gap: 14px;
             --workspace-panel-radius: 15px;
             --workspace-control-height: 38px;
@@ -55,6 +59,11 @@ export default function App({ Component, pageProps }: AppProps) {
 
           * {
             box-sizing: border-box;
+          }
+
+          @media (prefers-reduced-motion: reduce) {
+            :root { --motion-fast: 0ms; --motion-surface: 0ms; --motion-enter: 0ms; }
+            html { scroll-behavior: auto; }
           }
 
           .workspace-tooltip {

@@ -7,6 +7,7 @@ import {
   getStrategyFeatureSupport,
   updateStrategyConfig,
 } from "@/api/strategies";
+import BottomReversalFields, { isBottomReversal } from "@/components/BottomReversalFields";
 import { SelectControl } from "@/components/workspace/SelectControl";
 import { useI18n } from "@/i18n/provider";
 import type {
@@ -309,14 +310,18 @@ export default function StrategyForm({
   const [srBreakoutVolumeRatioMin, setSrBreakoutVolumeRatioMin] = useState(toFiniteNumber(initialSignal.breakout_volume_ratio_min, 1.5));
   const [srRetestWindow, setSrRetestWindow] = useState(toFiniteNumber(initialSignal.retest_window, 10));
   const [srRetestVolumeRatioMax, setSrRetestVolumeRatioMax] = useState(toFiniteNumber(initialSignal.retest_volume_ratio_max, 0.8));
-  const [srScoreOutcomeWindow, setSrScoreOutcomeWindow] = useState(toFiniteNumber(initialSignal.score_outcome_window, 20));
-  const [srScoreTargetAtr, setSrScoreTargetAtr] = useState(toFiniteNumber(initialSignal.score_target_atr, 3));
-  const [srScoreStopAtr, setSrScoreStopAtr] = useState(toFiniteNumber(initialSignal.score_stop_atr, 1.5));
   const [srStopLossAtr, setSrStopLossAtr] = useState(toFiniteNumber(initialRisk.stop_loss_atr, 1.5));
   const [srMaxLossPct, setSrMaxLossPct] = useState(toFiniteNumber(initialRisk.max_loss_pct, 0.08));
   const [srTakeProfitAtr, setSrTakeProfitAtr] = useState(toFiniteNumber(initialRisk.take_profit_atr, 3));
   const [srMinRewardRisk, setSrMinRewardRisk] = useState(toFiniteNumber(initialRisk.min_reward_risk, 1.5));
   const [srMaxHoldingDays, setSrMaxHoldingDays] = useState(toFiniteNumber(initialRisk.max_holding_days, 40));
+  const [srMaxZonesPerKind, setSrMaxZonesPerKind] = useState(toFiniteNumber(initialSignal.max_zones_per_kind, 3));
+  const [srPivotToleranceAtr, setSrPivotToleranceAtr] = useState(toFiniteNumber(initialSignal.pivot_tolerance_atr, 0.05));
+  const [srRiskPerTradePct, setSrRiskPerTradePct] = useState(toFiniteNumber(initialRisk.risk_per_trade_pct, 0.005));
+  const [srStopCooldownSessions, setSrStopCooldownSessions] = useState(toFiniteNumber(initialRisk.stop_cooldown_sessions, 5));
+  const [srBreakEvenAtR, setSrBreakEvenAtR] = useState(toFiniteNumber(initialRisk.break_even_at_r, 1.0));
+  const [srMarketFilterEnabled, setSrMarketFilterEnabled] = useState(toBoolean(initialRisk.market_filter_enabled, false));
+  const [srMarketFilterSymbol, setSrMarketFilterSymbol] = useState(String(initialRisk.market_filter_symbol ?? "SPY"));
   const [rawJson, setRawJson] = useState(
     initialStrategy
       ? JSON.stringify(initialStrategy.params, null, 2)
@@ -329,6 +334,19 @@ export default function StrategyForm({
     () => catalog.find((item) => item.strategy_type === strategyType) || null,
     [catalog, strategyType]
   );
+
+  const bottomParams = useMemo(() => {
+    if (!isBottomReversal(strategyType)) return null;
+    try {
+      const parsed = toRecord(JSON.parse(rawJson));
+      const defaults = toRecord(selectedTemplate?.defaults);
+      return { ...defaults, ...parsed,
+        signal: { ...toRecord(defaults.signal), ...toRecord(parsed.signal) },
+        risk: { ...toRecord(defaults.risk), ...toRecord(parsed.risk) } };
+    } catch {
+      return null;
+    }
+  }, [rawJson, selectedTemplate, strategyType]);
 
   const applyTemplateDefaults = (template: StrategyCatalogItem) => {
     const defaults = toRecord(template.defaults);
@@ -430,14 +448,18 @@ export default function StrategyForm({
       setSrBreakoutVolumeRatioMin(toFiniteNumber(signal.breakout_volume_ratio_min, 1.5));
       setSrRetestWindow(toFiniteNumber(signal.retest_window, 10));
       setSrRetestVolumeRatioMax(toFiniteNumber(signal.retest_volume_ratio_max, 0.8));
-      setSrScoreOutcomeWindow(toFiniteNumber(signal.score_outcome_window, 20));
-      setSrScoreTargetAtr(toFiniteNumber(signal.score_target_atr, 3));
-      setSrScoreStopAtr(toFiniteNumber(signal.score_stop_atr, 1.5));
       setSrStopLossAtr(toFiniteNumber(risk.stop_loss_atr, 1.5));
       setSrMaxLossPct(toFiniteNumber(risk.max_loss_pct, 0.08));
       setSrTakeProfitAtr(toFiniteNumber(risk.take_profit_atr, 3));
       setSrMinRewardRisk(toFiniteNumber(risk.min_reward_risk, 1.5));
       setSrMaxHoldingDays(toFiniteNumber(risk.max_holding_days, 40));
+      setSrMaxZonesPerKind(toFiniteNumber(signal.max_zones_per_kind, 3));
+      setSrPivotToleranceAtr(toFiniteNumber(signal.pivot_tolerance_atr, 0.05));
+      setSrRiskPerTradePct(toFiniteNumber(risk.risk_per_trade_pct, 0.005));
+      setSrStopCooldownSessions(toFiniteNumber(risk.stop_cooldown_sessions, 5));
+      setSrBreakEvenAtR(toFiniteNumber(risk.break_even_at_r, 1.0));
+      setSrMarketFilterEnabled(toBoolean(risk.market_filter_enabled, false));
+      setSrMarketFilterSymbol(String(risk.market_filter_symbol ?? "SPY"));
       return;
     }
 
@@ -771,6 +793,7 @@ export default function StrategyForm({
 
       return {
         signal: {
+          ...toRecord(bottomParams?.signal),
           min_strength_score: Number(minStrengthScore),
           downtrend_lookback: Number(islandDowntrendLookback),
           downtrend_min_drop_pct: Number(islandDowntrendMinDropPct),
@@ -789,6 +812,7 @@ export default function StrategyForm({
           selection_mode: parsedSymbols.length > 0 ? "manual" : "all_common_stock",
         },
         risk: {
+          ...toRecord(bottomParams?.risk),
           max_positions: Number(maxPositions),
           position_size_pct: Number(positionSizePct),
           stop_loss_atr: Number(islandStopLossAtr),
@@ -807,6 +831,7 @@ export default function StrategyForm({
       };
     },
     [
+      bottomParams,
       description,
       islandDowntrendLookback,
       islandDowntrendMinDropPct,
@@ -840,6 +865,7 @@ export default function StrategyForm({
 
       return {
         signal: {
+          ...toRecord(bottomParams?.signal),
           min_strength_score: Number(minStrengthScore),
           downtrend_lookback: Number(doubleBottomDowntrendLookback),
           downtrend_min_drop_pct: Number(doubleBottomDowntrendMinDropPct),
@@ -865,6 +891,7 @@ export default function StrategyForm({
           selection_mode: parsedSymbols.length > 0 ? "manual" : "all_common_stock",
         },
         risk: {
+          ...toRecord(bottomParams?.risk),
           max_positions: Number(maxPositions),
           position_size_pct: Number(positionSizePct),
           stop_loss_atr: Number(doubleBottomStopLossAtr),
@@ -883,6 +910,7 @@ export default function StrategyForm({
       };
     },
     [
+      bottomParams,
       bottomTolerancePct,
       breakoutBufferPct,
       breakoutVolumeRatioMin,
@@ -930,6 +958,8 @@ export default function StrategyForm({
         detection_window: Number(srDetectionWindow),
         min_line_pivots: Number(srMinLinePivots),
         min_line_span_sessions: Number(srMinLineSpanSessions),
+        max_zones_per_kind: srMaxZonesPerKind,
+        pivot_tolerance_atr: srPivotToleranceAtr,
         line_inlier_tolerance_atr: Number(srLineInlierToleranceAtr),
         max_abs_slope_atr_per_session: Number(srMaxAbsSlopeAtrPerSession),
         zone_half_width_atr: Number(srZoneHalfWidthAtr),
@@ -939,9 +969,6 @@ export default function StrategyForm({
         breakout_volume_ratio_min: Number(srBreakoutVolumeRatioMin),
         retest_window: Number(srRetestWindow),
         retest_volume_ratio_max: Number(srRetestVolumeRatioMax),
-        score_outcome_window: Number(srScoreOutcomeWindow),
-        score_target_atr: Number(srScoreTargetAtr),
-        score_stop_atr: Number(srScoreStopAtr),
       },
       universe: {
         symbols: parsedSymbols,
@@ -955,6 +982,11 @@ export default function StrategyForm({
         take_profit_atr: Number(srTakeProfitAtr),
         min_reward_risk: Number(srMinRewardRisk),
         max_holding_days: Number(srMaxHoldingDays),
+        risk_per_trade_pct: srRiskPerTradePct,
+        stop_cooldown_sessions: srStopCooldownSessions,
+        break_even_at_r: srBreakEvenAtR,
+        market_filter_enabled: srMarketFilterEnabled,
+        market_filter_symbol: srMarketFilterSymbol.trim().toUpperCase(),
       },
       execution: { timeframe: "1d", rebalance, run_at: runAt },
       metadata: {
@@ -971,8 +1003,9 @@ export default function StrategyForm({
     srLineInlierToleranceAtr, srMaxAbsSlopeAtrPerSession, srMaxHoldingDays, srMaxLossPct,
     srMinLinePivots, srMinLineSpanSessions, srMinRewardRisk, minStrengthScore,
     srPivotLeftBars, srPivotRightBars, srRetestVolumeRatioMax, srRetestWindow,
-    srScoreOutcomeWindow, srScoreStopAtr, srScoreTargetAtr, srStopLossAtr,
+    srStopLossAtr,
     srTakeProfitAtr, srZoneHalfWidthAtr, supportBounceEnabled, symbols,
+    srMaxZonesPerKind, srPivotToleranceAtr, srRiskPerTradePct, srStopCooldownSessions, srBreakEvenAtR, srMarketFilterEnabled, srMarketFilterSymbol,
   ]);
 
   const previewPayload = useMemo<StrategyCreate>(() => {
@@ -1217,7 +1250,7 @@ export default function StrategyForm({
           throw new Error(isZh ? "左底后置 K 线数必须 > 0" : "Left-bottom bars after must be > 0");
         }
         if (!(Number(bottomTolerancePct) > 0 && Number(bottomTolerancePct) <= 1)) {
-          throw new Error(isZh ? "双底价差容忍度必须在 (0%, 100%] 之间" : "Bottom tolerance pct must be within (0%, 100%]");
+          throw new Error(isZh ? "右底向上容差必须在 (0%, 100%] 之间" : "Bottom tolerance pct must be within (0%, 100%]");
         }
         if (!(Number(necklineMinReboundPct) > 0 && Number(necklineMinReboundPct) <= 1)) {
           throw new Error(isZh ? "颈线最小反弹幅度必须在 (0%, 100%] 之间" : "Neckline min rebound pct must be within (0%, 100%]");
@@ -1225,8 +1258,8 @@ export default function StrategyForm({
         if (!(Number(reboundUpDayRatioMin) > 0 && Number(reboundUpDayRatioMin) <= 1)) {
           throw new Error(
             isZh
-              ? "左底到右底上涨天数占比必须在 (0%, 100%] 之间"
-              : "Left-to-right-bottom up-day ratio must be within (0%, 100%]"
+              ? "左底到颈线高点上涨天数占比必须在 (0%, 100%] 之间"
+              : "Left-to-neckline up-day ratio must be within (0%, 100%]"
           );
         }
         if (!(Number(secondBottomVolumeRatioMax) > 0)) {
@@ -1275,16 +1308,16 @@ export default function StrategyForm({
           params: doubleBottomParams,
         };
       } else if (strategyType === "support_resistance") {
-        if (!supportBounceEnabled && !resistanceBreakoutEnabled && !breakoutRetestEnabled) {
-          throw new Error(isZh ? "至少启用一种入场模式" : "Enable at least one entry mode");
+        if (!supportBounceEnabled && !breakoutRetestEnabled) {
+          throw new Error(isZh ? "至少启用支撑反弹或突破回踩" : "Enable support bounce or breakout retest");
         }
         const positiveValues = [
           srPivotLeftBars, srPivotRightBars, srDetectionWindow, srMinLinePivots,
           srMinLineSpanSessions, srLineInlierToleranceAtr, srMaxAbsSlopeAtrPerSession,
           srZoneHalfWidthAtr, srDecayHalfLife,
           srBounceConfirmationAtr, srBreakoutConfirmationAtr, srBreakoutVolumeRatioMin,
-          srRetestWindow, srRetestVolumeRatioMax, srScoreOutcomeWindow, srScoreTargetAtr,
-          srScoreStopAtr, srStopLossAtr, srTakeProfitAtr, srMinRewardRisk,
+          srRetestWindow, srRetestVolumeRatioMax,
+          srStopLossAtr, srTakeProfitAtr, srMinRewardRisk,
           srMaxHoldingDays, maxPositions, positionSizePct,
         ];
         if (positiveValues.some((value) => !(Number(value) > 0))) {
@@ -1401,6 +1434,8 @@ export default function StrategyForm({
     { labelZh: "Pivot 左侧 K 线", labelEn: "Pivot Left Bars", value: srPivotLeftBars, setValue: setSrPivotLeftBars },
     { labelZh: "Pivot 右侧确认 K 线", labelEn: "Pivot Right Bars", value: srPivotRightBars, setValue: setSrPivotRightBars },
     { labelZh: "检测窗口", labelEn: "Detection Window", value: srDetectionWindow, setValue: setSrDetectionWindow },
+    { labelZh: "每类最多区域数", labelEn: "Maximum Zones Per Kind", value: srMaxZonesPerKind, setValue: setSrMaxZonesPerKind },
+    { labelZh: "Pivot 并列容差（ATR）", labelEn: "Pivot Tie Tolerance (ATR)", value: srPivotToleranceAtr, setValue: setSrPivotToleranceAtr },
     { labelZh: "最少拟合 Pivot", labelEn: "Minimum Line Pivots", value: srMinLinePivots, setValue: setSrMinLinePivots },
     { labelZh: "最小跨度（交易日）", labelEn: "Minimum Span (Sessions)", value: srMinLineSpanSessions, setValue: setSrMinLineSpanSessions },
     { labelZh: "内点容差（ATR）", labelEn: "Inlier Tolerance (ATR)", value: srLineInlierToleranceAtr, setValue: setSrLineInlierToleranceAtr },
@@ -1414,18 +1449,18 @@ export default function StrategyForm({
     { labelZh: "突破成交量 / ADV20", labelEn: "Breakout Volume / ADV20", value: srBreakoutVolumeRatioMin, setValue: setSrBreakoutVolumeRatioMin },
     { labelZh: "回踩窗口", labelEn: "Retest Window", value: srRetestWindow, setValue: setSrRetestWindow },
     { labelZh: "回踩量 / 突破量上限", labelEn: "Retest / Breakout Volume Max", value: srRetestVolumeRatioMax, setValue: setSrRetestVolumeRatioMax },
-    { labelZh: "评分结果窗口", labelEn: "Scoring Outcome Window", value: srScoreOutcomeWindow, setValue: setSrScoreOutcomeWindow },
-    { labelZh: "评分目标（ATR）", labelEn: "Scoring Target (ATR)", value: srScoreTargetAtr, setValue: setSrScoreTargetAtr },
-    { labelZh: "评分止损（ATR）", labelEn: "Scoring Stop (ATR)", value: srScoreStopAtr, setValue: setSrScoreStopAtr },
   ];
   const srRiskFields: Array<{ labelZh: string; labelEn: string; percent?: boolean; value: number; setValue: (value: number) => void }> = [
     { labelZh: "最大持仓数", labelEn: "Max Positions", value: maxPositions, setValue: setMaxPositions },
-    { labelZh: "单票仓位比例", labelEn: "Position Size Pct", value: positionSizePct, setValue: setPositionSizePct, percent: true },
+    { labelZh: "单票名义仓位上限", labelEn: "Position Notional Cap", value: positionSizePct, setValue: setPositionSizePct, percent: true },
     { labelZh: "ATR 止损", labelEn: "ATR Stop", value: srStopLossAtr, setValue: setSrStopLossAtr },
-    { labelZh: "最大亏损比例", labelEn: "Max Loss Pct", value: srMaxLossPct, setValue: setSrMaxLossPct, percent: true },
+    { labelZh: "收盘止损参考比例（不含跳空）", labelEn: "Close Stop Reference (Gaps Excluded)", value: srMaxLossPct, setValue: setSrMaxLossPct, percent: true },
     { labelZh: "无压力区目标（ATR）", labelEn: "Fallback Target (ATR)", value: srTakeProfitAtr, setValue: setSrTakeProfitAtr },
     { labelZh: "最低盈亏比", labelEn: "Minimum Reward / Risk", value: srMinRewardRisk, setValue: setSrMinRewardRisk },
     { labelZh: "最长持有交易日", labelEn: "Maximum Holding Days", value: srMaxHoldingDays, setValue: setSrMaxHoldingDays },
+    { labelZh: "单笔计划风险", labelEn: "Risk Per Trade", value: srRiskPerTradePct, setValue: setSrRiskPerTradePct, percent: true },
+    { labelZh: "止损冷却交易日（0 关闭）", labelEn: "Stop Cooldown Sessions (0 Off)", value: srStopCooldownSessions, setValue: setSrStopCooldownSessions },
+    { labelZh: "保本触发盈利（R）", labelEn: "Break-Even Trigger (R)", value: srBreakEvenAtR, setValue: setSrBreakEvenAtR },
   ];
 
   return (
@@ -2168,8 +2203,8 @@ export default function StrategyForm({
               <h3 style={{ marginTop: 0 }}>{isZh ? "双底形态参数" : "Double Bottom Parameters"}</h3>
               <div style={{ marginBottom: 14, color: "rgba(148, 163, 184, 0.88)", fontSize: 13, lineHeight: 1.6 }}>
                 {isZh
-                  ? "这是保守版双底：先用放量突破确认形态，再等待后续缩量回踩颈线时买入。左底前会额外检查下跌是否足够平滑。所有百分比字段以百分数输入，例如输入 3 表示 3%。"
-                  : "This is the conservative double-bottom setup: it uses the breakout to confirm the pattern, then waits for a later low-volume retest of the neckline before buying. The left bottom also requires a smooth downtrend. Percentage fields use percent inputs: enter 3 for 3%."}
+                  ? "双底依次确认缩量右底、右侧缩量回踩、放量收盘突破颈线，累计目标为 20% / 50% / 100%。右底不得低于左底，强势突破可跳过回踩。所有百分比以百分数输入，例如 3 表示 3%。"
+                  : "Stages confirm a low-volume right bottom, right-side pullback, and volume-backed close above the neckline, targeting 20% / 50% / 100%. The right low cannot undercut the left; a strong breakout can skip the pullback. Enter percentages as 3 for 3%."}
               </div>
 
               <div style={{ display: "grid", gap: 14 }}>
@@ -2284,7 +2319,7 @@ export default function StrategyForm({
                       />
                     </div>
                     <div style={groupedBoxStyle}>
-                      <label>{isZh ? "双底容差" : "Bottom Tolerance Pct"} (%)</label>
+                      <label>{isZh ? "右底向上容差" : "Right-bottom Upward Tolerance Pct"} (%)</label>
                       <input
                         type="number"
                         min={0.1}
@@ -2308,7 +2343,7 @@ export default function StrategyForm({
                       />
                     </div>
                     <div style={groupedBoxStyle}>
-                      <label>{isZh ? "左底到右底上涨天数占比下限" : "Left-to-Right Up-Day Ratio Min"} (%)</label>
+                      <label>{isZh ? "左底到颈线高点上涨天数占比下限" : "Left-to-Neckline Up-Day Ratio Min"} (%)</label>
                       <input
                         type="number"
                         min={1}
@@ -2337,8 +2372,8 @@ export default function StrategyForm({
                   <div style={groupedPanelTitleStyle}>{isZh ? "突破与回踩" : "Breakout And Retest"}</div>
                   <p style={groupedPanelHintStyle}>
                     {isZh
-                      ? "管理右底之后的突破等待、放量确认条件，以及突破后回踩买点。"
-                      : "Controls breakout timing after the right bottom, volume confirmation, and the post-breakout retest entry."}
+                      ? "管理右底之后的回踩窗口、缩量要求及放量收盘突破。"
+                      : "Controls the post-right-bottom pullback window, shrinking volume, and a volume-confirmed closing breakout."}
                   </p>
                   <div style={groupedGridStyle}>
                     <div style={groupedBoxStyle}>
@@ -2414,6 +2449,12 @@ export default function StrategyForm({
 
                 <div style={groupedPanelStyle}>
                   <div style={groupedPanelTitleStyle}>{isZh ? "风险与执行" : "Risk And Execution"}</div>
+                  <label style={groupedBoxStyle}>
+                    <span><input type="checkbox" checked={srMarketFilterEnabled} onChange={(event) => setSrMarketFilterEnabled(event.target.checked)} /> {isZh ? "启用大盘 200 日均线过滤" : "Enable Market SMA200 Filter"}</span>
+                    {isZh ? "过滤基准代码" : "Filter Benchmark Symbol"}
+                    <input aria-label={isZh ? "过滤基准代码" : "Filter Benchmark Symbol"} style={inputStyle} value={srMarketFilterSymbol} onChange={(event) => setSrMarketFilterSymbol(event.target.value)} />
+                  </label>
+                  <p style={groupedPanelHintStyle}>{isZh ? "市场过滤默认关闭。开启后缺少当日基准数据会拒绝新增仓位。风险预算是按止损参考价估算，不能限制跳空损失。" : "Market filtering defaults off. Missing benchmark data blocks new entries when enabled. Planned stop risk does not cap gap losses."}</p>
                   <p style={groupedPanelHintStyle}>
                     {isZh
                       ? "统一管理仓位规模、止损止盈，以及运行频率。"
@@ -2531,13 +2572,13 @@ export default function StrategyForm({
                   <div style={groupedPanelTitleStyle}>{isZh ? "固定市场状态规则" : "Fixed Market-Regime Policy"}</div>
                   <p style={groupedPanelHintStyle}>
                     {isZh
-                      ? "v3 将每个交易日唯一归入上行、下行、震荡或过渡区间。上行允许三种入场，震荡仅允许支撑反弹，下行与过渡暂停买入；确认下行会触发下一交易日开盘退出。该规则没有额外可调参数。"
-                      : "v3 assigns every session to exactly one uptrend, downtrend, range, or transition interval. Uptrends allow all three entries, ranges allow support bounces only, and downtrend/transition states pause buys; a confirmed downtrend exits at the next session open. This policy has no extra tunable parameters."}
+                      ? "v3 将每个交易日唯一归入上行、下行、震荡或过渡区间。上行允许支撑反弹和突破回踩，直接突破仅审计，震荡仅允许支撑反弹，下行与过渡暂停买入；确认下行会触发下一交易日开盘退出。该规则没有额外可调参数。"
+                      : "v3 assigns every session to exactly one uptrend, downtrend, range, or transition interval. Uptrends allow bounces and retests; direct breakouts are audit-only, ranges allow support bounces only, and downtrend/transition states pause buys; a confirmed downtrend exits at the next session open. This policy has no extra tunable parameters."}
                   </p>
                 </div>
                 <div style={groupedPanelStyle}>
                   <div style={groupedPanelTitleStyle}>{isZh ? "入场模式" : "Entry Modes"}</div>
-                  <p style={groupedPanelHintStyle}>{isZh ? "至少开启一种；同日多模式命中时只生成一个最高评分 BUY。" : "Enable at least one. Multiple same-day matches persist as events but emit one highest-scored BUY."}</p>
+                  <p style={groupedPanelHintStyle}>{isZh ? "至少开启反弹或回踩；直接突破开关只控制审计记录。" : "Enable bounce or retest. The direct-breakout switch only controls audit candidates."}</p>
                   <div style={groupedCompactGridStyle}>
                     {[
                       { label: isZh ? "支撑反弹" : "Support Bounce", value: supportBounceEnabled, setValue: setSupportBounceEnabled },
@@ -2558,7 +2599,7 @@ export default function StrategyForm({
                     {srDetectionFields.map((field) => (
                       <div key={field.labelEn} style={groupedBoxStyle}>
                         <label>{isZh ? field.labelZh : field.labelEn}</label>
-                        <input type="number" min={0.01} step="any" style={inputStyle} value={field.value} onChange={(event) => field.setValue(Number(event.target.value))} />
+                        <input type="number" min={0} step="any" style={inputStyle} value={field.value} onChange={(event) => field.setValue(Number(event.target.value))} />
                       </div>
                     ))}
                   </div>
@@ -2566,12 +2607,12 @@ export default function StrategyForm({
 
                 <div style={groupedPanelStyle}>
                   <div style={groupedPanelTitleStyle}>{isZh ? "确认与向前评分" : "Confirmation And Forward Scoring"}</div>
-                  <p style={groupedPanelHintStyle}>{isZh ? "Signal strength 决定同日候选排序；Beta 后验仅作为形态审计证据，并只使用当前日期以前已结束的同类事件。" : "Signal strength ranks same-day candidates. The Beta posterior is audit evidence only and uses same-mode outcomes resolved before the current date."}</p>
+                  <p style={groupedPanelHintStyle}>{isZh ? "Signal strength 决定同日候选排序；Beta 后验仅作为形态审计证据，每个标的/模式只追踪一个不重叠事件，使用当前日期以前已结束的结果，超时计入非成功。" : "Signal strength ranks same-day candidates. The Beta posterior is audit evidence only and tracks one non-overlapping episode per instrument/mode, using prior resolved outcomes and counting timeouts as non-success."}</p>
                   <div style={groupedGridStyle}>
                     {srSignalFields.map((field) => (
                       <div key={field.labelEn} style={groupedBoxStyle}>
                         <label>{isZh ? field.labelZh : field.labelEn}</label>
-                        <input type="number" min={0.01} step="any" style={inputStyle} value={field.value} onChange={(event) => field.setValue(Number(event.target.value))} />
+                        <input type="number" min={0} step="any" style={inputStyle} value={field.value} onChange={(event) => field.setValue(Number(event.target.value))} />
                       </div>
                     ))}
                   </div>
@@ -2579,11 +2620,17 @@ export default function StrategyForm({
 
                 <div style={groupedPanelStyle}>
                   <div style={groupedPanelTitleStyle}>{isZh ? "风险与执行" : "Risk And Execution"}</div>
+                  <label style={groupedBoxStyle}>
+                    <span><input type="checkbox" checked={srMarketFilterEnabled} onChange={(event) => setSrMarketFilterEnabled(event.target.checked)} /> {isZh ? "启用大盘 200 日均线过滤" : "Enable Market SMA200 Filter"}</span>
+                    {isZh ? "过滤基准代码" : "Filter Benchmark Symbol"}
+                    <input aria-label={isZh ? "过滤基准代码" : "Filter Benchmark Symbol"} style={inputStyle} value={srMarketFilterSymbol} onChange={(event) => setSrMarketFilterSymbol(event.target.value)} />
+                  </label>
+                  <p style={groupedPanelHintStyle}>{isZh ? "市场过滤默认关闭。开启后缺少当日基准数据会拒绝新增仓位。风险预算是按止损参考价估算，不能限制跳空损失。" : "Market filtering defaults off. Missing benchmark data blocks new entries when enabled. Planned stop risk does not cap gap losses."}</p>
                   <div style={groupedGridStyle}>
                     {srRiskFields.map((field) => (
                       <div key={field.labelEn} style={groupedBoxStyle}>
                         <label>{isZh ? field.labelZh : field.labelEn}{field.percent ? " (%)" : ""}</label>
-                        <input type="number" min={0.01} max={field.percent ? 100 : undefined} step="any" style={inputStyle} value={field.percent ? Number((field.value * 100).toFixed(8)) : field.value} onChange={(event) => field.setValue(Number(event.target.value) / (field.percent ? 100 : 1))} />
+                        <input type="number" min={0} max={field.percent ? 100 : undefined} step="any" style={inputStyle} value={field.percent ? Number((field.value * 100).toFixed(8)) : field.value} onChange={(event) => field.setValue(Number(event.target.value) / (field.percent ? 100 : 1))} />
                       </div>
                     ))}
                     <div style={groupedBoxStyle}>
@@ -2630,6 +2677,11 @@ export default function StrategyForm({
                 onChange={(e) => setRawJson(e.target.value)}
               />
             </section>
+          )}
+
+          {isBottomReversal(strategyType) && bottomParams && (
+            <BottomReversalFields type={strategyType} params={bottomParams}
+              onChange={(params) => setRawJson(JSON.stringify(params, null, 2))} />
           )}
 
           <button

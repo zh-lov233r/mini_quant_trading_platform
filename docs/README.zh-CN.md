@@ -11,6 +11,7 @@
 - [研究实验](research-experiments.zh-CN.md)：实验输入、trial 生命周期、停止策略、报告和恢复行为。
 - [回测性能与 worker 运维](backtest-performance.zh-CN.md)：共享原生内核边界、typed COPY 持久化、durable job、benchmark 门槛和恢复。
 - [Tushare A 股数据](tushare-a-share-data.zh-CN.md)：沪深北证券主数据、日线、复权、特征、回测股票池和安全导入流程。
+- [股票池筛选](stock-basket-screening.zh-CN.md)：分页选择、行业 / 市值筛选、手动快照和授权数据库部署。
 - [BUY 信号强度](signal-strength.zh-CN.md)：各大类 0–100 公式、阈值排名、T 日收盘/下一有效交易日开盘时序和审计字段。
 - [底部反转策略](bottom-reversal-strategies.zh-CN.md)：五类形态、三阶段累计目标、审计字段与安全边界。
 - [支撑线与压力线策略](support-resistance-strategy.zh-CN.md)：原生因果 Pivot/ATR 区域与状态、入场退出、typed 稀疏持久化、缓存失效和数据库上线。

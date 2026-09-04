@@ -175,6 +175,14 @@ export interface MarkerLabelBounds {
   right: number;
 }
 
+export function markerLabelCandidates(x: number, labelWidth: number | null, paneWidth: number): MarkerLabelBounds[] {
+  const width = labelWidth == null ? 8 : labelWidth + 16;
+  const right = { left: x - 8, right: x + width };
+  const left = { left: x - width, right: x + 8 };
+  const candidates = [right, left].filter((bounds) => bounds.left >= 2 && bounds.right <= paneWidth - 2);
+  return candidates.length ? candidates : [right];
+}
+
 export function chooseMarkerLabelPlacement(
   lanes: MarkerLabelBounds[][],
   candidates: MarkerLabelBounds[],
@@ -389,21 +397,7 @@ class LifecycleOverlayRenderer implements IPrimitivePaneRenderer {
         const showText = marker.showText !== false;
         const labelWidth = showText ? context.measureText(marker.label).width : 0;
         context.restore();
-        const rightBounds = {
-          left: x - 8,
-          right: x + (showText ? labelWidth + 16 : 8),
-        };
-        const leftBounds = {
-          left: x - (showText ? labelWidth + 16 : 8),
-          right: x + 8,
-        };
-        const rightFits = rightBounds.right <= mediaSize.width - 2;
-        const leftFits = leftBounds.left >= 2;
-        const candidates = rightFits
-          ? [rightBounds, ...(leftFits ? [leftBounds] : [])]
-          : leftFits
-            ? [leftBounds, rightBounds]
-            : [rightBounds];
+        const candidates = markerLabelCandidates(x, showText ? labelWidth : null, mediaSize.width);
         const lanes = lowerGutter ? occupiedMarkerLanes.lower : occupiedMarkerLanes.upper;
         const placement = chooseMarkerLabelPlacement(lanes, candidates);
         if (!lanes[placement.lane]) lanes[placement.lane] = [];

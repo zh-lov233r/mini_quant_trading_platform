@@ -4,7 +4,7 @@
 
 `support_resistance` is an engine-ready, long-only daily strategy. New execution uses the causal confirmed-Pivot, sloped-ATR-zone, four-regime detector `pivot-slope-regime-v3`. Legacy `pivot-slope-atr-v2` definitions, backtests, and materializations remain readable for audit but cannot start new execution. Registering or creating the strategy does not create an allocation, activate a portfolio, enable the scheduler, or submit an order.
 
-The shared C++ kernel is the only executable implementation. Its descriptor owns defaults, validation, feature/history declarations, and the algorithm revision; native state objects own Pivot membership, zones, regimes, pending outcomes, posterior evidence, entry channels, signals, exits, and audit events. Python only loads and fingerprints data, locks/queries cache tables, adapts typed results for persistence, and performs separately authorized Paper broker operations. Backtests call native `run_backtest`; Paper converts bounded history to an in-memory PreparedDataset v3 and calls `evaluate_day(dataset_day, strategy, portfolio_state)`.
+The shared C++ kernel is the only executable implementation. Its descriptor owns defaults, validation, feature/history declarations, and the algorithm revision; native state objects own Pivot membership, zones, regimes, pending outcomes, posterior evidence, entry channels, signals, exits, and audit events. Python only loads and fingerprints data, locks/queries cache tables, adapts typed results for persistence, and performs separately authorized Paper broker operations. Backtests call native `run_backtest`; Paper converts bounded history to an in-memory PreparedDataset v4 and calls `evaluate_day(dataset_day, strategy, portfolio_state)`.
 
 ## Timing and Price Semantics
 
@@ -14,48 +14,64 @@ Signals use forward-adjusted OHLC when available and fall back to unadjusted OHL
 
 ## Default Detector
 
-- Pivot confirmation: 3 bars left and 3 bars right.
-- Detection window: 120 trading sessions.
-- High and low Pivots are fitted independently by a deterministic two-stage, recency-weighted Theil-Sen estimator.
-- A line requires at least 3 inlier Pivots and eligible Pivot pairs span at least 10 sessions.
-- First-stage inlier tolerance: 0.75 ATR; maximum absolute slope: 0.25 ATR per session.
-- Zone half-width is frozen at 0.5 ATR when a version is created; decay half-life is 60 sessions.
-- The highest-quality low-Pivot and high-Pivot boundary are retained independently, so role changes never discard the other side of the channel.
-- Quality ordering is deterministic: inlier count, recency weight, ATR-normalized residual, distance to current price, then stable key. There is no horizontal fallback when a line cannot be fitted.
-- Continuous residence inside a zone counts as one touch.
-- A volume-confirmed breakout is evaluated against the T-1 frozen resistance geometry. After the T-day decision is frozen, any close above a resistance upper bound changes its display role to support; volume confirmation still controls the tradable `resistance_breakout` setup. A newly fitted line below the current close is likewise initialized as support instead of being mislabeled as overhead resistance. A later successful retest confirms the separate `breakout_retest` setup without delaying the role change. A support close below its event-day lower bound converts it to potential resistance. Zones expire when their effective Pivot membership falls below the configured minimum or leaves the window.
-- A projected band that becomes non-finite, non-positive, or unordered expires before classification and candidate detection. Its immutable tombstone freezes the last valid geometry and is never projected beyond the invalidation session. Persistence rejects geometry outside the database numeric domain instead of widening precision or silently clipping prices.
+- Confirm Pivots with 3 bars on either side in a 120-session window. Extremes within `pivot_tolerance_atr=0.05` of the candidate's ATR are ties; select the earliest bar in the confirmation window. No future bar beyond the configured right window is read.
+- Seed lines from eligible high/high or low/low Pivot pairs, then reuse the deterministic two-stage weighted Theil-Sen fit. Each line needs 3 inliers and a 10-session pair span. Deduplicate membership and overlapping fits of the same kind, then retain up to `max_zones_per_kind=3` (configurable 1–5).
+- Order by inlier count, mean recency weight, ATR-normalized residual, current-price distance, and stable Pivot keys. The decay half-life is 60 sessions. There is no horizontal fallback.
+- Half-width is the maximum of `zone_half_width_atr × current ATR` (default 0.5) and the largest absolute residual of the fitted members. This contains every defining Pivot at its own session. Geometry stays anchored while membership is unchanged; rebase when current ATR leaves `[0.5, 2] × anchor ATR`. Rebasing appends a sparse version instead of rewriting history.
+- ATR denominators have distinct purposes: each Pivot's ATR normalizes inlier tolerance (default 0.75); weighted-median member ATR limits slope (default 0.25 ATR/session); current ATR sets the minimum width. Residual width is in price units. These are intentional, explicit definitions.
+- `pivot_count` counts fitted members. `touch_count` starts at zero and increments only on an observed transition from outside to intersecting the frozen band; continuous residence counts once. A touch is an intersection, not proof that support held.
+- Recompute display role from the close relative to the projected center after each decision. Setup detection and channel/target geometry do not depend on this label. Volume-confirmed crossings still create breakout records when the breakout audit switch is off, so retests remain detectable.
+- Invalid, non-positive, unordered, or non-finite projections expire before classification. Preserve the last valid tombstone geometry and database numeric validation.
 
 ## Four mutually exclusive regimes
 
-Every visible market session belongs to exactly one of `uptrend`, `downtrend`, `range`, or `transition`. Classification on T uses only T-1 frozen boundaries, the T close, and Pivots confirmed by T; zones created on T first participate on T+1.
+Every visible session belongs to exactly one of `uptrend`, `downtrend`, `range`, or `transition`. T uses T-1 frozen boundaries and already confirmed Pivots. Select the best high/low boundary by quality. Structure direction uses the median pairwise ATR-normalized price change among the latest four confirmed swings of each kind, independently of line membership; record all contributing keys.
 
-- Uptrend: high/low Pivot structure and both boundaries rise, with the lower boundary intact.
-- Downtrend: high/low Pivot structure and both boundaries fall, with the upper boundary intact.
-- Range: price remains inside ordered boundaries and the aligned structure is flat, contracting, or expanding.
-- Transition: a boundary or Pivot evidence is missing, boundaries are misordered, price leaves the structure, directions conflict, or a boundary is broken.
-
-Direction tolerance is derived from the existing ATR half-width and minimum line span; v3 adds no regime parameter. The first market session is written as `transition` when evidence is insufficient, and a version is appended only when the state changes. Reconstructed time intervals therefore have exact, gap-free, non-overlapping coverage. This constraint applies to time regimes, not to overlap between support/resistance price bands.
+Uptrend requires rising boundaries and higher high/low structures with an intact lower boundary. Downtrend requires all four directions to fall with an intact upper boundary. Ordered flat, contracting, or expanding structures containing price are range; missing, broken, or conflicting evidence is transition. The four-direction agreement requirement remains unchanged; a high transition share alone does not justify relaxing a trading rule. Regime intervals remain append-only, gap-free, and non-overlapping. Classification runs daily, but signal `regime_evidence` cites the interval-start evidence dated by `evidence_trade_date`, keeping fresh and cached signals identical. The entry channel separately records current-day geometry.
 
 ## Entry, Scoring, and Exit
 
-All three modes default to enabled, and validation requires at least one:
+The three detection switches default on, but at least **bounce or retest** must be enabled:
 
-- `support_bounce`: the prior close is above support, the new bar enters it, and the close recovers above the upper bound plus 0.25 ATR.
-- `resistance_breakout`: the close exceeds the upper bound plus 0.5 ATR and volume is at least 1.5 times ADV20; the candidate is audit-only and never directly trades.
-- `breakout_retest`: within 10 sessions of a breakout, price retests that session's projected former-resistance bounds, closes above its upper bound, and volume is at most 0.8 times breakout volume.
+- `support_bounce`: previous close above the band, a new intersection, and recovery at least 0.25 ATR above its upper edge.
+- `resistance_breakout`: crossing above the frozen upper edge plus 0.5 ATR with at least 1.5 ADV20 volume. This switch enables audit candidates only; no direct breakout BUY.
+- `breakout_retest`: within 10 sessions of a confirmed crossing, retest the projected band, hold its upper edge, and use at most 0.8 of breakout volume.
 
-Every matching mode is retained as a candidate event. Uptrend admits `support_bounce` and `breakout_retest`; range admits only `support_bounce`; downtrend and transition admit no BUY. `resistance_breakout` is always rejected as `direct_breakout_audit_only`. Rejected candidates retain their reason and classification evidence. The expanding Beta posterior is statistical setup evidence only and does not rank candidates.
+Uptrend permits bounce and retest; range permits bounce; downtrend/transition prohibit entries. Store all candidate reasons. Choose the strongest eligible candidate deterministically. Strength model v2 weights reward/risk 25%, Pivot count 15%, observed touches 10%, fitting quality 15%, proximity to support 20%, and volume 15%. After confirmation, closer entries score higher. Breakouts use confirmation instead of proximity; retests reward volume contraction. The minimum strength remains 50. These fixed weights are engineering defaults, not fitted evidence of profitability.
 
-Only outcomes resolved before T enter Beta evidence. Success means the 3 ATR target precedes the 1.5 ATR stop inside 20 sessions; neither boundary is censored, and a same-session hit of both boundaries is a loss.
+Channel selection is geometric: the nearest active upper edge below the close and lower edge above it define the inclusive interval, regardless of role or Pivot kind. Require `support.upper < resistance.lower`. Freeze both bands and project one session for the slippage-adjusted next-valid-session open check. Never widen the upper edge automatically. Rejected opens create `execution_rejection`; cash and positions stay unchanged, and SELL is ungated.
 
-The entry signal freezes the selected zone, regime and classification evidence, slope, anchor session, Pivot evidence, all candidate modes, event-day bounds, ATR, target, stop, posterior counts, and signal strength in `Signal.features.support_resistance`. The stop is the strictest long stop among the frozen zone lower bound, 1.5 ATR, and 8% maximum loss. The target is the nearest overhead resistance; entries below 1.5 expected reward/risk are skipped. With no overhead resistance, the target is 3 ATR. Exit priority is stop, target, confirmed downtrend, then 40-session maximum holding. Transition does not force an exit. T-close exits still fill at the next valid session open.
+The initial stop is the strictest of zone lower edge, 1.5 ATR, and the 8% close-stop reference (`max_loss_pct` remains the configuration name). The nearest overhead band supplies the target regardless of role; no overhead uses 3 ATR. Candidate events include `overhead_count` and `target_source`. Initial gross reward/risk must be at least 1.5; actual entry repeats the gate **after entry/exit commissions and exit slippage** at the next open. Signal strength is a gross setup measure; the execution gate uses actual modeled costs.
 
-Every BUY must also be inside a role-based inner-edge channel. The nearest active support below the close and nearest active resistance above it must satisfy `support.upper < resistance.lower`; the inclusive entry interval is `support.upper <= price <= resistance.lower`. The signal freezes both zone snapshots, keys, inner edges, slopes, and reason. Backtests project those edges by one session and validate the slippage-adjusted next-valid-session (T+1) open fill; rejection records `execution_rejection` without changing cash, positions, or transactions. SELL, stops, and liquidation never use this gate.
+`risk_per_trade_pct=0.005` budgets planned stop loss at 0.5% of equity, including both modeled commissions. Quantity is bounded by this budget, available cash, and `position_size_pct` as the maximum nominal holding. SELL-first/shared-cash execution and deterministic ranking remain serial. Gap losses can exceed this planned budget; neither the 8% stop reference nor risk sizing is a loss guarantee.
+
+Project the frozen support lower edge through subsequent observed sessions; the stop never loosens below its initial reference. After a **prior close** reaches `break_even_at_r=1` times initial risk, lift the stop to entry cost. A stop signal blocks that zone for `stop_cooldown_sessions=5` following sessions (0 disables the extra cooldown). Paper reloads prior stop signals only from the same strategy/portfolio and only up to the requested date. Exit priority remains close-stop, target, confirmed downtrend, then 40-session maximum holding; exits fill at the next valid session open.
+
+The Beta evidence remains descriptive and never ranks/orders trades. Track at most one active eligible episode per instrument/setup; use the next open and channel/RR check, the same close-based stop/target/downtrend/holding rules, and the following open for exit. Timeouts count as non-success: `(wins + 1) / (wins + losses + censored + 2)`. Current-day outcomes become visible only on the next day. Unfilled entries do not count. This gross hypothetical setup statistic excludes portfolio cash and position-slot competition and actual broker fees, and is **not** realized portfolio performance or a calibrated confidence interval. The independent `score_outcome_window`, `score_target_atr`, and `score_stop_atr` settings were removed.
+
+## Optional Market Filter
+
+Disabled by default. `market_filter_enabled=true` requires `market_filter_symbol` (default `SPY`, configurable to a stored A-share index). New entries require that signal-day adjusted close be at or above the mean of its latest 200 observed closes. Missing same-day data or insufficient history blocks BUY; no future data or forward-filled benchmark is used. Existing positions retain their exit rules.
+
+The strategy does not load industry classifications or cap holdings by industry; missing SIC never blocks entries. Security-master SIC data and stock-basket industry screening remain independent. Maximum positions, per-symbol notional caps, and per-trade risk budgets still apply, but do not control industry concentration.
+
+Backtest and Paper signal runs freeze market context in `config_snapshot.support_risk_context`; the native kernel owns the gates and sizing. Paper uses zero modeled commission and sizes at a limit capped by both the channel and minimum reward/risk, so a better quote cannot authorize a larger worst-case loss. It does not predict broker fees or guarantee gap protection.
+
+## Read-only Review and Revision Rollout
+
+Detector revision **12**, regime revision **3**, and strength v2 invalidate old cache identities without changing database tables. No migration or reset is required for this revision. Recreate a strategy from the current catalog, or remove retired scoring fields and `risk.max_industry_positions` from its parameters; start a fresh effectiveness study under the two tradable modes. Old results remain audit artifacts and are not evidence for the new rules. Do not resume an old three-mode study under the revised protocol.
+
+Revision 12 validates the final `NUMERIC(24,10)`-rounded zone geometry before selecting or recording a new/refitted zone. A positive raw lower bound or ATR that rounds to zero is rejected; projection and persistence validation remain in force, without clamping prices or widening database precision. This prevents late materialization failures such as `zone geometry is non-positive or unordered`. Rebuild the native extension with `.venv/bin/pip install --no-build-isolation --no-deps -e backend/native`, then restart the backend and worker processes once active tasks have finished or been explicitly cancelled; loaded native modules do not hot-reload. Keep `PAPER_TRADING_SCHEDULER_ENABLED=false` and `PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false` during backtest-only verification. Retry only the identified failed backtest after these checks, retaining its failure record; no database repair or market-data change is needed.
+
+```bash
+.venv/bin/python backend/utils/audit_support_resistance_run.py --run-id <run-uuid>
+```
+
+This opens a repeatable-read, read-only transaction and reports candidate/regime/channel/strength funnels, R/R and strength dispersion, regime-session coverage, rejection reasons and 1/5/10/20-session forward returns, and next-open stop gaps. Forward returns and session coverage use currently stored market data and may reflect later corrections; old events without `overhead_count` cannot establish the fallback-target rate. Small or overlapping rejection samples do not justify loosening the open channel. The materialization planner reports measured zone/regime/event counts and estimated 5,000-row COPY batches for the configured line count.
 
 ## Sparse Persistence and Cache Invalidation
 
-The system does not store a full daily market-wide snapshot. It stores a new zone version only when Pivot membership, role, or status changes, plus run-specific events actually observed by a backtest or paper-signal run:
+The system does not store a full daily market-wide snapshot. It stores a new zone version only when Pivot membership, role, status, or volatility rebasing changes, plus run-specific events actually observed by a backtest or paper-signal run:
 
 - `support_resistance_materializations`: immutable cache identity and build status.
 - `support_resistance_zone_versions`: sparse zone timelines.
@@ -69,7 +85,7 @@ Before the first detail write, persistence validates all typed column lengths/or
 
 Detector state and sparse timelines are partitioned by stable `instrument_id`; `symbol` is display metadata only. The native backtest result carries that identity into persistence, while non-native callers may resolve a unique primary symbol-history interval for the requested coverage. If one ticker belongs to multiple instruments inside the same range, their histories remain independent instead of being merged or guessed from the current canonical ticker. Existing databases must rerun `backend/utils/migrate_pivot_slope_regime_v3.sql` in a separately authorized schema rollout so regime uniqueness is enforced by `instrument_id`; perform the documented read-only preflight and backup first.
 
-For paper trading, cache materialization and run-event persistence complete first. A support/resistance BUY is stored as `paper_execution=pending`; at the next broker session open, a current-session ask must be inside the projected channel before a regular-hours day limit order is submitted with the resistance inner edge as its cap. The remainder is cancelled when the quote leaves the channel or at 09:35 New York time. A fill below the support inner edge records `channel_fill_violation`, cancels the remainder, and blocks adds until the position is flat, without automatic liquidation. SELL remains first and ungated. Configuration uses `ALPACA_DATA_BASE_URL`, real-time `ALPACA_DATA_FEED=iex|sip`, `PAPER_TRADING_OPEN_QUOTE_MAX_AGE_SECONDS` (default 15), and `PAPER_TRADING_OPEN_ENTRY_CUTOFF_NY` (default `09:35`); `submit_orders=false` creates no actionable pending intent. A build failure marks the strategy run failed and no new paper order is submitted.
+For paper trading, cache materialization and run-event persistence complete first. A support/resistance BUY is stored as `paper_execution=pending`; at the next broker session open, a current-session ask must be inside the projected channel before a regular-hours day limit order is submitted with the lesser of the resistance inner edge and the reward/risk price cap. The remainder is cancelled when the quote leaves the channel or at 09:35 New York time. A fill below the support inner edge records `channel_fill_violation`, cancels the remainder, and blocks adds until the position is flat, without automatic liquidation. SELL remains first and ungated. Configuration uses `ALPACA_DATA_BASE_URL`, real-time `ALPACA_DATA_FEED=iex|sip`, `PAPER_TRADING_OPEN_QUOTE_MAX_AGE_SECONDS` (default 15), and `PAPER_TRADING_OPEN_ENTRY_CUTOFF_NY` (default `09:35`); `submit_orders=false` creates no actionable pending intent. A build failure marks the strategy run failed and no new paper order is submitted.
 
 Deleting a run cascades its links and run events but retains shared materializations and zone versions. Unreferenced caches are never deleted automatically. The first version materializes on demand and does not prefill ten years of all-market history.
 

@@ -137,12 +137,6 @@ def _trigger_profiles(setup: str) -> tuple[tuple[str, dict[str, Any]], ...]:
             (label, {"signal.bounce_confirmation_atr": value})
             for label, value in (("loose", 0.10), ("default", 0.25), ("strict", 0.50))
         )
-    if setup == "resistance_breakout":
-        return (
-            ("loose", {"signal.breakout_confirmation_atr": 0.25, "signal.breakout_volume_ratio_min": 1.2}),
-            ("default", {"signal.breakout_confirmation_atr": 0.50, "signal.breakout_volume_ratio_min": 1.5}),
-            ("strict", {"signal.breakout_confirmation_atr": 0.75, "signal.breakout_volume_ratio_min": 2.0}),
-        )
     return (
         (
             "loose",
@@ -175,6 +169,8 @@ def _trigger_profiles(setup: str) -> tuple[tuple[str, dict[str, Any]], ...]:
 
 
 def fixed_mode_candidates(setup: str) -> list[AdaptiveCandidateProposal]:
+    if setup not in {"support_bounce", "breakout_retest"}:
+        raise ValueError("direct breakout is audit-only and has no discovery trials")
     candidates: list[AdaptiveCandidateProposal] = []
     for trigger_label, trigger in _trigger_profiles(setup):
         for detector_label, detector in DETECTOR_PROFILES:
@@ -262,7 +258,7 @@ def validate_effectiveness_study_request(
             "status": "draft",
         },
         "normalizedSpec": normalized_spec,
-        "firstRoundTrialCount": 144,
+        "firstRoundTrialCount": 96,
         "maximumTrialCount": 200,
         "universeSymbols": [],
         "universeSummary": {
@@ -353,11 +349,11 @@ def create_effectiveness_study(
                 "endDate": FINAL_WINDOW[3].isoformat(),
                 "openedAt": None,
             },
-            "backtestBudget": {"maximum": 200, "scheduled": 144},
+            "backtestBudget": {"maximum": 200, "scheduled": 96},
             "createdAt": now.isoformat(),
             "reportArtifacts": {"status": "pending"},
         },
-        progress={"phase": "discovery", "total": 200, "scheduled": 144, "completed": 0},
+        progress={"phase": "discovery", "total": 200, "scheduled": 96, "completed": 0},
     )
     db.add(parent)
     db.commit()
@@ -366,7 +362,7 @@ def create_effectiveness_study(
     from src.services.adaptive_research_service import create_category_study
 
     child_ids: dict[str, str] = {}
-    for setup in ("support_bounce", "resistance_breakout", "breakout_retest"):
+    for setup in ("support_bounce", "breakout_retest"):
         candidates = fixed_mode_candidates(setup)
         child_spec = _child_spec(
             spec,
@@ -482,7 +478,7 @@ def _create_fold_children(db: Session, parent: ResearchExperiment) -> None:
         for item in parent.child_experiments
         if str((item.spec or {}).get("validationPhase", "")).startswith("discovery:")
     }
-    if len(discovery) != 3 or any(item.status not in {"completed", "partially_failed", "failed"} for item in discovery.values()):
+    if len(discovery) != 2 or any(item.status not in {"completed", "partially_failed", "failed"} for item in discovery.values()):
         return
     champions = {setup: _mode_champion(child) for setup, child in discovery.items()}
     if any(candidate is None for candidate in champions.values()):
@@ -496,7 +492,7 @@ def _create_fold_children(db: Session, parent: ResearchExperiment) -> None:
         return
     proposals = [_default_proposal()] + [
         _proposal_from_candidate(champions[setup], f"frozen discovery champion: {setup}")
-        for setup in ("support_bounce", "resistance_breakout", "breakout_retest")
+        for setup in ("support_bounce", "breakout_retest")
         if champions[setup] is not None
     ]
     manifest = dict(parent.run_manifest or {})
@@ -529,7 +525,7 @@ def _create_fold_children(db: Session, parent: ResearchExperiment) -> None:
                 out_end=out_end,
                 proposals=proposals,
                 max_rounds=1,
-                max_trials=16,
+                max_trials=12,
             ),
             idempotency_key=f"{parent.idempotency_key}:{phase}",
             parent_experiment_id=parent.id,
@@ -542,10 +538,10 @@ def _create_fold_children(db: Session, parent: ResearchExperiment) -> None:
     assert parent is not None
     manifest = dict(parent.run_manifest or {})
     manifest["children"] = {**dict(manifest.get("children") or {}), **fold_children}
-    manifest["backtestBudget"] = {"maximum": 200, "scheduled": 192}
+    manifest["backtestBudget"] = {"maximum": 200, "scheduled": 132}
     parent.run_manifest = manifest
     parent.status = "running"
-    parent.progress = {"phase": "annual_folds", "total": 200, "scheduled": 192, "completed": 144}
+    parent.progress = {"phase": "annual_folds", "total": 200, "scheduled": 132, "completed": 96}
     db.commit()
 
 
@@ -651,14 +647,14 @@ def _create_final_child(db: Session, parent: ResearchExperiment) -> None:
     }
     manifest["backtestBudget"] = {
         "maximum": 200,
-        "scheduled": 198 if champion else 195,
+        "scheduled": 138 if champion else 135,
     }
     parent.run_manifest = manifest
     parent.progress = {
         "phase": "final_holdout",
         "total": 200,
-        "scheduled": 198 if champion else 195,
-        "completed": 192,
+        "scheduled": 138 if champion else 135,
+        "completed": 132,
     }
     db.commit()
 

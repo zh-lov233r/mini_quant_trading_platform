@@ -27,11 +27,13 @@ from src.services.backtest_worker_config import (
     resolve_effective_backtest_intra_run_threads,
 )
 from src.services.columnar_market_data_loader import build_market_dataset
+from src.services.support_resistance_risk_service import load_support_risk_context
 from src.services.market_data_maintenance_service import acquire_market_data_read_lock
 from src.services.native_result_repository import (
     NativePersistenceCancelledError,
     persist_native_result,
 )
+from src.services.native_support_state import NativeSupportState
 from src.services.prepared_dataset_service import (
     PREPARED_DATASET_SCHEMA_VERSION,
     PREPARED_INTEGER_INDEX,
@@ -56,10 +58,6 @@ from src.services.support_resistance_persistence_service import (
     find_reusable_materialization,
     hydrate_state_from_materialization,
     persist_support_resistance_run,
-)
-from src.services.support_resistance_service import (
-    SupportResistanceState,
-    SupportResistanceSymbolState,
 )
 
 PERSIST_LEVELS = {"summary", "trades", "full"}
@@ -573,55 +571,10 @@ def _load_prepared_dataset(
     return dataset, manifest, cache_status, materialization
 
 
-def _native_support_state(result: Any, dataset: Any) -> SupportResistanceState:
-    state = SupportResistanceState()
-    symbols = list(result.symbols)
-    support = result.support_resistance
-    support = {} if support is None else support
-    for key, target in (
-        ("events", "events"),
-        ("zone_versions", "zone_versions"),
-        ("regime_versions", "regime_versions"),
-    ):
-        collection = support.get(key)
-        if collection is None:
-            continue
-        # Native numeric columns are read-only numpy views, so they must never
-        # be used in a boolean context (``x or []`` would raise an ambiguous
-        # truth-value error). Normalize explicitly.
-        instrument_ids = collection.get("instrument_id")
-        symbol_ids = collection.get("symbol_id")
-        payloads = collection.get("payload_json")
-        instrument_ids = [] if instrument_ids is None else list(instrument_ids)
-        symbol_ids = [] if symbol_ids is None else list(symbol_ids)
-        payloads = [] if payloads is None else list(payloads)
-        for instrument_id, symbol_id, payload in zip(
-            instrument_ids,
-            symbol_ids,
-            payloads,
-            strict=True,
-        ):
-            instrument_id = int(instrument_id)
-            symbol = symbols[int(symbol_id)]
-            symbol_state = state.symbols.setdefault(
-                str(instrument_id),
-                SupportResistanceSymbolState(instrument_id=instrument_id, symbol=symbol),
-            )
-            symbol_state.symbol = symbol
-            getattr(symbol_state, target).append(json.loads(payload))
-    integer_index = PREPARED_INTEGER_INDEX
-    for row in dataset.integers:
-        instrument_id = int(row[integer_index["instrument_id"]])
-        symbol = symbols[int(row[integer_index["symbol_id"]])]
-        symbol_state = state.symbols.setdefault(
-            str(instrument_id),
-            SupportResistanceSymbolState(instrument_id=instrument_id, symbol=symbol),
-        )
-        symbol_state.symbol = symbol
-        symbol_state.history.append(
-            {"dt_ny": date.fromordinal(int(row[integer_index["dt_ordinal"]]))}
-        )
-    return state
+def _native_support_state(
+    result: Any, dataset: Any, check_cancel: Callable[[], None] | None = None,
+) -> NativeSupportState:
+    return NativeSupportState(result, dataset, check_cancel)
 
 
 def _native_research_metrics(result: Any, initial_cash: float) -> dict[str, Any]:
@@ -862,6 +815,12 @@ def run_backtest(
                 if start_date.toordinal() <= int(value) <= end_date.toordinal()
             }
         )
+        if runtime["strategy_type"] == "support_resistance":
+            context = load_support_risk_context(db, runtime["params"]["risk"],
+                date.fromordinal(int(dataset.integers[:, PREPARED_INTEGER_INDEX["dt_ordinal"]].min())),
+                end_date)
+            dataset.sidecar = {**dataset.sidecar, "support_risk_context": context}
+            run.config_snapshot = {**run.config_snapshot, "support_risk_context": context}
 
         def control(completed: int, total: int) -> bool:
             cancelled = bool(cancel_check and cancel_check())
@@ -878,6 +837,47 @@ def run_backtest(
                 )
             return cancelled
 
+        last_cancel_check = 0.0
+
+        def check_finalization_cancel() -> None:
+            nonlocal last_cancel_check
+            now = perf_counter()
+            if now - last_cancel_check < 0.25:
+                return
+            last_cancel_check = now
+            if cancel_check is not None and cancel_check():
+                raise SupportResistancePersistenceCancelledError(
+                    "backtest cancellation requested during finalization"
+                )
+
+        def report_persistence(stage: str, completed: int, total: int) -> None:
+            if progress_callback is not None:
+                progress_callback({
+                    "phase": "finalizing",
+                    "trade_date": end_date.isoformat(),
+                    "completed_days": len(session_dates),
+                    "total_days": len(session_dates),
+                    "percent": round(90.0 + 8.0 * completed / total, 3),
+                    "finalizing_stage": stage,
+                    "completed_items": completed,
+                    "total_items": total,
+                })
+
+        def finalize_native(completed: int, total: int) -> bool:
+            check_finalization_cancel()
+            if progress_callback is not None:
+                progress_callback({
+                    "phase": "finalizing",
+                    "trade_date": end_date.isoformat(),
+                    "completed_days": len(session_dates),
+                    "total_days": len(session_dates),
+                    "percent": round(85.0 + 3.0 * completed / total, 3),
+                    "finalizing_stage": "backtest_details",
+                    "completed_items": completed,
+                    "total_items": total,
+                })
+            return False
+
         try:
             native_started = perf_counter()
             native_result = quant_kernel.run_backtest(
@@ -893,6 +893,7 @@ def run_backtest(
                     "end_date": end_date,
                 },
                 control,
+                finalize_native,
             )
             performance["native_kernel_ms"] = round(
                 (perf_counter() - native_started) * 1000.0,
@@ -909,7 +910,7 @@ def run_backtest(
                     "trade_date": end_date.isoformat(),
                     "completed_days": len(session_dates),
                     "total_days": len(session_dates),
-                    "percent": 85.0,
+                    "percent": 88.0,
                     "finalizing_stage": "backtest_details",
                     "completed_items": None,
                     "total_items": None,
@@ -925,7 +926,7 @@ def run_backtest(
         )
         materialization = reusable_materialization
         if runtime["strategy_type"] == "support_resistance":
-            native_state = _native_support_state(native_result, dataset)
+            native_state = _native_support_state(native_result, dataset, check_finalization_cancel)
             materialization = persist_support_resistance_run(
                 db,
                 run=run,
@@ -936,6 +937,8 @@ def run_backtest(
                 coverage_end=date.fromisoformat(str(manifest["date_range"][1])),
                 persist_run_events=level == "full",
                 cancel_check=cancel_check,
+                progress_callback=report_persistence,
+                performance=performance,
             )
         summary = dict(native_result.summary)
         native_performance = dict(native_result.performance)

@@ -455,7 +455,7 @@ class SupportResistanceStrategyTests(unittest.TestCase):
             return item
 
         cases = (
-            ("downtrend", snapshot(100), "closed below the frozen zone-aware invalidation line"),
+            ("downtrend", snapshot(100), "closed below the projected zone-aware stop"),
             ("downtrend", snapshot(116), "reached the frozen support/resistance target"),
             ("downtrend", snapshot(104), "confirmed downtrend regime"),
             (
@@ -523,11 +523,12 @@ class SupportResistanceStrategyTests(unittest.TestCase):
 
         self.assertIsNotNone(decision)
         self.assertEqual(decision["action"], "BUY")
-        self.assertEqual(decision["support_resistance"]["selected_setup"], "support_bounce")
+        self.assertEqual(decision["support_resistance"]["selected_setup"], "breakout_retest")
         selected_strength = decision["support_resistance"]["strength"]["score"]
         self.assertEqual(
             selected_strength,
-            max(candidate["strength"]["score"] for candidate in decision["support_resistance"]["candidates"]),
+            max(candidate["strength"]["score"] for candidate in decision["support_resistance"]["candidates"]
+                if candidate["entry_eligible"]),
         )
         self.assertEqual(
             set(decision["support_resistance"]["candidate_setups"]),
@@ -538,7 +539,7 @@ class SupportResistanceStrategyTests(unittest.TestCase):
             1,
         )
 
-    def test_beta_score_uses_only_resolved_prior_events_and_both_hit_is_loss(self) -> None:
+    def test_outcomes_use_close_exit_signals_and_next_open_fills(self) -> None:
         state = SupportResistanceSymbolState(cached_regime_timeline=_cached_regime())
         state.pending_outcomes.append(
             PendingOutcome(
@@ -548,6 +549,8 @@ class SupportResistanceStrategyTests(unittest.TestCase):
                 origin_session_index=-1,
                 target=103,
                 stop=97,
+                entry_price=100,
+                frozen={"entry_close": 100, "entry_atr": 2, "stop_price": 97, "target_price": 103},
             )
         )
 
@@ -559,6 +562,10 @@ class SupportResistanceStrategyTests(unittest.TestCase):
             emit_signals=False,
         )
 
+        self.assertEqual(state.stats["support_bounce"].resolved, 0)
+        advance_symbol(state, _bar(2, high=101, low=95, close=96), self.signal, self.risk, emit_signals=False)
+        self.assertEqual(state.stats["support_bounce"].resolved, 0)
+        advance_symbol(state, _bar(3, high=100, low=94, close=95), self.signal, self.risk, emit_signals=False)
         stats = state.stats["support_bounce"]
         self.assertEqual((stats.wins, stats.losses, stats.censored), (0, 1, 0))
         self.assertAlmostEqual(stats.posterior, 1 / 3)
@@ -575,6 +582,8 @@ class SupportResistanceStrategyTests(unittest.TestCase):
                 origin_session_index=-1,
                 target=103,
                 stop=97,
+                entry_price=103,
+                exit_reason="stop",
             )
         )
 
@@ -1003,8 +1012,36 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         self.assertEqual(zone.center, 100.1234567892)
         self.assertEqual(zone.atr, 1.2345678902)
         detector = normalized_detector_params({"signal": self.signal})
-        self.assertEqual(detector["implementation_revision"], 10)
-        self.assertEqual(detector["regime_logic_revision"], 2)
+        self.assertEqual(detector["implementation_revision"], 12)
+        self.assertEqual(detector["regime_logic_revision"], 3)
+
+    def test_rebuild_rejects_geometry_rounded_to_zero_before_recording_a_zone(self) -> None:
+        for price, atr, expected_lower in (
+            (0.50000000004, 1.0, None),
+            (0.50000000006, 1.0, 0.0000000001),
+            (1.0, 0.00000000004, None),
+        ):
+            with self.subTest(price=price, atr=atr):
+                state = SupportResistanceSymbolState(
+                    history=[_bar(index, high=2, low=0.25, close=1) for index in range(21)],
+                    pivots=[
+                        Pivot(
+                            pivot_key=f"low:{index}", kind="low", session_index=index,
+                            trade_date=date(2025, 1, 1) + timedelta(days=index),
+                            confirmed_on=date(2025, 1, 4) + timedelta(days=index),
+                            price=price, atr=1.0,
+                        )
+                        for index in (0, 10, 20)
+                    ],
+                )
+                _rebuild_zones(state, {**state.history[-1], "atr_14": atr}, self.signal)
+
+                if expected_lower is None:
+                    self.assertEqual(state.zones, {})
+                    self.assertEqual(state.zone_versions, [])
+                else:
+                    self.assertEqual(len(state.zones), 1)
+                    self.assertEqual(next(iter(state.zones.values())).lower, expected_lower)
 
     def test_inner_edge_channel_selection_projection_and_inclusive_price_gate(self) -> None:
         far_support = _zone("far-support", "support", 95)
@@ -1198,6 +1235,54 @@ class SupportResistancePersistenceTests(unittest.TestCase):
         )
         state.symbols["TEST"] = symbol_state
         return state
+
+    @patch("src.services.support_resistance_persistence_service._instrument_ids", return_value={"TEST": 1})
+    def test_native_view_streams_the_same_persisted_audit(self, _ids) -> None:
+        import json
+        from types import SimpleNamespace
+        import numpy as np
+        from src.services.native_support_state import NativeSupportState
+        from src.services.prepared_dataset_service import PREPARED_INTEGER_FIELDS, PREPARED_INTEGER_INDEX
+
+        state = self._state()
+        original = state.symbols["TEST"]
+        integers = np.zeros((2, len(PREPARED_INTEGER_FIELDS)), dtype=np.int64)
+        integers[:, PREPARED_INTEGER_INDEX["instrument_id"]] = 1
+        integers[:, PREPARED_INTEGER_INDEX["dt_ordinal"]] = [row["dt_ny"].toordinal() for row in original.history]
+        support = {
+            key: {
+                "instrument_id": np.ones(len(getattr(original, key)), dtype=np.int64),
+                "symbol_id": np.zeros(len(getattr(original, key)), dtype=np.int64),
+                "payload_json": [json.dumps(row, default=str) for row in getattr(original, key)],
+            }
+            for key in ("events", "zone_versions", "regime_versions")
+        }
+        native = NativeSupportState(SimpleNamespace(symbols=["TEST"], support_resistance=support), SimpleNamespace(integers=integers))
+
+        def write_batches(db, model, rows, **kwargs):
+            if model is SupportResistanceRunEvent:
+                self.assertNotIsInstance(rows, list)
+            return _insert_in_batches(db, model, rows, **kwargs)
+
+        with self.Session.begin() as db, patch(
+            "src.services.support_resistance_persistence_service._insert_in_batches", side_effect=write_batches,
+        ):
+            runs = []
+            caches = []
+            for value in (native, state):
+                run = self._new_run(db)
+                runs.append(run)
+                caches.append(persist_support_resistance_run(
+                    db, run=run, runtime=self.runtime, state=value, symbols=["TEST"],
+                    coverage_start=date(2025, 1, 1), coverage_end=date(2025, 3, 1), batch_size=1,
+                ))
+            self.assertEqual(caches[0].id, caches[1].id)
+            self.assertEqual(caches[0].statistics["zone_version_count"], 1)
+            self.assertEqual(caches[0].statistics["regime_version_count"], 1)
+            self.assertEqual(
+                [db.scalar(select(SupportResistanceRunEvent.payload).where(SupportResistanceRunEvent.run_id == run.id)) for run in runs],
+                [original.events[0], original.events[0]],
+            )
 
     def test_instrument_ids_use_unique_point_in_time_symbol_history(self) -> None:
         with self.Session.begin() as db:

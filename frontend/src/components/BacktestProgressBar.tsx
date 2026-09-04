@@ -1,4 +1,5 @@
 import type { BacktestProgress } from "@/types/backtest";
+import motion from "@/styles/Motion.module.css";
 import {
   backtestFinalizingStageLabel,
   backtestPhaseLabel,
@@ -56,12 +57,13 @@ export default function BacktestProgressBar({
         }}
       >
         <div
+          className={motion.progress}
+          data-phase={progress.phase}
           style={{
             width: `${percent}%`,
             height: "100%",
             borderRadius: 999,
             background: progress.phase === "failed" ? "#fb7185" : "linear-gradient(90deg, #0891b2, #22d3ee)",
-            transition: "width 240ms ease",
           }}
         />
       </div>

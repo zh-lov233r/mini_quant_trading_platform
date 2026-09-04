@@ -17,6 +17,7 @@ export interface LifecyclePatternSelection {
   setupId: string;
   latestSignal: BacktestSignalOut;
   stageSignals: Map<number, BacktestSignalOut>;
+  exitSignal: BacktestSignalOut | null;
 }
 
 const PATTERN_TYPES = new Set<PatternType>([
@@ -90,7 +91,7 @@ export function selectLifecyclePattern(
   const matching = signals.filter((signal) => {
     const setup = setupOf(signal);
     const date = toTradeDateKey(signal.ts);
-    return signal.signal === "BUY"
+    return (signal.signal === "BUY" || signal.signal === "SELL")
       && signal.symbol.toUpperCase() === normalizedSymbol
       && textValue(setup || {}, "setup_id") === setupId
       && (!startDate || !date || date >= startDate)
@@ -98,15 +99,19 @@ export function selectLifecyclePattern(
   });
   if (!matching.includes(initialSignal)) matching.push(initialSignal);
 
-  matching.sort((left, right) =>
+  const exitSignal = matching.filter((signal) => signal.signal === "SELL")
+    .sort((left, right) => (toTradeDateKey(left.ts) || "").localeCompare(toTradeDateKey(right.ts) || "")).at(-1) || null;
+  const buys = matching.filter((signal) => signal.signal === "BUY");
+  buys.sort((left, right) =>
     stageIndex(left) - stageIndex(right)
     || (toTradeDateKey(left.ts) || "").localeCompare(toTradeDateKey(right.ts) || ""));
   const stageSignals = new Map<number, BacktestSignalOut>();
-  matching.forEach((signal) => stageSignals.set(stageIndex(signal), signal));
+  buys.forEach((signal) => stageSignals.set(stageIndex(signal), signal));
   return {
     patternType,
     setupId,
-    latestSignal: matching[matching.length - 1],
+    latestSignal: buys[buys.length - 1],
+    exitSignal,
     stageSignals,
   };
 }
@@ -161,8 +166,8 @@ export function buildPatternLifecycleMarkers(
   const signalClose = (stage: number) => numberValue(objectValue(selection.stageSignals.get(stage)?.features) || {}, "close");
 
   if (selection.patternType === "island_reversal") {
-    const leftDate = anchorDate("left_gap");
-    const breakoutDate = anchorDate("breakout");
+    const leftDate = anchorDate("left_gap_trade_date");
+    const breakoutDate = anchorDate("breakout_trade_date");
     const knownThroughDate = breakoutDate || toTradeDateKey(selection.latestSignal.ts);
     const islandBars = bars.filter((bar) =>
       (!leftDate || bar.trade_date >= leftDate)
@@ -187,6 +192,8 @@ export function buildPatternLifecycleMarkers(
     const leftDate = anchorDate("left_shoulder");
     const headDate = anchorDate("head");
     const rightDate = anchorDate("right_shoulder");
+    add("platform-start", anchorDate("platform_start"), numberValue(setup, "platform_low"), "shoulder", ["左肩平台下沿", "Left Platform Floor"]);
+    add("platform-end", anchorDate("platform_end"), numberValue(setup, "platform_high"), "shoulder", ["左肩平台上沿", "Left Platform Ceiling"]);
     add("left-shoulder", leftDate, numberValue(setup, "left_shoulder_low") ?? barLow(leftDate), "shoulder", ["左肩", "Left Shoulder"]);
     add("head", headDate, numberValue(setup, "head_low") ?? barLow(headDate), "pattern_bottom", ["头部低点", "Head Low"]);
     add("right-shoulder", rightDate, barLow(rightDate), "shoulder", ["右肩", "Right Shoulder"]);
@@ -200,15 +207,38 @@ export function buildPatternLifecycleMarkers(
         `Right Pullback ${index + 1}`,
       ]);
     });
+    textList(anchors, "rebound_peaks").forEach((date, index) => {
+      add(`rebound-peak-${index + 1}`, date, barHigh(date), "neckline", [`右侧反弹高点 ${index + 1}`, `Right Rebound Peak ${index + 1}`]);
+    });
     add("reversal", signalDate(3), signalClose(3) ?? numberValue(setup, "rim_price"), "reversal", ["碗口突破", "Rim Breakout"]);
   } else {
     const pivotDate = anchorDate("pivot");
     const breakoutDate = anchorDate("breakout");
     add("pivot", pivotDate, numberValue(setup, "pivot_low") ?? barLow(pivotDate), "pattern_bottom", ["V 型转折", "V Pivot"]);
+    add("volume-reversal", anchorDate("reversal"), signalClose(1), "reversal", ["放量转折确认", "Volume Reversal Confirmed"]);
+    add("range-start", anchorDate("consolidation_start"), numberValue(setup, "consolidation_low"), "neckline", ["整理区下沿", "Range Floor"]);
+    add("range-end", anchorDate("consolidation_end"), numberValue(setup, "consolidation_top"), "neckline", ["整理区上沿", "Range Ceiling"]);
     add("continuation", signalDate(2), signalClose(2), "pullback", ["反转延续", "Reversal Continuation"]);
     add("breakout", breakoutDate, numberValue(setup, "consolidation_top") ?? barHigh(breakoutDate), "neckline", ["整理区突破", "Range Breakout"]);
     add("reversal", signalDate(3), signalClose(3), "reversal", ["回踩确认", "Retest Confirmed"]);
   }
 
+  const exitSetup = setupOf(selection.exitSignal);
+  if (exitSetup) {
+    const exitAnchors = objectValue(exitSetup.anchors) || {};
+    add("failure-peak", textValue(exitAnchors, "failure_peak"), numberValue(exitSetup, "failure_peak_price"), "neckline", ["走弱前峰值", "Peak Before Weakness"]);
+    add("lower-high", textValue(exitAnchors, "lower_high"), numberValue(exitSetup, "lower_high_price"), "neckline", ["已确认更低高点", "Confirmed Lower High"]);
+    add("failure-support", textValue(exitAnchors, "failure_pullback"), numberValue(exitSetup, "failure_support_price"), "pullback", ["失守回踩支撑", "Broken Pullback Support"]);
+    const reasons: Record<string, [string, string]> = {
+      right_side_failure: ["右侧走弱退出", "Right-side Weakness Exit"],
+      bearish_volume_failure: ["巨量阴线退出", "High-volume Bearish Exit"],
+      pattern_invalidation: ["形态失效退出", "Pattern Invalidation Exit"],
+      max_loss_stop: ["最大亏损退出", "Maximum Loss Exit"],
+      atr_stop: ["ATR 止损退出", "ATR Stop Exit"],
+      take_profit: ["止盈退出", "Take-profit Exit"],
+    };
+    add("exit", toTradeDateKey(selection.exitSignal?.ts), numberValue(objectValue(selection.exitSignal?.features) || {}, "close"), "sell_signal",
+      reasons[textValue(exitSetup, "exit_stage") || ""] || ["形态退出", "Pattern Exit"]);
+  }
   return markers;
 }

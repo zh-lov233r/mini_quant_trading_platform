@@ -277,8 +277,6 @@ export default function EquityLightweightChart({
           position: "relative",
           minHeight: 380,
           overflow: "hidden",
-          borderRadius: 18,
-          border: "1px solid rgba(94, 234, 212, 0.18)",
           background: "rgba(8, 15, 24, 0.98)",
         }}
       >

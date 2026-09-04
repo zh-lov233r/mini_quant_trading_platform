@@ -2441,7 +2441,7 @@ function accountMenuChevronStyle(open: boolean): CSSProperties {
   return {
     color: "rgba(203, 213, 225, 0.82)",
     transform: open ? "rotate(180deg)" : "rotate(0deg)",
-    transition: "transform 140ms ease",
+    transition: "transform var(--motion-fast) ease",
   };
 }
 

@@ -48,39 +48,39 @@ const std::vector<Descriptor>& descriptors() {
         },
         {
             "island_reversal", "Island Reversal Bottom",
-            "底部岛形反转策略，识别缩量向下衰竭缺口、放量向上突破缺口和缩量回踩缺口。", 1, 80,
+            "底部岛形反转策略，识别缩量向下衰竭缺口、放量向上突破缺口和缩量回踩缺口。", 2, 80,
             {"open", "high", "low", "close", "volume", "volume_sma_20", "atr_14", "ret_60d"},
-            R"json({"execution":{"rebalance":"daily","run_at":"close","timeframe":"1d"},"metadata":{"description":"","schema_version":1},"risk":{"max_loss_pct":0.1,"max_positions":6,"position_size_pct":0.15,"stage_1_target_pct":0.2,"stage_2_target_pct":0.5,"stage_3_target_pct":1.0,"stop_loss_atr":1.5,"take_profit_atr":3.0},"signal":{"downtrend_lookback":60,"downtrend_min_drop_pct":0.15,"left_gap_min_pct":0.02,"left_volume_ratio_max":0.8,"max_island_bars":8,"min_island_bars":1,"min_strength_score":50.0,"retest_volume_ratio_max":0.7,"retest_window":10,"right_gap_min_pct":0.02,"right_volume_ratio_min":1.5,"support_tolerance_pct":0.01},"universe":{"selection_mode":"all_common_stock","symbols":[]}})json"
+            R"json({"execution":{"rebalance":"daily","run_at":"close","timeframe":"1d"},"metadata":{"description":"","schema_version":1},"risk":{"max_loss_pct":0.1,"max_positions":6,"position_size_pct":0.15,"stage_1_target_pct":0.2,"stage_2_target_pct":0.5,"stage_3_target_pct":1.0,"stop_loss_atr":1.5,"take_profit_atr":3.0},"signal":{"breakout_body_atr_min":0.5,"downtrend_lookback":60,"downtrend_min_drop_pct":0.15,"exhaustion_body_atr_max":1.0,"island_body_atr_max":0.5,"left_gap_min_pct":0.02,"left_volume_ratio_max":0.8,"max_island_bars":8,"min_island_bars":1,"min_strength_score":50.0,"previous_body_atr_min":0.5,"retest_volume_ratio_max":0.7,"retest_window":10,"right_gap_min_pct":0.02,"right_volume_ratio_min":1.5,"support_tolerance_pct":0.01},"universe":{"selection_mode":"all_common_stock","symbols":[]}})json"
         },
         {
             "double_bottom", "Double Bottom",
-            "保守版双底形态策略，确认长期下跌后的双底，等待放量突破后的缩量回踩再买入。", 1, 151,
+            "双底三阶段策略，第二底不破前低，温和放量反弹、缩量回踩，并以收盘放量突破颈线确认。", 2, 151,
             {"open", "high", "low", "close", "volume", "volume_sma_20", "atr_14", "ret_60d"},
-            R"json({"execution":{"rebalance":"daily","run_at":"close","timeframe":"1d"},"metadata":{"description":"","schema_version":1},"risk":{"max_loss_pct":0.08,"max_positions":6,"position_size_pct":0.15,"stage_1_target_pct":0.2,"stage_2_target_pct":0.5,"stage_3_target_pct":1.0,"stop_loss_atr":1.5,"take_profit_atr":3.0},"signal":{"bottom_tolerance_pct":0.03,"breakout_buffer_pct":0.005,"breakout_volume_ratio_min":1.5,"downtrend_lookback":60,"downtrend_max_up_day_ratio":0.35,"downtrend_min_drop_pct":0.2,"downtrend_min_r_squared":0.65,"left_bottom_after_bars":1,"left_bottom_before_bars":1,"max_bottom_spacing":30,"max_breakout_bars_after_right_bottom":40,"min_bottom_spacing":5,"min_strength_score":50.0,"neckline_min_rebound_pct":0.06,"rebound_up_day_ratio_min":0.6,"retest_volume_ratio_max":0.8,"retest_window":10,"second_bottom_volume_ratio_max":0.9,"support_tolerance_pct":0.02},"universe":{"selection_mode":"all_common_stock","symbols":[]}})json"
+            R"json({"execution":{"rebalance":"daily","run_at":"close","timeframe":"1d"},"metadata":{"description":"","schema_version":1},"risk":{"max_loss_pct":0.08,"max_positions":6,"position_size_pct":0.15,"stage_1_target_pct":0.2,"stage_2_target_pct":0.5,"stage_3_target_pct":1.0,"stop_loss_atr":1.5,"take_profit_atr":3.0},"signal":{"bottom_tolerance_pct":0.03,"breakout_buffer_pct":0.005,"breakout_volume_ratio_min":1.5,"downtrend_lookback":60,"downtrend_max_up_day_ratio":0.35,"downtrend_min_drop_pct":0.2,"downtrend_min_r_squared":0.65,"left_bottom_after_bars":1,"left_bottom_before_bars":1,"max_bottom_spacing":30,"max_breakout_bars_after_right_bottom":40,"min_bottom_spacing":5,"min_strength_score":50.0,"neckline_min_rebound_pct":0.06,"rebound_up_day_ratio_min":0.6,"rebound_volume_ratio_max":1.5,"rebound_volume_ratio_min":1.0,"retest_volume_ratio_max":0.8,"retest_window":10,"second_bottom_volume_ratio_max":0.9,"support_tolerance_pct":0.02},"universe":{"selection_mode":"all_common_stock","symbols":[]}})json"
         },
         {
             "head_shoulders_bottom", "Head and Shoulders Bottom",
-            "头肩底反转策略，分阶段识别缩量头部、右肩回踩与放量突破动态颈线。", 1, 152,
+            "头肩底反转策略，分阶段识别缩量头部、右肩回踩与放量突破动态颈线。", 2, 152,
             {"open", "high", "low", "close", "volume", "volume_sma_20", "atr_14", "ret_60d"},
-            R"json({"execution":{"rebalance":"daily","run_at":"close","timeframe":"1d"},"metadata":{"algorithm_version":"confirmed-pivots-v1","description":"","schema_version":1},"risk":{"max_loss_pct":0.08,"max_positions":6,"position_size_pct":0.15,"stage_1_target_pct":0.2,"stage_2_target_pct":0.5,"stage_3_target_pct":1.0,"stop_loss_atr":1.5,"take_profit_atr":3.0},"signal":{"breakout_buffer_pct":0.005,"breakout_volume_ratio_min":1.5,"downtrend_lookback":60,"downtrend_min_drop_pct":0.2,"head_depth_min_pct":0.05,"head_volume_ratio_max":0.8,"max_segment_bars":40,"min_segment_bars":5,"min_strength_score":50.0,"pivot_left_bars":2,"pivot_right_bars":2,"right_shoulder_volume_ratio_max":0.9,"shoulder_tolerance_pct":0.05},"universe":{"selection_mode":"all_common_stock","symbols":[]}})json"
+            R"json({"execution":{"rebalance":"daily","run_at":"close","timeframe":"1d"},"metadata":{"algorithm_version":"confirmed-pivots-v2","description":"","schema_version":1},"risk":{"max_loss_pct":0.08,"max_positions":6,"position_size_pct":0.15,"stage_1_target_pct":0.2,"stage_2_target_pct":0.5,"stage_3_target_pct":1.0,"stop_loss_atr":1.5,"take_profit_atr":3.0},"signal":{"breakout_buffer_pct":0.005,"breakout_volume_ratio_min":1.5,"downtrend_lookback":60,"downtrend_min_drop_pct":0.2,"head_depth_min_pct":0.05,"head_volume_ratio_max":0.8,"max_segment_bars":40,"min_segment_bars":5,"min_strength_score":50.0,"pivot_left_bars":2,"pivot_right_bars":2,"platform_bars":5,"platform_drift_atr_max":1.0,"platform_range_atr_max":3.0,"rebound_volume_ratio_max":1.5,"rebound_volume_ratio_min":1.0,"right_shoulder_volume_ratio_max":0.9,"shoulder_tolerance_pct":0.05},"universe":{"selection_mode":"all_common_stock","symbols":[]}})json"
         },
         {
             "rounded_bottom", "Rounded Bottom",
-            "圆弧底反转策略，使用因果二次曲线拟合、右侧更高回踩与放量突破碗口。", 1, 252,
+            "圆弧底反转策略，使用因果二次曲线拟合、右侧更高回踩与放量突破碗口。", 2, 252,
             {"open", "high", "low", "close", "volume", "volume_sma_20", "atr_14", "ret_60d"},
-            R"json({"execution":{"rebalance":"daily","run_at":"close","timeframe":"1d"},"metadata":{"algorithm_version":"log-quadratic-v1","description":"","schema_version":1},"risk":{"max_loss_pct":0.08,"max_positions":6,"position_size_pct":0.15,"stage_1_target_pct":0.2,"stage_2_target_pct":0.5,"stage_3_target_pct":1.0,"stop_loss_atr":1.5,"take_profit_atr":3.0},"signal":{"breakout_buffer_pct":0.005,"breakout_volume_ratio_min":1.5,"max_lookback":240,"min_depth_pct":0.2,"min_lookback":80,"min_pullback_spacing":5,"min_r_squared":0.75,"min_strength_score":50.0,"pivot_left_bars":2,"pivot_right_bars":2,"pullback_volume_ratio_max":0.8,"right_volume_ratio_min":1.3,"vertex_position_max":0.65,"vertex_position_min":0.35},"universe":{"selection_mode":"all_common_stock","symbols":[]}})json"
+            R"json({"execution":{"rebalance":"daily","run_at":"close","timeframe":"1d"},"metadata":{"algorithm_version":"log-quadratic-v2","description":"","schema_version":1},"risk":{"max_loss_pct":0.08,"max_positions":6,"position_size_pct":0.15,"stage_1_target_pct":0.2,"stage_2_target_pct":0.5,"stage_3_target_pct":1.0,"stop_loss_atr":1.5,"take_profit_atr":3.0},"signal":{"breakout_buffer_pct":0.005,"breakout_volume_ratio_min":1.5,"max_lookback":240,"min_depth_pct":0.2,"min_lookback":80,"min_pullback_spacing":5,"min_r_squared":0.75,"min_strength_score":50.0,"pivot_left_bars":2,"pivot_right_bars":2,"pullback_volume_ratio_max":0.8,"right_volume_ratio_min":1.3,"vertex_position_max":0.65,"vertex_position_min":0.35,"weakening_buffer_pct":0.005},"universe":{"selection_mode":"all_common_stock","symbols":[]}})json"
         },
         {
             "v_reversal", "V Reversal",
-            "V 型反转策略，识别底部放量转折、连续上升与顶部突破回踩。", 1, 90,
+            "V 型反转策略，识别底部放量转折、连续上升与顶部突破回踩。", 2, 90,
             {"open", "high", "low", "close", "volume", "volume_sma_20", "atr_14", "ret_60d"},
-            R"json({"execution":{"rebalance":"daily","run_at":"close","timeframe":"1d"},"metadata":{"algorithm_version":"volume-v-reversal-v1","description":"","schema_version":1},"risk":{"max_loss_pct":0.08,"max_positions":6,"position_size_pct":0.15,"stage_1_target_pct":0.2,"stage_2_target_pct":0.5,"stage_3_target_pct":1.0,"stop_loss_atr":1.5,"take_profit_atr":3.0},"signal":{"bearish_reversal_volume_ratio_min":2.0,"breakout_volume_ratio_min":1.5,"consolidation_max_bars":10,"consolidation_min_bars":3,"continuation_volume_ratio_min":1.2,"continuation_window":5,"downtrend_lookback":60,"downtrend_min_drop_pct":0.2,"min_strength_score":50.0,"pivot_max_bars":3,"pivot_volume_ratio_min":2.0,"retest_volume_ratio_max":0.8,"retest_window":5,"reversal_min_atr":1.5,"reversal_min_return_pct":0.05,"support_tolerance_pct":0.02},"universe":{"selection_mode":"all_common_stock","symbols":[]}})json"
+            R"json({"execution":{"rebalance":"daily","run_at":"close","timeframe":"1d"},"metadata":{"algorithm_version":"volume-v-reversal-v2","description":"","schema_version":1},"risk":{"max_loss_pct":0.08,"max_positions":6,"position_size_pct":0.15,"stage_1_target_pct":0.2,"stage_2_target_pct":0.5,"stage_3_target_pct":1.0,"stop_loss_atr":1.5,"take_profit_atr":3.0},"signal":{"bearish_body_atr_min":0.5,"bearish_reversal_volume_ratio_min":2.0,"breakout_buffer_pct":0.005,"breakout_volume_ratio_min":1.5,"consolidation_drift_atr_max":1.0,"consolidation_max_bars":10,"consolidation_min_bars":3,"consolidation_range_atr_max":3.0,"continuation_volume_ratio_min":1.2,"continuation_window":5,"downtrend_lookback":60,"downtrend_min_drop_pct":0.2,"min_strength_score":50.0,"pivot_max_bars":3,"pivot_volume_ratio_min":2.0,"retest_volume_ratio_max":0.8,"retest_window":5,"reversal_min_atr":1.5,"reversal_min_return_pct":0.05,"support_tolerance_pct":0.02},"universe":{"selection_mode":"all_common_stock","symbols":[]}})json"
         },
         {
             "support_resistance", "Support / Resistance Zones",
-            "使用已确认 Pivot 与 ATR 聚类识别动态支撑/压力区，并交易反弹、突破和突破回踩。", 10, 163,
+            "使用已确认 Pivot 与 ATR 聚类识别动态支撑/压力区，并交易反弹和突破回踩；直接突破仅审计。", 11, 163,
             {"open", "high", "low", "close", "volume", "volume_sma_20", "atr_14"},
-            R"json({"execution":{"rebalance":"daily","run_at":"close","timeframe":"1d"},"metadata":{"algorithm_version":"pivot-slope-regime-v3","description":"","price_semantics":"forward_adjusted_preferred_unadjusted_fallback","schema_version":1},"risk":{"max_holding_days":40,"max_loss_pct":0.08,"max_positions":6,"min_reward_risk":1.5,"position_size_pct":0.15,"stop_loss_atr":1.5,"take_profit_atr":3.0},"signal":{"bounce_confirmation_atr":0.25,"breakout_confirmation_atr":0.5,"breakout_retest_enabled":true,"breakout_volume_ratio_min":1.5,"decay_half_life":60,"detection_window":120,"line_inlier_tolerance_atr":0.75,"max_abs_slope_atr_per_session":0.25,"min_line_pivots":3,"min_line_span_sessions":10,"min_strength_score":50.0,"pivot_left_bars":3,"pivot_right_bars":3,"resistance_breakout_enabled":true,"retest_volume_ratio_max":0.8,"retest_window":10,"score_outcome_window":20,"score_stop_atr":1.5,"score_target_atr":3.0,"support_bounce_enabled":true,"zone_half_width_atr":0.5},"universe":{"selection_mode":"all_common_stock","symbols":[]}})json"
+            R"json({"execution":{"rebalance":"daily","run_at":"close","timeframe":"1d"},"metadata":{"algorithm_version":"pivot-slope-regime-v3","description":"","price_semantics":"forward_adjusted_preferred_unadjusted_fallback","schema_version":1},"risk":{"break_even_at_r":1.0,"market_filter_enabled":false,"market_filter_symbol":"SPY","max_holding_days":40,"max_loss_pct":0.08,"max_positions":6,"min_reward_risk":1.5,"position_size_pct":0.15,"risk_per_trade_pct":0.005,"stop_cooldown_sessions":5,"stop_loss_atr":1.5,"take_profit_atr":3.0},"signal":{"bounce_confirmation_atr":0.25,"breakout_confirmation_atr":0.5,"breakout_retest_enabled":true,"breakout_volume_ratio_min":1.5,"decay_half_life":60,"detection_window":120,"line_inlier_tolerance_atr":0.75,"max_abs_slope_atr_per_session":0.25,"max_zones_per_kind":3,"min_line_pivots":3,"min_line_span_sessions":10,"min_strength_score":50.0,"pivot_left_bars":3,"pivot_right_bars":3,"pivot_tolerance_atr":0.05,"resistance_breakout_enabled":true,"retest_volume_ratio_max":0.8,"retest_window":10,"support_bounce_enabled":true,"zone_half_width_atr":0.5},"universe":{"selection_mode":"all_common_stock","symbols":[]}})json"
         },
     };
     return values;
@@ -159,14 +159,14 @@ py::list normalized_symbols(const py::handle& raw) {
     return values;
 }
 
-py::dict schema_for(const py::dict& defaults, const std::string& path = "") {
+py::dict schema_for(const py::dict& defaults, const std::string& path = "", bool staged = false) {
     py::dict properties;
     for (const auto& [raw_key, raw_value] : defaults) {
         const std::string key = py::cast<std::string>(py::str(raw_key));
         const std::string field = path.empty() ? key : path + "." + key;
         py::dict property;
         if (py::isinstance<py::dict>(raw_value)) {
-            property = schema_for(py::cast<py::dict>(raw_value), field);
+            property = schema_for(py::cast<py::dict>(raw_value), field, staged);
         } else if (py::isinstance<py::bool_>(raw_value)) {
             property["type"] = "boolean";
         } else if (py::isinstance<py::int_>(raw_value)) {
@@ -181,6 +181,14 @@ py::dict schema_for(const py::dict& defaults, const std::string& path = "") {
         } else {
             property["type"] = "string";
         }
+        if (staged && path == "signal" && key != "min_strength_score") {
+            const bool unit_interval = key == "downtrend_max_up_day_ratio" || key == "downtrend_min_r_squared"
+                || key == "rebound_up_day_ratio_min" || key == "min_r_squared" || key.starts_with("vertex_position_");
+            if (py::isinstance<py::int_>(raw_value)) property["minimum"] = 1;
+            else if (unit_interval || key == "breakout_buffer_pct") property["minimum"] = 0.0;
+            else property["exclusiveMinimum"] = 0.0;
+            if (unit_interval || key.ends_with("_pct")) property["maximum"] = 1.0;
+        }
         if (field == "signal.min_strength_score") {
             property["minimum"] = 0.0;
             property["maximum"] = 100.0;
@@ -192,6 +200,22 @@ py::dict schema_for(const py::dict& defaults, const std::string& path = "") {
             property["maximum"] = 1.0;
         } else if (field == "risk.max_positions" || field == "metadata.schema_version") {
             property["minimum"] = 1;
+        }
+        if (field == "signal.max_zones_per_kind") { property["minimum"] = 1; property["maximum"] = 5; }
+        if (field == "signal.pivot_tolerance_atr") { property["minimum"] = 0.0; property["maximum"] = 0.1; }
+        if (field == "risk.risk_per_trade_pct") { property["exclusiveMinimum"] = 0.0; property["maximum"] = 1.0; }
+        if (field == "risk.stop_cooldown_sessions") property["minimum"] = 0;
+        if (field == "risk.break_even_at_r") property["exclusiveMinimum"] = 0.0;
+        if (field == "signal.breakout_buffer_pct") {
+            property["minimum"] = 0.0;
+            property["exclusiveMaximum"] = 1.0;
+        }
+        if (field == "signal.platform_bars") property["minimum"] = 3;
+        if (field.starts_with("signal.") && (field.ends_with("_atr_min") || field.ends_with("_atr_max")
+            || field.starts_with("signal.rebound_volume_ratio_"))) property["exclusiveMinimum"] = 0.0;
+        if (field == "signal.weakening_buffer_pct") {
+            property["exclusiveMinimum"] = 0.0;
+            property["exclusiveMaximum"] = 1.0;
         }
         if (field == "execution.timeframe") property["enum"] = py::make_tuple("1d");
         if (field == "execution.rebalance") property["enum"] = py::make_tuple("daily");
@@ -259,7 +283,7 @@ void validate_declared_types(
     }
 }
 
-void validate_common(const std::string& type, py::dict& normalized) {
+void validate_common(const std::string& type, py::dict& normalized, const py::dict& defaults) {
     py::dict signal = py::cast<py::dict>(normalized["signal"]);
     py::dict universe = py::cast<py::dict>(normalized["universe"]);
     py::dict risk = py::cast<py::dict>(normalized["risk"]);
@@ -299,6 +323,38 @@ void validate_common(const std::string& type, py::dict& normalized) {
         }
     }
     if (type == "support_resistance") {
+        for (const char* key : {"min_line_pivots", "min_line_span_sessions", "decay_half_life", "retest_window"}) {
+            positive_integer(signal, key, std::string("signal.") + key);
+        }
+        if (py::cast<int>(signal["min_line_pivots"]) < 3) throw std::invalid_argument("signal.min_line_pivots must be at least 3");
+        positive_integer(risk, "max_holding_days", "risk.max_holding_days");
+        for (const char* key : {"line_inlier_tolerance_atr", "max_abs_slope_atr_per_session", "zone_half_width_atr",
+            "bounce_confirmation_atr", "breakout_confirmation_atr", "breakout_volume_ratio_min", "retest_volume_ratio_max"}) {
+            if (finite_number(signal, key, std::string("signal.") + key) <= 0.0) {
+                throw std::invalid_argument(std::string("signal.") + key + " must be positive");
+            }
+        }
+        for (const char* key : {"stop_loss_atr", "take_profit_atr", "min_reward_risk", "max_loss_pct"}) {
+            if (finite_number(risk, key, std::string("risk.") + key) <= 0.0) {
+                throw std::invalid_argument(std::string("risk.") + key + " must be positive");
+            }
+        }
+        if (py::cast<double>(risk["max_loss_pct"]) > 1.0) throw std::invalid_argument("risk.max_loss_pct must not exceed 1");
+        const int zones = positive_integer(signal, "max_zones_per_kind", "signal.max_zones_per_kind");
+        if (zones > 5) throw std::invalid_argument("signal.max_zones_per_kind must not exceed 5");
+        const double tolerance = finite_number(signal, "pivot_tolerance_atr", "signal.pivot_tolerance_atr");
+        if (tolerance < 0.0 || tolerance > 0.1) throw std::invalid_argument("signal.pivot_tolerance_atr must be within [0, 0.1]");
+        const double risk_budget = finite_number(risk, "risk_per_trade_pct", "risk.risk_per_trade_pct");
+        if (risk_budget <= 0.0 || risk_budget > 1.0) throw std::invalid_argument("risk.risk_per_trade_pct must be within (0, 1]");
+        if (py::cast<int>(risk["stop_cooldown_sessions"]) < 0) {
+            throw std::invalid_argument("risk.stop_cooldown_sessions must be a nonnegative integer");
+        }
+        if (finite_number(risk, "break_even_at_r", "risk.break_even_at_r") <= 0.0) {
+            throw std::invalid_argument("risk.break_even_at_r must be positive");
+        }
+        const auto benchmark = normalized_symbols(py::make_tuple(risk["market_filter_symbol"]));
+        if (py::len(benchmark) != 1) throw std::invalid_argument("risk.market_filter_symbol must be one symbol");
+        risk["market_filter_symbol"] = benchmark[0];
         for (const char* key : {
                 "support_bounce_enabled", "resistance_breakout_enabled", "breakout_retest_enabled"
             }) {
@@ -307,9 +363,8 @@ void validate_common(const std::string& type, py::dict& normalized) {
             }
         }
         if (!py::cast<bool>(signal["support_bounce_enabled"])
-            && !py::cast<bool>(signal["resistance_breakout_enabled"])
             && !py::cast<bool>(signal["breakout_retest_enabled"])) {
-            throw std::invalid_argument("at least one support/resistance entry mode must be enabled");
+            throw std::invalid_argument("at least one tradable support/resistance mode (bounce or retest) must be enabled");
         }
         const int left = positive_integer(signal, "pivot_left_bars", "signal.pivot_left_bars");
         const int right = positive_integer(signal, "pivot_right_bars", "signal.pivot_right_bars");
@@ -333,6 +388,50 @@ void validate_common(const std::string& type, py::dict& normalized) {
         "rounded_bottom", "v_reversal"
     };
     if (staged.contains(type)) {
+        const auto declared_metadata = py::cast<py::dict>(defaults["metadata"]);
+        if (declared_metadata.contains("algorithm_version")) {
+            py::cast<py::dict>(normalized["metadata"])["algorithm_version"] = declared_metadata["algorithm_version"];
+        }
+        const auto declared_signal = py::cast<py::dict>(defaults["signal"]);
+        for (const auto& [raw_key, value] : signal) {
+            const std::string key = py::cast<std::string>(raw_key);
+            if (key == "min_strength_score") continue;
+            if (py::isinstance<py::int_>(declared_signal[raw_key])) {
+                positive_integer(signal, key.c_str(), "signal." + key);
+                continue;
+            }
+            const double number = py::cast<double>(value);
+            const bool unit_interval = key == "downtrend_max_up_day_ratio" || key == "downtrend_min_r_squared"
+                || key == "rebound_up_day_ratio_min" || key == "min_r_squared" || key.starts_with("vertex_position_");
+            const bool zero_allowed = unit_interval || key == "breakout_buffer_pct";
+            if (number < 0.0 || (!zero_allowed && number == 0.0)) {
+                throw std::invalid_argument("signal." + key + (zero_allowed ? " must be nonnegative" : " must be positive"));
+            }
+            if ((unit_interval || key.ends_with("_pct")) && number > 1.0) {
+                throw std::invalid_argument("signal." + key + " must not exceed 1");
+            }
+        }
+        if (signal.contains("platform_bars") && py::cast<int>(signal["platform_bars"]) < 3) {
+            throw std::invalid_argument("signal.platform_bars must be at least 3");
+        }
+        if (signal.contains("weakening_buffer_pct")) {
+            const double buffer = py::cast<double>(signal["weakening_buffer_pct"]);
+            if (buffer <= 0.0 || buffer >= 1.0) throw std::invalid_argument("signal.weakening_buffer_pct must be within (0, 1)");
+        }
+        for (const auto& [minimum, maximum] : std::vector<std::pair<const char*, const char*>>{
+            {"rebound_volume_ratio_min", "rebound_volume_ratio_max"}, {"min_island_bars", "max_island_bars"},
+            {"min_bottom_spacing", "max_bottom_spacing"}, {"min_segment_bars", "max_segment_bars"},
+            {"min_lookback", "max_lookback"}, {"consolidation_min_bars", "consolidation_max_bars"},
+            {"vertex_position_min", "vertex_position_max"}
+        }) {
+            if (signal.contains(minimum) && py::cast<double>(signal[minimum]) > py::cast<double>(signal[maximum])) {
+                throw std::invalid_argument(std::string("signal.") + minimum + " must not exceed signal." + maximum);
+            }
+        }
+        if (signal.contains("breakout_buffer_pct")) {
+            const double buffer = py::cast<double>(signal["breakout_buffer_pct"]);
+            if (buffer < 0.0 || buffer >= 1.0) throw std::invalid_argument("signal.breakout_buffer_pct must be within [0, 1)");
+        }
         const double first = finite_number(risk, "stage_1_target_pct", "risk.stage_1_target_pct");
         const double second = finite_number(risk, "stage_2_target_pct", "risk.stage_2_target_pct");
         const double third = finite_number(risk, "stage_3_target_pct", "risk.stage_3_target_pct");
@@ -360,7 +459,7 @@ py::list strategy_catalog() {
         item["algorithm_revision"] = value.revision;
         item["history_length"] = value.history_length;
         item["required_features"] = value.features;
-        item["parameter_schema"] = schema_for(defaults);
+        item["parameter_schema"] = schema_for(defaults, "", value.revision == 2);
         result.append(std::move(item));
     }
     return result;
@@ -374,7 +473,7 @@ py::dict normalize_strategy_params(
     py::dict normalized = py::module_::import("copy").attr("deepcopy")(defaults).cast<py::dict>();
     merge_dict(normalized, params);
     validate_declared_types(defaults, normalized);
-    validate_common(strategy_type, normalized);
+    validate_common(strategy_type, normalized, defaults);
     return normalized;
 }
 

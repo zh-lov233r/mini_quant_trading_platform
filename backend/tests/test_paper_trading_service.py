@@ -149,6 +149,7 @@ class PaperTradingServiceTests(unittest.TestCase):
             strategy_id=str(self.strategy.id),
             ts=datetime(2026, 4, 14, 20, tzinfo=timezone.utc),
             symbol="AAPL",
+            instrument_id=42,
             action="BUY",
             reason="valid channel",
             metadata={
@@ -175,6 +176,7 @@ class PaperTradingServiceTests(unittest.TestCase):
         self.assertEqual(execution["status"], "pending")
         self.assertEqual(execution["eligible_trade_date"], "2026-04-15")
         self.assertEqual(execution["entry_channel"]["upper"], 101)
+        self.assertEqual(event.metadata["support_resistance"]["instrument_id"], 42)
 
     def test_open_quote_freshness_and_limit_tick_rounding(self) -> None:
         ask, quote_ts = _fresh_snapshot_ask(
@@ -267,6 +269,36 @@ class PaperTradingServiceTests(unittest.TestCase):
         self.assertEqual(client.submissions, [])
         self.assertEqual(run.summary_metrics["pending_order_count"], 0)
 
+    def test_support_open_order_is_sized_at_its_worst_permitted_limit(self) -> None:
+        self.strategy.strategy_type = "support_resistance"
+        self.strategy.params = normalize_strategy_params("support_resistance", {
+            "risk": {"position_size_pct": 1.0}, "signal": {"min_strength_score": 0}})
+        signal = Signal(run_id=self.run.id, strategy_id=self.strategy.id,
+            ts=datetime(2026, 4, 14, 20, tzinfo=timezone.utc), symbol="AAPL", signal="BUY",
+            features={"strength": {"score": 70, "passes_threshold": True},
+                "support_resistance": {"stop_price": 100, "target_price": 115},
+                "paper_execution": {"status": "pending", "eligible_trade_date": "2026-04-15",
+                    "client_order_id": "paper-risk-test", "entry_channel": {"valid": True,
+                        "lower": 99, "upper": 110, "lower_slope_per_session": 0,
+                        "upper_slope_per_session": 0}}})
+        self.db.add(signal)
+        self.db.commit()
+        client = StubAlpacaClient(submit_order_response=_make_order(order_id="risk-order",
+            symbol="AAPL", side="buy", qty=0.833333, status="accepted"))
+        client.get_clock = lambda: {"is_open": True}
+        client.list_orders = lambda **kwargs: []
+        allocation = VirtualSubportfolioConfig(portfolio_name="default", allocation_pct=1,
+            capital_base=1000, allow_fractional=True, source="unit-test")
+        with patch("src.services.paper_trading_service.build_alpaca_client_for_portfolio", return_value=client), \
+            patch("src.services.paper_trading_service._resolve_virtual_subportfolio_config", return_value=allocation):
+            process_pending_support_resistance_entries(self.db,
+                now=datetime(2026, 4, 15, 13, 30, 5, tzinfo=timezone.utc))
+        self.assertEqual(len(client.submissions), 1)
+        order = client.submissions[0]
+        self.assertEqual(float(order["limit_price"]), 106)
+        self.assertAlmostEqual(float(order["qty"]), 5 / 6, places=5)
+        self.assertLessEqual(float(order["qty"]) * (float(order["limit_price"]) - 100), 5)
+
     def test_submit_order_with_immediate_fill_updates_virtual_ledger(self) -> None:
         client = StubAlpacaClient(
             submit_order_response=_make_order(
@@ -319,6 +351,23 @@ class PaperTradingServiceTests(unittest.TestCase):
                 for message in captured.output
             )
         )
+
+    def test_partial_staged_fill_only_books_actual_quantity_and_can_retry(self) -> None:
+        from src.services.staged_entry_service import can_apply_staged_entry
+        event = self._buy_event()
+        client = StubAlpacaClient(submit_order_response=_make_order(
+            order_id="partial-stage", symbol="AAPL", side="buy", qty=5,
+            status="partially_filled", filled_qty=2, filled_avg_price=10,
+            filled_at="2026-04-14T20:00:05Z",
+        ))
+        outcome = _submit_paper_order(db=self.db, strategy=self.strategy, run=self.run,
+            trade_date=date(2026, 4, 14), client=client, event=event, submit_orders=True,
+            qty=5, reference_price=10, client_order_id="partial-stage", portfolio_name="default", allocation_pct=1.)
+        self.assertEqual(outcome.filled_qty, 2.)
+        sleeve = self._rebuild_state(capital_base=1000.)
+        self.assertEqual(sleeve.positions_by_symbol["AAPL"].qty, 2.)
+        self.assertEqual(sleeve.cash, 980.)
+        self.assertTrue(can_apply_staged_entry(event.metadata, event.metadata))
 
     def test_sync_pending_order_promotes_fill_without_duplicate_transaction(self) -> None:
         submit_client = StubAlpacaClient(

@@ -1,3 +1,4 @@
+import motion from "@/styles/Motion.module.css";
 import * as Tooltip from "radix-ui/tooltip";
 
 import styles from "./MetricCard.module.css";
@@ -31,7 +32,7 @@ export default function MetricCard({
           {density === "compact" ? (
             <Tooltip.Root delayDuration={250}>
               <Tooltip.Trigger asChild><button type="button" className={styles.helpButton} aria-label={`${label}: ${hint}`}>?</button></Tooltip.Trigger>
-              <Tooltip.Portal><Tooltip.Content className="workspace-tooltip" sideOffset={7}>{hint}</Tooltip.Content></Tooltip.Portal>
+              <Tooltip.Portal><Tooltip.Content className={`workspace-tooltip ${motion.popover}`} sideOffset={7}>{hint}</Tooltip.Content></Tooltip.Portal>
             </Tooltip.Root>
           ) : null}
         </div>

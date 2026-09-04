@@ -56,10 +56,13 @@ class PointInTimeUniversePolicyTests(unittest.TestCase):
 
 
 class PreRegisteredCandidateTests(unittest.TestCase):
+    def test_direct_breakout_has_no_discovery_budget(self) -> None:
+        with self.assertRaisesRegex(ValueError, "audit-only"):
+            fixed_mode_candidates("resistance_breakout")
+
     def test_each_setup_has_exactly_twelve_unique_single_mode_candidates(self) -> None:
         switches = {
             "support_bounce": "signal.support_bounce_enabled",
-            "resistance_breakout": "signal.resistance_breakout_enabled",
             "breakout_retest": "signal.breakout_retest_enabled",
         }
         for setup, enabled_key in switches.items():

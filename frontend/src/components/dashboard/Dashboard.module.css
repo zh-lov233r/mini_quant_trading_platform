@@ -1,3 +1,8 @@
+.button { composes: control from "../../styles/Motion.module.css"; }
+.actionLink { composes: control from "../../styles/Motion.module.css"; }
+.skeleton { composes: skeleton from "../../styles/Motion.module.css"; }
+.content { composes: enter from "../../styles/Motion.module.css"; }
+.kpis { composes: kpis from "../../styles/Motion.module.css"; }
 .content { display: grid; gap: 18px; min-width: 0; }
 .content h2 { margin: 0 0 12px; font-size: 19px; }
 .content h3 { font-size: 16px; }

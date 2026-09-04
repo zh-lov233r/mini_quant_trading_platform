@@ -39,6 +39,60 @@ tags:
     description: Manual and scheduled Alpaca paper-strategy execution.
 
 paths:
+  /api/stock-screening/stocks:
+    get:
+      tags: [Market]
+      summary: Search and screen local active common stocks
+      description: Read-only, no vendor calls. Industry and market-cap bounds require a market. Amounts are in base currency units (CNY or USD), bounds are inclusive. Missing caps are excluded only when a cap bound is supplied. Industry uses Tushare for CN and SIC for US. Results are ordered by ticker and instrument identity. Latest snapshots are not historical point-in-time fundamentals.
+      parameters:
+        - {name: market, in: query, schema: {type: string, enum: [US, CN]}}
+        - {name: query, in: query, schema: {type: string, maxLength: 100, default: ""}}
+        - {name: industry, in: query, schema: {type: string, maxLength: 256}}
+        - {name: min_cap, in: query, schema: {type: number, minimum: 0, maximum: 1.0e20}}
+        - {name: max_cap, in: query, schema: {type: number, exclusiveMinimum: 0, maximum: 1.0e20}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+        - {name: offset, in: query, schema: {type: integer, minimum: 0, default: 0}}
+      responses:
+        "200":
+          description: A bounded result page plus counts before pagination; missing_market_cap is counted before applying cap bounds.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/StockSearchResult"}
+        "422": {description: Invalid filters or cap range}
+        "503": {description: Screening schema not installed; operator approval and schema rollout required}
+  /api/stock-screening/industries:
+    get:
+      tags: [Market]
+      summary: List distinct local industries for one market
+      parameters:
+        - {name: market, in: query, required: true, schema: {type: string, enum: [US, CN]}}
+      responses:
+        "200":
+          description: Sorted industry labels
+          content:
+            application/json:
+              schema: {type: array, items: {type: string}}
+        "422": {description: Invalid or missing market}
+        "503": {description: Screening schema not installed}
+  /api/stock-screening/symbols:
+    post:
+      tags: [Market]
+      summary: Resolve every matching symbol for explicit bulk addition
+      description: Read-only; applies the same filters as search and returns unique ticker-sorted symbols, without pagination. Does not save a basket. The UI confirms this newly resolved count before appending to its draft.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/StockFilters"}
+            example: {market: CN, industry: 银行, min_cap: 10000000000}
+      responses:
+        "200":
+          description: Complete matching symbols
+          content:
+            application/json:
+              schema: {type: array, items: {type: string}}
+        "422": {description: Invalid filters or cap range}
+        "503": {description: Screening schema not installed}
   /api/stock-baskets:
     get:
       tags: [Strategies]
@@ -1511,6 +1565,37 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
 
   schemas:
+    StockFilters:
+      type: object
+      description: Industry and cap bounds require market. Cap amounts are base currency units; min_cap must not exceed max_cap.
+      properties:
+        market: {type: [string, "null"], enum: [US, CN, null], default: null}
+        query: {type: string, maxLength: 100, default: ""}
+        industry: {type: [string, "null"], maxLength: 256, default: null}
+        min_cap: {type: [number, "null"], minimum: 0, maximum: 1.0e20, default: null}
+        max_cap: {type: [number, "null"], exclusiveMinimum: 0, maximum: 1.0e20, default: null}
+    StockCandidate:
+      type: object
+      required: [instrument_id, ticker, name, market, industry, industry_source, market_cap, currency, cap_source, cap_data_date, cap_retrieved_at]
+      properties:
+        instrument_id: {type: integer}
+        ticker: {type: string}
+        name: {type: [string, "null"]}
+        market: {type: string, enum: [US, CN]}
+        industry: {type: [string, "null"]}
+        industry_source: {type: string, enum: [SIC, Tushare]}
+        market_cap: {type: [number, "null"], description: Latest known amount in base currency units}
+        currency: {type: string}
+        cap_source: {type: [string, "null"]}
+        cap_data_date: {type: [string, "null"], format: date}
+        cap_retrieved_at: {type: [string, "null"], format: date-time}
+    StockSearchResult:
+      type: object
+      required: [items, total, missing_market_cap]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/StockCandidate"}}
+        total: {type: integer, minimum: 0}
+        missing_market_cap: {type: integer, minimum: 0}
     StockBasketInput:
       type: object
       required: [name, symbols]
@@ -2292,124 +2377,207 @@ components:
 
     IslandReversalStrategyParams:
       type: object
+      description: Revision 2. Daily close signals; fills at the next valid session open. Defaults are initial quantification, not optimized values.
       required: [signal, universe, risk, execution, metadata]
       properties:
         signal:
           type: object
-          required:
-            [downtrend_lookback, downtrend_min_drop_pct, left_gap_min_pct, right_gap_min_pct,
-             min_island_bars, max_island_bars, left_volume_ratio_max, right_volume_ratio_min,
-             retest_window, retest_volume_ratio_max, support_tolerance_pct]
+          required: [breakout_body_atr_min, downtrend_lookback, downtrend_min_drop_pct, exhaustion_body_atr_max, island_body_atr_max, left_gap_min_pct, left_volume_ratio_max, max_island_bars, min_island_bars, min_strength_score, previous_body_atr_min, retest_volume_ratio_max, retest_window, right_gap_min_pct, right_volume_ratio_min, support_tolerance_pct]
           properties:
-            downtrend_lookback:
-              type: integer
-              minimum: 1
-            downtrend_min_drop_pct:
-              type: number
-              exclusiveMinimum: 0
-              maximum: 1
-            left_gap_min_pct:
-              type: number
-              exclusiveMinimum: 0
-              maximum: 1
-            right_gap_min_pct:
-              type: number
-              exclusiveMinimum: 0
-              maximum: 1
-            min_island_bars:
-              type: integer
-              minimum: 1
-            max_island_bars:
-              type: integer
-              minimum: 1
-            left_volume_ratio_max:
-              type: number
-              exclusiveMinimum: 0
-            right_volume_ratio_min:
-              type: number
-              exclusiveMinimum: 0
-            retest_window:
-              type: integer
-              minimum: 1
-            retest_volume_ratio_max:
-              type: number
-              exclusiveMinimum: 0
-            support_tolerance_pct:
-              type: number
-              exclusiveMinimum: 0
-              maximum: 1
-            min_strength_score:
-              type: number
-              minimum: 0
-              maximum: 100
-              default: 50
-        universe:
-          $ref: "#/components/schemas/UniverseConfig"
-        risk:
-          type: object
-          required: [max_positions, position_size_pct, stop_loss_atr]
-          properties:
-            max_positions:
-              type: integer
-              minimum: 1
-            position_size_pct:
-              type: number
-              exclusiveMinimum: 0
-              maximum: 1
-            stop_loss_atr:
-              type: number
-              exclusiveMinimum: 0
+            breakout_body_atr_min: {"type": "number", "default": 0.5, "exclusiveMinimum": 0}
+            downtrend_lookback: {"type": "integer", "default": 60, "minimum": 1}
+            downtrend_min_drop_pct: {"type": "number", "default": 0.15, "exclusiveMinimum": 0, "maximum": 1}
+            exhaustion_body_atr_max: {"type": "number", "default": 1.0, "exclusiveMinimum": 0}
+            island_body_atr_max: {"type": "number", "default": 0.5, "exclusiveMinimum": 0}
+            left_gap_min_pct: {"type": "number", "default": 0.02, "exclusiveMinimum": 0, "maximum": 1}
+            left_volume_ratio_max: {"type": "number", "default": 0.8, "exclusiveMinimum": 0}
+            max_island_bars: {"type": "integer", "default": 8, "minimum": 1}
+            min_island_bars: {"type": "integer", "default": 1, "minimum": 1}
+            min_strength_score: {"type": "number", "default": 50.0, "minimum": 0, "maximum": 100}
+            previous_body_atr_min: {"type": "number", "default": 0.5, "exclusiveMinimum": 0}
+            retest_volume_ratio_max: {"type": "number", "default": 0.7, "exclusiveMinimum": 0}
+            retest_window: {"type": "integer", "default": 10, "minimum": 1}
+            right_gap_min_pct: {"type": "number", "default": 0.02, "exclusiveMinimum": 0, "maximum": 1}
+            right_volume_ratio_min: {"type": "number", "default": 1.5, "exclusiveMinimum": 0}
+            support_tolerance_pct: {"type": "number", "default": 0.01, "exclusiveMinimum": 0, "maximum": 1}
+        universe: {$ref: "#/components/schemas/UniverseConfig"}
+        risk: {$ref: "#/components/schemas/StagedBottomRiskConfig"}
         execution:
-          $ref: "#/components/schemas/ExecutionConfig"
-        metadata:
-          $ref: "#/components/schemas/MetadataConfig"
+          type: object
+          required: [timeframe, rebalance, run_at]
+          properties:
+            timeframe: {type: string, enum: [1d]}
+            rebalance: {type: string, enum: [daily]}
+            run_at: {type: string, enum: [close]}
+        metadata: {$ref: "#/components/schemas/MetadataConfig"}
 
     DoubleBottomStrategyParams:
       type: object
+      description: Revision 2. Daily close signals; fills at the next valid session open. Defaults are initial quantification, not optimized values.
       required: [signal, universe, risk, execution, metadata]
       properties:
         signal:
           type: object
-          required:
-            [downtrend_lookback, downtrend_min_drop_pct, downtrend_max_up_day_ratio,
-             downtrend_min_r_squared, min_bottom_spacing, max_bottom_spacing,
-             left_bottom_before_bars, left_bottom_after_bars, bottom_tolerance_pct,
-             neckline_min_rebound_pct, rebound_up_day_ratio_min,
-             second_bottom_volume_ratio_max, breakout_volume_ratio_min,
-             max_breakout_bars_after_right_bottom, breakout_buffer_pct, retest_window,
-             retest_volume_ratio_max, support_tolerance_pct]
+          required: [bottom_tolerance_pct, breakout_buffer_pct, breakout_volume_ratio_min, downtrend_lookback, downtrend_max_up_day_ratio, downtrend_min_drop_pct, downtrend_min_r_squared, left_bottom_after_bars, left_bottom_before_bars, max_bottom_spacing, max_breakout_bars_after_right_bottom, min_bottom_spacing, min_strength_score, neckline_min_rebound_pct, rebound_up_day_ratio_min, rebound_volume_ratio_max, rebound_volume_ratio_min, retest_volume_ratio_max, retest_window, second_bottom_volume_ratio_max, support_tolerance_pct]
           properties:
-            min_strength_score: {type: number, minimum: 0, maximum: 100, default: 50}
-            downtrend_lookback: {type: integer, minimum: 1}
-            downtrend_min_drop_pct: {type: number, exclusiveMinimum: 0, maximum: 1}
-            downtrend_max_up_day_ratio: {type: number, minimum: 0, maximum: 1}
-            downtrend_min_r_squared: {type: number, minimum: 0, maximum: 1}
-            min_bottom_spacing: {type: integer, minimum: 1}
-            max_bottom_spacing: {type: integer, minimum: 1}
-            left_bottom_before_bars: {type: integer, minimum: 1}
-            left_bottom_after_bars: {type: integer, minimum: 1}
-            bottom_tolerance_pct: {type: number, exclusiveMinimum: 0, maximum: 1}
-            neckline_min_rebound_pct: {type: number, exclusiveMinimum: 0, maximum: 1}
-            rebound_up_day_ratio_min: {type: number, minimum: 0, maximum: 1}
-            second_bottom_volume_ratio_max: {type: number, exclusiveMinimum: 0}
-            breakout_volume_ratio_min: {type: number, exclusiveMinimum: 0}
-            max_breakout_bars_after_right_bottom: {type: integer, minimum: 1}
-            breakout_buffer_pct: {type: number, minimum: 0, maximum: 1}
-            retest_window: {type: integer, minimum: 1}
-            retest_volume_ratio_max: {type: number, exclusiveMinimum: 0}
-            support_tolerance_pct: {type: number, exclusiveMinimum: 0, maximum: 1}
+            bottom_tolerance_pct: {"type": "number", "default": 0.03, "exclusiveMinimum": 0, "maximum": 1, "description": "Right low must be between the left low and left low * (1 + tolerance); no undercut allowed."}
+            breakout_buffer_pct: {"type": "number", "default": 0.005, "minimum": 0, "exclusiveMaximum": 1, "description": "Require a close strictly above the key price * (1 + buffer), with confirming volume."}
+            breakout_volume_ratio_min: {"type": "number", "default": 1.5, "exclusiveMinimum": 0}
+            downtrend_lookback: {"type": "integer", "default": 60, "minimum": 1}
+            downtrend_max_up_day_ratio: {"type": "number", "default": 0.35, "minimum": 0, "maximum": 1}
+            downtrend_min_drop_pct: {"type": "number", "default": 0.2, "exclusiveMinimum": 0, "maximum": 1}
+            downtrend_min_r_squared: {"type": "number", "default": 0.65, "minimum": 0, "maximum": 1}
+            left_bottom_after_bars: {"type": "integer", "default": 1, "minimum": 1}
+            left_bottom_before_bars: {"type": "integer", "default": 1, "minimum": 1}
+            max_bottom_spacing: {"type": "integer", "default": 30, "minimum": 1}
+            max_breakout_bars_after_right_bottom: {"type": "integer", "default": 40, "minimum": 1}
+            min_bottom_spacing: {"type": "integer", "default": 5, "minimum": 1}
+            min_strength_score: {"type": "number", "default": 50.0, "minimum": 0, "maximum": 100}
+            neckline_min_rebound_pct: {"type": "number", "default": 0.06, "exclusiveMinimum": 0, "maximum": 1}
+            rebound_up_day_ratio_min: {"type": "number", "default": 0.6, "minimum": 0, "maximum": 1}
+            rebound_volume_ratio_max: {"type": "number", "default": 1.5, "exclusiveMinimum": 0}
+            rebound_volume_ratio_min: {"type": "number", "default": 1.0, "exclusiveMinimum": 0}
+            retest_volume_ratio_max: {"type": "number", "default": 0.8, "exclusiveMinimum": 0}
+            retest_window: {"type": "integer", "default": 10, "minimum": 1}
+            second_bottom_volume_ratio_max: {"type": "number", "default": 0.9, "exclusiveMinimum": 0}
+            support_tolerance_pct: {"type": "number", "default": 0.02, "exclusiveMinimum": 0, "maximum": 1}
         universe: {$ref: "#/components/schemas/UniverseConfig"}
-        risk:
+        risk: {$ref: "#/components/schemas/StagedBottomRiskConfig"}
+        execution:
           type: object
-          required: [max_positions, position_size_pct, stop_loss_atr, max_loss_pct, take_profit_atr]
+          required: [timeframe, rebalance, run_at]
           properties:
-            max_positions: {type: integer, minimum: 1}
-            position_size_pct: {type: number, exclusiveMinimum: 0, maximum: 1}
-            stop_loss_atr: {type: number, exclusiveMinimum: 0}
-            max_loss_pct: {type: number, exclusiveMinimum: 0, maximum: 1}
-            take_profit_atr: {type: number, exclusiveMinimum: 0}
-        execution: {$ref: "#/components/schemas/ExecutionConfig"}
+            timeframe: {type: string, enum: [1d]}
+            rebalance: {type: string, enum: [daily]}
+            run_at: {type: string, enum: [close]}
         metadata: {$ref: "#/components/schemas/MetadataConfig"}
+
+    HeadShouldersBottomStrategyParams:
+      type: object
+      description: Revision 2. Daily close signals; fills at the next valid session open. Defaults are initial quantification, not optimized values.
+      required: [signal, universe, risk, execution, metadata]
+      properties:
+        signal:
+          type: object
+          required: [breakout_buffer_pct, breakout_volume_ratio_min, downtrend_lookback, downtrend_min_drop_pct, head_depth_min_pct, head_volume_ratio_max, max_segment_bars, min_segment_bars, min_strength_score, pivot_left_bars, pivot_right_bars, platform_bars, platform_drift_atr_max, platform_range_atr_max, rebound_volume_ratio_max, rebound_volume_ratio_min, right_shoulder_volume_ratio_max, shoulder_tolerance_pct]
+          properties:
+            breakout_buffer_pct: {"type": "number", "default": 0.005, "minimum": 0, "exclusiveMaximum": 1, "description": "Require a close strictly above the key price * (1 + buffer), with confirming volume."}
+            breakout_volume_ratio_min: {"type": "number", "default": 1.5, "exclusiveMinimum": 0}
+            downtrend_lookback: {"type": "integer", "default": 60, "minimum": 1}
+            downtrend_min_drop_pct: {"type": "number", "default": 0.2, "exclusiveMinimum": 0, "maximum": 1}
+            head_depth_min_pct: {"type": "number", "default": 0.05, "exclusiveMinimum": 0, "maximum": 1}
+            head_volume_ratio_max: {"type": "number", "default": 0.8, "exclusiveMinimum": 0}
+            max_segment_bars: {"type": "integer", "default": 40, "minimum": 1}
+            min_segment_bars: {"type": "integer", "default": 5, "minimum": 1}
+            min_strength_score: {"type": "number", "default": 50.0, "minimum": 0, "maximum": 100}
+            pivot_left_bars: {"type": "integer", "default": 2, "minimum": 1}
+            pivot_right_bars: {"type": "integer", "default": 2, "minimum": 1}
+            platform_bars: {"type": "integer", "default": 5, "minimum": 3}
+            platform_drift_atr_max: {"type": "number", "default": 1.0, "exclusiveMinimum": 0}
+            platform_range_atr_max: {"type": "number", "default": 3.0, "exclusiveMinimum": 0}
+            rebound_volume_ratio_max: {"type": "number", "default": 1.5, "exclusiveMinimum": 0}
+            rebound_volume_ratio_min: {"type": "number", "default": 1.0, "exclusiveMinimum": 0}
+            right_shoulder_volume_ratio_max: {"type": "number", "default": 0.9, "exclusiveMinimum": 0}
+            shoulder_tolerance_pct: {"type": "number", "default": 0.05, "exclusiveMinimum": 0, "maximum": 1}
+        universe: {$ref: "#/components/schemas/UniverseConfig"}
+        risk: {$ref: "#/components/schemas/StagedBottomRiskConfig"}
+        execution:
+          type: object
+          required: [timeframe, rebalance, run_at]
+          properties:
+            timeframe: {type: string, enum: [1d]}
+            rebalance: {type: string, enum: [daily]}
+            run_at: {type: string, enum: [close]}
+        metadata: {$ref: "#/components/schemas/MetadataConfig"}
+
+    RoundedBottomStrategyParams:
+      type: object
+      description: Revision 2. Daily close signals; fills at the next valid session open. Defaults are initial quantification, not optimized values.
+      required: [signal, universe, risk, execution, metadata]
+      properties:
+        signal:
+          type: object
+          required: [breakout_buffer_pct, breakout_volume_ratio_min, max_lookback, min_depth_pct, min_lookback, min_pullback_spacing, min_r_squared, min_strength_score, pivot_left_bars, pivot_right_bars, pullback_volume_ratio_max, right_volume_ratio_min, vertex_position_max, vertex_position_min, weakening_buffer_pct]
+          properties:
+            breakout_buffer_pct: {"type": "number", "default": 0.005, "minimum": 0, "exclusiveMaximum": 1, "description": "Require a close strictly above the key price * (1 + buffer), with confirming volume."}
+            breakout_volume_ratio_min: {"type": "number", "default": 1.5, "exclusiveMinimum": 0}
+            max_lookback: {"type": "integer", "default": 240, "minimum": 1}
+            min_depth_pct: {"type": "number", "default": 0.2, "exclusiveMinimum": 0, "maximum": 1}
+            min_lookback: {"type": "integer", "default": 80, "minimum": 1}
+            min_pullback_spacing: {"type": "integer", "default": 5, "minimum": 1}
+            min_r_squared: {"type": "number", "default": 0.75, "minimum": 0, "maximum": 1}
+            min_strength_score: {"type": "number", "default": 50.0, "minimum": 0, "maximum": 100}
+            pivot_left_bars: {"type": "integer", "default": 2, "minimum": 1}
+            pivot_right_bars: {"type": "integer", "default": 2, "minimum": 1}
+            pullback_volume_ratio_max: {"type": "number", "default": 0.8, "exclusiveMinimum": 0}
+            right_volume_ratio_min: {"type": "number", "default": 1.3, "exclusiveMinimum": 0}
+            vertex_position_max: {"type": "number", "default": 0.65, "minimum": 0, "maximum": 1}
+            vertex_position_min: {"type": "number", "default": 0.35, "minimum": 0, "maximum": 1}
+            weakening_buffer_pct: {"type": "number", "default": 0.005, "exclusiveMinimum": 0, "exclusiveMaximum": 1}
+        universe: {$ref: "#/components/schemas/UniverseConfig"}
+        risk: {$ref: "#/components/schemas/StagedBottomRiskConfig"}
+        execution:
+          type: object
+          required: [timeframe, rebalance, run_at]
+          properties:
+            timeframe: {type: string, enum: [1d]}
+            rebalance: {type: string, enum: [daily]}
+            run_at: {type: string, enum: [close]}
+        metadata: {$ref: "#/components/schemas/MetadataConfig"}
+
+    VReversalStrategyParams:
+      type: object
+      description: Revision 2. Daily close signals; fills at the next valid session open. Defaults are initial quantification, not optimized values.
+      required: [signal, universe, risk, execution, metadata]
+      properties:
+        signal:
+          type: object
+          required: [bearish_body_atr_min, bearish_reversal_volume_ratio_min, breakout_buffer_pct, breakout_volume_ratio_min, consolidation_drift_atr_max, consolidation_max_bars, consolidation_min_bars, consolidation_range_atr_max, continuation_volume_ratio_min, continuation_window, downtrend_lookback, downtrend_min_drop_pct, min_strength_score, pivot_max_bars, pivot_volume_ratio_min, retest_volume_ratio_max, retest_window, reversal_min_atr, reversal_min_return_pct, support_tolerance_pct]
+          properties:
+            bearish_body_atr_min: {"type": "number", "default": 0.5, "exclusiveMinimum": 0}
+            bearish_reversal_volume_ratio_min: {"type": "number", "default": 2.0, "exclusiveMinimum": 0}
+            breakout_buffer_pct: {"type": "number", "default": 0.005, "minimum": 0, "exclusiveMaximum": 1, "description": "Require a close strictly above the key price * (1 + buffer), with confirming volume."}
+            breakout_volume_ratio_min: {"type": "number", "default": 1.5, "exclusiveMinimum": 0}
+            consolidation_drift_atr_max: {"type": "number", "default": 1.0, "exclusiveMinimum": 0}
+            consolidation_max_bars: {"type": "integer", "default": 10, "minimum": 1}
+            consolidation_min_bars: {"type": "integer", "default": 3, "minimum": 1}
+            consolidation_range_atr_max: {"type": "number", "default": 3.0, "exclusiveMinimum": 0}
+            continuation_volume_ratio_min: {"type": "number", "default": 1.2, "exclusiveMinimum": 0}
+            continuation_window: {"type": "integer", "default": 5, "minimum": 1}
+            downtrend_lookback: {"type": "integer", "default": 60, "minimum": 1}
+            downtrend_min_drop_pct: {"type": "number", "default": 0.2, "exclusiveMinimum": 0, "maximum": 1}
+            min_strength_score: {"type": "number", "default": 50.0, "minimum": 0, "maximum": 100}
+            pivot_max_bars: {"type": "integer", "default": 3, "minimum": 1}
+            pivot_volume_ratio_min: {"type": "number", "default": 2.0, "exclusiveMinimum": 0}
+            retest_volume_ratio_max: {"type": "number", "default": 0.8, "exclusiveMinimum": 0}
+            retest_window: {"type": "integer", "default": 5, "minimum": 1}
+            reversal_min_atr: {"type": "number", "default": 1.5, "exclusiveMinimum": 0}
+            reversal_min_return_pct: {"type": "number", "default": 0.05, "exclusiveMinimum": 0, "maximum": 1}
+            support_tolerance_pct: {"type": "number", "default": 0.02, "exclusiveMinimum": 0, "maximum": 1}
+        universe: {$ref: "#/components/schemas/UniverseConfig"}
+        risk: {$ref: "#/components/schemas/StagedBottomRiskConfig"}
+        execution:
+          type: object
+          required: [timeframe, rebalance, run_at]
+          properties:
+            timeframe: {type: string, enum: [1d]}
+            rebalance: {type: string, enum: [daily]}
+            run_at: {type: string, enum: [close]}
+        metadata: {$ref: "#/components/schemas/MetadataConfig"}
+
+    StagedBottomRiskConfig:
+      type: object
+      description: Targets must satisfy 0 < stage 1 < stage 2 < stage 3 = 1. Repeat signals only fill the remaining cumulative target.
+      required: [max_loss_pct, max_positions, position_size_pct, stage_1_target_pct, stage_2_target_pct, stage_3_target_pct, stop_loss_atr, take_profit_atr]
+      properties:
+        max_loss_pct: {"type": "number", "default": 0.08, "exclusiveMinimum": 0, "maximum": 1}
+        max_positions: {"type": "integer", "default": 6, "minimum": 1}
+        position_size_pct: {"type": "number", "default": 0.15, "exclusiveMinimum": 0, "maximum": 1}
+        stage_1_target_pct: {"type": "number", "default": 0.2, "exclusiveMinimum": 0, "maximum": 1}
+        stage_2_target_pct: {"type": "number", "default": 0.5, "exclusiveMinimum": 0, "maximum": 1}
+        stage_3_target_pct: {"type": "number", "const": 1, "default": 1}
+        stop_loss_atr: {"type": "number", "default": 1.5, "exclusiveMinimum": 0}
+        take_profit_atr: {"type": "number", "default": 3.0, "exclusiveMinimum": 0}
 
     SupportResistanceStrategyParams:
       type: object
@@ -2425,11 +2593,10 @@ components:
           required:
             [support_bounce_enabled, resistance_breakout_enabled, breakout_retest_enabled,
              pivot_left_bars, pivot_right_bars, detection_window, min_line_pivots,
-             min_line_span_sessions, line_inlier_tolerance_atr,
+             min_line_span_sessions, max_zones_per_kind, pivot_tolerance_atr, line_inlier_tolerance_atr,
              max_abs_slope_atr_per_session, zone_half_width_atr, decay_half_life,
              bounce_confirmation_atr, breakout_confirmation_atr, breakout_volume_ratio_min,
-             retest_window, retest_volume_ratio_max, score_outcome_window,
-             score_target_atr, score_stop_atr]
+             retest_window, retest_volume_ratio_max, min_strength_score]
           properties:
             min_strength_score: {type: number, minimum: 0, maximum: 100, default: 50}
             support_bounce_enabled: {type: boolean, default: true}
@@ -2443,6 +2610,8 @@ components:
             detection_window: {type: integer, minimum: 7, default: 120}
             min_line_pivots: {type: integer, minimum: 3, default: 3}
             min_line_span_sessions: {type: integer, minimum: 1, default: 10}
+            max_zones_per_kind: {type: integer, minimum: 1, maximum: 5, default: 3}
+            pivot_tolerance_atr: {type: number, minimum: 0, maximum: 0.1, default: 0.05}
             line_inlier_tolerance_atr: {type: number, exclusiveMinimum: 0, default: 0.75}
             max_abs_slope_atr_per_session: {type: number, exclusiveMinimum: 0, default: 0.25}
             zone_half_width_atr: {type: number, exclusiveMinimum: 0, default: 0.5}
@@ -2452,17 +2621,13 @@ components:
             breakout_volume_ratio_min: {type: number, exclusiveMinimum: 0, default: 1.5}
             retest_window: {type: integer, minimum: 1, default: 10}
             retest_volume_ratio_max: {type: number, exclusiveMinimum: 0, default: 0.8}
-            score_outcome_window: {type: integer, minimum: 1, default: 20}
-            score_target_atr: {type: number, exclusiveMinimum: 0, default: 3}
-            score_stop_atr: {type: number, exclusiveMinimum: 0, default: 1.5}
           anyOf:
             - properties: {support_bounce_enabled: {const: true}}
-            - properties: {resistance_breakout_enabled: {const: true}}
             - properties: {breakout_retest_enabled: {const: true}}
         universe: {$ref: "#/components/schemas/UniverseConfig"}
         risk:
           type: object
-          required: [max_positions, position_size_pct, stop_loss_atr, max_loss_pct, take_profit_atr, min_reward_risk, max_holding_days]
+          required: [max_positions, position_size_pct, stop_loss_atr, max_loss_pct, take_profit_atr, min_reward_risk, max_holding_days, risk_per_trade_pct, stop_cooldown_sessions, break_even_at_r, market_filter_enabled, market_filter_symbol]
           properties:
             max_positions: {type: integer, minimum: 1}
             position_size_pct: {type: number, exclusiveMinimum: 0, maximum: 1}
@@ -2471,6 +2636,11 @@ components:
             take_profit_atr: {type: number, exclusiveMinimum: 0}
             min_reward_risk: {type: number, exclusiveMinimum: 0}
             max_holding_days: {type: integer, minimum: 1}
+            risk_per_trade_pct: {type: number, exclusiveMinimum: 0, maximum: 1, default: 0.005, description: Planned stop loss budget including simulated commissions; gaps can exceed it.}
+            stop_cooldown_sessions: {type: integer, minimum: 0, default: 5}
+            break_even_at_r: {type: number, exclusiveMinimum: 0, default: 1}
+            market_filter_enabled: {type: boolean, default: false}
+            market_filter_symbol: {type: string, default: SPY, description: Stored benchmark used for a causal 200-session mean of adjusted closes.}
         execution:
           type: object
           required: [timeframe, rebalance, run_at]
@@ -2582,6 +2752,9 @@ components:
             - $ref: "#/components/schemas/MomentumBreakoutStrategyParams"
             - $ref: "#/components/schemas/IslandReversalStrategyParams"
             - $ref: "#/components/schemas/DoubleBottomStrategyParams"
+            - $ref: "#/components/schemas/HeadShouldersBottomStrategyParams"
+            - $ref: "#/components/schemas/RoundedBottomStrategyParams"
+            - $ref: "#/components/schemas/VReversalStrategyParams"
             - $ref: "#/components/schemas/SupportResistanceStrategyParams"
             - $ref: "#/components/schemas/FreeFormObject"
         parameter_schema:
@@ -2619,6 +2792,9 @@ components:
             - $ref: "#/components/schemas/MomentumBreakoutStrategyParams"
             - $ref: "#/components/schemas/IslandReversalStrategyParams"
             - $ref: "#/components/schemas/DoubleBottomStrategyParams"
+            - $ref: "#/components/schemas/HeadShouldersBottomStrategyParams"
+            - $ref: "#/components/schemas/RoundedBottomStrategyParams"
+            - $ref: "#/components/schemas/VReversalStrategyParams"
             - $ref: "#/components/schemas/SupportResistanceStrategyParams"
             - $ref: "#/components/schemas/FreeFormObject"
         status:

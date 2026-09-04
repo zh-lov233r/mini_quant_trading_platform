@@ -18,6 +18,7 @@ from src.api.paper_trading import router as paper_trading_router
 from src.api.research import agent_router as agent_research_router
 from src.api.research import router as research_router
 from src.api.stock_baskets import router as stock_baskets_router
+from src.api.stock_screening import router as stock_screening_router
 from src.api.strategy_allocations import router as strategy_allocations_router
 from src.api.strategies import agent_router as agent_strategies_router
 from src.api.strategies import router as strategies_router
@@ -65,6 +66,7 @@ app.include_router(agent_strategies_router)
 app.include_router(backtests_router)
 app.include_router(market_data_router)
 app.include_router(stock_baskets_router)
+app.include_router(stock_screening_router)
 app.include_router(paper_accounts_router)
 app.include_router(strategy_allocations_router)
 app.include_router(paper_trading_router)

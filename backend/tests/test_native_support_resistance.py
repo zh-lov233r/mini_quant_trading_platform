@@ -265,6 +265,8 @@ class NativeSupportResistanceParityTests(unittest.TestCase):
             "detection_window",
             "min_line_pivots",
             "min_line_span_sessions",
+            "max_zones_per_kind",
+            "pivot_tolerance_atr",
             "line_inlier_tolerance_atr",
             "max_abs_slope_atr_per_session",
             "zone_half_width_atr",
@@ -275,14 +277,14 @@ class NativeSupportResistanceParityTests(unittest.TestCase):
             "retest_volume_ratio_max",
         )
         expected = {
-            "implementation_revision": 10,
-            "regime_logic_revision": 2,
+            "implementation_revision": 12,
+            "regime_logic_revision": 3,
             **{key: self.signal[key] for key in keys},
         }
         actual = self.native.normalized_detector_params({"signal": self.signal})
 
-        self.assertEqual(self.native.DETECTOR_IMPLEMENTATION_REVISION, 10)
-        self.assertEqual(self.native.REGIME_LOGIC_REVISION, 2)
+        self.assertEqual(self.native.DETECTOR_IMPLEMENTATION_REVISION, 12)
+        self.assertEqual(self.native.REGIME_LOGIC_REVISION, 3)
         self.assertEqual(
             self.native.ENTRY_CHANNEL_SEMANTICS,
             "support_upper_to_resistance_lower_v1",

@@ -271,6 +271,7 @@ class NativeKernelParityTests(unittest.TestCase):
     def test_head_shoulders_three_stages_match_python(self) -> None:
         params = {
             "signal": {
+                "platform_bars": 3,
                 "pivot_left_bars": 1,
                 "pivot_right_bars": 1,
                 "downtrend_lookback": 2,
@@ -314,7 +315,7 @@ class NativeKernelParityTests(unittest.TestCase):
             "breakout_volume_ratio_min": 1.2,
             "max_breakout_bars_after_right_bottom": 4,
             "breakout_buffer_pct": 0.005,
-            "retest_window": 3,
+            "retest_window": 5,
             "retest_volume_ratio_max": 0.8,
             "support_tolerance_pct": 0.02,
         }
@@ -323,8 +324,8 @@ class NativeKernelParityTests(unittest.TestCase):
             self._bar(1, 116, 117, 114, 115, 100),
             self._bar(2, 111, 112, 108, 110, 100),
             self._bar(3, 101, 102, 98, 100, 80),
-            self._bar(4, 101, 108, 100, 106, 90),
-            self._bar(5, 107, 112, 105, 109, 95),
+            self._bar(4, 101, 108, 100, 106, 110),
+            self._bar(5, 107, 112, 105, 109, 120),
             self._bar(6, 108, 109, 104, 106, 90),
             self._bar(7, 101, 102, 99, 100, 70),
         ]

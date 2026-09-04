@@ -1,3 +1,4 @@
+.helpButton { composes: control from "../styles/Motion.module.css"; }
 .card { min-width: 0; padding: 13px 14px; border: 1px solid rgba(148,163,184,.14); border-radius: 15px; background: linear-gradient(180deg,rgba(11,23,35,.92),rgba(15,23,42,.88)); box-shadow: 0 12px 28px rgba(2,6,23,.24); container-type: inline-size; }
 .compact { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 8px 12px; }
 .comfortable { display: block; }

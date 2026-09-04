@@ -110,6 +110,11 @@ class PendingOutcome:
     origin_session_index: int
     target: float
     stop: float
+    frozen: dict[str, Any] = field(default_factory=dict)
+    entry_price: float = 0.0
+    exit_reason: str = ""
+    channel_lower: float = 0.0
+    channel_upper: float = 0.0
 
 
 @dataclass(slots=True)
@@ -124,7 +129,7 @@ class SetupStats:
 
     @property
     def posterior(self) -> float:
-        return (self.wins + 1.0) / (self.resolved + 2.0)
+        return (self.wins + 1.0) / (self.resolved + self.censored + 2.0)
 
 
 @dataclass(slots=True)
@@ -153,6 +158,7 @@ class SupportResistanceSymbolState:
     cached_regime_timeline: list[dict[str, Any]] = field(default_factory=list)
     cached_lifecycle_events: set[tuple[date, str, str]] = field(default_factory=set)
     current_entry_channel: dict[str, Any] | None = None
+    stopped_zones: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

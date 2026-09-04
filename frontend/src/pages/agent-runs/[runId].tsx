@@ -248,4 +248,4 @@ const primaryButton: CSSProperties = { padding: "10px 16px", border: 0, borderRa
 const dangerButton: CSSProperties = { padding: "10px 16px", border: "1px solid #be123c", borderRadius: 10, background: "rgba(159,18,57,.2)", color: "#fecdd3", fontWeight: 800, cursor: "pointer" };
 const linkButton: CSSProperties = { padding: "10px 16px", borderRadius: 10, background: "#0891b2", color: "white", textDecoration: "none", fontWeight: 800 };
 const progressTrackStyle: CSSProperties = { height: 8, marginTop: 10, overflow: "hidden", borderRadius: 999, background: "#1e293b" };
-const progressBarStyle: CSSProperties = { height: "100%", borderRadius: 999, background: "#06b6d4", transition: "width .2s ease" };
+const progressBarStyle: CSSProperties = { height: "100%", borderRadius: 999, background: "#06b6d4", transition: "width var(--motion-enter) ease" };

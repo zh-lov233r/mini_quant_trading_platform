@@ -48,6 +48,7 @@ JsonObject object(std::initializer_list<std::pair<std::string, JsonValue>> value
 void set(JsonObject& value, std::string key, JsonValue item);
 const JsonValue* find(const JsonObject& value, const std::string& key);
 std::string json(const JsonValue& value);
+std::string json(const JsonObject& value);
 std::string iso_date(std::int32_t ordinal);
 std::int32_t date_ordinal(const std::string& value);
 
@@ -70,6 +71,8 @@ struct Config {
     int detection_window = 120;
     int min_line_pivots = 3;
     int min_line_span_sessions = 10;
+    int max_zones_per_kind = 3;
+    double pivot_tolerance_atr = 0.05;
     double line_inlier_tolerance_atr = 0.75;
     double max_abs_slope_atr_per_session = 0.25;
     double zone_half_width_atr = 0.5;
@@ -82,15 +85,16 @@ struct Config {
     bool breakout_retest_enabled = true;
     int retest_window = 10;
     double retest_volume_ratio_max = 0.8;
-    int score_outcome_window = 20;
-    double score_target_atr = 3.0;
-    double score_stop_atr = 1.5;
     double min_strength_score = 50.0;
     int max_holding_days = 40;
     double min_reward_risk = 1.5;
     double stop_loss_atr = 1.5;
     double max_loss_pct = 0.08;
     double take_profit_atr = 3.0;
+    double risk_per_trade_pct = 0.005;
+    int stop_cooldown_sessions = 5;
+    double break_even_at_r = 1.0;
+    bool market_filter_enabled = false;
 };
 
 struct Bar {
@@ -103,8 +107,13 @@ struct Bar {
     double volume = 0.0;
     double volume_sma_20 = 0.0;
     double atr_14 = 0.0;
+    std::optional<double> market_close;
+    std::optional<double> market_sma_200;
 };
 
+struct RiskContext {
+    std::map<std::int32_t, std::pair<double, double>> market;
+};
 struct Pivot {
     std::string pivot_key;
     PivotKind kind = PivotKind::Low;
@@ -155,6 +164,11 @@ struct PendingOutcome {
     int origin_session_index = 0;
     double target = 0.0;
     double stop = 0.0;
+    JsonObject frozen;
+    double entry_price = 0.0;
+    std::string exit_reason;
+    double channel_lower = 0.0;
+    double channel_upper = 0.0;
 };
 
 struct SetupStats {
@@ -165,7 +179,7 @@ struct SetupStats {
     [[nodiscard]] int resolved() const { return wins + losses; }
     [[nodiscard]] double posterior() const {
         return (static_cast<double>(wins) + 1.0)
-            / (static_cast<double>(resolved()) + 2.0);
+            / (static_cast<double>(resolved() + censored) + 2.0);
     }
 };
 
@@ -223,6 +237,7 @@ struct Candidate {
     double stop_price = 0.0;
     double target_price = 0.0;
     double reward_risk = 0.0;
+    int overhead_count = 0;
     std::string reason;
     JsonObject strength_inputs;
     Strength strength;
@@ -263,6 +278,19 @@ struct PositionView {
     std::optional<JsonObject> entry_signal_features;
 };
 
+struct EntrySizing {
+    double quantity = 0.0;
+    double stop = 0.0;
+    double planned_loss = 0.0;
+    double reward_risk = 0.0;
+    std::string reason_code;
+    double maximum_entry_price = 0.0;
+};
+
+EntrySizing size_entry(const JsonObject& frozen, double price, double equity, double cash,
+    double position_cap, const Config& config, double commission_bps = 0.0,
+    double commission_min = 0.0, double slippage_bps = 0.0);
+
 struct Decision {
     Action action = Action::Buy;
     std::string reason;
@@ -302,6 +330,7 @@ struct SymbolState {
     std::vector<CachedRegimeVersion> cached_regime_timeline;
     std::vector<LifecycleEventKey> cached_lifecycle_events;
     std::optional<EntryChannel> current_entry_channel;
+    std::map<std::string, int> stopped_zones;
 };
 
 double stored_zone_price(double value);

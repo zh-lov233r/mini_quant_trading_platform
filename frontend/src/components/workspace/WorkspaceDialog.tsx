@@ -46,7 +46,6 @@ export function WorkspaceDialog({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
-  const previousOpenRef = useRef(false);
   const open = controlledOpen ?? internalOpen;
   const setOpen = (next: boolean) => {
     if (controlledOpen == null) setInternalOpen(next);
@@ -59,20 +58,6 @@ export function WorkspaceDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router.asPath]);
 
-  useEffect(() => {
-    const wasOpen = previousOpenRef.current;
-    previousOpenRef.current = open;
-    if (open && !wasOpen) {
-      if (document.activeElement instanceof HTMLElement) returnFocusRef.current = document.activeElement;
-      const frame = window.requestAnimationFrame(() => closeRef.current?.focus());
-      return () => window.cancelAnimationFrame(frame);
-    }
-    if (!open && wasOpen) {
-      const target = triggerRef.current || returnFocusRef.current;
-      if (target?.isConnected) target.focus();
-    }
-  }, [open]);
-
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       {triggerLabel ? (
@@ -84,7 +69,19 @@ export function WorkspaceDialog({
       ) : null}
       <Dialog.Portal>
         <Dialog.Overlay className={styles.overlay} />
-        <Dialog.Content className={`${styles.content} ${size === "wide" ? styles.wide : size === "form" ? styles.form : styles.summary}`}>
+        <Dialog.Content
+          className={`${styles.content} ${size === "wide" ? styles.wide : size === "form" ? styles.form : styles.summary}`}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            if (document.activeElement instanceof HTMLElement) returnFocusRef.current = document.activeElement;
+            closeRef.current?.focus();
+          }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            const target = triggerRef.current || returnFocusRef.current;
+            if (target?.isConnected) target.focus();
+          }}
+        >
           <header className={styles.header}>
             <div>
               <Dialog.Title className={styles.dialogTitle}>{title}</Dialog.Title>

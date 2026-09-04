@@ -5,6 +5,7 @@ import type { FormEvent, PointerEvent as ReactPointerEvent, ReactNode } from "re
 import { getCandleSeries } from "@/api/quotes";
 import type { CandleBarOut, CandleSeriesOut } from "@/types/quote";
 import { useI18n } from "@/i18n/provider";
+import motion from "@/styles/Motion.module.css";
 
 const CandlestickLightweightChart = dynamic(
   () => import("@/components/charts/CandlestickLightweightChart"),
@@ -318,7 +319,7 @@ export default function StockCandleWidget() {
         type="button"
         aria-label={messages.marketViewer.title}
         title={messages.marketViewer.title}
-        className="workspace-market-trigger"
+        className={`${motion.control} workspace-market-trigger`}
         onClick={() => setOpen((current) => !current)}
         style={{
           position: "fixed",
@@ -449,6 +450,8 @@ export default function StockCandleWidget() {
               </div>
 
               <button
+
+                className={motion.control}
                 type="button"
                 aria-label={messages.marketViewer.closeWindow}
                 title={messages.marketViewer.closeWindow}
@@ -533,6 +536,8 @@ export default function StockCandleWidget() {
               </div>
 
               <button
+
+                className={motion.control}
                 type="submit"
                 disabled={loading}
                 style={{

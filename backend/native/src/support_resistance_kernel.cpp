@@ -19,8 +19,8 @@ namespace sr = quant_kernel::support_resistance;
 namespace quant_kernel {
 namespace {
 
-constexpr int kDetectorImplementationRevision = 10;
-constexpr int kRegimeLogicRevision = 2;
+constexpr int kDetectorImplementationRevision = 12;
+constexpr int kRegimeLogicRevision = 3;
 constexpr const char* kEntryChannelSemantics = "support_upper_to_resistance_lower_v1";
 
 py::object value_for(const py::handle& value, const char* key) {
@@ -291,6 +291,10 @@ std::optional<sr::Bar> bar_from_python(const py::dict& snapshot) {
         number_or(snapshot, "volume", 0.0),
         number_or(snapshot, "volume_sma_20", 0.0),
         atr,
+        value_for(snapshot, "market_close").is_none() ? std::nullopt
+            : std::optional(required_number(snapshot, "market_close")),
+        value_for(snapshot, "market_sma_200").is_none() ? std::nullopt
+            : std::optional(required_number(snapshot, "market_sma_200")),
     };
 }
 
@@ -330,6 +334,8 @@ py::dict bar_to_python(const sr::Bar& bar) {
     result["volume"] = bar.volume;
     result["volume_sma_20"] = bar.volume_sma_20;
     result["atr_14"] = bar.atr_14;
+    result["market_close"] = bar.market_close ? py::object(py::float_(*bar.market_close)) : py::object(py::none());
+    result["market_sma_200"] = bar.market_sma_200 ? py::object(py::float_(*bar.market_sma_200)) : py::object(py::none());
     return result;
 }
 
@@ -380,6 +386,7 @@ py::object zone_to_python(const sr::Zone& zone) {
 
 sr::SymbolState state_from_python(const py::handle& source) {
     sr::SymbolState state;
+    state.stopped_zones = py::cast<std::map<std::string, int>>(value_for(source, "stopped_zones"));
     for (const py::handle raw : py::reinterpret_borrow<py::iterable>(value_for(source, "history"))) {
         if (const auto bar = bar_from_python(py::cast<py::dict>(raw))) state.history.push_back(*bar);
     }
@@ -406,6 +413,11 @@ sr::SymbolState state_from_python(const py::handle& source) {
             integer_or(raw, "origin_session_index", 0),
             required_number(raw, "target"),
             required_number(raw, "stop"),
+            object_from_python(value_for(raw, "frozen")),
+            number_or(raw, "entry_price", 0.0),
+            text_or(raw, "exit_reason"),
+            number_or(raw, "channel_lower", 0.0),
+            number_or(raw, "channel_upper", 0.0),
         });
     }
     const py::dict stats = py::cast<py::dict>(value_for(source, "stats"));
@@ -447,6 +459,7 @@ sr::SymbolState state_from_python(const py::handle& source) {
 }
 
 void sync_state_to_python(const sr::SymbolState& state, const py::handle& target) {
+    target.attr("stopped_zones") = py::cast(state.stopped_zones);
     py::list history;
     for (const sr::Bar& bar : state.history) history.append(bar_to_python(bar));
     target.attr("history") = history;
@@ -475,6 +488,11 @@ void sync_state_to_python(const sr::SymbolState& state, const py::handle& target
         values["origin_session_index"] = outcome.origin_session_index;
         values["target"] = outcome.target;
         values["stop"] = outcome.stop;
+        values["frozen"] = python_from_object(outcome.frozen);
+        values["entry_price"] = outcome.entry_price;
+        values["exit_reason"] = outcome.exit_reason;
+        values["channel_lower"] = outcome.channel_lower;
+        values["channel_upper"] = outcome.channel_upper;
         pending.append(construct("PendingOutcome", values));
     }
     target.attr("pending_outcomes") = pending;
@@ -519,6 +537,12 @@ py::dict decision_to_python(const sr::Decision& decision) {
 
 sr::Config parse_support_resistance_config(const py::dict& signal, const py::dict& risk) {
     sr::Config result;
+    result.max_zones_per_kind = integer_or(signal, "max_zones_per_kind", result.max_zones_per_kind);
+    result.pivot_tolerance_atr = number_or(signal, "pivot_tolerance_atr", result.pivot_tolerance_atr);
+    result.risk_per_trade_pct = number_or(risk, "risk_per_trade_pct", result.risk_per_trade_pct);
+    result.stop_cooldown_sessions = integer_or(risk, "stop_cooldown_sessions", result.stop_cooldown_sessions);
+    result.break_even_at_r = number_or(risk, "break_even_at_r", result.break_even_at_r);
+    result.market_filter_enabled = bool_or(risk, "market_filter_enabled", false);
     result.pivot_left_bars = integer_or(signal, "pivot_left_bars", result.pivot_left_bars);
     result.pivot_right_bars = integer_or(signal, "pivot_right_bars", result.pivot_right_bars);
     result.detection_window = integer_or(signal, "detection_window", result.detection_window);
@@ -536,15 +560,27 @@ sr::Config parse_support_resistance_config(const py::dict& signal, const py::dic
     result.breakout_retest_enabled = bool_or(signal, "breakout_retest_enabled", result.breakout_retest_enabled);
     result.retest_window = integer_or(signal, "retest_window", result.retest_window);
     result.retest_volume_ratio_max = number_or(signal, "retest_volume_ratio_max", result.retest_volume_ratio_max);
-    result.score_outcome_window = integer_or(signal, "score_outcome_window", result.score_outcome_window);
-    result.score_target_atr = number_or(signal, "score_target_atr", result.score_target_atr);
-    result.score_stop_atr = number_or(signal, "score_stop_atr", result.score_stop_atr);
     result.min_strength_score = number_or(signal, "min_strength_score", result.min_strength_score);
     result.max_holding_days = integer_or(risk, "max_holding_days", result.max_holding_days);
     result.min_reward_risk = number_or(risk, "min_reward_risk", result.min_reward_risk);
     result.stop_loss_atr = number_or(risk, "stop_loss_atr", result.stop_loss_atr);
     result.max_loss_pct = number_or(risk, "max_loss_pct", result.max_loss_pct);
     result.take_profit_atr = number_or(risk, "take_profit_atr", result.take_profit_atr);
+    return result;
+}
+
+sr::RiskContext parse_support_risk_context(const py::dict& payload) {
+    sr::RiskContext result;
+    if (payload.contains("market")) {
+        for (const auto& [key, raw] : py::cast<py::dict>(payload["market"])) {
+            const auto pair = py::cast<std::pair<double, double>>(raw);
+            if (!std::isfinite(pair.first) || !std::isfinite(pair.second)
+                || pair.first <= 0.0 || pair.second <= 0.0) {
+                throw std::invalid_argument("market filter inputs must be finite and positive");
+            }
+            result.market.emplace(std::stoi(py::cast<std::string>(key)), pair);
+        }
+    }
     return result;
 }
 
@@ -653,6 +689,25 @@ py::list evaluate_support_resistance_day(
             item.bars.push_back(*current);
         }
         item.position = position_from_python(snapshot);
+        const auto context_value = value_for(snapshot, "support_risk_context");
+        if (!context_value.is_none()) {
+            const auto context = parse_support_risk_context(py::cast<py::dict>(context_value));
+            for (auto& bar : item.bars) {
+                if (const auto found = context.market.find(bar.date_ordinal); found != context.market.end()) {
+                    bar.market_close = found->second.first;
+                    bar.market_sma_200 = found->second.second;
+                }
+            }
+        }
+        const auto stopped = value_for(snapshot, "support_stopped_zones");
+        if (!stopped.is_none()) {
+            for (const auto& [key, day] : py::cast<py::dict>(stopped)) {
+                const auto stop_day = ordinal(day);
+                const auto index = std::lower_bound(item.bars.begin(), item.bars.end(), stop_day,
+                    [](const sr::Bar& bar, std::int32_t value) { return bar.date_ordinal < value; });
+                item.state.stopped_zones[py::cast<std::string>(key)] = static_cast<int>(index - item.bars.begin());
+            }
+        }
         work.push_back(std::move(item));
     }
     {
@@ -719,6 +774,16 @@ void bind_support_resistance(py::module_& module) {
     native.attr("DETECTOR_IMPLEMENTATION_REVISION") = kDetectorImplementationRevision;
     native.attr("REGIME_LOGIC_REVISION") = kRegimeLogicRevision;
     native.attr("ENTRY_CHANNEL_SEMANTICS") = kEntryChannelSemantics;
+    native.def("size_entry", [](const py::dict& frozen, double price, double equity, double cash,
+        const py::dict& risk, double commission_bps, double commission_min, double slippage_bps) {
+        const auto result = sr::size_entry(object_from_python(frozen), price, equity, cash,
+            required_number(risk, "position_size_pct"), parse_support_resistance_config(py::dict(), risk),
+            commission_bps, commission_min, slippage_bps);
+        return py::dict(py::arg("quantity") = result.quantity, py::arg("stop") = result.stop,
+            py::arg("planned_loss") = result.planned_loss, py::arg("reward_risk") = result.reward_risk,
+            py::arg("reason_code") = result.reason_code, py::arg("maximum_entry_price") = result.maximum_entry_price);
+    }, py::arg("frozen"), py::arg("price"), py::arg("equity"), py::arg("cash"), py::arg("risk"),
+        py::arg("commission_bps") = 0.0, py::arg("commission_min") = 0.0, py::arg("slippage_bps") = 0.0);
     native.def("stored_zone_price", &sr::stored_zone_price, py::arg("value"));
     native.def("valid_zone_values", &sr::valid_zone_values, py::arg("center"), py::arg("lower"), py::arg("upper"), py::arg("atr"), py::arg("slope"));
     native.def("normalized_detector_params", [](const py::dict& params) {
@@ -727,6 +792,8 @@ void bind_support_resistance(py::module_& module) {
         py::dict result;
         result["implementation_revision"] = kDetectorImplementationRevision;
         result["regime_logic_revision"] = kRegimeLogicRevision;
+        result["max_zones_per_kind"] = integer_or(signal, "max_zones_per_kind", 3);
+        result["pivot_tolerance_atr"] = number_or(signal, "pivot_tolerance_atr", 0.05);
         for (const char* key : {"pivot_left_bars", "pivot_right_bars", "detection_window", "min_line_pivots", "min_line_span_sessions", "line_inlier_tolerance_atr", "max_abs_slope_atr_per_session", "zone_half_width_atr", "decay_half_life", "breakout_confirmation_atr", "breakout_volume_ratio_min", "retest_window", "retest_volume_ratio_max"}) {
             if (signal.contains(key)) result[py::str(key)] = signal[py::str(key)];
         }

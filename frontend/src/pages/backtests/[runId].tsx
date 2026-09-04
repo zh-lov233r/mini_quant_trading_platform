@@ -15,10 +15,11 @@ import {
 import { getCandleSeries } from "@/api/quotes";
 import AppShell, { PageActionLink } from "@/components/AppShell";
 import Badge from "@/components/Badge";
-import BacktestProgressBar from "@/components/BacktestProgressBar";
 import BacktestWorkerCapacity from "@/components/BacktestWorkerCapacity";
 import BacktestPerformanceProbe from "@/components/charts/BacktestPerformanceProbe";
 import MetricCard from "@/components/MetricCard";
+import BacktestOverview from "@/components/backtests/BacktestOverview";
+import styles from "@/styles/BacktestDetail.module.css";
 import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogNote as ContextNote, DialogStack as ContextStack, DialogStat as ContextStat, DialogStats as ContextStats, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import type { BacktestTransactionDenseRow } from "@/components/workspace/BacktestTransactionsDenseTable";
 import { useI18n } from "@/i18n/provider";
@@ -124,7 +125,7 @@ function BacktestReviewWindow({
   };
 
   return (
-    <section style={{ ...sectionCardStyle, marginTop: 18, marginBottom: 18 }}>
+    <section className={styles.section}>
       <div style={{ marginBottom: 14 }}>
         <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>
           {isZh ? "回测复盘工作台" : "Backtest Review Workbench"}
@@ -136,11 +137,11 @@ function BacktestReviewWindow({
         </p>
       </div>
 
-      <div style={reviewWorkspaceFrameStyle}>
+      <div>
         <div
           role="tablist"
           aria-label={isZh ? "回测复盘模块" : "Backtest review modules"}
-          style={reviewTabListStyle}
+          className={styles.reviewTabs}
         >
           {BACKTEST_REVIEW_TABS.map((tab) => {
             const active = tab === activeTab;
@@ -172,7 +173,7 @@ function BacktestReviewWindow({
           role="tabpanel"
           aria-labelledby={`backtest-review-tab-${activeTab}`}
           tabIndex={0}
-          style={reviewTabPanelStyle}
+          className={styles.reviewPanel}
         >
           {children}
         </div>
@@ -1246,123 +1247,6 @@ function buildEventMarkers(
   return markers;
 }
 
-function RunOverviewPanel({ run }: { run: BacktestDetailOut }) {
-  const { locale } = useI18n();
-  const isZh = locale === "zh-CN";
-  return (
-    <div
-      style={{
-        marginBottom: 18,
-        padding: 18,
-        borderRadius: 18,
-        background: "linear-gradient(180deg, rgba(8,15,24,0.92), rgba(15,23,42,0.88))",
-        border: "1px solid rgba(71, 85, 105, 0.3)",
-        color: "#e2e8f0",
-      }}
-    >
-      <div style={{ marginBottom: 16 }}>
-        <h3 style={{ margin: "0 0 8px", fontSize: 22 }}>
-          {isZh ? "Run 概览" : "Run Overview"}
-        </h3>
-      </div>
-
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
-        <Badge tone="info">{run.mode}</Badge>
-        {run.basket_name ? <Badge>{run.basket_name}</Badge> : null}
-        <Badge
-          tone={
-            run.status === "completed"
-              ? "success"
-              : run.status === "failed"
-                ? "warning"
-                : "neutral"
-          }
-        >
-          {run.status}
-        </Badge>
-        <Badge>v{run.strategy_version}</Badge>
-      </div>
-
-      <div style={infoGridStyle}>
-        <div>
-          <div style={labelStyle}>Run ID</div>
-          <div style={valueStyle}>{run.id}</div>
-        </div>
-        <div>
-          <div style={labelStyle}>{isZh ? "策略" : "Strategy"}</div>
-          <div style={valueStyle}>{run.strategy_name || run.strategy_id}</div>
-        </div>
-        <div>
-          <div style={labelStyle}>{isZh ? "区间" : "Window"}</div>
-          <div style={valueStyle}>
-            {run.window_start} {"->"} {run.window_end}
-          </div>
-        </div>
-        <div>
-          <div style={labelStyle}>{isZh ? "股票组合" : "Basket"}</div>
-          <div style={valueStyle}>
-            {run.basket_name || (isZh ? "沿用策略原始股票池" : "Use the strategy's original universe")}
-          </div>
-        </div>
-        <div>
-          <div style={labelStyle}>{isZh ? "初始资金" : "Initial Cash"}</div>
-          <div style={valueStyle}>{formatCurrency(run.initial_cash, locale)}</div>
-        </div>
-        <div>
-          <div style={labelStyle}>{isZh ? "期末权益" : "Final Equity"}</div>
-          <div style={valueStyle}>{formatCurrency(run.final_equity, locale)}</div>
-        </div>
-        <div>
-          <div style={labelStyle}>{isZh ? "完成时间" : "Completed At"}</div>
-          <div style={valueStyle}>{formatDateTime(run.finished_at || run.requested_at, locale)}</div>
-        </div>
-        <div>
-          <div style={labelStyle}>{isZh ? "总耗时" : "Runtime"}</div>
-          <div style={valueStyle}>{formatDurationMs(run.runtime_ms, locale)}</div>
-        </div>
-      </div>
-
-      {run.latest_snapshot ? (
-        <div
-          style={{
-            marginTop: 16,
-            padding: 16,
-            borderRadius: 16,
-            background: "rgba(15, 23, 42, 0.72)",
-            border: "1px solid rgba(71, 85, 105, 0.28)",
-            fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-          }}
-        >
-          <div style={{ marginBottom: 10, fontWeight: 700, color: "#f8fafc" }}>
-            {isZh ? "最新快照" : "Latest Snapshot"}
-          </div>
-          <div style={{ display: "grid", gap: 8, color: "rgba(148, 163, 184, 0.9)" }}>
-            <div>{isZh ? "时间" : "Time"}: {formatDateTime(run.latest_snapshot.ts || null, locale)}</div>
-            <div>{isZh ? "现金" : "Cash"}: {formatCurrency(run.latest_snapshot.cash, locale)}</div>
-            <div>{isZh ? "权益" : "Equity"}: {formatCurrency(run.latest_snapshot.equity, locale)}</div>
-            <div>{isZh ? "回撤" : "Drawdown"}: {formatPercent(run.latest_snapshot.drawdown ?? null, 2)}</div>
-          </div>
-        </div>
-      ) : null}
-
-      {run.error_message ? (
-        <div
-          style={{
-            marginTop: 16,
-            padding: 14,
-            borderRadius: 14,
-            background: "rgba(127, 29, 29, 0.28)",
-            border: "1px solid rgba(248, 113, 113, 0.18)",
-            color: "#fecaca",
-            fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-          }}
-        >
-          {run.error_message}
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
 function SymbolPnlCard({ rows }: { rows: SymbolPnlRow[] }) {
   const { locale } = useI18n();
@@ -1422,14 +1306,7 @@ function SymbolPnlCard({ rows }: { rows: SymbolPnlRow[] }) {
               ? `当前显示 ${visibleRows.length} / ${rows.length} 支股票，先按盈利从大到小，再按亏损从小到大排序。`
               : `Showing ${visibleRows.length} / ${rows.length} symbols, with winners first from highest gain to lowest, followed by losers from most negative to least negative.`}
           </div>
-          <div
-            style={{
-              overflowX: "auto",
-              borderRadius: 18,
-              border: "1px solid rgba(71, 85, 105, 0.28)",
-              background: "rgba(15, 23, 42, 0.74)",
-            }}
-          >
+          <div className={styles.tableScroll}>
             <table
               style={{
                 width: "100%",
@@ -1738,7 +1615,6 @@ function EquityCurveCard({
         </div>
       </div>
 
-      <RunOverviewPanel run={run} />
 
       <div
         style={{
@@ -2120,28 +1996,28 @@ function EquityCurveCard({
           fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
         }}
       >
-        <div style={miniMetricStyle}>
+        <div className={styles.stat}>
           <div style={labelStyle}>{isZh ? "快照点数" : "Snapshots"}</div>
           <div style={miniMetricValueStyle}>{normalizedPoints.length}</div>
         </div>
-        <div style={miniMetricStyle}>
+        <div className={styles.stat}>
           <div style={labelStyle}>{isZh ? "曲线峰值" : "Peak Equity"}</div>
           <div style={miniMetricValueStyle}>{formatCurrency(peakValue, locale)}</div>
         </div>
-        <div style={miniMetricStyle}>
+        <div className={styles.stat}>
           <div style={labelStyle}>{isZh ? "曲线谷值" : "Lowest Equity"}</div>
           <div style={miniMetricValueStyle}>{formatCurrency(troughValue, locale)}</div>
         </div>
-        <div style={miniMetricStyle}>
+        <div className={styles.stat}>
           <div style={labelStyle}>SPY {isZh ? "收益" : "Return"}</div>
           <div style={miniMetricValueStyle}>{formatPercent(spyTotalReturn, 2)}</div>
         </div>
-        <div style={miniMetricStyle}>
+        <div className={styles.stat}>
           <div style={labelStyle}>QQQ {isZh ? "收益" : "Return"}</div>
           <div style={miniMetricValueStyle}>{formatPercent(qqqTotalReturn, 2)}</div>
         </div>
         {benchmarkSymbol ? (
-          <div style={miniMetricStyle}>
+          <div className={styles.stat}>
             <div style={labelStyle}>
               {isZh ? "基准收益" : "Benchmark Return"} {benchmarkSymbol ? `(${benchmarkSymbol})` : ""}
             </div>
@@ -2149,12 +2025,12 @@ function EquityCurveCard({
           </div>
         ) : null}
         {benchmarkSymbol ? (
-          <div style={miniMetricStyle}>
+          <div className={styles.stat}>
             <div style={labelStyle}>{isZh ? "超额收益" : "Excess Return"}</div>
             <div style={miniMetricValueStyle}>{formatPercent(excessReturn, 2)}</div>
           </div>
         ) : null}
-          <div style={miniMetricStyle}>
+          <div className={styles.stat}>
             <div style={labelStyle}>{isZh ? "最后快照" : "Last Snapshot"}</div>
             <div style={miniMetricValueStyle}>{formatDateTime(latestPoint?.ts || null, locale)}</div>
           </div>
@@ -2253,19 +2129,16 @@ function EquityCurveCardLightweight({
 
   if (normalizedPoints.length < 2) {
     return (
-      <section style={sectionCardStyle}>
-        <h2 style={{ margin: "0 0 8px", fontSize: 24 }}>{isZh ? "权益曲线" : "Equity Curve"}</h2>
+      <div>
         <div style={emptyStateStyle}>
           {isZh ? "至少需要两个有效权益点才能绘图" : "At least two valid equity points are required"}
         </div>
-      </section>
+      </div>
     );
   }
 
   return (
-    <section style={sectionCardStyle}>
-      <h2 style={{ margin: "0 0 16px", fontSize: 24 }}>{isZh ? "权益曲线" : "Equity Curve"}</h2>
-      <RunOverviewPanel run={run} />
+    <div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "14px 0" }}>
         <button type="button" style={markerToggleChipStyle(curveVisibility.strategy, "#0f766e")} onClick={() => setCurveVisibility((current) => ({ ...current, strategy: !current.strategy }))}>
           {isZh ? "策略曲线" : "Strategy Curve"}
@@ -2298,21 +2171,21 @@ function EquityCurveCardLightweight({
         initialValue={startValue}
         locale={locale}
       />
-      <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
-        <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "快照点数" : "Snapshots"}</div><div style={miniMetricValueStyle}>{normalizedPoints.length}</div></div>
-        <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "曲线峰值" : "Peak Equity"}</div><div style={miniMetricValueStyle}>{formatCurrency(peakValue, locale)}</div></div>
-        <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "曲线谷值" : "Lowest Equity"}</div><div style={miniMetricValueStyle}>{formatCurrency(troughValue, locale)}</div></div>
+      <div className={styles.stats}>
+        <div className={styles.stat}><div style={labelStyle}>{isZh ? "快照点数" : "Snapshots"}</div><div style={miniMetricValueStyle}>{normalizedPoints.length}</div></div>
+        <div className={styles.stat}><div style={labelStyle}>{isZh ? "曲线峰值" : "Peak Equity"}</div><div style={miniMetricValueStyle}>{formatCurrency(peakValue, locale)}</div></div>
+        <div className={styles.stat}><div style={labelStyle}>{isZh ? "曲线谷值" : "Lowest Equity"}</div><div style={miniMetricValueStyle}>{formatCurrency(troughValue, locale)}</div></div>
         {comparisons.map((comparison) => (
-          <div key={`${comparison.key}-return`} style={miniMetricStyle}>
+          <div key={`${comparison.key}-return`} className={styles.stat}>
             <div style={labelStyle}>{comparisonCurveLabel(comparison.key, locale)} {isZh ? "收益" : "Return"}</div>
             <div style={miniMetricValueStyle}>{formatPercent(comparisonReturn(comparison.key), 2)}</div>
           </div>
         ))}
-        {benchmarkSymbol ? <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "基准收益" : "Benchmark Return"} ({benchmarkSymbol})</div><div style={miniMetricValueStyle}>{formatPercent(benchmarkTotalReturn, 2)}</div></div> : null}
-        {benchmarkSymbol ? <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "超额收益" : "Excess Return"}</div><div style={miniMetricValueStyle}>{formatPercent(excessReturn, 2)}</div></div> : null}
-        <div style={miniMetricStyle}><div style={labelStyle}>{isZh ? "最后快照" : "Last Snapshot"}</div><div style={miniMetricValueStyle}>{formatDateTime(latestPoint?.sourceTs || null, locale)}</div></div>
+        {benchmarkSymbol ? <div className={styles.stat}><div style={labelStyle}>{isZh ? "基准收益" : "Benchmark Return"} ({benchmarkSymbol})</div><div style={miniMetricValueStyle}>{formatPercent(benchmarkTotalReturn, 2)}</div></div> : null}
+        {benchmarkSymbol ? <div className={styles.stat}><div style={labelStyle}>{isZh ? "超额收益" : "Excess Return"}</div><div style={miniMetricValueStyle}>{formatPercent(excessReturn, 2)}</div></div> : null}
+        <div className={styles.stat}><div style={labelStyle}>{isZh ? "最后快照" : "Last Snapshot"}</div><div style={miniMetricValueStyle}>{formatDateTime(latestPoint?.sourceTs || null, locale)}</div></div>
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -3195,18 +3068,7 @@ function LifecycleDetailPanel({
         </div>
       </div>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-          gap: 12,
-          marginBottom: 14,
-          padding: "12px 14px",
-          borderRadius: 16,
-          background: "rgba(15, 23, 42, 0.56)",
-          border: "1px solid rgba(71, 85, 105, 0.24)",
-        }}
-      >
+      <div className={styles.lifecycleControls}>
         <div style={{ display: "grid", gap: 10 }}>
           <div style={{ color: "rgba(226, 232, 240, 0.88)", fontSize: 13, fontWeight: 700 }}>
             {isZh ? "买入前显示范围" : "Pre-entry Window"}
@@ -3328,20 +3190,15 @@ function LifecycleDetailPanel({
       </div>
 
       <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
-          gap: 10,
-          marginBottom: 14,
-        }}
+        className={styles.stats}
       >
-        <div style={miniMetricStyle}>
+        <div className={styles.stat}>
           <div style={labelStyle}>{isZh ? "买入交易日" : "Buy Trade Date"}</div>
           <div style={miniMetricValueStyle}>
             {formatLifecycleEventMoment(row.entryTs, row.entryTradeDate, locale)}
           </div>
         </div>
-        <div style={miniMetricStyle}>
+        <div className={styles.stat}>
           <div style={labelStyle}>
             {row.status === "closed"
               ? isZh ? "卖出交易日" : "Sell Trade Date"
@@ -3351,11 +3208,11 @@ function LifecycleDetailPanel({
             {formatLifecycleEventMoment(row.exitTs || row.markTs, row.exitTradeDate || row.markTradeDate, locale)}
           </div>
         </div>
-        <div style={miniMetricStyle}>
+        <div className={styles.stat}>
           <div style={labelStyle}>{isZh ? "买入价" : "Buy Price"}</div>
           <div style={miniMetricValueStyle}>{formatCurrency(row.entryPrice, locale)}</div>
         </div>
-        <div style={miniMetricStyle}>
+        <div className={styles.stat}>
           <div style={labelStyle}>
             {row.status === "closed"
               ? isZh
@@ -3374,7 +3231,7 @@ function LifecycleDetailPanel({
       {chartDisplayState === "loading" ? (
         <div style={lifecycleChartPlaceholderStyle}>{isZh ? "正在加载这段生命周期的蜡烛图..." : "Loading the candlestick chart for this lifecycle..."}</div>
       ) : chartDisplayState === "error" ? (
-        <div style={{ ...lifecycleChartPlaceholderStyle, color: "#fecaca", border: "1px solid rgba(248, 113, 113, 0.22)" }}>{error}</div>
+        <div style={{ ...lifecycleChartPlaceholderStyle, color: "#fecaca" }}>{error}</div>
       ) : chartDisplayState === "empty" ? (
         <div style={lifecycleChartPlaceholderStyle}>
           {isZh ? "这个生命周期区间内没有可用的日线数据" : "There are no daily bars available inside this lifecycle window"}
@@ -3383,6 +3240,7 @@ function LifecycleDetailPanel({
         <>
           <div style={{ position: "relative", minHeight: 460 }}>
             <CandlestickLightweightChart
+              framed={false}
               bars={bars}
               markers={markers as ChartOverlayMarker[]}
               gaps={gapOverlays as ChartGapOverlay[]}
@@ -3696,32 +3554,27 @@ function PositionLifecycleCard({
       ) : (
         <>
           <div
-            style={{
-              marginBottom: 14,
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-              gap: 12,
-            }}
+            className={styles.stats}
           >
-            <div style={miniMetricStyle}>
+            <div className={styles.stat}>
               <div style={labelStyle}>{isZh ? "已闭环" : "Closed"}</div>
               <div style={miniMetricValueStyle}>{closedRows.length}</div>
             </div>
-            <div style={miniMetricStyle}>
+            <div className={styles.stat}>
               <div style={labelStyle}>{isZh ? "仍持有" : "Open"}</div>
               <div style={miniMetricValueStyle}>{openRows.length}</div>
             </div>
-            <div style={miniMetricStyle}>
+            <div className={styles.stat}>
               <div style={labelStyle}>{isZh ? "胜率" : "Win Rate"}</div>
               <div style={miniMetricValueStyle}>{formatPercent(winRate, 2)}</div>
             </div>
-            <div style={miniMetricStyle}>
+            <div className={styles.stat}>
               <div style={labelStyle}>{isZh ? "平均持有天数" : "Avg Hold Days"}</div>
               <div style={miniMetricValueStyle}>
                 {averageHoldingDays == null ? "-" : averageHoldingDays.toLocaleString(locale, { maximumFractionDigits: 1 })}
               </div>
             </div>
-              <div style={miniMetricStyle}>
+              <div className={styles.stat}>
                 <div style={labelStyle}>{isZh ? "生命周期盈亏" : "Lifecycle PnL"}</div>
                 <div style={miniMetricValueStyle}>{formatCurrency(totalPnl, locale)}</div>
               </div>
@@ -3762,14 +3615,7 @@ function PositionLifecycleCard({
             </div>
           </div>
 
-          <div
-            style={{
-              overflowX: "auto",
-              borderRadius: 18,
-              border: "1px solid rgba(71, 85, 105, 0.28)",
-              background: "rgba(15, 23, 42, 0.74)",
-            }}
-          >
+          <div className={styles.tableScroll}>
             <table
               style={{
                 width: "100%",
@@ -4039,7 +3885,7 @@ function TransactionsCard({
                 : `Showing the latest ${visibleTransactions.length} / ${totalTransactions} transactions.`}
             </div>
           ) : null}
-          <BacktestTransactionsDenseTable rows={transactionRows} />
+          <div className={styles.transactionTable}><BacktestTransactionsDenseTable rows={transactionRows} /></div>
         </>
       )}
     </div>
@@ -4378,11 +4224,6 @@ export default function BacktestDetailPage() {
 
       {!loading && !error && run ? (
         <>
-          {run.progress ? (
-            <div style={{ marginBottom: 18 }}>
-              <BacktestProgressBar progress={run.progress} isZh={isZh} showDetails />
-            </div>
-          ) : null}
           {(run.status === "queued" || run.status === "running")
           && (workerStatusUnavailable || workerStatus?.automation_available === false) ? (
             <div style={{ ...emptyStateStyle, marginBottom: 18, color: "#fde68a" }}>
@@ -4410,51 +4251,43 @@ export default function BacktestDetailPage() {
           {run.status === "completed" ? (
             <>
           {run.persist_level !== "full" ? (
-            <p style={{ ...sectionCardStyle, color: "#fbbf24" }}>
+            <p className={styles.warning}>
               {isZh
                 ? `该回测采用 ${run.persist_level} 持久化级别；未保存的明细不是“零信号”或“零交易”。`
                 : `This run uses ${run.persist_level} persistence. Details that were not persisted do not mean zero signals or zero trades.`}
             </p>
           ) : null}
-          <section
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-              gap: 16,
-              marginBottom: 18,
-            }}
-          >
-            <MetricCard
-              label={isZh ? "总收益" : "Total Return"}
-              value={formatPercent(totalReturn, 2)}
-              hint={isZh ? "来自 strategy_run.summary_metrics.total_return" : "From strategy_run.summary_metrics.total_return"}
-              accent="#0f766e"
-            />
-            <MetricCard
-              label={isZh ? "最大回撤" : "Max Drawdown"}
-              value={formatPercent(maxDrawdown, 2)}
-              hint={isZh ? "用来快速判断这次曲线是否过于激进" : "Used to quickly judge whether the curve was overly aggressive"}
-              accent="#b45309"
-            />
-            <MetricCard
-              label="Signals"
-              value={signalCount != null ? String(signalCount) : "-"}
-              hint={isZh ? "这次 run 中生成的信号数量" : "Number of signals generated in this run"}
-              accent="#2563eb"
-            />
-            <MetricCard
-              label="Transactions"
-              value={String(run.transaction_count ?? tradeCount ?? "-")}
-              hint={isZh ? "已经写入 transactions 的成交记录数量" : "Number of filled transactions written into the transactions table"}
-              accent="#ca8a04"
-            />
-          </section>
+          <BacktestOverview run={run}>
+            <div className={styles.primaryMetrics}>
+              <MetricCard
+                label={isZh ? "总收益" : "Total Return"}
+                value={formatPercent(totalReturn, 2)}
+                hint={isZh ? "来自 strategy_run.summary_metrics.total_return" : "From strategy_run.summary_metrics.total_return"}
+                accent="#0f766e"
+              />
+              <MetricCard
+                label={isZh ? "最大回撤" : "Max Drawdown"}
+                value={formatPercent(maxDrawdown, 2)}
+                hint={isZh ? "用来快速判断这次曲线是否过于激进" : "Used to quickly judge whether the curve was overly aggressive"}
+                accent="#b45309"
+              />
+              <MetricCard
+                label={isZh ? "信号数" : "Signals"}
+                value={signalCount != null ? String(signalCount) : "-"}
+                hint={isZh ? "这次 run 中生成的信号数量" : "Number of signals generated in this run"}
+                accent="#2563eb"
+              />
+              <MetricCard
+                label={isZh ? "交易数" : "Transactions"}
+                value={String(run.transaction_count ?? tradeCount ?? "-")}
+                hint={isZh ? "已经写入 transactions 的成交记录数量" : "Number of filled transactions written into the transactions table"}
+                accent="#ca8a04"
+              />
+            </div>
+          </BacktestOverview>
 
-          <section
-            style={{
-              marginBottom: 18,
-            }}
-          >
+          <section className={styles.section}>
+            <h2 className={styles.sectionTitle}>{isZh ? "权益曲线" : "Equity Curve"}</h2>
             {equityLoading ? (
               <div style={emptyStateStyle}>{isZh ? "正在加载权益曲线..." : "Loading equity curve..."}</div>
             ) : equityError ? (
@@ -4580,11 +4413,11 @@ export default function BacktestDetailPage() {
                 {latestPositions.length === 0 ? (
                   <div style={emptyStateStyle}>{isZh ? "当前没有持仓，或回测结束时已经全部平仓" : "There are no positions, or all positions were closed by the end of the backtest"}</div>
                 ) : (
-                  <div style={positionGridStyle}>
+                  <div className={styles.positions}>
                     {latestPositions.map((position) => (
-                      <article key={position.symbol} style={positionCardStyle}>
+                      <article key={position.symbol} className={styles.position}>
                         <strong style={{ color: "#f8fafc", fontSize: 18 }}>{position.symbol}</strong>
-                        <div style={positionMetricsStyle}>
+                        <div className={styles.positionMetrics}>
                           <div><span style={positionLabelStyle}>{isZh ? "数量" : "Quantity"}</span><strong>{position.quantity?.toLocaleString(locale, { maximumFractionDigits: 4 }) ?? "-"}</strong></div>
                           <div><span style={positionLabelStyle}>{isZh ? "成本价" : "Avg. cost"}</span><strong>{formatCurrency(position.averageEntryPrice, locale)}</strong></div>
                           <div><span style={positionLabelStyle}>{isZh ? "收盘价" : "Close"}</span><strong>{formatCurrency(position.closePrice, locale)}</strong></div>
@@ -4614,22 +4447,7 @@ const sectionCardStyle = {
   boxShadow: "0 18px 44px rgba(2, 6, 23, 0.22)",
 } as const;
 
-const reviewTabListStyle = {
-  display: "flex",
-  gap: 8,
-  overflowX: "auto",
-  padding: 6,
-  borderBottom: "1px solid rgba(71, 85, 105, 0.28)",
-  background: "rgba(2, 6, 23, 0.42)",
-  scrollbarWidth: "thin",
-} as const;
 
-const reviewWorkspaceFrameStyle = {
-  overflow: "hidden",
-  borderRadius: 18,
-  border: "1px solid rgba(71, 85, 105, 0.28)",
-  background: "rgba(2, 6, 23, 0.34)",
-} as const;
 
 function reviewTabButtonStyle(active: boolean) {
   return {
@@ -4647,14 +4465,6 @@ function reviewTabButtonStyle(active: boolean) {
   } as const;
 }
 
-const reviewTabPanelStyle = {
-  minHeight: 240,
-  maxHeight: "min(72vh, 920px)",
-  overflow: "auto",
-  padding: 16,
-  background: "transparent",
-  outline: "none",
-} as const;
 
 const sectionSubtitleStyle = {
   margin: 0,
@@ -4663,28 +4473,8 @@ const sectionSubtitleStyle = {
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 } as const;
 
-const positionGridStyle = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(min(260px, 100%), 1fr))",
-  gap: 12,
-} as const;
 
-const positionCardStyle = {
-  display: "grid",
-  gap: 12,
-  padding: 16,
-  borderRadius: 18,
-  border: "1px solid rgba(71, 85, 105, 0.28)",
-  background: "rgba(15, 23, 42, 0.76)",
-  fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-} as const;
 
-const positionMetricsStyle = {
-  display: "grid",
-  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-  gap: 12,
-  color: "#e2e8f0",
-} as const;
 
 const positionLabelStyle = {
   display: "block",
@@ -4695,10 +4485,7 @@ const positionLabelStyle = {
 } as const;
 
 const emptyStateStyle = {
-  padding: 16,
-  borderRadius: 16,
-  background: "rgba(15, 23, 42, 0.7)",
-  border: "1px solid rgba(71, 85, 105, 0.28)",
+  padding: "16px 0",
   color: "rgba(148, 163, 184, 0.88)",
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 } as const;
@@ -4728,12 +4515,6 @@ const lifecycleChartReloadingStyle = {
   boxShadow: "0 8px 20px rgba(2, 6, 23, 0.3)",
 } as const;
 
-const infoGridStyle = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-  gap: 14,
-} as const;
-
 const labelStyle = {
   marginBottom: 6,
   color: "#64748b",
@@ -4749,13 +4530,6 @@ const valueStyle = {
   fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
 };
 
-const miniMetricStyle = {
-  padding: 14,
-  borderRadius: 16,
-  background: "rgba(15, 23, 42, 0.72)",
-  border: "1px solid rgba(71, 85, 105, 0.28)",
-  color: "#e2e8f0",
-} as const;
 
 const miniMetricValueStyle = {
   color: "#f8fafc",

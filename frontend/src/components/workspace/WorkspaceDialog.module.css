@@ -1,3 +1,10 @@
+.trigger { composes: control from "../../styles/Motion.module.css"; }
+.close { composes: control from "../../styles/Motion.module.css"; }
+.cancelButton { composes: control from "../../styles/Motion.module.css"; }
+.dangerButton { composes: control from "../../styles/Motion.module.css"; }
+.link { composes: control from "../../styles/Motion.module.css"; }
+.overlay { composes: overlay from "../../styles/Motion.module.css"; }
+.content { composes: dialog from "../../styles/Motion.module.css"; }
 .trigger { min-height: 36px; padding: 7px 12px; border: 1px solid rgba(71,85,105,.48); border-radius: 10px; background: rgba(15,23,42,.78); color: #dbeafe; cursor: pointer; font: inherit; font-size: 12px; font-weight: 750; }
 .trigger:hover { border-color: rgba(45,212,191,.48); color: #99f6e4; }
 .triggerPrimary { border-color: rgba(8,145,178,.5); background: #078cad; color: #f8fafc; }
@@ -7,7 +14,6 @@
 .summary { max-width: 640px; }
 .form { max-width: 880px; }
 .wide { max-width: 1040px; }
-.overlay[data-state="closed"],.content[data-state="closed"] { display: none; }
 .header { position: sticky; top: 0; z-index: 2; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid rgba(71,85,105,.34); background: rgba(7,17,28,.98); }
 .dialogTitle { margin: 0; color: #f8fafc; font-size: 18px; }
 .description { margin: 5px 0 0; color: #94a3b8; font-size: 12px; line-height: 1.5; }

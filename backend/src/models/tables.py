@@ -86,6 +86,24 @@ class Instrument(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class InstrumentMarketCap(Base):
+    """Latest screening snapshot, not historical point-in-time fundamentals."""
+
+    __tablename__ = "instrument_market_caps"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_market_cap_positive"),
+        CheckConstraint("currency IN ('USD', 'CNY')", name="ck_market_cap_currency"),
+    )
+
+    instrument_id = Column(BigInteger, ForeignKey("instruments.id"), primary_key=True)
+    amount = Column(Numeric(24, 4), nullable=False)
+    currency = Column(String(3), nullable=False)
+    source = Column(Text, nullable=False)
+    data_date = Column(Date)
+    retrieved_at = Column(DateTime(timezone=True), nullable=False)
+    vendor_payload = Column(JSON_VARIANT, nullable=False)
+
+
 class StockBasket(Base):
     __tablename__ = "stock_baskets"
     __table_args__ = (

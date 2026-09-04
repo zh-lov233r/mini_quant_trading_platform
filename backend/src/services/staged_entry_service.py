@@ -122,7 +122,7 @@ def select_highest_stage_signals(signals: Iterable[Any]) -> list[Any]:
     for event in signals:
         metadata = getattr(event, "metadata", None)
         setup = pattern_setup_from_metadata(metadata)
-        if setup is None:
+        if setup is None or getattr(event, "action", None) != "BUY":
             passthrough.append(event)
             continue
         identity = getattr(event, "instrument_id", None)
