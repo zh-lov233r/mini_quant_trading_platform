@@ -5,6 +5,7 @@ import os
 from unittest.mock import patch
 import unittest
 
+from fastapi import HTTPException
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -30,6 +31,13 @@ class BacktestWorkerStatusApiTests(unittest.TestCase):
         self.engine = create_engine("sqlite+pysqlite:///:memory:")
         Base.metadata.create_all(self.engine)
         self.db = Session(self.engine)
+        self.basket = StockBasket(
+            name="Backtest Scope",
+            symbols=["AAPL"],
+            status="active",
+        )
+        self.db.add(self.basket)
+        self.db.commit()
 
     def tearDown(self) -> None:
         self.db.close()
@@ -93,6 +101,7 @@ class BacktestWorkerStatusApiTests(unittest.TestCase):
         result = create_backtest(
             BacktestCreate(
                 strategy_id=strategy.id,
+                basket_id=self.basket.id,
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 1, 2),
             ),
@@ -103,6 +112,33 @@ class BacktestWorkerStatusApiTests(unittest.TestCase):
         self.assertIsNotNone(result.progress)
         self.assertFalse(worker_status.automation_available)
         self.assertEqual(worker_status.queued_jobs, 1)
+
+    def test_create_requires_exactly_one_universe_source(self) -> None:
+        strategy = Strategy(
+            strategy_key="missing-scope-test",
+            name="missing scope test",
+            strategy_type="trend",
+            params={},
+            status="active",
+            version=1,
+        )
+        self.db.add(strategy)
+        self.db.commit()
+
+        with self.assertRaises(HTTPException) as raised:
+            create_backtest(
+                BacktestCreate(
+                    strategy_id=strategy.id,
+                    start_date=date(2025, 1, 1),
+                    end_date=date(2025, 1, 2),
+                ),
+                self.db,
+            )
+        self.assertEqual(raised.exception.status_code, 422)
+        self.assertEqual(
+            raised.exception.detail,
+            "exactly one of basket_id or universe_policy is required",
+        )
 
     def test_a_share_basket_replaces_default_us_benchmark(self) -> None:
         strategy = Strategy(
@@ -151,6 +187,7 @@ class BacktestWorkerStatusApiTests(unittest.TestCase):
             create_backtest(
                 BacktestCreate(
                     strategy_id=strategy.id,
+                    basket_id=self.basket.id,
                     start_date=date(2025, 1, day),
                     end_date=date(2025, 1, day + 1),
                 ),

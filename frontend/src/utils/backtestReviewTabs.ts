@@ -7,6 +7,7 @@ export const BACKTEST_REVIEW_TABS = [
 ] as const;
 
 export type BacktestReviewTab = (typeof BACKTEST_REVIEW_TABS)[number];
+export const DEFAULT_BACKTEST_REVIEW_TAB: BacktestReviewTab = "lifecycles";
 export type BacktestReviewTabKey = "ArrowLeft" | "ArrowRight" | "Home" | "End";
 
 const LABELS: Record<BacktestReviewTab, { zh: string; en: string }> = {

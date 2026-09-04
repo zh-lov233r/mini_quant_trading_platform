@@ -537,10 +537,14 @@ export default function BacktestsPage() {
       setSubmitError(isZh ? "请选择一个策略" : "Please select a strategy");
       return;
     }
+    if (!basketId) {
+      setSubmitError(isZh ? "请选择本次回测的股票范围" : "Choose a stock scope for this backtest");
+      return;
+    }
 
     const payload: BacktestCreate = {
       strategy_id: strategyId,
-      basket_id: basketId || null,
+      basket_id: basketId,
       start_date: startDate,
       end_date: endDate,
       initial_cash: Number(initialCash),
@@ -821,8 +825,8 @@ export default function BacktestsPage() {
                     {fieldBlock(
                       isZh ? "股票组合" : "Basket",
                       isZh
-                        ? "可选。选择已创建的股票池或使用默认组合"
-                        : "Optional. Choose an existing basket or keep the strategy's default universe.",
+                        ? "必填。选择本次回测使用的股票池；策略本身不绑定范围"
+                        : "Required. Choose the basket for this backtest; the strategy itself does not bind a scope.",
                       <>
                       <SelectControl aria-label={isZh ? "股票组合市场" : "Basket market"} value={basketMarketFilter} onValueChange={(value) => {
                         setBasketMarketFilter(value);
@@ -838,21 +842,15 @@ export default function BacktestsPage() {
                         searchPlaceholder={isZh ? "搜索股票组合" : "Search baskets"}
                         emptyText={isZh ? "没有匹配的股票组合" : "No matching baskets"}
                         clearSearchLabel={isZh ? "清空股票组合搜索" : "Clear basket search"}
+                        invalid={Boolean(submitError && !basketId)}
                         sortOptions={false}
-                        options={[
-                          {
-                            value: "",
-                            label: isZh ? "不覆盖，沿用策略自带股票池" : "Use the strategy universe",
-                            description: isZh ? "不覆盖策略中的股票池配置" : "Do not override the strategy universe",
-                          },
-                          ...activeBaskets.map((item) => ({
+                        options={activeBaskets.map((item) => ({
                             value: item.id,
                             label: item.name,
                             description: isZh ? `${item.symbol_count} 只股票` : `${item.symbol_count} symbols`,
                             keywords: item.symbols,
                             accent: "#38bdf8",
-                          })),
-                        ]}
+                          }))}
                       />
                       </>
                     )}
@@ -1076,8 +1074,8 @@ export default function BacktestsPage() {
                     <div style={{ marginBottom: 6 }}>
                       {selectedBasket.description?.trim() ||
                         (isZh
-                          ? "这次回测会使用该组合覆盖策略原有的股票池"
-                          : "This backtest will override the strategy's original universe with this basket.")}
+                          ? "这次回测将使用该股票范围"
+                          : "This backtest will use this stock scope.")}
                     </div>
                     <div style={{ color: "#1d4ed8", fontSize: 13 }}>
                       {selectedBasket.symbol_count} 只股票: {selectedBasket.symbols.slice(0, 8).join(", ")}

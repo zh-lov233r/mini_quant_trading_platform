@@ -76,6 +76,11 @@ export class LifecycleOverlayPrimitive implements ISeriesPrimitive<Time> {
     return this.view.hitTest(x, y);
   }
 
+  selectZone(key: string | null) {
+    this.view.selectZone(key);
+    this.requestUpdate?.();
+  }
+
   autoscaleInfo(startTimePoint: Logical, endTimePoint: Logical): AutoscaleInfo | null {
     if (!this.chart) return null;
     const priceRange = visibleZonePriceRange(
@@ -121,6 +126,10 @@ class LifecycleOverlayView implements IPrimitivePaneView {
 
   invalidate() {
     this.rendererValue.invalidate();
+  }
+
+  selectZone(key: string | null) {
+    this.rendererValue.selectedZone = key;
   }
 
   hitTest(x: number, y: number): PrimitiveHoveredItem | null {
@@ -198,6 +207,8 @@ export function chooseMarkerLabelPlacement(
 }
 
 class LifecycleOverlayRenderer implements IPrimitivePaneRenderer {
+  selectedZone: string | null = null;
+  private zoneHits: Array<{ key: string; x1: number; x2: number; upper1: number; upper2: number; lower1: number; lower2: number }> = [];
   private cacheKey = "";
   private readonly barByTime: Map<string, CandleChartPoint>;
   private markerHits: Array<{
@@ -238,9 +249,21 @@ class LifecycleOverlayRenderer implements IPrimitivePaneRenderer {
         closestDistance = distance;
       }
     }
-    if (!closest) return null;
+    if (!closest) {
+      const hits = this.zoneHits.flatMap((hit) => {
+        if (x < hit.x1 - 2 || x > hit.x2 + 2) return [];
+        const ratio = hit.x2 === hit.x1 ? 0 : Math.max(0, Math.min(1, (x - hit.x1) / (hit.x2 - hit.x1)));
+        const upper = hit.upper1 + (hit.upper2 - hit.upper1) * ratio;
+        const lower = hit.lower1 + (hit.lower2 - hit.lower1) * ratio;
+        return y >= Math.min(upper, lower) - 2 && y <= Math.max(upper, lower) + 2
+          ? [{ key: hit.key, distance: Math.abs(y - (upper + lower) / 2) }] : [];
+      }).sort((a, b) => a.distance - b.distance || a.key.localeCompare(b.key));
+      return hits.length ? { externalId: `zone:${hits[0].key}`, zOrder: "top", cursorStyle: "pointer" } : null;
+    }
     return {
-      externalId: closest.key,
+      externalId: this.selectedZone && this.zones.some((zone) =>
+        zone.zoneKey === this.selectedZone && zone.evidenceMarkers?.some((marker) => marker.key === closest.key))
+        ? `zone:${this.selectedZone}` : closest.key,
       zOrder: "top",
       cursorStyle: "pointer",
       itemType: "marker",
@@ -287,6 +310,7 @@ class LifecycleOverlayRenderer implements IPrimitivePaneRenderer {
           context.fillText(`${regime.label} · ${regime.sessionCount}`, left + 6, 17, width - 12);
         }
       });
+      this.zoneHits = [];
       this.zones.forEach((zone) => {
         const startX = chart.timeScale().timeToCoordinate(zone.startDate);
         const endX = zone.endDate ? chart.timeScale().timeToCoordinate(zone.endDate) : mediaSize.width;
@@ -295,22 +319,26 @@ class LifecycleOverlayRenderer implements IPrimitivePaneRenderer {
         const endUpperY = series.priceToCoordinate(zone.endUpperPrice);
         const endLowerY = series.priceToCoordinate(zone.endLowerPrice);
         if ([startX, endX, startUpperY, startLowerY, endUpperY, endLowerY].some((value) => value == null)) return;
+        this.zoneHits.push({ key: zone.zoneKey || zone.key, x1: startX!, x2: endX!,
+          upper1: startUpperY!, upper2: endUpperY!, lower1: startLowerY!, lower2: endLowerY! });
         const support = zone.role === "support";
         const channel = zone.role === "entry_channel";
         context.fillStyle = channel
           ? "rgba(6, 182, 212, 0.09)"
           : support ? "rgba(34, 197, 94, 0.14)" : "rgba(239, 68, 68, 0.13)";
         context.strokeStyle = channel ? "#06b6d4" : support ? "#22c55e" : "#ef4444";
-        context.lineWidth = 1.25;
-        context.setLineDash([6, 4]);
+        context.globalAlpha = zone.retrospective ? 0.4 : 1;
+        context.lineWidth = this.selectedZone === (zone.zoneKey || zone.key) ? 2.5 : 1.25;
+        context.setLineDash(zone.retrospective ? [6, 4] : []);
         context.beginPath();
         context.moveTo(startX!, startUpperY!);
         context.lineTo(endX!, endUpperY!);
         context.lineTo(endX!, endLowerY!);
         context.lineTo(startX!, startLowerY!);
         context.closePath();
-        context.fill();
+        if (!zone.retrospective) context.fill();
         context.stroke();
+        context.globalAlpha = 1;
       });
 
       this.gaps.forEach((gap) => {
@@ -382,7 +410,8 @@ class LifecycleOverlayRenderer implements IPrimitivePaneRenderer {
         upper: [] as MarkerLabelBounds[][],
         lower: [] as MarkerLabelBounds[][],
       };
-      this.leaderMarkers.forEach((marker) => {
+      const evidence = this.zones.find((zone) => (zone.zoneKey || zone.key) === this.selectedZone)?.evidenceMarkers || [];
+      [...this.leaderMarkers, ...evidence].forEach((marker) => {
         const time = toChartTime(marker.date);
         const bar = time ? this.barByTime.get(time) : null;
         const x = time ? chart.timeScale().timeToCoordinate(time) : null;

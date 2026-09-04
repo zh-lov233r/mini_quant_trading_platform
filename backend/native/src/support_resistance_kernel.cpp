@@ -19,8 +19,8 @@ namespace sr = quant_kernel::support_resistance;
 namespace quant_kernel {
 namespace {
 
-constexpr int kDetectorImplementationRevision = 12;
-constexpr int kRegimeLogicRevision = 3;
+constexpr int kDetectorImplementationRevision = 13;
+constexpr int kRegimeLogicRevision = 4;
 constexpr const char* kEntryChannelSemantics = "support_upper_to_resistance_lower_v1";
 
 py::object value_for(const py::handle& value, const char* key) {
@@ -183,8 +183,6 @@ sr::Regime regime(const std::string& value) {
 
 sr::Setup setup(const std::string& value) {
     if (value == "support_bounce") return sr::Setup::SupportBounce;
-    if (value == "resistance_breakout") return sr::Setup::ResistanceBreakout;
-    if (value == "breakout_retest") return sr::Setup::BreakoutRetest;
     throw std::invalid_argument("invalid support/resistance setup: " + value);
 }
 
@@ -238,6 +236,8 @@ sr::Zone zone_from_python(const py::handle& value) {
         number_or(value, "recency_weight", 0.0),
         bool_or(value, "last_inside", false),
         timeline.is_none() ? 0 : ordinal(timeline),
+        value_for(value, "phase_start").is_none() ? 0 : ordinal(value_for(value, "phase_start")),
+        text_or(value, "end_reason"),
     };
 }
 
@@ -358,6 +358,9 @@ py::object pivot_to_python(const sr::Pivot& pivot) {
 py::object zone_to_python(const sr::Zone& zone) {
     py::kwargs values;
     values["zone_key"] = zone.zone_key;
+    values["phase_start"] = zone.phase_start_ordinal == 0
+        ? py::object(py::none()) : date_object(zone.phase_start_ordinal);
+    values["end_reason"] = zone.end_reason;
     values["source_kind"] = std::string(sr::name(zone.source_kind));
     values["role"] = std::string(sr::name(zone.role));
     values["status"] = std::string(sr::name(zone.status));
@@ -386,6 +389,8 @@ py::object zone_to_python(const sr::Zone& zone) {
 
 sr::SymbolState state_from_python(const py::handle& source) {
     sr::SymbolState state;
+    if (!value_for(source, "phase_start").is_none())
+        state.phase_start_ordinal = ordinal(value_for(source, "phase_start"));
     state.stopped_zones = py::cast<std::map<std::string, int>>(value_for(source, "stopped_zones"));
     for (const py::handle raw : py::reinterpret_borrow<py::iterable>(value_for(source, "history"))) {
         if (const auto bar = bar_from_python(py::cast<py::dict>(raw))) state.history.push_back(*bar);
@@ -395,15 +400,6 @@ sr::SymbolState state_from_python(const py::handle& source) {
     }
     for (const auto& [raw_key, raw_zone] : py::cast<py::dict>(value_for(source, "zones"))) {
         state.zones.emplace(py::cast<std::string>(py::str(raw_key)), zone_from_python(raw_zone));
-    }
-    for (const auto& [raw_key, raw] : py::cast<py::dict>(value_for(source, "breakouts"))) {
-        const std::string key = py::cast<std::string>(py::str(raw_key));
-        state.breakouts.emplace(key, sr::BreakoutRecord{
-            key,
-            ordinal(value_for(raw, "breakout_date")),
-            integer_or(raw, "breakout_session_index", 0),
-            required_number(raw, "breakout_volume"),
-        });
     }
     for (const py::handle raw : py::reinterpret_borrow<py::iterable>(value_for(source, "pending_outcomes"))) {
         state.pending_outcomes.push_back({
@@ -459,6 +455,8 @@ sr::SymbolState state_from_python(const py::handle& source) {
 }
 
 void sync_state_to_python(const sr::SymbolState& state, const py::handle& target) {
+    target.attr("phase_start") = state.phase_start_ordinal == 0
+        ? py::object(py::none()) : date_object(state.phase_start_ordinal);
     target.attr("stopped_zones") = py::cast(state.stopped_zones);
     py::list history;
     for (const sr::Bar& bar : state.history) history.append(bar_to_python(bar));
@@ -469,16 +467,6 @@ void sync_state_to_python(const sr::SymbolState& state, const py::handle& target
     py::dict zones;
     for (const auto& [key, zone] : state.zones) zones[py::str(key)] = zone_to_python(zone);
     target.attr("zones") = zones;
-    py::dict breakouts;
-    for (const auto& [key, breakout] : state.breakouts) {
-        py::kwargs values;
-        values["zone_key"] = breakout.zone_key;
-        values["breakout_date"] = date_object(breakout.breakout_date_ordinal);
-        values["breakout_session_index"] = breakout.breakout_session_index;
-        values["breakout_volume"] = breakout.breakout_volume;
-        breakouts[py::str(key)] = construct("BreakoutRecord", values);
-    }
-    target.attr("breakouts") = breakouts;
     py::list pending;
     for (const sr::PendingOutcome& outcome : state.pending_outcomes) {
         py::kwargs values;
@@ -553,13 +541,7 @@ sr::Config parse_support_resistance_config(const py::dict& signal, const py::dic
     result.zone_half_width_atr = number_or(signal, "zone_half_width_atr", result.zone_half_width_atr);
     result.decay_half_life = number_or(signal, "decay_half_life", result.decay_half_life);
     result.bounce_confirmation_atr = number_or(signal, "bounce_confirmation_atr", result.bounce_confirmation_atr);
-    result.breakout_confirmation_atr = number_or(signal, "breakout_confirmation_atr", result.breakout_confirmation_atr);
-    result.breakout_volume_ratio_min = number_or(signal, "breakout_volume_ratio_min", result.breakout_volume_ratio_min);
     result.support_bounce_enabled = bool_or(signal, "support_bounce_enabled", result.support_bounce_enabled);
-    result.resistance_breakout_enabled = bool_or(signal, "resistance_breakout_enabled", result.resistance_breakout_enabled);
-    result.breakout_retest_enabled = bool_or(signal, "breakout_retest_enabled", result.breakout_retest_enabled);
-    result.retest_window = integer_or(signal, "retest_window", result.retest_window);
-    result.retest_volume_ratio_max = number_or(signal, "retest_volume_ratio_max", result.retest_volume_ratio_max);
     result.min_strength_score = number_or(signal, "min_strength_score", result.min_strength_score);
     result.max_holding_days = integer_or(risk, "max_holding_days", result.max_holding_days);
     result.min_reward_risk = number_or(risk, "min_reward_risk", result.min_reward_risk);
@@ -794,7 +776,7 @@ void bind_support_resistance(py::module_& module) {
         result["regime_logic_revision"] = kRegimeLogicRevision;
         result["max_zones_per_kind"] = integer_or(signal, "max_zones_per_kind", 3);
         result["pivot_tolerance_atr"] = number_or(signal, "pivot_tolerance_atr", 0.05);
-        for (const char* key : {"pivot_left_bars", "pivot_right_bars", "detection_window", "min_line_pivots", "min_line_span_sessions", "line_inlier_tolerance_atr", "max_abs_slope_atr_per_session", "zone_half_width_atr", "decay_half_life", "breakout_confirmation_atr", "breakout_volume_ratio_min", "retest_window", "retest_volume_ratio_max"}) {
+        for (const char* key : {"pivot_left_bars", "pivot_right_bars", "detection_window", "min_line_pivots", "min_line_span_sessions", "line_inlier_tolerance_atr", "max_abs_slope_atr_per_session", "zone_half_width_atr", "decay_half_life"}) {
             if (signal.contains(key)) result[py::str(key)] = signal[py::str(key)];
         }
         return result;
@@ -871,48 +853,6 @@ void bind_support_resistance(py::module_& module) {
     native.def("project_zone", [](const py::handle& value, int session_index) {
         return python_from_object(sr::zone_json(sr::project_zone(zone_from_python(value), session_index)));
     }, py::arg("zone"), py::arg("session_index"));
-    native.def("freeze_zones_for_session", [](const py::iterable& values, int session_index, const py::handle& date) {
-        py::list active;
-        py::list expired;
-        py::list events;
-        std::vector<sr::Zone> retained;
-        const std::int32_t effective = ordinal(date);
-        for (const py::handle value : values) {
-            sr::Zone zone = zone_from_python(value);
-            if (zone.status != sr::ZoneStatus::Active) continue;
-            sr::Zone projected = sr::project_zone(zone, session_index);
-            if (sr::valid_zone_values(projected.center, projected.lower, projected.upper, projected.atr, projected.slope_per_session)) {
-                retained.push_back(std::move(projected));
-                continue;
-            }
-            zone.status = sr::ZoneStatus::Expired;
-            zone.anchor_session_index = session_index;
-            zone.anchor_center = zone.center;
-            zone.anchor_lower = zone.lower;
-            zone.anchor_upper = zone.upper;
-            zone.slope_per_session = 0.0;
-            py::dict version = python_from_object(sr::zone_json(zone));
-            version["effective_from"] = sr::iso_date(effective);
-            expired.append(version);
-            py::dict event;
-            event["event_date"] = sr::iso_date(effective);
-            event["event_type"] = "invalidation";
-            event["zone_key"] = zone.zone_key;
-            event["role"] = std::string(sr::name(zone.role));
-            event["reason"] = "projected_zone_geometry_became_invalid";
-            events.append(event);
-        }
-        std::sort(retained.begin(), retained.end(), [](const sr::Zone& left, const sr::Zone& right) {
-            return std::tuple(std::string(sr::name(left.role)), left.center, left.zone_key)
-                < std::tuple(std::string(sr::name(right.role)), right.center, right.zone_key);
-        });
-        for (const sr::Zone& zone : retained) active.append(python_from_object(sr::zone_json(zone)));
-        py::dict result;
-        result["active_zones"] = active;
-        result["expired_zone_versions"] = expired;
-        result["events"] = events;
-        return result;
-    }, py::arg("zones"), py::arg("session_index"), py::arg("trade_date"));
     native.def("new_zone_key", [](const std::string& kind, const py::iterable& values) {
         std::vector<sr::Pivot> pivots;
         for (const py::handle value : values) {
@@ -973,13 +913,6 @@ void bind_support_resistance(py::module_& module) {
         sr::rebuild(state, *bar, parse_support_resistance_config(signal, py::dict()));
         sync_state_to_python(state, state_object);
     }, py::arg("state"), py::arg("bar"), py::arg("signal_cfg"));
-    native.def("match_zone", [](const py::iterable& values, const std::string& kind, double center, double half_width, const py::iterable& raw_keys) -> py::object {
-        std::vector<sr::Zone> zones;
-        for (const py::handle value : values) zones.push_back(zone_from_python(value));
-        std::vector<std::string> keys = string_list(raw_keys);
-        const auto matched = sr::match_existing_zone(zones, pivot_kind(kind), center, half_width, keys);
-        return matched ? zone_to_python(*matched) : py::object(py::none());
-    }, py::arg("old_zones"), py::arg("source_kind"), py::arg("center"), py::arg("half_width"), py::arg("pivot_keys"));
     native.def("record_zone_version", [](const py::object& state_object, const py::handle& raw_zone, const py::handle& effective, const std::string& status) {
         sr::SymbolState state = state_from_python(state_object);
         sr::record_zone(state, zone_from_python(raw_zone), ordinal(effective), zone_status(status));

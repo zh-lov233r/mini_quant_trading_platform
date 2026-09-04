@@ -186,6 +186,8 @@ def hydrate_state_from_materialization(
                 "first_pivot_date": _as_date(metadata.get("first_pivot_date"), version.effective_from),
                 "last_pivot_date": _as_date(metadata.get("last_pivot_date"), version.effective_from),
                 "valid_from": _as_date(metadata.get("valid_from"), version.effective_from),
+                "phase_start": metadata.get("phase_start"),
+                "end_reason": metadata.get("end_reason", ""),
             }
         )
     regime_versions = db.execute(
@@ -645,8 +647,9 @@ def _validate_regime_versions(
     allowed_states = {"uptrend", "downtrend", "range", "transition"}
     if any(state not in allowed_states for state in states):
         raise ValueError(f"{symbol}: regime timeline contains an invalid state")
-    if any(left == right for left, right in zip(states, states[1:])):
-        raise ValueError(f"{symbol}: adjacent regime versions must differ")
+    phases = [item.get("evidence", {}).get("phase_start") for item in versions]
+    if any(states[i - 1] == states[i] and phases[i - 1] == phases[i] for i in range(1, len(states))):
+        raise ValueError(f"{symbol}: adjacent regime versions within a phase must differ")
     session_set = set(session_dates)
     if any(start not in session_set for start in starts):
         raise ValueError(f"{symbol}: regime transition is not aligned to a market session")
@@ -700,6 +703,11 @@ def _zone_version_rows(
                 projection_end = projection_dates[-1] if projection_dates else effective_from
                 start_index = session_index_by_date.get(effective_from, payload["anchor_session_index"])
                 end_index = session_index_by_date.get(projection_end, start_index)
+                # Terminal records describe the last valid session, never the
+                # invalid projection on the first session of the next phase.
+                if payload["status"] != "active":
+                    start_index -= 1
+                    end_index = start_index
                 start_delta = payload["slope_per_session"] * (
                     start_index - payload["anchor_session_index"]
                 )
@@ -731,6 +739,8 @@ def _zone_version_rows(
                     "touch_count": payload["touch_count"],
                     "source_metadata": {
                         "source_kind": payload["source_kind"],
+                        "phase_start": payload["phase_start"],
+                        "end_reason": payload["end_reason"],
                         "pivot_keys": payload["pivot_keys"],
                         "first_pivot_date": payload["first_pivot_date"],
                         "last_pivot_date": payload["last_pivot_date"],

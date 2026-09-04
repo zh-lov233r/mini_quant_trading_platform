@@ -57,7 +57,7 @@ make import-a-share A_SHARE_ARGS="apply --start-date 2026-09-01 --end-date 2026-
 
 ## 九策略回测
 
-导入结束会同步 active 的 `All A Shares (Tushare)` 股票组合。在 `/backtests` 选择任意 engine-ready 策略，再用该股票组合覆盖策略自带 universe；九种类型均走同一原生数据集和回测入口：
+导入结束会同步 active 的 `All A Shares (Tushare)` 股票组合。在 `/backtests` 选择任意 engine-ready 策略，并把该股票组合作为本次回测的必选范围；九种类型均走同一原生数据集和回测入口：
 
 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`、`head_shoulders_bottom`、`rounded_bottom`、`v_reversal`、`support_resistance`。
 

@@ -170,12 +170,6 @@ JsonObject zone_snapshot(const Zone& zone) {
     return result;
 }
 
-int setup_priority(Setup setup) {
-    if (setup == Setup::BreakoutRetest) return 0;
-    if (setup == Setup::SupportBounce) return 1;
-    return 2;
-}
-
 double weighted_median(std::vector<std::pair<double, double>> values) {
     std::stable_sort(values.begin(), values.end(), [](const auto& left, const auto& right) {
         return left.first < right.first;
@@ -489,12 +483,9 @@ StrengthComponent strength_component(
 }
 
 Strength build_strength(
-    Setup setup,
     const Config& config,
     double confirmation_atr,
-    double hold_margin_atr,
     std::optional<double> volume_ratio,
-    std::optional<double> retest_volume_ratio,
     double reward_risk,
     const Zone& zone
 ) {
@@ -508,20 +499,10 @@ Strength build_strength(
         strength_component("fit_residual_atr", zone.fit_residual_atr, 0.15,
             config.line_inlier_tolerance_atr, 0.0, false),
     };
-    if (setup == Setup::ResistanceBreakout) {
-        components.push_back(strength_component("confirmation_atr", confirmation_atr,
-            0.20, config.breakout_confirmation_atr, config.breakout_confirmation_atr * 2.0));
-        components.push_back(strength_component("volume_ratio", volume_ratio.value_or(0.0),
-            0.15, config.breakout_volume_ratio_min, config.breakout_volume_ratio_min * 2.0));
-    } else {
-        const double ideal = setup == Setup::SupportBounce ? config.bounce_confirmation_atr : 0.0;
-        components.push_back(strength_component("support_proximity_atr", confirmation_atr,
-            0.20, ideal + 2.0, ideal, false));
-        components.push_back(setup == Setup::SupportBounce
-            ? strength_component("volume_ratio", volume_ratio.value_or(0.0), 0.15, 0.5, 1.5)
-            : strength_component("retest_volume_ratio", retest_volume_ratio.value_or(0.0),
-                0.15, config.retest_volume_ratio_max, 0.0, false));
-    }
+    components.push_back(strength_component("support_proximity_atr", confirmation_atr,
+        0.20, config.bounce_confirmation_atr + 2.0, config.bounce_confirmation_atr, false));
+    components.push_back(strength_component("volume_ratio", volume_ratio.value_or(0.0),
+        0.15, 0.5, 1.5));
     double weighted = 0.0;
     double total = 0.0;
     for (const StrengthComponent& component : components) {
@@ -533,7 +514,7 @@ Strength build_strength(
         score,
         config.min_strength_score,
         score >= config.min_strength_score,
-        "support_resistance:" + std::string(name(setup)) + ":v2",
+        "support_resistance:support_bounce:v2",
         std::move(components),
     };
 }
@@ -620,8 +601,6 @@ std::string_view name(Regime value) {
 std::string_view name(Setup value) {
     switch (value) {
         case Setup::SupportBounce: return "support_bounce";
-        case Setup::ResistanceBreakout: return "resistance_breakout";
-        case Setup::BreakoutRetest: return "breakout_retest";
     }
     return "support_bounce";
 }
@@ -713,8 +692,10 @@ EntryChannel build_entry_channel(
             )) {
             continue;
         }
-        if (zone.upper <= close) supports.push_back({&zone, close - zone.upper});
-        if (zone.lower >= close) resistances.push_back({&zone, zone.lower - close});
+        if (zone.role == ZoneRole::Support && zone.upper <= close)
+            supports.push_back({&zone, close - zone.upper});
+        if (zone.role == ZoneRole::Resistance && zone.lower >= close)
+            resistances.push_back({&zone, zone.lower - close});
     }
     std::sort(supports.begin(), supports.end(), less);
     std::sort(resistances.begin(), resistances.end(), less);
@@ -799,6 +780,8 @@ std::pair<bool, std::string> entry_price_is_inside_channel(
 JsonObject zone_json(const Zone& zone) {
     return object({
         {"zone_key", zone.zone_key},
+        {"phase_start", zone.phase_start_ordinal == 0 ? JsonValue(nullptr) : JsonValue(iso_date(zone.phase_start_ordinal))},
+        {"end_reason", zone.end_reason},
         {"source_kind", std::string(name(zone.source_kind))},
         {"role", std::string(name(zone.role))},
         {"status", std::string(name(zone.status))},
@@ -1003,6 +986,8 @@ RegimeEvidence activate_cached_regime(SymbolState& state, std::int32_t trade_dat
         result.upper_zone_key = selected->upper_zone_key;
         result.reason_code = selected->reason_code;
         result.payload = selected->evidence;
+        if (const auto* phase = get<std::string>(result.payload, "phase_start"))
+            state.phase_start_ordinal = date_ordinal(*phase);
     }
     state.current_regime = result.regime;
     state.current_regime_evidence = result.payload;
@@ -1015,6 +1000,7 @@ void record_regime_version(
     const RegimeEvidence& evidence
 ) {
     std::optional<Regime> previous;
+    if (state.phase_start_ordinal == 0) state.phase_start_ordinal = effective_from;
     if (!state.regime_versions.empty()) {
         if (const std::string* prior = get<std::string>(state.regime_versions.back(), "regime")) {
             if (*prior == "uptrend") previous = Regime::Uptrend;
@@ -1024,11 +1010,15 @@ void record_regime_version(
         }
     }
     state.current_regime = evidence.regime;
-    if (previous && *previous == evidence.regime) {
+    const auto* previous_phase = state.regime_versions.empty() ? nullptr
+        : get<std::string>(*get<JsonObject>(state.regime_versions.back(), "evidence"), "phase_start");
+    if (previous && *previous == evidence.regime && previous_phase
+        && *previous_phase == iso_date(state.phase_start_ordinal)) {
         state.current_regime_evidence = *get<JsonObject>(state.regime_versions.back(), "evidence");
         return;
     }
     state.current_regime_evidence = evidence.payload;
+    set(state.current_regime_evidence, "phase_start", iso_date(state.phase_start_ordinal));
     JsonObject payload = object({
         {"version", state.regime_versions.size() + 1U},
         {"effective_from", iso_date(effective_from)},
@@ -1036,7 +1026,7 @@ void record_regime_version(
         {"lower_zone_key", nullable(evidence.lower_zone_key)},
         {"upper_zone_key", nullable(evidence.upper_zone_key)},
         {"reason_code", evidence.reason_code.empty() ? "unknown" : evidence.reason_code},
-        {"evidence", evidence.payload},
+        {"evidence", state.current_regime_evidence},
     });
     state.regime_versions.push_back(payload);
     JsonObject event = object({
@@ -1048,34 +1038,6 @@ void record_regime_version(
     });
     for (const auto& item : payload) set(event, item.first, item.second);
     state.events.push_back(std::move(event));
-}
-
-void record_cached_lifecycle_events(SymbolState& state, std::int32_t trade_date_ordinal) {
-    for (const CachedZoneVersion& payload : state.cached_zone_timeline) {
-        if (payload.effective_from_ordinal != trade_date_ordinal
-            || payload.zone.status != ZoneStatus::Expired) {
-            continue;
-        }
-        const LifecycleEventKey signature{
-            trade_date_ordinal,
-            "invalidation",
-            payload.zone.zone_key,
-        };
-        if (std::find(
-                state.cached_lifecycle_events.begin(),
-                state.cached_lifecycle_events.end(),
-                signature
-            ) != state.cached_lifecycle_events.end()) {
-            continue;
-        }
-        state.cached_lifecycle_events.push_back(signature);
-        state.events.push_back(object({
-            {"event_date", iso_date(trade_date_ordinal)},
-            {"event_type", "invalidation"},
-            {"zone_key", payload.zone.zone_key},
-            {"role", std::string(name(payload.zone.role))},
-        }));
-    }
 }
 
 std::optional<Decision> resolve_exit(const PositionView&, const Bar&, const Config&,
@@ -1165,24 +1127,12 @@ Candidate candidate_payload(
     const double reward_risk = risk > 0.0 ? (target - entry) / risk : 0.0;
     const bool eligible = reward_risk >= config.min_reward_risk;
     const SetupStats& stats = state.stats.at(setup);
-    const auto breakout = state.breakouts.find(zone.zone_key);
     const std::optional<double> volume_ratio = bar.volume_sma_20 > 0.0
         ? std::optional(bar.volume / bar.volume_sma_20)
         : std::nullopt;
-    const std::optional<double> retest_volume_ratio = breakout != state.breakouts.end()
-        && breakout->second.breakout_volume > 0.0
-            ? std::optional(bar.volume / breakout->second.breakout_volume)
-            : std::nullopt;
     const double confirmation_atr = (entry - zone.upper) / bar.atr_14;
     const double hold_margin_atr = confirmation_atr;
-    std::string reason;
-    if (setup == Setup::SupportBounce) {
-        reason = "confirmed bounce above a frozen support zone";
-    } else if (setup == Setup::ResistanceBreakout) {
-        reason = "volume-confirmed close above a frozen resistance zone";
-    } else {
-        reason = "low-volume retest held the former resistance zone";
-    }
+    const std::string reason = "confirmed bounce above a frozen support zone";
     Candidate result;
     result.setup = setup;
     result.zone_key = zone.zone_key;
@@ -1211,16 +1161,12 @@ Candidate candidate_payload(
         {"confirmation_atr", confirmation_atr},
         {"hold_margin_atr", hold_margin_atr},
         {"volume_ratio", nullable(volume_ratio)},
-        {"retest_volume_ratio", nullable(retest_volume_ratio)},
         {"reward_risk", reward_risk},
     });
     result.strength = build_strength(
-        setup,
         config,
         confirmation_atr,
-        hold_margin_atr,
         volume_ratio,
-        retest_volume_ratio,
         reward_risk,
         zone
     );
@@ -1228,80 +1174,22 @@ Candidate candidate_payload(
 }
 
 std::vector<Candidate> detect_candidates(
-    SymbolState& state,
-    const Bar& bar,
-    const std::vector<Zone>& zones,
-    int session_index,
-    const Config& config
+    SymbolState& state, const Bar& bar, const std::vector<Zone>& zones,
+    int session_index, const Config& config
 ) {
-    const std::optional<double> previous_close = state.history.empty()
-        ? std::nullopt
-        : std::optional(state.history.back().close);
+    static_cast<void>(session_index);
     std::vector<Candidate> candidates;
+    if (!config.support_bounce_enabled || state.history.empty()) return candidates;
     for (const Zone& zone : zones) {
-        std::optional<Setup> setup;
-        const bool breakout = previous_close
-            && *previous_close <= zone.upper + config.breakout_confirmation_atr * bar.atr_14
-            && bar.close > zone.upper + config.breakout_confirmation_atr * bar.atr_14
-            && bar.volume_sma_20 > 0.0
-            && bar.volume >= config.breakout_volume_ratio_min * bar.volume_sma_20;
-        if (config.support_bounce_enabled && previous_close
-            && *previous_close > zone.upper && bar.low <= zone.upper
+        if (zone.role == ZoneRole::Support
+            && zone.valid_from_ordinal < bar.date_ordinal
+            && state.history.back().close > zone.upper && bar.low <= zone.upper
             && bar.close >= zone.upper + config.bounce_confirmation_atr * bar.atr_14) {
-            setup = Setup::SupportBounce;
-        }
-        if (breakout) {
-            state.breakouts.insert_or_assign(zone.zone_key, BreakoutRecord{
-                zone.zone_key,
-                bar.date_ordinal,
-                session_index,
-                bar.volume,
-            });
-            state.events.push_back(object({
-                {"event_date", iso_date(bar.date_ordinal)},
-                {"event_type", "breakout"},
-                {"zone_key", zone.zone_key},
-                {"setup", "resistance_breakout"},
-                {"role", std::string(name(zone.role))},
-                {"lower", zone.lower},
-                {"upper", zone.upper},
-                {"breakout_volume", bar.volume},
-            }));
-            if (config.resistance_breakout_enabled) setup = Setup::ResistanceBreakout;
-        }
-        if (setup) candidates.push_back(candidate_payload(
-            state, *setup, zone, zones, bar, config
-        ));
-    }
-    for (const auto& [key, breakout] : state.breakouts) {
-        const int elapsed = session_index - breakout.breakout_session_index;
-        if (elapsed <= 0 || elapsed > config.retest_window) continue;
-        const auto zone = std::find_if(zones.begin(), zones.end(), [&](const Zone& candidate) {
-            return candidate.zone_key == key;
-        });
-        if (zone == zones.end()) continue;
-        if (bar.low <= zone->upper && bar.close >= zone->upper
-            && bar.volume <= breakout.breakout_volume * config.retest_volume_ratio_max) {
-            state.events.push_back(object({
-                {"event_date", iso_date(bar.date_ordinal)},
-                {"event_type", "retest"},
-                {"zone_key", key},
-                {"setup", "breakout_retest"},
-                {"role", std::string(name(zone->role))},
-                {"lower", zone->lower},
-                {"upper", zone->upper},
-                {"breakout_date", iso_date(breakout.breakout_date_ordinal)},
-                {"breakout_volume", breakout.breakout_volume},
-                {"retest_volume", bar.volume},
-            }));
-            if (config.breakout_retest_enabled) candidates.push_back(candidate_payload(
-                state, Setup::BreakoutRetest, *zone, zones, bar, config
-            ));
+            candidates.push_back(candidate_payload(state, Setup::SupportBounce, zone, zones, bar, config));
         }
     }
-    std::sort(candidates.begin(), candidates.end(), [](const Candidate& left, const Candidate& right) {
-        return std::pair(setup_priority(left.setup), left.zone_key)
-            < std::pair(setup_priority(right.setup), right.zone_key);
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+        return a.zone_key < b.zone_key;
     });
     return candidates;
 }
@@ -1317,28 +1205,11 @@ void apply_regime_entry_policy(
         candidate.risk_eligible = candidate.entry_eligible;
         candidate.regime = regime.regime;
         candidate.regime_evidence = regime.payload;
-        candidate.regime_eligible = (regime.regime == Regime::Uptrend
-                && (candidate.setup == Setup::SupportBounce
-                    || candidate.setup == Setup::BreakoutRetest))
-            || (regime.regime == Regime::Range && candidate.setup == Setup::SupportBounce);
+        candidate.regime_eligible = regime.regime == Regime::Uptrend || regime.regime == Regime::Range;
         candidate.entry_channel = entry_channel;
         candidate.channel_eligible = entry_channel.valid;
-        const bool direct_breakout = candidate.setup == Setup::ResistanceBreakout;
         candidate.entry_eligible = candidate.risk_eligible && candidate.regime_eligible
-            && candidate.channel_eligible && !direct_breakout;
-        if (direct_breakout) {
-            candidate.rejection_reason = "direct_breakout_audit_only";
-            state.events.push_back(object({
-                {"event_date", iso_date(trade_date_ordinal)},
-                {"event_type", "direct_breakout_audit"},
-                {"zone_key", candidate.zone_key},
-                {"setup", std::string(name(candidate.setup))},
-                {"regime", std::string(name(regime.regime))},
-                {"reason_code", "direct_breakout_audit_only"},
-                {"entry_channel", entry_channel_json(entry_channel)},
-            }));
-            continue;
-        }
+            && candidate.channel_eligible;
         if (!candidate.channel_eligible) {
             candidate.rejection_reason = entry_channel.reason_code.empty()
                 ? "missing_valid_entry_channel"
@@ -1376,8 +1247,8 @@ const Candidate* select_candidate(const std::vector<Candidate>& candidates) {
     }
     if (eligible.empty()) return nullptr;
     std::sort(eligible.begin(), eligible.end(), [](const Candidate* left, const Candidate* right) {
-        return std::tuple(-left->strength.score, setup_priority(left->setup), left->zone_key)
-            < std::tuple(-right->strength.score, setup_priority(right->setup), right->zone_key);
+        return std::pair(-left->strength.score, left->zone_key)
+            < std::pair(-right->strength.score, right->zone_key);
     });
     return eligible.front();
 }
@@ -1449,80 +1320,30 @@ std::optional<Decision> resolve_exit(
 }
 
 void apply_current_bar_zone_state(
-    SymbolState& state,
-    const Bar& bar,
-    int session_index,
-    const Config& config
+    SymbolState& state, const Bar& bar, int session_index, const Config& config
 ) {
-    for (auto& [unused, zone] : state.zones) {
-        static_cast<void>(unused);
-        zone = project_zone(zone, session_index);
-    }
+    static_cast<void>(config);
     for (auto& [key, zone] : state.zones) {
-        if (zone.status != ZoneStatus::Active) continue;
+        zone = project_zone(zone, session_index);
         const bool inside = bar.high >= zone.lower && bar.low <= zone.upper;
         if (inside && !zone.last_inside) {
             ++zone.touch_count;
             state.events.push_back(object({
-                {"event_date", iso_date(bar.date_ordinal)},
-                {"event_type", "touch"},
-                {"zone_key", zone.zone_key},
-                {"role", std::string(name(zone.role))},
-                {"lower", zone.lower},
-                {"upper", zone.upper},
+                {"event_date", iso_date(bar.date_ordinal)}, {"event_type", "touch"},
+                {"zone_key", key}, {"role", std::string(name(zone.role))},
+                {"lower", zone.lower}, {"upper", zone.upper},
+                {"phase_start", iso_date(state.phase_start_ordinal)},
             }));
         }
         zone.last_inside = inside;
-        const auto breakout = state.breakouts.find(key);
-        const ZoneRole role = zone.role;
-        if (role == ZoneRole::Resistance && bar.close >= zone.center) {
-            zone.role = ZoneRole::Support;
-            state.events.push_back(object({
-                {"event_date", iso_date(bar.date_ordinal)},
-                {"event_type", "role_transition"},
-                {"zone_key", key},
-                {"from_role", "resistance"},
-                {"to_role", "support"},
-                {"lower", zone.lower},
-                {"upper", zone.upper},
-                {"reason", breakout != state.breakouts.end()
-                    && session_index == breakout->second.breakout_session_index
-                        ? "confirmed_breakout" : "close_above_resistance"},
-            }));
-        } else if (role == ZoneRole::Support && bar.close < zone.center) {
-            zone.role = ZoneRole::Resistance;
-            state.events.push_back(object({
-                {"event_date", iso_date(bar.date_ordinal)},
-                {"event_type", "role_transition"},
-                {"zone_key", key},
-                {"from_role", "support"},
-                {"to_role", "resistance"},
-                {"lower", zone.lower},
-                {"upper", zone.upper},
-                {"reason", "support_breakdown"},
-            }));
-            state.breakouts.erase(key);
-        } else if (role == ZoneRole::Support && breakout != state.breakouts.end()
-            && session_index > breakout->second.breakout_session_index
-            && session_index <= breakout->second.breakout_session_index + config.retest_window
-            && bar.low <= zone.upper && bar.close >= zone.upper
-            && bar.volume <= breakout->second.breakout_volume * config.retest_volume_ratio_max) {
-            state.breakouts.erase(key);
-        }
     }
-    std::vector<std::string> expired;
-    for (const auto& [key, breakout] : state.breakouts) {
-        if (session_index - breakout.breakout_session_index > config.retest_window) {
-            expired.push_back(key);
-        }
-    }
-    for (const std::string& key : expired) state.breakouts.erase(key);
 }
 
 void confirm_pivots(SymbolState& state, const Config& config) {
     const int pivot_index = static_cast<int>(state.history.size()) - 1 - config.pivot_right_bars;
     if (pivot_index < config.pivot_left_bars) return;
     const Bar& candidate = state.history[static_cast<std::size_t>(pivot_index)];
+    if (candidate.date_ordinal < state.phase_start_ordinal) return;
     const std::int32_t confirmed_on = state.history.back().date_ordinal;
     for (const PivotKind kind : {PivotKind::High, PivotKind::Low}) {
         std::vector<double> values;
@@ -1560,32 +1381,6 @@ void confirm_pivots(SymbolState& state, const Config& config) {
     }
 }
 
-const Zone* match_zone(
-    const std::map<std::string, Zone>& old_zones,
-    PivotKind source_kind,
-    double center,
-    double half_width,
-    const std::vector<std::string>& pivot_keys
-) {
-    std::vector<const Zone*> candidates;
-    std::vector<const Zone*> exact;
-    for (const auto& [unused, zone] : old_zones) {
-        static_cast<void>(unused);
-        if (zone.source_kind == source_kind && zone.lower <= center + half_width
-            && zone.upper >= center - half_width) {
-            candidates.push_back(&zone);
-            if (zone.pivot_keys == pivot_keys) exact.push_back(&zone);
-        }
-    }
-    std::vector<const Zone*>& selected = exact.empty() ? candidates : exact;
-    if (selected.empty()) return nullptr;
-    std::sort(selected.begin(), selected.end(), [center](const Zone* left, const Zone* right) {
-        return std::pair(std::abs(left->center - center), left->zone_key)
-            < std::pair(std::abs(right->center - center), right->zone_key);
-    });
-    return selected.front();
-}
-
 std::string zone_signature(const Zone& zone, ZoneStatus status) {
     return std::string(name(zone.role)) + "|" + std::string(name(status)) + "|"
         + json(strings(zone.pivot_keys)) + "|" + std::to_string(zone.anchor_session_index)
@@ -1613,17 +1408,24 @@ void rebuild_zones(SymbolState& state, const Bar& bar, const Config& config) {
     const int current_index = static_cast<int>(state.history.size()) - 1;
     state.pivots.erase(
         std::remove_if(state.pivots.begin(), state.pivots.end(), [&](const Pivot& pivot) {
-            return current_index - pivot.session_index >= config.detection_window;
+            if (pivot.trade_date_ordinal < state.phase_start_ordinal) return true;
+            if (current_index - pivot.session_index < config.detection_window) return false;
+            return std::none_of(state.zones.begin(), state.zones.end(), [&](const auto& item) {
+                const auto& keys = item.second.pivot_keys;
+                return std::find(keys.begin(), keys.end(), pivot.pivot_key) != keys.end();
+            });
         }),
         state.pivots.end()
     );
     std::map<std::string, Zone> old_zones;
     for (const auto& [key, zone] : state.zones) old_zones.emplace(key, project_zone(zone, current_index));
-    std::map<std::string, Zone> selected;
+    std::map<std::string, Zone> selected = old_zones;
     for (const PivotKind source_kind : {PivotKind::Low, PivotKind::High}) {
         std::vector<const Pivot*> pivots;
         for (const Pivot& pivot : state.pivots) {
-            if (pivot.kind == source_kind) pivots.push_back(&pivot);
+            if (pivot.kind == source_kind
+                && current_index - pivot.session_index < config.detection_window)
+                pivots.push_back(&pivot);
         }
         std::sort(pivots.begin(), pivots.end(), [](const Pivot* a, const Pivot* b) {
             return std::tie(a->session_index, a->pivot_key) < std::tie(b->session_index, b->pivot_key);
@@ -1665,8 +1467,8 @@ void rebuild_zones(SymbolState& state, const Bar& bar, const Config& config) {
             };
             return quality(a) < quality(b);
         });
-        int count = 0;
-        std::set<std::string> used_old;
+        int count = static_cast<int>(std::count_if(selected.begin(), selected.end(),
+            [&](const auto& item) { return item.second.source_kind == source_kind; }));
         for (const auto& [member_keys, fit] : ordered) {
             if (count >= config.max_zones_per_kind) break;
             double half_width = config.zone_half_width_atr * bar.atr_14;
@@ -1676,71 +1478,49 @@ void rebuild_zones(SymbolState& state, const Bar& bar, const Config& config) {
             }
             if (!valid_zone_values(fit.center, fit.center - half_width, fit.center + half_width,
                     bar.atr_14, fit.slope)) continue;
-            // Overlapping fits of the same boundary do not consume additional slots.
-            if (std::any_of(selected.begin(), selected.end(), [&](const auto& item) {
-                const Zone& zone = item.second;
-                return zone.source_kind == source_kind && zone.lower <= fit.center + half_width
-                    && zone.upper >= fit.center - half_width;
-            })) continue;
             std::vector<std::string> keys = member_keys;
             std::sort(keys.begin(), keys.end());
-            std::map<std::string, Zone> available;
-            for (const auto& [key, old] : old_zones) {
-                if (!used_old.contains(key)) available.emplace(key, old);
-            }
-            const Zone* matched = match_zone(available, source_kind, fit.center, half_width, keys);
             Zone zone;
-            const bool unchanged = matched && matched->pivot_keys == keys
-                && bar.atr_14 >= matched->atr * 0.5 && bar.atr_14 <= matched->atr * 2.0;
-            if (unchanged) {
-                zone = *matched;
-            } else {
-                std::vector<Pivot> cluster;
-                for (const Pivot* pivot : fit.inliers) cluster.push_back(*pivot);
-                zone.zone_key = matched ? matched->zone_key : new_zone_key(source_kind, cluster);
-                if (!matched && std::any_of(state.zone_versions.begin(), state.zone_versions.end(),
-                    [&](const JsonObject& version) {
-                        const auto* key = get<std::string>(version, "zone_key");
-                        const auto* day = get<std::string>(version, "effective_from");
-                        return key && day && *key == zone.zone_key && *day == iso_date(bar.date_ordinal);
-                    })) zone.zone_key = revived_zone_key(zone.zone_key, bar.date_ordinal);
-                zone.source_kind = source_kind;
-                zone.center = zone.anchor_center = stored_zone_price(fit.center);
-                zone.lower = zone.anchor_lower = stored_zone_price(fit.center - half_width);
-                zone.upper = zone.anchor_upper = stored_zone_price(fit.center + half_width);
-                zone.atr = stored_zone_price(bar.atr_14);
-                zone.anchor_session_index = current_index;
-                zone.slope_per_session = stored_zone_price(fit.slope);
-                zone.pivot_keys = keys;
-                zone.pivot_count = static_cast<int>(fit.inliers.size());
-                zone.touch_count = matched ? matched->touch_count : 0;
-                zone.last_inside = matched ? matched->last_inside : false;
-                zone.first_pivot_date_ordinal = fit.inliers.front()->trade_date_ordinal;
-                zone.last_pivot_date_ordinal = fit.inliers.back()->trade_date_ordinal;
-                zone.valid_from_ordinal = matched ? matched->valid_from_ordinal : bar.date_ordinal;
-                // Residuals use the same persisted NUMERIC scale as zone prices.
-                zone.fit_residual_atr = stored_zone_price(fit.residual_atr);
-            }
+            std::vector<Pivot> cluster;
+            for (const Pivot* pivot : fit.inliers) cluster.push_back(*pivot);
+            zone.phase_start_ordinal = state.phase_start_ordinal;
+            zone.zone_key = revived_zone_key(new_zone_key(source_kind, cluster), state.phase_start_ordinal);
+            zone.source_kind = source_kind;
+            zone.center = zone.anchor_center = stored_zone_price(fit.center);
+            zone.lower = zone.anchor_lower = stored_zone_price(fit.center - half_width);
+            zone.upper = zone.anchor_upper = stored_zone_price(fit.center + half_width);
+            zone.atr = stored_zone_price(bar.atr_14);
+            zone.anchor_session_index = current_index;
+            zone.slope_per_session = stored_zone_price(fit.slope);
+            zone.pivot_keys = keys;
+            zone.pivot_count = static_cast<int>(fit.inliers.size());
+            zone.first_pivot_date_ordinal = fit.inliers.front()->trade_date_ordinal;
+            zone.last_pivot_date_ordinal = fit.inliers.back()->trade_date_ordinal;
+            zone.valid_from_ordinal = bar.date_ordinal;
+            // Residuals use the same persisted NUMERIC scale as zone prices.
+            zone.fit_residual_atr = stored_zone_price(fit.residual_atr);
             // A positive fit can round to zero at the persisted NUMERIC(24,10) scale.
             if (!valid_zone_values(zone.center, zone.lower, zone.upper, zone.atr,
                     zone.slope_per_session)) continue;
-            if (!unchanged) zone.recency_weight = fit.total_weight / fit.inliers.size();
+            zone.recency_weight = fit.total_weight / fit.inliers.size();
             zone.role = bar.close >= zone.center ? ZoneRole::Support : ZoneRole::Resistance;
             zone.status = ZoneStatus::Active;
-            if (matched) used_old.insert(matched->zone_key);
+            // Linear bands can cross between discrete samples. Strict ordering at
+            // both ends proves disjointness over their entire shared history.
+            const bool conflict = std::any_of(selected.begin(), selected.end(), [&](const auto& item) {
+                const Zone& old = item.second;
+                const auto first_date = std::max(old.first_pivot_date_ordinal, zone.first_pivot_date_ordinal);
+                const auto first = std::lower_bound(state.history.begin(), state.history.end(), first_date,
+                    [](const Bar& value, std::int32_t day) { return value.date_ordinal < day; });
+                const int index = static_cast<int>(first - state.history.begin());
+                const Zone a = project_zone(old, index), b = project_zone(zone, index);
+                return !((a.upper < b.lower && old.upper < zone.lower)
+                    || (b.upper < a.lower && zone.upper < old.lower));
+            });
+            if (conflict) continue;
             selected.emplace(zone.zone_key, std::move(zone));
             ++count;
         }
-    }
-    for (const auto& [key, old] : old_zones) {
-        if (selected.contains(key)) continue;
-        record_zone_version(state, old, bar.date_ordinal, ZoneStatus::Expired);
-        state.events.push_back(object({
-            {"event_date", iso_date(bar.date_ordinal)},
-            {"event_type", "invalidation"},
-            {"zone_key", key},
-            {"role", std::string(name(old.role))},
-        }));
     }
     state.zones = std::move(selected);
     for (const auto& [unused, zone] : state.zones) {
@@ -1788,20 +1568,8 @@ void record_regime(
 }
 
 void rebuild(SymbolState& state, const Bar& bar, const Config& config) {
+    if (state.phase_start_ordinal == 0) state.phase_start_ordinal = state.history.front().date_ordinal;
     rebuild_zones(state, bar, config);
-}
-
-std::optional<Zone> match_existing_zone(
-    const std::vector<Zone>& old_zones,
-    PivotKind source_kind,
-    double center,
-    double half_width,
-    const std::vector<std::string>& pivot_keys
-) {
-    std::map<std::string, Zone> values;
-    for (const Zone& zone : old_zones) values.emplace(zone.zone_key, zone);
-    const Zone* result = match_zone(values, source_kind, center, half_width, pivot_keys);
-    return result == nullptr ? std::nullopt : std::optional(*result);
 }
 
 void record_zone(
@@ -1828,45 +1596,80 @@ std::optional<Decision> advance_symbol(
         return std::nullopt;
     }
     const int session_index = static_cast<int>(state.history.size());
-    const bool has_cached_zones = !state.cached_zone_timeline.empty();
-    if (has_cached_zones) activate_cached_zones(state, bar.date_ordinal);
+    const bool has_cached_zones = !state.cached_zone_timeline.empty() || !state.cached_regime_timeline.empty();
+    if (!state.cached_zone_timeline.empty()) activate_cached_zones(state, bar.date_ordinal);
 
+    if (state.phase_start_ordinal == 0) {
+        state.phase_start_ordinal = state.history.empty()
+            ? bar.date_ordinal : state.history.front().date_ordinal;
+    }
     std::vector<Zone> frozen_zones;
-    std::map<std::string, Zone> retained;
+    std::string end_reason;
+    JsonArray broken;
     for (const auto& [key, zone] : state.zones) {
-        if (zone.status != ZoneStatus::Active) continue;
         Zone projected = project_zone(zone, session_index);
-        if (valid_zone_values(
-                projected.center,
-                projected.lower,
-                projected.upper,
-                projected.atr,
-                projected.slope_per_session
-            )) {
-            frozen_zones.push_back(projected);
-            retained.emplace(key, std::move(projected));
-            continue;
+        if (!valid_zone_values(projected.center, projected.lower, projected.upper,
+                projected.atr, projected.slope_per_session)) {
+            end_reason = "invalid_geometry";
+            broken.emplace_back(key);
         }
-        state.breakouts.erase(key);
-        if (!has_cached_zones) {
-            Zone tombstone = zone;
-            tombstone.status = ZoneStatus::Expired;
-            tombstone.anchor_session_index = session_index;
-            tombstone.anchor_center = zone.center;
-            tombstone.anchor_lower = zone.lower;
-            tombstone.anchor_upper = zone.upper;
-            tombstone.slope_per_session = 0.0;
-            record_zone_version(state, tombstone, bar.date_ordinal, ZoneStatus::Expired);
-            state.events.push_back(object({
-                {"event_date", iso_date(bar.date_ordinal)},
-                {"event_type", "invalidation"},
-                {"zone_key", key},
-                {"role", std::string(name(zone.role))},
-                {"reason", "projected_zone_geometry_became_invalid"},
-            }));
+        frozen_zones.push_back(projected);
+    }
+    if (end_reason.empty()) {
+        for (std::size_t i = 0; i < frozen_zones.size(); ++i) {
+            for (std::size_t j = i + 1; j < frozen_zones.size(); ++j) {
+                const Zone& a = frozen_zones[i];
+                const Zone& b = frozen_zones[j];
+                const Zone old_a = project_zone(state.zones.at(a.zone_key), session_index - 1);
+                const Zone old_b = project_zone(state.zones.at(b.zone_key), session_index - 1);
+                if (!((a.upper < b.lower && old_a.upper < old_b.lower)
+                    || (b.upper < a.lower && old_b.upper < old_a.lower))) {
+                    end_reason = "zone_conflict";
+                    broken.emplace_back(a.zone_key);
+                    broken.emplace_back(b.zone_key);
+                }
+            }
         }
     }
-    state.zones = std::move(retained);
+    if (end_reason.empty()) {
+        for (const Zone& zone : frozen_zones) {
+            if ((zone.role == ZoneRole::Support && bar.close < zone.lower)
+                || (zone.role == ZoneRole::Resistance && bar.close > zone.upper)) {
+                end_reason = "close_break";
+                broken.emplace_back(zone.zone_key);
+            }
+        }
+    }
+    if (!end_reason.empty()) {
+        const auto previous_day = state.history.back().date_ordinal;
+        for (const auto& [key, zone] : state.zones) {
+            Zone terminal = zone;
+            terminal.end_reason = end_reason;
+            if (!has_cached_zones)
+                record_zone_version(state, terminal, bar.date_ordinal, ZoneStatus::Expired);
+            state.events.push_back(object({
+                {"event_date", iso_date(bar.date_ordinal)}, {"event_type", "invalidation"},
+                {"zone_key", key}, {"role", std::string(name(zone.role))},
+                {"reason", end_reason}, {"phase_start", iso_date(state.phase_start_ordinal)},
+                {"effective_to", iso_date(previous_day)}, {"close", bar.close},
+                {"broken_zone_keys", broken},
+            }));
+        }
+        state.events.push_back(object({
+            {"event_date", iso_date(bar.date_ordinal)}, {"event_type", "phase_ended"},
+            {"phase_start", iso_date(state.phase_start_ordinal)},
+            {"next_phase_start", iso_date(bar.date_ordinal)},
+            {"effective_to", iso_date(previous_day)}, {"reason", end_reason},
+            {"open", bar.open}, {"high", bar.high}, {"low", bar.low}, {"close", bar.close},
+            {"broken_zone_keys", broken},
+        }));
+        state.phase_start_ordinal = bar.date_ordinal;
+        state.zones.clear();
+        state.pivots.clear();
+        frozen_zones.clear();
+    } else {
+        for (const Zone& zone : frozen_zones) state.zones.at(zone.zone_key) = zone;
+    }
     std::sort(frozen_zones.begin(), frozen_zones.end(), [](const Zone& left, const Zone& right) {
         return std::tuple(std::string(name(left.role)), left.center, left.zone_key)
             < std::tuple(std::string(name(right.role)), right.center, right.zone_key);
@@ -1880,6 +1683,7 @@ std::optional<Decision> advance_symbol(
     const bool has_cached_regimes = !state.cached_regime_timeline.empty();
     if (has_cached_regimes) {
         regime = activate_cached_regime(state, bar.date_ordinal);
+        record_regime_version(state, bar.date_ordinal, regime);
     } else {
         regime = classify_market_regime(state, frozen_zones, bar, config);
         record_regime_version(state, bar.date_ordinal, regime);
@@ -1969,11 +1773,13 @@ std::optional<Decision> advance_symbol(
     }
 
     apply_current_bar_zone_state(state, bar, session_index, config);
-    if (has_cached_zones) record_cached_lifecycle_events(state, bar.date_ordinal);
     state.history.push_back(bar);
     if (!has_cached_zones) {
         confirm_pivots(state, config);
         rebuild_zones(state, bar, config);
+    } else if (!state.cached_zone_timeline.empty()) {
+        // Restore T-close confirmations before the next-open geometry check.
+        activate_cached_zones(state, bar.date_ordinal + 1);
     }
 
     if (!emit_signals) return std::nullopt;
@@ -1983,7 +1789,31 @@ std::optional<Decision> advance_symbol(
     }
     JsonArray raw_candidates;
     for (const Candidate& candidate : candidates) raw_candidates.emplace_back(candidate_json(candidate));
+    // This projection uses only the T-close frozen definitions, including zones
+    // just confirmed on T; no T+1 close or future Pivot is consulted.
+    std::string next_phase_geometry = "valid";
+    std::vector<Zone> next_zones;
+    for (const auto& [key, zone] : state.zones) {
+        const Zone projected = project_zone(zone, session_index + 1);
+        if (!valid_zone_values(projected.center, projected.lower, projected.upper,
+                projected.atr, projected.slope_per_session)) next_phase_geometry = "invalid_geometry";
+        next_zones.push_back(projected);
+    }
+    if (next_phase_geometry == "valid") {
+        for (std::size_t i = 0; i < next_zones.size(); ++i) {
+            for (std::size_t j = i + 1; j < next_zones.size(); ++j) {
+                const auto& a = next_zones[i];
+                const auto& b = next_zones[j];
+                const Zone old_a = project_zone(state.zones.at(a.zone_key), session_index);
+                const Zone old_b = project_zone(state.zones.at(b.zone_key), session_index);
+                if (!((a.upper < b.lower && old_a.upper < old_b.lower)
+                    || (b.upper < a.lower && old_b.upper < old_a.lower)))
+                    next_phase_geometry = "zone_conflict";
+            }
+        }
+    }
     JsonObject metadata = object({
+        {"next_session_phase_geometry", next_phase_geometry},
         {"zone_key", selected->zone_key},
         {"selected_setup", std::string(name(selected->setup))},
         {"candidate_setups", candidate_setups},
@@ -2018,6 +1848,11 @@ EntrySizing size_entry(const JsonObject& frozen, double price, double equity, do
     double position_cap, const Config& config, double commission_bps,
     double commission_min, double slippage_bps) {
     EntrySizing result;
+    if (const auto* geometry = get<std::string>(frozen, "next_session_phase_geometry");
+            geometry && *geometry != "valid") {
+        result.reason_code = "next_session_phase_" + *geometry;
+        return result;
+    }
     const auto stop = number(frozen, "stop_price");
     const auto target = number(frozen, "target_price");
     if (!stop || !target) throw std::invalid_argument("support entry requires stop_price and target_price");

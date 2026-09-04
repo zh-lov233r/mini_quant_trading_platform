@@ -297,8 +297,6 @@ export interface SupportResistanceStrategyParams {
   signal: {
     min_strength_score: number;
     support_bounce_enabled: boolean;
-    resistance_breakout_enabled: boolean;
-    breakout_retest_enabled: boolean;
     pivot_left_bars: number;
     pivot_right_bars: number;
     detection_window: number;
@@ -311,10 +309,6 @@ export interface SupportResistanceStrategyParams {
     zone_half_width_atr: number;
     decay_half_life: number;
     bounce_confirmation_atr: number;
-    breakout_confirmation_atr: number;
-    breakout_volume_ratio_min: number;
-    retest_window: number;
-    retest_volume_ratio_max: number;
   };
   universe: { symbols: string[]; selection_mode: string };
   risk: {

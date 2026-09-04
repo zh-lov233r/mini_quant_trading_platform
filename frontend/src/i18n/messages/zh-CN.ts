@@ -3,6 +3,13 @@ import { strategyCreateZhCN } from "./strategy-create/zh-CN";
 
 export const zhCNMessages = {
   dashboard: dashboardZhCN,
+  lifecycleZones: {
+    showAll: "显示全部区域",
+    all: "显示窗口内全部支撑/压力区域历史。",
+    tradeOnly: "仅显示本笔交易明确关联的支撑/压力区域历史。",
+    noAssociation: "暂无明确的交易关联区域记录；可勾选查看全部区域，不按价格反推。",
+    outsideWindow: "本笔交易关联的区域在当前窗口内没有可绘制分段。",
+  },
   common: {
     appName: "量化策略工作台",
     language: "语言",

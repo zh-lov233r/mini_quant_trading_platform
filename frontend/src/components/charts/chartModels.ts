@@ -79,6 +79,10 @@ export interface ChartGapOverlay {
 
 export interface ChartZoneOverlay {
   key: string;
+  zoneKey?: string;
+  retrospective?: boolean;
+  details?: string[];
+  evidenceMarkers?: ChartOverlayMarker[];
   startDate: string;
   endDate: string;
   startCenterPrice: number;
@@ -128,21 +132,8 @@ export type CandleSeriesMarker = CandleSeriesMarkerBase & (
   | { position: "atPriceTop" | "atPriceBottom"; price: number }
 );
 
-const DISPLAYABLE_SUPPORT_RESISTANCE_EVENT_TYPES = new Set([
-  "touch",
-  "breakout",
-  "retest",
-  "candidate",
-  "selection",
-  "role_transition",
-  "entry_channel_rejection",
-  "execution_rejection",
-  "direct_breakout_audit",
-  "channel_fill_violation",
-]);
-
 export function isDisplayableSupportResistanceEventType(eventType: string): boolean {
-  return DISPLAYABLE_SUPPORT_RESISTANCE_EVENT_TYPES.has(eventType);
+  return eventType === "touch";
 }
 
 export function toChartTime(value?: string | null): ChartTime | null {

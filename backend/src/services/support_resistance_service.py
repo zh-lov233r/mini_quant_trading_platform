@@ -5,7 +5,8 @@ from __future__ import annotations
 Signal generation, Pivot/zone/regime evolution, posterior tracking, and entry
 channel rules are implemented by ``quant_kernel``.  The Python dataclasses in
 this module only adapt typed native audit output to database persistence and
-test fixtures; they are not a separately routable strategy engine.
+test fixtures; they are not a separately routable strategy engine. Cached zone
+anchors are immutable and comparisons project them onto a common session.
 """
 
 from dataclasses import asdict, dataclass, field, replace
@@ -16,7 +17,7 @@ from quant_kernel import support_resistance as native_support_resistance
 
 ZoneRole = Literal["support", "resistance"]
 MarketRegime = Literal["uptrend", "downtrend", "range", "transition"]
-SetupMode = Literal["support_bounce", "resistance_breakout", "breakout_retest"]
+SetupMode = Literal["support_bounce"]
 DETECTOR_IMPLEMENTATION_REVISION = native_support_resistance.DETECTOR_IMPLEMENTATION_REVISION
 REGIME_LOGIC_REVISION = native_support_resistance.REGIME_LOGIC_REVISION
 ENTRY_CHANNEL_SEMANTICS = native_support_resistance.ENTRY_CHANNEL_SEMANTICS
@@ -58,6 +59,8 @@ class Zone:
     recency_weight: float = 0.0
     last_inside: bool = False
     timeline_effective_from: date | None = None
+    phase_start: date | None = None
+    end_reason: str = ""
 
     def __post_init__(self) -> None:
         if self.anchor_center is None:
@@ -82,24 +85,12 @@ class Zone:
 
     def snapshot(self) -> dict[str, Any]:
         payload = asdict(self)
-        for key in ("first_pivot_date", "last_pivot_date", "valid_from", "timeline_effective_from"):
+        for key in ("first_pivot_date", "last_pivot_date", "valid_from", "timeline_effective_from", "phase_start"):
             if payload[key] is not None:
                 payload[key] = payload[key].isoformat()
         payload.pop("timeline_effective_from", None)
         payload["pivot_keys"] = list(self.pivot_keys)
         return payload
-
-
-@dataclass(slots=True)
-class BreakoutRecord:
-    zone_key: str
-    breakout_date: date
-    breakout_session_index: int
-    breakout_volume: float
-    # Kept for fixture and persistence hydration; the native kernel projects
-    # the live zone and does not use these horizontal bounds.
-    original_lower: float | None = None
-    original_upper: float | None = None
 
 
 @dataclass(slots=True)
@@ -134,18 +125,16 @@ class SetupStats:
 
 @dataclass(slots=True)
 class SupportResistanceSymbolState:
+    phase_start: date | None = None
     instrument_id: int | None = None
     symbol: str | None = None
     history: list[dict[str, Any]] = field(default_factory=list)
     pivots: list[Pivot] = field(default_factory=list)
     zones: dict[str, Zone] = field(default_factory=dict)
-    breakouts: dict[str, BreakoutRecord] = field(default_factory=dict)
     pending_outcomes: list[PendingOutcome] = field(default_factory=list)
     stats: dict[SetupMode, SetupStats] = field(
         default_factory=lambda: {
             "support_bounce": SetupStats(),
-            "resistance_breakout": SetupStats(),
-            "breakout_retest": SetupStats(),
         }
     )
     events: list[dict[str, Any]] = field(default_factory=list)
@@ -279,22 +268,6 @@ def _fit_pivot_line(
         float(result["slope"]),
         float(result["residual_atr"]),
         float(result["total_weight"]),
-    )
-
-
-def _match_zone(
-    old_zones: Any,
-    source_kind: str,
-    center: float,
-    half_width: float,
-    pivot_keys: tuple[str, ...],
-) -> Zone | None:
-    return native_support_resistance.match_zone(
-        old_zones,
-        source_kind,
-        center,
-        half_width,
-        pivot_keys,
     )
 
 

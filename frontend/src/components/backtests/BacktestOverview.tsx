@@ -57,7 +57,7 @@ export default function BacktestOverview({ run, children }: { run: BacktestSumma
         <div>
           <div className={styles.label}>{isZh ? "股票组合" : "Basket"}</div>
           <div className={styles.value}>
-            {run.basket_name || (isZh ? "沿用策略原始股票池" : "Use the strategy's original universe")}
+            {run.basket_name || (isZh ? "历史动态股票池" : "Historical dynamic universe")}
           </div>
         </div>
         <div>

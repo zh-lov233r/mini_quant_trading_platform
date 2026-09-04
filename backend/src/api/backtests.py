@@ -62,10 +62,10 @@ log = logging.getLogger(__name__)
 
 class BacktestCreate(BaseModel):
     strategy_id: UUID = Field(..., description="策略 ID")
-    basket_id: Optional[UUID] = Field(default=None, description="股票组合 ID，用于覆盖策略 universe")
+    basket_id: Optional[UUID] = Field(default=None, description="本次回测使用的静态股票组合 ID")
     universe_policy: Optional[PointInTimeUniversePolicy] = Field(
         default=None,
-        description="历史动态入场股票池；与 basket_id 互斥",
+        description="本次回测使用的历史动态入场股票池；与 basket_id 二选一",
     )
     start_date: date = Field(..., description="回测开始日期")
     end_date: date = Field(..., description="回测结束日期")
@@ -858,8 +858,11 @@ def create_backtest(
         )
     if payload.end_date < payload.start_date:
         raise HTTPException(status_code=422, detail="end_date must be on or after start_date")
-    if payload.basket_id is not None and payload.universe_policy is not None:
-        raise HTTPException(status_code=422, detail="basket_id and universe_policy are mutually exclusive")
+    if (payload.basket_id is None) == (payload.universe_policy is None):
+        raise HTTPException(
+            status_code=422,
+            detail="exactly one of basket_id or universe_policy is required",
+        )
     basket = None
     basket_symbols = None
     basket_metadata = None
@@ -1321,7 +1324,10 @@ def get_backtest_support_resistance(
         )
         event_stmt = event_stmt.where(SupportResistanceRunEvent.event_date >= start_date)
     if end_date:
-        zone_stmt = zone_stmt.where(SupportResistanceZoneVersion.effective_from <= end_date)
+        zone_stmt = zone_stmt.where(
+            (SupportResistanceZoneVersion.effective_from <= end_date)
+            | (SupportResistanceZoneVersion.source_metadata["first_pivot_date"].as_string() <= end_date.isoformat())
+        )
         event_stmt = event_stmt.where(SupportResistanceRunEvent.event_date <= end_date)
 
     versions = db.execute(
@@ -1351,6 +1357,9 @@ def get_backtest_support_resistance(
         versions,
         start_date=start_date,
         end_date=end_date,
+    )
+    formation_by_version = _build_clipped_zone_geometry(
+        db, versions, start_date=start_date, end_date=end_date, retrospective=True,
     )
     if normalized_symbol and not regime_versions and normalized_symbol not in (materialization.symbols or []):
         regime_intervals = []
@@ -1417,6 +1426,7 @@ def get_backtest_support_resistance(
                 "touch_count": version.touch_count,
                 "source_metadata": version.source_metadata,
                 "geometry": geometry_by_version.get(version.id),
+                "formation_geometry": formation_by_version.get(version.id),
             }
             for version in versions
         ],
@@ -1489,7 +1499,9 @@ def _build_regime_intervals(
         starts = [item.effective_from for item in ordered]
         if len(starts) != len(set(starts)) or any(left >= right for left, right in zip(starts, starts[1:])):
             raise ValueError(f"{symbol}: regime effective dates are not strictly increasing")
-        if any(left.regime == right.regime for left, right in zip(ordered, ordered[1:])):
+        if any(left.regime == right.regime
+               and left.evidence.get("phase_start") == right.evidence.get("phase_start")
+               for left, right in zip(ordered, ordered[1:])):
             raise ValueError(f"{symbol}: adjacent regime intervals have the same state")
         session_dates = [
             trade_date
@@ -1549,12 +1561,16 @@ def _build_clipped_zone_geometry(
     *,
     start_date: date | None,
     end_date: date | None,
+    retrospective: bool = False,
 ) -> dict[UUID, dict[str, Any]]:
     """Project each version onto the nearest sessions inside the requested window."""
-    usable = [version for version in versions if version.instrument_id is not None]
+    usable = [version for version in versions if version.instrument_id is not None
+              and (not retrospective or version.status == "active")]
     if not usable:
         return {}
     if db.bind is None or db.bind.dialect.name != "postgresql":
+        if retrospective:
+            return {}
         return {
             version.id: {
                 "start_date": version.effective_from.isoformat(),
@@ -1569,7 +1585,10 @@ def _build_clipped_zone_geometry(
             }
             for version in usable
         }
-    earliest = min(version.effective_from for version in usable)
+    def first_date(version):
+        return date.fromisoformat(version.source_metadata["first_pivot_date"]) if retrospective else version.effective_from
+
+    earliest = min(first_date(version) for version in usable)
     latest = max(version.projection_end for version in usable)
     rows = db.execute(
         text(
@@ -1596,8 +1615,9 @@ def _build_clipped_zone_geometry(
         dates = dates_by_instrument.get(int(version.instrument_id), [])
         if not dates:
             continue
-        lower_date = max(version.effective_from, start_date or version.effective_from)
-        upper_date = min(version.projection_end, end_date or version.projection_end)
+        lower_date = max(first_date(version), start_date or first_date(version))
+        last_date = version.effective_from if retrospective else version.projection_end
+        upper_date = min(last_date, end_date or last_date)
         start_index = bisect_left(dates, lower_date)
         end_index = bisect_right(dates, upper_date) - 1
         base_index = bisect_left(dates, version.effective_from)
@@ -1609,6 +1629,8 @@ def _build_clipped_zone_geometry(
         start_center = float(version.center_price) + slope * start_offset
         end_center = float(version.center_price) + slope * end_offset
         half_width = (float(version.upper_price) - float(version.lower_price)) / 2.0
+        if min(start_center, end_center) - half_width <= 0:
+            continue
         output[version.id] = {
             "start_date": dates[start_index].isoformat(),
             "end_date": dates[end_index].isoformat(),

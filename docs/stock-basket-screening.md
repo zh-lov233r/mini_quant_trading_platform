@@ -12,7 +12,7 @@ Add individually or resolve all matches and confirm the newly resolved count. Th
 
 ## API and storage
 
-Strategy creation (`/strategies/new`, including clones) shows the complete universe count with only the first eight tickers and a remaining count. Selecting a saved basket still copies every symbol into the strategy draft. “Adjust stock universe” opens the same paginated selector; only “Apply to strategy draft” accepts its changes, while closing discards them. Neither action edits the saved basket or saves a strategy. An empty strategy universe retains the explicitly displayed all-eligible-US-common-stocks default.
+Strategy creation (`/strategies/new`, including clones) configures trading logic only and does not load or select a stock scope. Every new manual backtest must choose a saved basket; the backend rejects submissions without either that static basket or an explicit historical dynamic-universe policy. The run records the resolved membership, so later basket edits do not rewrite historical results. Existing strategy-level universe values remain readable as historical configuration but are not the default for new manual backtests.
 
 - `GET /api/stock-screening/stocks`: `query`, `market=US|CN`, `industry`, `min_cap`, `max_cap`, `limit` (20 default, 100 maximum), `offset`. API cap bounds are base currency units, not hundreds of millions. Returns `items`, `total`, `missing_market_cap`, ordered by ticker and instrument ID.
 - `GET /api/stock-screening/industries?market=CN`: sorted local industry labels.

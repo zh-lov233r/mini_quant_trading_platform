@@ -99,14 +99,18 @@ CHECKS = {
     """,
     "adjacent_equal_regimes": """
         SELECT count(*) FROM (
-          SELECT regime,
+          SELECT regime, evidence->>'phase_start' AS phase_start,
+                 lag(evidence->>'phase_start') OVER (
+                   PARTITION BY materialization_id, instrument_id
+                   ORDER BY effective_from, version
+                 ) AS previous_phase,
                  lag(regime) OVER (
                    PARTITION BY materialization_id, instrument_id
                    ORDER BY effective_from, version
                  ) AS previous_regime
           FROM support_resistance_regime_versions
         ) timeline
-        WHERE previous_regime = regime
+        WHERE previous_regime = regime AND previous_phase IS NOT DISTINCT FROM phase_start
     """,
     "regime_transitions_without_market_session": """
         SELECT count(*)

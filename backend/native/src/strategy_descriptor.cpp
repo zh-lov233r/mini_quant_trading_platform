@@ -78,9 +78,9 @@ const std::vector<Descriptor>& descriptors() {
         },
         {
             "support_resistance", "Support / Resistance Zones",
-            "使用已确认 Pivot 与 ATR 聚类识别动态支撑/压力区，并交易反弹和突破回踩；直接突破仅审计。", 11, 163,
+            "使用已确认 Pivot 与 ATR 聚类识别冻结支撑/压力区，并交易符合条件的支撑反弹。", 11, 163,
             {"open", "high", "low", "close", "volume", "volume_sma_20", "atr_14"},
-            R"json({"execution":{"rebalance":"daily","run_at":"close","timeframe":"1d"},"metadata":{"algorithm_version":"pivot-slope-regime-v3","description":"","price_semantics":"forward_adjusted_preferred_unadjusted_fallback","schema_version":1},"risk":{"break_even_at_r":1.0,"market_filter_enabled":false,"market_filter_symbol":"SPY","max_holding_days":40,"max_loss_pct":0.08,"max_positions":6,"min_reward_risk":1.5,"position_size_pct":0.15,"risk_per_trade_pct":0.005,"stop_cooldown_sessions":5,"stop_loss_atr":1.5,"take_profit_atr":3.0},"signal":{"bounce_confirmation_atr":0.25,"breakout_confirmation_atr":0.5,"breakout_retest_enabled":true,"breakout_volume_ratio_min":1.5,"decay_half_life":60,"detection_window":120,"line_inlier_tolerance_atr":0.75,"max_abs_slope_atr_per_session":0.25,"max_zones_per_kind":3,"min_line_pivots":3,"min_line_span_sessions":10,"min_strength_score":50.0,"pivot_left_bars":3,"pivot_right_bars":3,"pivot_tolerance_atr":0.05,"resistance_breakout_enabled":true,"retest_volume_ratio_max":0.8,"retest_window":10,"support_bounce_enabled":true,"zone_half_width_atr":0.5},"universe":{"selection_mode":"all_common_stock","symbols":[]}})json"
+            R"json({"execution":{"rebalance":"daily","run_at":"close","timeframe":"1d"},"metadata":{"algorithm_version":"pivot-slope-regime-v3","description":"","price_semantics":"forward_adjusted_preferred_unadjusted_fallback","schema_version":1},"risk":{"break_even_at_r":1.0,"market_filter_enabled":false,"market_filter_symbol":"SPY","max_holding_days":40,"max_loss_pct":0.08,"max_positions":6,"min_reward_risk":1.5,"position_size_pct":0.15,"risk_per_trade_pct":0.005,"stop_cooldown_sessions":5,"stop_loss_atr":1.5,"take_profit_atr":3.0},"signal":{"bounce_confirmation_atr":0.25,"decay_half_life":60,"detection_window":120,"line_inlier_tolerance_atr":0.75,"max_abs_slope_atr_per_session":0.25,"max_zones_per_kind":3,"min_line_pivots":2,"min_line_span_sessions":10,"min_strength_score":50.0,"pivot_left_bars":3,"pivot_right_bars":3,"pivot_tolerance_atr":0.05,"support_bounce_enabled":true,"zone_half_width_atr":0.5},"universe":{"selection_mode":"all_common_stock","symbols":[]}})json"
         },
     };
     return values;
@@ -323,13 +323,13 @@ void validate_common(const std::string& type, py::dict& normalized, const py::di
         }
     }
     if (type == "support_resistance") {
-        for (const char* key : {"min_line_pivots", "min_line_span_sessions", "decay_half_life", "retest_window"}) {
+        for (const char* key : {"min_line_pivots", "min_line_span_sessions", "decay_half_life"}) {
             positive_integer(signal, key, std::string("signal.") + key);
         }
-        if (py::cast<int>(signal["min_line_pivots"]) < 3) throw std::invalid_argument("signal.min_line_pivots must be at least 3");
+        if (py::cast<int>(signal["min_line_pivots"]) < 2) throw std::invalid_argument("signal.min_line_pivots must be at least 2");
         positive_integer(risk, "max_holding_days", "risk.max_holding_days");
         for (const char* key : {"line_inlier_tolerance_atr", "max_abs_slope_atr_per_session", "zone_half_width_atr",
-            "bounce_confirmation_atr", "breakout_confirmation_atr", "breakout_volume_ratio_min", "retest_volume_ratio_max"}) {
+            "bounce_confirmation_atr"}) {
             if (finite_number(signal, key, std::string("signal.") + key) <= 0.0) {
                 throw std::invalid_argument(std::string("signal.") + key + " must be positive");
             }
@@ -356,15 +356,14 @@ void validate_common(const std::string& type, py::dict& normalized, const py::di
         if (py::len(benchmark) != 1) throw std::invalid_argument("risk.market_filter_symbol must be one symbol");
         risk["market_filter_symbol"] = benchmark[0];
         for (const char* key : {
-                "support_bounce_enabled", "resistance_breakout_enabled", "breakout_retest_enabled"
+                "support_bounce_enabled"
             }) {
             if (!py::isinstance<py::bool_>(signal[key])) {
                 throw std::invalid_argument(std::string("signal.") + key + " must be a boolean");
             }
         }
-        if (!py::cast<bool>(signal["support_bounce_enabled"])
-            && !py::cast<bool>(signal["breakout_retest_enabled"])) {
-            throw std::invalid_argument("at least one tradable support/resistance mode (bounce or retest) must be enabled");
+        if (!py::cast<bool>(signal["support_bounce_enabled"])) {
+            throw std::invalid_argument("support_bounce_enabled must be true");
         }
         const int left = positive_integer(signal, "pivot_left_bars", "signal.pivot_left_bars");
         const int right = positive_integer(signal, "pivot_right_bars", "signal.pivot_right_bars");

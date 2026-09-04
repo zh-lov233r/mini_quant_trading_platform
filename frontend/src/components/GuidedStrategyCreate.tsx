@@ -10,10 +10,6 @@ import {
   getStrategyFeatureSupport,
   validateStrategy,
 } from "@/api/strategies";
-import { listStockBaskets } from "@/api/stock-baskets";
-import type { StockBasketOut } from "@/types/stock-basket";
-import { SearchableSelect } from "@/components/workspace/SearchableSelect";
-import { StrategyUniversePicker } from "@/components/StrategyUniversePicker";
 import Badge from "@/components/Badge";
 import { SelectControl } from "@/components/workspace/SelectControl";
 import { useI18n } from "@/i18n/provider";
@@ -30,7 +26,6 @@ import {
   cloneRecord,
   ENGINE_READY_TYPES,
   getPathValue,
-  normalizeSymbols,
   setPathValue,
   STRATEGY_GUIDANCE,
   type GuidedFieldDefinition,
@@ -92,10 +87,6 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
   const [rawJson, setRawJson] = useState("{}");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [baskets, setBaskets] = useState<StockBasketOut[]>([]);
-  const [basketError, setBasketError] = useState<string | null>(null);
-  const [basketId, setBasketId] = useState("");
-  const [symbolsText, setSymbolsText] = useState("");
   const [dirty, setDirty] = useState(false);
   const [showAdvancedSignal, setShowAdvancedSignal] = useState(false);
   const [showAdvancedRisk, setShowAdvancedRisk] = useState(false);
@@ -128,7 +119,6 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
 
   useEffect(() => {
     void loadCatalog();
-    void listStockBaskets().then(setBaskets).catch((error: Error) => setBasketError(error.message));
     // The loader is intentionally stable for this one-time request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -144,7 +134,6 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
     setRawJson(draft.rawJson);
     setName(draft.name);
     setDescription(draft.description);
-    setSymbolsText(draft.symbolsText);
     setErrors({});
     setValidation(null);
     setValidationError(null);
@@ -155,7 +144,6 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
     () => catalog.find((item) => item.strategy_type === selectedType) ?? null,
     [catalog, selectedType],
   );
-  const symbols = useMemo(() => normalizeSymbols(symbolsText), [symbolsText]);
 
   const invalidate = () => {
     setDirty(true);
@@ -211,8 +199,8 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
     } else {
       result = cloneRecord(params);
     }
-    result = setPathValue(result, "universe.symbols", symbols);
-    result = setPathValue(result, "universe.selection_mode", symbols.length ? "manual" : "all_common_stock");
+    result = setPathValue(result, "universe.symbols", []);
+    result = setPathValue(result, "universe.selection_mode", "all_common_stock");
     result = setPathValue(result, "metadata.description", description.trim());
     result = setPathValue(result, "metadata.schema_version", Number(getPathValue(result, "metadata.schema_version")) || 1);
     return result;
@@ -275,7 +263,7 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
         if (["double_bottom", "head_shoulders_bottom"].includes(selectedType) && Number(getPathValue(params, "signal.rebound_volume_ratio_min")) > Number(getPathValue(params, "signal.rebound_volume_ratio_max"))) next["signal.rebound_volume_ratio_max"] = copy.errors.reboundVolumeRange;
         if (selectedType === "rounded_bottom" && Number(getPathValue(params, "signal.vertex_position_min")) > Number(getPathValue(params, "signal.vertex_position_max"))) next["signal.vertex_position_max"] = copy.errors.vertexRange;
         if (selectedType === "support_resistance") {
-          const modes = ["support_bounce_enabled", "breakout_retest_enabled"];
+          const modes = ["support_bounce_enabled"];
           if (!modes.some((key) => Boolean(getPathValue(params, `signal.${key}`)))) next["signal.support_bounce_enabled"] = copy.errors.supportMode;
           const covered = Number(getPathValue(params, "signal.pivot_left_bars")) + Number(getPathValue(params, "signal.pivot_right_bars")) + 1;
           if (Number(getPathValue(params, "signal.detection_window")) < covered) next["signal.detection_window"] = copy.errors.detectionWindow;
@@ -480,22 +468,9 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
           />
           <span style={counterStyle}>{description.length}/500</span>
         </FieldShell>
-        <FieldShell inputId="strategy-basket" label={isZh ? "现有股票组合" : "Saved stock basket"} hint={isZh ? "选中后复制股票代码；以后编辑组合不会改变此策略。" : "Copies symbols into this draft. Later basket edits do not change the strategy."} full>
-          <SearchableSelect id="strategy-basket" value={basketId} onValueChange={(id) => {
-            setBasketId(id);
-            const basket = baskets.find((item) => item.id === id);
-            if (basket) { setSymbolsText(basket.symbols.join(", ")); invalidate(); }
-          }} ariaLabel={isZh ? "选择现有股票组合" : "Choose a saved basket"} placeholder={isZh ? "选择组合" : "Choose basket"} searchPlaceholder={isZh ? "搜索组合" : "Search baskets"} emptyText={isZh ? "没有匹配组合" : "No matching baskets"} options={[
-            { value: "", label: isZh ? "自定义股票池" : "Custom stock universe" },
-            ...baskets.filter((item) => item.status === "active").map((item) => ({ value: item.id, label: item.name, description: String(item.symbol_count) })),
-          ]} />
-          {basketError ? <span role="alert">{basketError}</span> : null}
-        </FieldShell>
-        <div role="group" aria-labelledby="strategy-universe-label" style={{ ...fieldShellStyle, gridColumn: "1 / -1" }}>
-          <span id="strategy-universe-label" style={labelStyle}>{copy.basics.universe}</span>
-          <StrategyUniversePicker symbols={symbols} onChange={(next) => {
-            setBasketId(""); setSymbolsText(next.join(", ")); invalidate();
-          }} />
+        <div style={{ ...readonlyCardStyle, gridColumn: "1 / -1" }}>
+          <div><strong>{copy.basics.universe}</strong></div>
+          <p style={{ ...mutedStyle, margin: 0 }}>{copy.basics.universeAtBacktest}</p>
         </div>
         <div style={{ ...readonlyCardStyle, gridColumn: "1 / -1" }}>
           <div><strong>{copy.basics.status}</strong><div style={{ marginTop: 8 }}><Badge tone="warning">{copy.basics.draft}</Badge></div></div>
@@ -665,7 +640,7 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
           <ReviewItem label={copy.review.type} value={selectedType ? `${typeCopy[selectedType].title} · ${selectedType}` : "—"} />
           <ReviewItem label={copy.review.name} value={name || "—"} />
           <ReviewItem label={copy.review.status} value="Draft" />
-          <ReviewItem label={copy.review.universe} value={symbols.length ? interpolate(copy.review.symbols, { count: symbols.length }) : copy.review.allCommonStock} />
+          <ReviewItem label={copy.review.universe} value={copy.review.universeAtBacktest} />
           <ReviewItem label={copy.review.execution} value={copy.review.executionValue} wide />
         </div>
         <div style={{ ...validationStyle, borderColor: validation ? "rgba(34,197,94,.52)" : validationError ? "rgba(244,63,94,.5)" : "rgba(14,165,233,.4)" }}>

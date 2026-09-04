@@ -271,20 +271,16 @@ class NativeSupportResistanceParityTests(unittest.TestCase):
             "max_abs_slope_atr_per_session",
             "zone_half_width_atr",
             "decay_half_life",
-            "breakout_confirmation_atr",
-            "breakout_volume_ratio_min",
-            "retest_window",
-            "retest_volume_ratio_max",
         )
         expected = {
-            "implementation_revision": 12,
-            "regime_logic_revision": 3,
+            "implementation_revision": 13,
+            "regime_logic_revision": 4,
             **{key: self.signal[key] for key in keys},
         }
         actual = self.native.normalized_detector_params({"signal": self.signal})
 
-        self.assertEqual(self.native.DETECTOR_IMPLEMENTATION_REVISION, 12)
-        self.assertEqual(self.native.REGIME_LOGIC_REVISION, 3)
+        self.assertEqual(self.native.DETECTOR_IMPLEMENTATION_REVISION, 13)
+        self.assertEqual(self.native.REGIME_LOGIC_REVISION, 4)
         self.assertEqual(
             self.native.ENTRY_CHANNEL_SEMANTICS,
             "support_upper_to_resistance_lower_v1",
@@ -384,24 +380,11 @@ class NativeSupportResistanceParityTests(unittest.TestCase):
         expected_versions = [
             item for item in state.zone_versions if item["status"] == "expired"
         ]
-        expected_events = [
-            item
-            for item in state.events
-            if item["event_type"] == "invalidation"
-            and item.get("reason") == "projected_zone_geometry_became_invalid"
-        ]
 
-        actual = self.native.freeze_zones_for_session(
-            [falling.snapshot()],
-            1,
-            date(2025, 1, 2),
-        )
-
-        self.assertEqual(actual["active_zones"], [])
-        self._assert_value_equal(actual["expired_zone_versions"], expected_versions)
-        self.assertEqual(actual["events"], expected_events)
-        self.assertGreater(actual["expired_zone_versions"][0]["lower"], 0)
-        self.assertEqual(actual["expired_zone_versions"][0]["slope_per_session"], 0.0)
+        self.assertEqual(len(expected_versions), 1)
+        self.assertEqual(expected_versions[0]["slope_per_session"], -0.2)
+        self.assertEqual(expected_versions[0]["end_reason"], "invalid_geometry")
+        self.assertEqual(state.phase_start, date(2025, 1, 2))
 
     def test_weighted_theil_sen_fit_matches_python(self) -> None:
         pivots = [
@@ -432,11 +415,18 @@ class NativeSupportResistanceParityTests(unittest.TestCase):
                 "total_weight": total_weight,
             },
         )
+        two_pivot_fit = self.native.fit_pivot_line(
+            [asdict(self._pivot(0, 100.0)), asdict(self._pivot(10, 101.0))],
+            20,
+            self.signal,
+        )
+        self.assertIsNotNone(two_pivot_fit)
+        three_pivot_signal = {**self.signal, "min_line_pivots": 3}
         self.assertIsNone(
             self.native.fit_pivot_line(
                 [asdict(self._pivot(0, 100.0)), asdict(self._pivot(10, 101.0))],
                 20,
-                self.signal,
+                three_pivot_signal,
             )
         )
 

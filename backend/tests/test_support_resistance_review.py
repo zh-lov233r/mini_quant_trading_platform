@@ -31,9 +31,9 @@ class SupportResistanceReviewTests(unittest.TestCase):
         self.params = normalize_strategy_params("support_resistance", {})
         self.signal, self.risk = self.params["signal"], self.params["risk"]
 
-    def test_real_detector_keeps_multiple_lines_and_retest_is_tradable(self):
+    def test_real_detector_keeps_multiple_lines_without_old_zone_retest_entry(self):
         state = SupportResistanceSymbolState()
-        signal = {**self.signal, "support_bounce_enabled": False, "resistance_breakout_enabled": False,
+        signal = {**self.signal,
             "max_zones_per_kind": 5, "max_abs_slope_atr_per_session": 0.105}
         for bar in channel_history():
             advance_symbol(state, bar, signal, self.risk)
@@ -42,13 +42,17 @@ class SupportResistanceReviewTests(unittest.TestCase):
         history = copy.deepcopy(state.zone_versions)
         advance_symbol(state, _bar(86, high=114.2, low=111.0, close=114.0, volume=160), signal, self.risk)
         decision = advance_symbol(state, _bar(87, high=114.0, low=113.1, close=113.4, volume=60), signal, self.risk)
-        self.assertIsNotNone(decision)
-        self.assertEqual(decision["support_resistance"]["selected_setup"], "breakout_retest")
+        self.assertIsNone(decision)
+        self.assertTrue(any(event["event_type"] == "phase_ended" for event in state.events))
         self.assertEqual(history, state.zone_versions[:len(history)])
 
-    def test_channel_and_targets_use_geometry_despite_role_labels(self):
+    def test_channel_respects_frozen_roles(self):
         support = _zone("floor", "resistance", 100)
         ceiling = _zone("ceiling", "support", 110)
+        channel = native.build_entry_channel([ceiling, support], 102, date(2025, 1, 2))
+        self.assertFalse(channel["valid"])
+        support.role = "support"
+        ceiling.role = "resistance"
         channel = native.build_entry_channel([ceiling, support], 102, date(2025, 1, 2))
         self.assertTrue(channel["valid"])
         self.assertEqual((channel["lower"], channel["upper"]), (101, 109))
@@ -123,9 +127,9 @@ class SupportResistanceReviewTests(unittest.TestCase):
 
     def test_censored_outcomes_count_as_non_success_and_audit_only_mode_is_invalid(self):
         self.assertAlmostEqual(SetupStats(wins=2, losses=1, censored=5).posterior, 0.3)
-        with self.assertRaisesRegex(ValueError, "tradable"):
+        with self.assertRaisesRegex(ValueError, "support_bounce_enabled"):
             normalize_strategy_params("support_resistance", {"signal": {
-                "support_bounce_enabled": False, "breakout_retest_enabled": False}})
+                "support_bounce_enabled": False}})
 
     def test_detected_multi_zone_cache_replays_identical_decisions(self):
         bars = channel_history() + [
@@ -137,7 +141,7 @@ class SupportResistanceReviewTests(unittest.TestCase):
         expected = [advance_symbol(live, bar, signal, self.risk) for bar in bars]
         cached = SupportResistanceSymbolState(cached_zone_timeline=copy.deepcopy(live.zone_versions),
             cached_regime_timeline=copy.deepcopy(live.regime_versions))
-        self.assertIsNotNone(expected[-1])
+        self.assertTrue(any(e["event_type"] == "phase_ended" for e in live.events))
         for index, bar in enumerate(bars):
             with self.subTest(index=index):
                 self.assertEqual(advance_symbol(cached, bar, signal, self.risk), expected[index])
@@ -153,7 +157,7 @@ class SupportResistanceReviewTests(unittest.TestCase):
         self.assertEqual([(p.kind, p.trade_date, p.confirmed_on) for p in state.pivots],
             [("high", date(2025, 1, 4), date(2025, 1, 7))])
 
-    def test_band_contains_its_members_and_reanchors_only_after_volatility_threshold(self):
+    def test_band_contains_its_members_and_never_reanchors_on_volatility(self):
         state = SupportResistanceSymbolState(history=[_bar(i, high=105, low=99, close=103) for i in range(21)],
             pivots=[Pivot(f"low:{i}", "low", i, date(2025, 1, 1) + timedelta(days=i),
                 date(2025, 1, 21), price, 1.0) for i, price in [(0, 100), (10, 100.6), (20, 100)]])
@@ -164,8 +168,9 @@ class SupportResistanceReviewTests(unittest.TestCase):
         state.history.append(_bar(21, high=105, low=99, close=103))
         _rebuild_zones(state, {**state.history[-1], "atr_14": 3.0}, self.signal)
         rebased = next(iter(state.zones.values()))
-        self.assertEqual(rebased.anchor_session_index, 21)
-        self.assertEqual(rebased.upper - rebased.center, 1.5)
+        self.assertEqual(rebased.anchor_session_index, 20)
+        self.assertAlmostEqual(rebased.upper - rebased.center, 0.6)
+        self.assertEqual(state.zone_versions, before)
         self.assertEqual(state.zone_versions[:len(before)], before)
 
     def test_stop_cooldown_expires_and_future_stop_does_not_leak_into_history(self):

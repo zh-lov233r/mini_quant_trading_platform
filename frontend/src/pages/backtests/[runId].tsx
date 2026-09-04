@@ -38,10 +38,12 @@ import type { CandleBarOut, CandleSeriesOut } from "@/types/quote";
 import { formatDateTime, formatDurationMs, formatPercent } from "@/utils/strategy";
 import { compactBacktestPositions } from "@/utils/backtestPositions";
 import { lifecycleChartDisplayState } from "@/utils/backtestLifecycleView";
+import { lifecycleSignalFeatures, lifecycleTradeZoneKeys, lifecycleZoneBands } from "@/utils/supportResistanceLifecycle";
 import { comparisonCurveLabel, comparisonCurveReturn } from "@/utils/comparisonCurves";
 import { shouldLoadBacktestDetails } from "@/utils/backtestProgress";
 import {
   BACKTEST_REVIEW_TABS,
+  DEFAULT_BACKTEST_REVIEW_TAB,
   backtestReviewTabLabel,
   nextBacktestReviewTab,
 } from "@/utils/backtestReviewTabs";
@@ -76,7 +78,6 @@ import {
 import type {
   ChartGapOverlay,
   ChartOverlayMarker,
-  ChartRegimeOverlay,
   ChartZoneOverlay,
 } from "@/components/charts/chartModels";
 import {
@@ -507,21 +508,7 @@ type LifecycleChartMarker = {
   description: string;
 };
 
-type LifecycleZoneOverlay = {
-  key: string;
-  startDate: string;
-  endDate: string;
-  startCenterPrice: number;
-  startLowerPrice: number;
-  startUpperPrice: number;
-  endCenterPrice: number;
-  endLowerPrice: number;
-  endUpperPrice: number;
-  slopePerSession: number;
-  slopeAtrPerSession: number | null;
-  role: "support" | "resistance" | "entry_channel";
-  description: string;
-};
+type LifecycleZoneOverlay = ChartZoneOverlay;
 
 type IslandReversalGapSetup = {
   leftGapTradeDate: string;
@@ -2441,153 +2428,23 @@ function buildSupportResistanceMarkers(
   locale: string,
   isZh: boolean
 ): LifecycleChartMarker[] {
-  const toneByType: Record<string, LifecycleChartMarker["tone"]> = {
-    touch: "neckline",
-    breakout: "breakout",
-    retest: "right_bottom",
-    candidate: "mark",
-    selection: "breakout",
-    role_transition: "right_bottom",
-    entry_channel_rejection: "mark",
-    execution_rejection: "mark",
-    direct_breakout_audit: "breakout",
-    channel_fill_violation: "mark",
-  } as Record<string, LifecycleChartMarker["tone"]>;
   return events
     .filter((event) => isDisplayableSupportResistanceEventType(event.event_type))
     .map((event) => {
-      const payload = event.payload || {};
-      const zone = getObjectValue(payload.zone);
-      const lower = event.lower_price ?? (zone ? getRecordNumber(zone, "lower") : null);
-      const upper = event.upper_price ?? (zone ? getRecordNumber(zone, "upper") : null);
-      const price = upper ?? lower;
-      const labelMap: Record<string, string> = {
-        touch: isZh ? "触碰" : "Touch",
-        breakout: isZh ? "突破" : "Breakout",
-        retest: isZh ? "回踩" : "Retest",
-        candidate: isZh ? "候选" : "Candidate",
-        selection: isZh ? "选中" : "Selected",
-        role_transition: isZh ? "角色转换" : "Role Flip",
-        entry_channel_rejection: isZh ? "通道拒绝" : "Channel Rejection",
-        execution_rejection: isZh ? "成交拒绝" : "Fill Rejection",
-        direct_breakout_audit: isZh ? "突破审计" : "Breakout Audit",
-        channel_fill_violation: isZh ? "异常成交" : "Fill Violation",
-      };
+      const zone = getObjectValue(event.payload?.zone);
+      const price = event.upper_price ?? event.lower_price
+        ?? (zone ? getRecordNumber(zone, "upper") : null);
+      const label = isZh ? "触碰" : "Touch";
       return {
         key: `sr-${event.id}`,
-        label: labelMap[event.event_type] || event.event_type,
+        label,
         date: event.event_date,
         price,
-        tone: toneByType[event.event_type] || "neckline",
-        description: [
-          labelMap[event.event_type] || event.event_type,
-          event.setup,
-          price != null ? formatCurrency(price, locale) : null,
-          event.score != null ? `${isZh ? "后验" : "Posterior"} ${formatPercent(event.score, 2)}` : null,
-          event.posterior_sample_count != null ? `n=${event.posterior_sample_count}` : null,
-        ].filter(Boolean).join(" · "),
+        tone: "neckline",
+        description: [label, event.event_date, price == null ? null : formatCurrency(price, locale)]
+          .filter(Boolean).join(" · "),
       };
     });
-}
-
-function buildEntryChannelOverlays(
-  events: SupportResistanceRunEventOut[],
-  bars: CandleBarOut[],
-  locale: string,
-  isZh: boolean,
-): LifecycleZoneOverlay[] {
-  const starts = events.filter((event) => event.event_type === "entry_channel_started");
-  const visibleStarts = starts.length > 0
-    ? starts
-    : events.filter((event, index, candidates) => {
-        if (event.event_type !== "selection") return false;
-        const channel = getObjectValue(event.payload.entry_channel);
-        if (!channel) return false;
-        const supportKey = getRecordText(channel, "support_zone_key");
-        const resistanceKey = getRecordText(channel, "resistance_zone_key");
-        return candidates.findIndex((candidate) => {
-          const candidateChannel = getObjectValue(candidate.payload.entry_channel);
-          return candidate.event_type === "selection"
-            && candidateChannel != null
-            && getRecordText(candidateChannel, "support_zone_key") === supportKey
-            && getRecordText(candidateChannel, "resistance_zone_key") === resistanceKey;
-        }) === index;
-      });
-  const ends = events.filter((event) => event.event_type === "entry_channel_ended");
-  const dateIndex = new Map(bars.map((bar, index) => [bar.trade_date, index]));
-  return visibleStarts.flatMap((start) => {
-    const channel = getObjectValue(start.payload.entry_channel);
-    if (!channel) return [];
-    const supportKey = getRecordText(channel, "support_zone_key");
-    const resistanceKey = getRecordText(channel, "resistance_zone_key");
-    const lower = getRecordNumber(channel, "lower");
-    const upper = getRecordNumber(channel, "upper");
-    const lowerSlope = getRecordNumber(channel, "lower_slope_per_session") ?? 0;
-    const upperSlope = getRecordNumber(channel, "upper_slope_per_session") ?? 0;
-    const startIndex = dateIndex.get(start.event_date);
-    if (!supportKey || !resistanceKey || lower == null || upper == null || startIndex == null || lower >= upper) return [];
-    const ended = ends.find((event) => {
-      if (event.event_date <= start.event_date) return false;
-      const endedChannel = getObjectValue(event.payload.entry_channel);
-      return endedChannel
-        && getRecordText(endedChannel, "support_zone_key") === supportKey
-        && getRecordText(endedChannel, "resistance_zone_key") === resistanceKey;
-    });
-    const endEventIndex = ended ? dateIndex.get(ended.event_date) : undefined;
-    const endIndex = Math.max(startIndex, endEventIndex == null ? bars.length - 1 : endEventIndex - 1);
-    const sessions = endIndex - startIndex;
-    const endLower = lower + lowerSlope * sessions;
-    const endUpper = upper + upperSlope * sessions;
-    if (!Number.isFinite(endLower) || !Number.isFinite(endUpper) || endLower >= endUpper) return [];
-    return [{
-      key: `entry-channel-${start.id}`,
-      startDate: bars[startIndex].trade_date,
-      endDate: bars[endIndex].trade_date,
-      startCenterPrice: (lower + upper) / 2,
-      startLowerPrice: lower,
-      startUpperPrice: upper,
-      endCenterPrice: (endLower + endUpper) / 2,
-      endLowerPrice: endLower,
-      endUpperPrice: endUpper,
-      slopePerSession: (lowerSlope + upperSlope) / 2,
-      slopeAtrPerSession: null,
-      role: "entry_channel" as const,
-      description: [
-        isZh ? "有效交易通道" : "Valid Entry Channel",
-        `${formatCurrency(endLower, locale)} - ${formatCurrency(endUpper, locale)}`,
-        `${supportKey} → ${resistanceKey}`,
-      ].join(" · "),
-    }];
-  });
-}
-
-function regimeLabel(regime: ChartRegimeOverlay["regime"], isZh: boolean): string {
-  const labels = {
-    uptrend: isZh ? "上行" : "Uptrend",
-    downtrend: isZh ? "下行" : "Downtrend",
-    range: isZh ? "震荡" : "Range",
-    transition: isZh ? "过渡" : "Transition",
-  };
-  return labels[regime];
-}
-
-function regimeReasonLabel(reasonCode: string, isZh: boolean): string {
-  const labels: Record<string, { zh: string; en: string }> = {
-    missing_boundary: { zh: "缺少上下边界", en: "Missing channel boundary" },
-    unordered_boundaries: { zh: "上下边界错位", en: "Unordered boundaries" },
-    insufficient_pivot_structure: { zh: "Pivot 结构证据不足", en: "Insufficient Pivot structure" },
-    rising_channel_higher_highs_higher_lows: { zh: "上升通道且高低点抬升", en: "Rising channel with higher highs and lows" },
-    falling_channel_lower_highs_lower_lows: { zh: "下降通道且高低点下移", en: "Falling channel with lower highs and lows" },
-    flat_range: { zh: "横向震荡", en: "Flat range" },
-    contracting_range: { zh: "收敛震荡", en: "Contracting range" },
-    expanding_range: { zh: "扩张震荡", en: "Expanding range" },
-    structure_conflict: { zh: "结构信号冲突", en: "Conflicting structure" },
-    price_outside_range: { zh: "价格离开震荡边界", en: "Price outside range boundaries" },
-    uptrend_lower_boundary_broken: { zh: "跌破上行下边界", en: "Uptrend lower boundary broken" },
-    downtrend_upper_boundary_broken: { zh: "突破下行上边界", en: "Downtrend upper boundary broken" },
-  };
-  const resolved = labels[reasonCode];
-  return resolved ? (isZh ? resolved.zh : resolved.en) : reasonCode;
 }
 
 function buildLifecycleGapOverlays(
@@ -2670,7 +2527,7 @@ function LifecycleDetailPanel({
   row: PositionLifecycleRow;
   signals: BacktestSignalOut[];
 }) {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const isZh = locale === "zh-CN";
   const resolvedEntryTradeDate = row.entryTradeDate || toTradeDateKey(row.entryTs);
   const persistedEntrySignal: BacktestSignalOut | null = row.entrySignalFeatures
@@ -2706,6 +2563,7 @@ function LifecycleDetailPanel({
   const [supportResistanceDetail, setSupportResistanceDetail] = useState<SupportResistanceBacktestOut | null>(null);
   const [supportResistanceLoading, setSupportResistanceLoading] = useState(false);
   const [supportResistanceError, setSupportResistanceError] = useState<string | null>(null);
+  const [showAllZones, setShowAllZones] = useState(false);
   const [patternSignals, setPatternSignals] = useState<BacktestSignalOut[]>(signals);
   const [patternSignalError, setPatternSignalError] = useState<string | null>(null);
   const [lookbackTradingDays, setLookbackTradingDays] = useState(
@@ -2746,16 +2604,28 @@ function LifecycleDetailPanel({
     let active = true;
     setPatternSignals(signals.filter((signal) => signal.symbol.toUpperCase() === row.symbol.toUpperCase()));
     setPatternSignalError(null);
-    void getBacktestSignals(runId, { symbol: row.symbol, limit: 500 })
-      .then((page) => {
-        if (active) setPatternSignals(page.items);
-      })
+    void (async () => {
+      const items: BacktestSignalOut[] = [];
+      let cursor: string | null = null;
+      do {
+        const page = await getBacktestSignals(runId, { symbol: row.symbol, limit: 500, cursor });
+        if (!active) return;
+        items.push(...page.items);
+        setPatternSignals([...items]);
+        cursor = page.next_cursor ?? null;
+        const hasEntry = row.entrySignalFeatures || !row.entrySignalTs
+          || lifecycleSignalFeatures(items, row.symbol, "BUY", row.entrySignalTs);
+        const hasExit = !row.exitSignalTs
+          || lifecycleSignalFeatures(items, row.symbol, "SELL", row.exitSignalTs);
+        if (hasEntry && hasExit) break;
+      } while (cursor);
+    })()
       .catch((err) => {
         if (!active) return;
         setPatternSignalError(err instanceof Error ? err.message : (isZh ? "加载形态阶段失败" : "Failed to load pattern stages"));
       });
     return () => { active = false; };
-  }, [isZh, row.symbol, runId, signals]);
+  }, [isZh, row.symbol, row.entrySignalFeatures, row.entrySignalTs, row.exitSignalTs, runId, signals]);
 
   function applyLookbackDays(nextValue: number) {
     const normalized = normalizeLifecycleLookbackDays(nextValue);
@@ -2845,11 +2715,9 @@ function LifecycleDetailPanel({
   const markers = useMemo(
     () => [
       ...buildLifecycleChartMarkers(row, locale, isZh),
-      ...buildPatternLifecycleMarkers(patternSelection, bars, locale),
-      ...buildSupportResistanceMarkers(supportResistanceDetail?.events || [], locale, isZh),
-      ...buildSupportResistancePivotMarkers(supportResistanceDetail?.zone_versions || [], bars, locale),
+      ...(supportResistanceDetail?.materialization ? [] : buildPatternLifecycleMarkers(patternSelection, bars, locale)),
     ],
-    [bars, isZh, locale, patternSelection, row, supportResistanceDetail?.events, supportResistanceDetail?.zone_versions]
+    [bars, isZh, locale, patternSelection, row, supportResistanceDetail?.materialization]
   );
   const visibleStartDate = bars[0]?.trade_date || fetchStartDate;
   const visibleEndDate = bars[bars.length - 1]?.trade_date || baseEndDate;
@@ -2914,17 +2782,19 @@ function LifecycleDetailPanel({
     () => buildLifecycleGapOverlays(bars, gapSetup, locale, isZh),
     [bars, gapSetup, isZh, locale]
   );
+  const tradeZoneKeys = useMemo(() => lifecycleTradeZoneKeys(
+    row.entrySignalFeatures || lifecycleSignalFeatures(patternSignals, row.symbol, "BUY", row.entrySignalTs),
+    lifecycleSignalFeatures(patternSignals, row.symbol, "SELL", row.exitSignalTs),
+  ), [patternSignals, row.entrySignalFeatures, row.entrySignalTs, row.exitSignalTs, row.symbol]);
   const zoneOverlays = useMemo<LifecycleZoneOverlay[]>(() => {
-    const versions = supportResistanceDetail?.zone_versions || [];
-    const availableDates = new Set(bars.map((bar) => bar.trade_date));
-    return versions
-      .filter((version) => version.status === "active" && version.geometry)
+    return lifecycleZoneBands(
+      supportResistanceDetail?.zone_versions || [],
+      bars.map((bar) => bar.trade_date), tradeZoneKeys, showAllZones,
+    )
       .filter((version) => {
-        const geometry = version.geometry!;
+        const geometry = version.geometry;
         return geometry.end_date >= (visibleStartDate || "")
-          && geometry.start_date <= (visibleEndDate || "")
-          && availableDates.has(geometry.start_date)
-          && availableDates.has(geometry.end_date);
+          && geometry.start_date <= (visibleEndDate || "");
       })
       .map((version) => {
         const geometry = version.geometry!;
@@ -2937,7 +2807,24 @@ function LifecycleDetailPanel({
             ? (isZh ? "下倾" : "Falling")
             : (isZh ? "水平" : "Flat");
         return {
-        key: `sr-zone-${version.id}`,
+        key: `sr-zone-${version.id}-${version.retrospective ? "fit" : "active"}`,
+        zoneKey: version.zone_key,
+        retrospective: version.retrospective,
+        details: [
+          `${isZh ? "阶段起点" : "Phase start"}: ${String(version.source_metadata.phase_start)}`,
+          `${isZh ? "确认日" : "Confirmed"}: ${String(version.source_metadata.valid_from)}`,
+          isZh ? "虚线为事后拟合，当时尚未生效；平仓后允许再次满足条件入场。" : "Dashed history is retrospective, not active at that time; qualifying re-entry after exit is allowed.",
+          `Pivot: ${Array.isArray(version.source_metadata.pivot_keys) ? version.source_metadata.pivot_keys.join(", ") : ""}`,
+          ...((supportResistanceDetail?.events || [])
+            .filter((event) => event.zone_key === version.zone_key && event.event_type === "touch")
+            .map((event) => `${isZh ? "真实触碰" : "Recorded touch"}: ${event.event_date}`)),
+        ],
+        evidenceMarkers: [
+          ...buildSupportResistancePivotMarkers(
+            (supportResistanceDetail?.zone_versions || []).filter((item) => item.id === version.id), bars, locale),
+          ...buildSupportResistanceMarkers(
+            (supportResistanceDetail?.events || []).filter((event) => event.zone_key === version.zone_key && event.event_type === "touch"), locale, isZh),
+        ],
         startDate: geometry.start_date,
         endDate: geometry.end_date,
         startCenterPrice: geometry.start_center_price,
@@ -2950,6 +2837,7 @@ function LifecycleDetailPanel({
         slopeAtrPerSession: normalizedSlope,
         role: version.role,
         description: [
+          version.retrospective ? (isZh ? "事后拟合" : "Retrospective fit") : null,
           version.role === "support" ? (isZh ? "支撑区" : "Support Zone") : (isZh ? "压力区" : "Resistance Zone"),
           `${formatCurrency(geometry.end_lower_price, locale)} - ${formatCurrency(geometry.end_upper_price, locale)}`,
           direction,
@@ -2957,52 +2845,11 @@ function LifecycleDetailPanel({
         ].filter(Boolean).join(" · "),
       };
     });
-  }, [bars, isZh, locale, supportResistanceDetail?.zone_versions, visibleEndDate, visibleStartDate]);
-  const entryChannelOverlays = useMemo(
-    () => buildEntryChannelOverlays(
-      supportResistanceDetail?.events || [],
-      bars,
-      locale,
-      isZh,
-    ),
-    [bars, isZh, locale, supportResistanceDetail?.events],
-  );
-  const allZoneOverlays = useMemo(
-    () => [...zoneOverlays, ...entryChannelOverlays],
-    [entryChannelOverlays, zoneOverlays],
-  );
+  }, [bars, isZh, locale, supportResistanceDetail?.events, supportResistanceDetail?.zone_versions, visibleEndDate, visibleStartDate, tradeZoneKeys, showAllZones]);
   const zoneLegendItems = useMemo(
-    () => latestVisibleZoneOverlaysByRole(allZoneOverlays),
-    [allZoneOverlays],
+    () => latestVisibleZoneOverlaysByRole(zoneOverlays.filter((zone) => !zone.retrospective)),
+    [zoneOverlays],
   );
-  const regimeOverlays = useMemo<ChartRegimeOverlay[]>(() =>
-    (supportResistanceDetail?.regime_intervals || []).map((interval) => {
-      const label = regimeLabel(interval.regime, isZh);
-      return {
-        key: `sr-regime-${interval.version_id}`,
-        startDate: interval.start_date,
-        endDate: interval.end_date,
-        regime: interval.regime,
-        sessionCount: interval.session_count,
-        label,
-        description: [
-          label,
-          `${interval.start_date} - ${interval.end_date}`,
-          `${interval.session_count} ${isZh ? "个交易日" : "sessions"}`,
-          regimeReasonLabel(interval.reason_code, isZh),
-          interval.lower_zone_key ? `${isZh ? "下边界" : "Lower"}: ${interval.lower_zone_key}` : null,
-          interval.upper_zone_key ? `${isZh ? "上边界" : "Upper"}: ${interval.upper_zone_key}` : null,
-        ].filter(Boolean).join(" · "),
-      };
-    }),
-  [isZh, supportResistanceDetail?.regime_intervals]);
-  const regimeLegendItems = useMemo(() => {
-    const unique = new Map<ChartRegimeOverlay["regime"], ChartRegimeOverlay>();
-    regimeOverlays.forEach((interval) => {
-      if (!unique.has(interval.regime)) unique.set(interval.regime, interval);
-    });
-    return Array.from(unique.values());
-  }, [regimeOverlays]);
 
   useEffect(() => {
     if (
@@ -3018,7 +2865,7 @@ function LifecycleDetailPanel({
 
   return (
     <div
-      style={{ paddingTop: 16 }}
+      style={{ paddingTop: 16, width: "100%", maxWidth: "calc(100vw - clamp(60px, 12.5vw, 160px))", whiteSpace: "normal" }}
     >
       <div
         style={{
@@ -3038,10 +2885,10 @@ function LifecycleDetailPanel({
             {isZh
               ? `${visibleStartDate || "-"} -> ${visibleEndDate || "-"}，当前额外包含买入前 ${lookbackTradingDays} 个交易日${
                   row.status === "closed" ? `、卖出后 ${postExitTradingDays} 个交易日` : ""
-                }的走势，并标出买卖信号、实际买卖，以及岛形、双底、头肩底、圆弧底和 V 型的底部、肩部、回踩与反转确认等关键位置。`
+                }的走势，并标出买卖信号、实际买卖。${supportResistanceDetail?.materialization ? "支撑/压力区确认后冻结；悬停或选择区域可查看固定 Pivot 与真实触碰。" : "同时展示形态底部、肩部、回踩与反转确认等关键位置。"}`
               : `${visibleStartDate || "-"} -> ${visibleEndDate || "-"}, currently including ${lookbackTradingDays} trading days before entry${
                   row.status === "closed" ? ` and ${postExitTradingDays} trading days after exit` : ""
-                } so you can see signal-generation points, actual fills, and the bottoms, shoulders, pullbacks, and reversal confirmations for Island, Double Bottom, Head-and-Shoulders Bottom, Rounded Bottom, and V patterns.`}
+                } to show signals and actual fills. ${supportResistanceDetail?.materialization ? "Support/resistance zones freeze at confirmation; hover or select a zone for its fixed Pivots and recorded touches." : "Pattern bottoms, shoulders, pullbacks, and reversal confirmations are also shown."}`}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -3228,6 +3075,21 @@ function LifecycleDetailPanel({
         </div>
       </div>
 
+      {supportResistanceDetail?.materialization ? (
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, marginBottom: 12, fontSize: 13, maxWidth: "min(100%, calc(100vw - 96px))" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+            <input type="checkbox" checked={showAllZones} onChange={(event) => setShowAllZones(event.target.checked)} />
+            {t("lifecycleZones.showAll")}
+          </label>
+          <span role="status" style={{ color: "rgba(148, 163, 184, 0.88)", flex: "1 1 260px", minWidth: 0, lineHeight: 1.5 }}>
+            {showAllZones ? t("lifecycleZones.all")
+              : tradeZoneKeys.size === 0 ? t("lifecycleZones.noAssociation")
+                : zoneOverlays.length === 0 ? t("lifecycleZones.outsideWindow")
+                  : t("lifecycleZones.tradeOnly")}
+          </span>
+          <span style={{ color: "#94a3b8" }}>{isZh ? "浅色虚线：事后拟合（尚未生效）；实线：冻结有效段。窗口外 Pivot 仅列日期。" : "Faint dashed: retrospective fit (not yet active); solid: frozen active segment. Off-window Pivots are listed by date only."}</span>
+        </div>
+      ) : null}
       {chartDisplayState === "loading" ? (
         <div style={lifecycleChartPlaceholderStyle}>{isZh ? "正在加载这段生命周期的蜡烛图..." : "Loading the candlestick chart for this lifecycle..."}</div>
       ) : chartDisplayState === "error" ? (
@@ -3244,11 +3106,7 @@ function LifecycleDetailPanel({
               bars={bars}
               markers={markers as ChartOverlayMarker[]}
               gaps={gapOverlays as ChartGapOverlay[]}
-              zones={allZoneOverlays as ChartZoneOverlay[]}
-              regimes={regimeOverlays}
-              requireRegimeCoverage={supportResistanceDetail?.materialization?.algorithm_version === "pivot-slope-regime-v3"}
-              regimeCoverageStart={supportResistanceDetail?.materialization?.coverage_start}
-              regimeCoverageEnd={supportResistanceDetail?.materialization?.coverage_end}
+              zones={zoneOverlays}
               locale={locale}
               showVolume
               height={460}
@@ -3265,13 +3123,6 @@ function LifecycleDetailPanel({
               </div>
             ) : null}
           </div>
-          {supportResistanceDetail?.materialization && entryChannelOverlays.length === 0 ? (
-            <div style={{ marginTop: 8, color: "rgba(148, 163, 184, 0.88)", fontSize: 13 }}>
-              {isZh
-                ? "该历史结果未计算有效交易通道；不会按当前规则反推。"
-                : "This historical result did not calculate valid entry channels; current rules are not backfilled."}
-            </div>
-          ) : null}
           <div
             style={{
               display: "flex",
@@ -3283,20 +3134,6 @@ function LifecycleDetailPanel({
               fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
             }}
           >
-            {regimeLegendItems.map((interval) => (
-              <span key={`legend-${interval.regime}`} style={legendItemStyle} title={interval.description}>
-                <span
-                  style={{
-                    ...legendDotStyle,
-                    background:
-                      interval.regime === "uptrend" ? "#22c55e"
-                        : interval.regime === "downtrend" ? "#ef4444"
-                          : interval.regime === "range" ? "#f59e0b" : "#94a3b8",
-                  }}
-                />
-                {interval.label}
-              </span>
-            ))}
             {zoneLegendItems.map((zone) => (
               <span key={zone.key} style={legendItemStyle} title={zone.description}>
                 <span
@@ -3910,14 +3747,14 @@ export default function BacktestDetailPage() {
   const [transactionsError, setTransactionsError] = useState<string | null>(null);
   const [workerStatus, setWorkerStatus] = useState<BacktestWorkerStatus | null>(null);
   const [workerStatusUnavailable, setWorkerStatusUnavailable] = useState(false);
-  const [reviewTab, setReviewTab] = useState<BacktestReviewTab>("symbolPnl");
+  const [reviewTab, setReviewTab] = useState<BacktestReviewTab>(DEFAULT_BACKTEST_REVIEW_TAB);
   const [transactionCollection, setTransactionCollection] = useState<TransactionCollectionState>(
     EMPTY_TRANSACTION_COLLECTION,
   );
   const transactionLoadGenerationRef = useRef(0);
 
   useEffect(() => {
-    setReviewTab("symbolPnl");
+    setReviewTab(DEFAULT_BACKTEST_REVIEW_TAB);
   }, [runId]);
 
   const loadTransactionPages = useCallback(async (

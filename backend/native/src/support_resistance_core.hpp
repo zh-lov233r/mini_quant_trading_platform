@@ -56,7 +56,7 @@ enum class PivotKind { Low, High };
 enum class ZoneRole { Support, Resistance };
 enum class ZoneStatus { Active, Expired };
 enum class Regime { Uptrend, Downtrend, Range, Transition };
-enum class Setup { SupportBounce, ResistanceBreakout, BreakoutRetest };
+enum class Setup { SupportBounce };
 enum class Action { Buy, Sell };
 
 std::string_view name(PivotKind value);
@@ -69,7 +69,7 @@ struct Config {
     int pivot_left_bars = 3;
     int pivot_right_bars = 3;
     int detection_window = 120;
-    int min_line_pivots = 3;
+    int min_line_pivots = 2;
     int min_line_span_sessions = 10;
     int max_zones_per_kind = 3;
     double pivot_tolerance_atr = 0.05;
@@ -78,13 +78,7 @@ struct Config {
     double zone_half_width_atr = 0.5;
     double decay_half_life = 60.0;
     double bounce_confirmation_atr = 0.25;
-    double breakout_confirmation_atr = 0.5;
-    double breakout_volume_ratio_min = 1.5;
     bool support_bounce_enabled = true;
-    bool resistance_breakout_enabled = true;
-    bool breakout_retest_enabled = true;
-    int retest_window = 10;
-    double retest_volume_ratio_max = 0.8;
     double min_strength_score = 50.0;
     int max_holding_days = 40;
     double min_reward_risk = 1.5;
@@ -148,13 +142,8 @@ struct Zone {
     double recency_weight = 0.0;
     bool last_inside = false;
     std::int32_t timeline_effective_from_ordinal = 0;
-};
-
-struct BreakoutRecord {
-    std::string zone_key;
-    std::int32_t breakout_date_ordinal = 0;
-    int breakout_session_index = 0;
-    double breakout_volume = 0.0;
+    std::int32_t phase_start_ordinal = 0;
+    std::string end_reason;
 };
 
 struct PendingOutcome {
@@ -310,15 +299,13 @@ struct LineFit {
 };
 
 struct SymbolState {
+    std::int32_t phase_start_ordinal = 0;
     std::vector<Bar> history;
     std::vector<Pivot> pivots;
     std::map<std::string, Zone> zones;
-    std::map<std::string, BreakoutRecord> breakouts;
     std::vector<PendingOutcome> pending_outcomes;
     std::map<Setup, SetupStats> stats{
         {Setup::SupportBounce, {}},
-        {Setup::ResistanceBreakout, {}},
-        {Setup::BreakoutRetest, {}},
     };
     std::vector<JsonObject> events;
     std::vector<JsonObject> zone_versions;
@@ -369,13 +356,6 @@ void record_regime(
     const RegimeEvidence& evidence
 );
 void rebuild(SymbolState& state, const Bar& bar, const Config& config);
-std::optional<Zone> match_existing_zone(
-    const std::vector<Zone>& old_zones,
-    PivotKind source_kind,
-    double center,
-    double half_width,
-    const std::vector<std::string>& pivot_keys
-);
 void record_zone(
     SymbolState& state,
     const Zone& zone,

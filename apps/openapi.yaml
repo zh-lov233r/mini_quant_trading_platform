@@ -2591,24 +2591,18 @@ components:
         signal:
           type: object
           required:
-            [support_bounce_enabled, resistance_breakout_enabled, breakout_retest_enabled,
+            [support_bounce_enabled,
              pivot_left_bars, pivot_right_bars, detection_window, min_line_pivots,
              min_line_span_sessions, max_zones_per_kind, pivot_tolerance_atr, line_inlier_tolerance_atr,
              max_abs_slope_atr_per_session, zone_half_width_atr, decay_half_life,
-             bounce_confirmation_atr, breakout_confirmation_atr, breakout_volume_ratio_min,
-             retest_window, retest_volume_ratio_max, min_strength_score]
+             bounce_confirmation_atr, min_strength_score]
           properties:
             min_strength_score: {type: number, minimum: 0, maximum: 100, default: 50}
-            support_bounce_enabled: {type: boolean, default: true}
-            resistance_breakout_enabled:
-              type: boolean
-              default: true
-              description: Detect and audit direct resistance breakouts without creating executable BUY signals.
-            breakout_retest_enabled: {type: boolean, default: true}
+            support_bounce_enabled: {type: boolean, const: true, default: true}
             pivot_left_bars: {type: integer, minimum: 1, default: 3}
             pivot_right_bars: {type: integer, minimum: 1, default: 3}
             detection_window: {type: integer, minimum: 7, default: 120}
-            min_line_pivots: {type: integer, minimum: 3, default: 3}
+            min_line_pivots: {type: integer, minimum: 2, default: 2}
             min_line_span_sessions: {type: integer, minimum: 1, default: 10}
             max_zones_per_kind: {type: integer, minimum: 1, maximum: 5, default: 3}
             pivot_tolerance_atr: {type: number, minimum: 0, maximum: 0.1, default: 0.05}
@@ -2617,13 +2611,6 @@ components:
             zone_half_width_atr: {type: number, exclusiveMinimum: 0, default: 0.5}
             decay_half_life: {type: integer, minimum: 1, default: 60}
             bounce_confirmation_atr: {type: number, exclusiveMinimum: 0, default: 0.25}
-            breakout_confirmation_atr: {type: number, exclusiveMinimum: 0, default: 0.5}
-            breakout_volume_ratio_min: {type: number, exclusiveMinimum: 0, default: 1.5}
-            retest_window: {type: integer, minimum: 1, default: 10}
-            retest_volume_ratio_max: {type: number, exclusiveMinimum: 0, default: 0.8}
-          anyOf:
-            - properties: {support_bounce_enabled: {const: true}}
-            - properties: {breakout_retest_enabled: {const: true}}
         universe: {$ref: "#/components/schemas/UniverseConfig"}
         risk:
           type: object
@@ -3163,6 +3150,20 @@ components:
     BacktestCreate:
       type: object
       required: [strategy_id, start_date, end_date]
+      oneOf:
+        - required: [basket_id]
+          properties:
+            basket_id:
+              type: string
+              format: uuid
+            universe_policy:
+              type: "null"
+        - required: [universe_policy]
+          properties:
+            basket_id:
+              type: "null"
+            universe_policy:
+              $ref: "#/components/schemas/PointInTimeUniversePolicy"
       properties:
         strategy_id:
           type: string
@@ -3170,10 +3171,12 @@ components:
         basket_id:
           type: [string, "null"]
           format: uuid
+          description: Static stock basket for this run. Exactly one of basket_id or universe_policy is required.
         universe_policy:
           oneOf:
             - $ref: "#/components/schemas/PointInTimeUniversePolicy"
             - {type: "null"}
+          description: Historical dynamic universe for this run. Exactly one of basket_id or universe_policy is required.
         start_date:
           type: string
           format: date
@@ -3513,6 +3516,21 @@ components:
             config_snapshot:
               $ref: "#/components/schemas/FreeFormObject"
 
+    SupportResistanceZoneGeometry:
+      type: [object, "null"]
+      description: Geometry clipped to actual sessions in the requested window. Retrospective fitting is never tradable.
+      required: [start_date, end_date, start_center_price, start_lower_price, start_upper_price, end_center_price, end_lower_price, end_upper_price, slope_per_session]
+      properties:
+        start_date: {type: string, format: date}
+        end_date: {type: string, format: date}
+        start_center_price: {type: number}
+        start_lower_price: {type: number}
+        start_upper_price: {type: number}
+        end_center_price: {type: number}
+        end_lower_price: {type: number}
+        end_upper_price: {type: number}
+        slope_per_session: {type: number}
+
     SupportResistanceBacktest:
       type: object
       required: [run_id, zone_versions, regime_intervals, events]
@@ -3539,7 +3557,7 @@ components:
           type: array
           items:
             type: object
-            required: [id, symbol, zone_key, version, effective_from, role, status, center_price, lower_price, upper_price, atr_width, anchor_session_index, slope_per_session, fit_residual_atr, projection_end, end_center_price, end_lower_price, end_upper_price, pivot_count, touch_count, source_metadata, geometry]
+            required: [id, symbol, zone_key, version, effective_from, role, status, center_price, lower_price, upper_price, atr_width, anchor_session_index, slope_per_session, fit_residual_atr, projection_end, end_center_price, end_lower_price, end_upper_price, pivot_count, touch_count, source_metadata, geometry, formation_geometry]
             properties:
               id: {type: string, format: uuid}
               symbol: {type: string}
@@ -3563,21 +3581,8 @@ components:
               pivot_count: {type: integer}
               touch_count: {type: integer}
               source_metadata: {$ref: "#/components/schemas/FreeFormObject"}
-              geometry:
-                oneOf:
-                  - type: object
-                    required: [start_date, end_date, start_center_price, start_lower_price, start_upper_price, end_center_price, end_lower_price, end_upper_price, slope_per_session]
-                    properties:
-                      start_date: {type: string, format: date}
-                      end_date: {type: string, format: date}
-                      start_center_price: {type: number}
-                      start_lower_price: {type: number}
-                      start_upper_price: {type: number}
-                      end_center_price: {type: number}
-                      end_lower_price: {type: number}
-                      end_upper_price: {type: number}
-                      slope_per_session: {type: number}
-                  - type: "null"
+              formation_geometry: {$ref: "#/components/schemas/SupportResistanceZoneGeometry"}
+              geometry: {$ref: "#/components/schemas/SupportResistanceZoneGeometry"}
         regime_intervals:
           type: array
           items:

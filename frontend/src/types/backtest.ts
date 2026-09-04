@@ -1,6 +1,6 @@
 export interface BacktestCreate {
   strategy_id: string;
-  basket_id?: string | null;
+  basket_id: string;
   universe_policy?: import("@/types/research").PointInTimeUniversePolicy | null;
   start_date: string;
   end_date: string;
@@ -291,6 +291,7 @@ export interface SupportResistanceZoneVersionOut {
   pivot_count: number;
   touch_count: number;
   source_metadata: Record<string, unknown>;
+  formation_geometry?: SupportResistanceZoneVersionOut["geometry"];
   geometry?: {
     start_date: string;
     end_date: string;

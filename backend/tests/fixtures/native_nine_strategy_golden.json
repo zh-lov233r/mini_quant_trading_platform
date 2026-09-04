@@ -220,7 +220,7 @@
       },
       "signals": {
         "rows": 400,
-        "sha256": "e1c59f41d34b86b73c16d82927bbb45258df8a5f4372b12c89d8f2812d7be54f"
+        "sha256": "5d5786cd721ee560df88c1339439b586c101432086e2231f0a69c89de44d82ee"
       },
       "summary": {
         "delisting_zero_write_off": 0.0,
@@ -235,12 +235,12 @@
         "trading_days": 120
       },
       "support_events": {
-        "rows": 3620,
-        "sha256": "24c397b6dcf5a6ccb8b39868f1fbd9f65c91137160c8a32c1472390593c54839"
+        "rows": 3240,
+        "sha256": "e21af3547fc3533b28c175510588b504b3e5244c9fb920ca0cc437bae175a674"
       },
       "support_regime_versions": {
-        "rows": 0,
-        "sha256": "933a41a8a94ebc23ed8f0f20660eafe9702ad0a14b62d7e839895fb72617dde6"
+        "rows": 20,
+        "sha256": "6d8538328b08cafb7f96663803d987c2a8d0620d2e684862d32b2c563100f19b"
       },
       "support_zone_versions": {
         "rows": 0,

@@ -57,7 +57,7 @@ The importer iterates Shanghai Stock Exchange open dates and commits EOD data pe
 
 ## Nine-strategy backtesting
 
-Each completed import synchronizes the active `All A Shares (Tushare)` basket. In `/backtests`, choose any engine-ready strategy and select this basket to override the strategy universe. All nine types use the same native dataset and backtest entrypoint:
+Each completed import synchronizes the active `All A Shares (Tushare)` basket. In `/backtests`, choose any engine-ready strategy and select this basket as the required scope for that run. All nine types use the same native dataset and backtest entrypoint:
 
 `trend`, `mean_reversion`, `momentum_breakout`, `island_reversal`, `double_bottom`, `head_shoulders_bottom`, `rounded_bottom`, `v_reversal`, and `support_resistance`.
 

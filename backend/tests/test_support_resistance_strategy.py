@@ -43,14 +43,12 @@ from src.services.support_resistance_persistence_service import (  # noqa: E402
     record_failed_materialization_after_rollback,
 )
 from src.services.support_resistance_service import (  # noqa: E402
-    BreakoutRecord,
     PendingOutcome,
     Pivot,
     SupportResistanceSymbolState,
     Zone,
     SupportResistanceState,
     _fit_pivot_line,
-    _match_zone,
     _new_zone_key,
     _record_regime_version,
     _record_zone_version,
@@ -210,52 +208,14 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         self.assertNotIn(zone.zone_key, state.zones)
         expired = next(item for item in state.zone_versions if item["status"] == "expired")
         self.assertGreater(expired["lower"], 0)
-        self.assertEqual(expired["slope_per_session"], 0.0)
+        self.assertEqual(expired["slope_per_session"], -0.2)
         invalidation = next(
             item
             for item in state.events
             if item["event_type"] == "invalidation" and item["zone_key"] == zone.zone_key
         )
-        self.assertEqual(invalidation["reason"], "projected_zone_geometry_became_invalid")
+        self.assertEqual(invalidation["reason"], "invalid_geometry")
         self.assertFalse(any(item["event_type"] == "candidate" for item in state.events))
-
-    def test_same_day_refit_after_invalid_projection_uses_a_new_zone_identity(self) -> None:
-        pivots = [
-            Pivot("low:1", "low", 0, date(2024, 12, 1), date(2024, 12, 4), 1.0, 1.0),
-            Pivot("low:2", "low", 1, date(2024, 12, 2), date(2024, 12, 5), 1.1, 1.0),
-            Pivot("low:3", "low", 2, date(2024, 12, 3), date(2024, 12, 6), 1.2, 1.0),
-        ]
-        old_key = _new_zone_key("low", pivots)
-        zone = _zone(old_key, "support", 0.2)
-        zone.pivot_keys = tuple(pivot.pivot_key for pivot in pivots)
-        zone.lower = 0.1
-        zone.upper = 0.3
-        zone.anchor_center = 0.2
-        zone.anchor_lower = 0.1
-        zone.anchor_upper = 0.3
-        zone.anchor_session_index = 0
-        zone.slope_per_session = -0.2
-        state = SupportResistanceSymbolState(
-            history=[_bar(0, high=1.0, low=0.5, close=0.8)],
-            pivots=pivots,
-            zones={old_key: zone},
-        )
-
-        signal = {**self.signal, "min_line_span_sessions": 1}
-        advance_symbol(
-            state,
-            _bar(1, high=1.2, low=0.8, close=1.0),
-            signal,
-            self.risk,
-            emit_signals=False,
-        )
-
-        same_day = [
-            item for item in state.zone_versions if item["effective_from"] == "2025-01-02"
-        ]
-        self.assertEqual({item["status"] for item in same_day}, {"active", "expired"})
-        self.assertEqual(len({item["zone_key"] for item in same_day}), 2)
-        self.assertNotIn(old_key, state.zones)
 
     def setUp(self) -> None:
         params = normalize_strategy_params("support_resistance", {})
@@ -263,16 +223,30 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         self.risk = params["risk"]
 
     def test_rejects_all_entry_modes_disabled(self) -> None:
-        with self.assertRaisesRegex(ValueError, "at least one"):
+        with self.assertRaisesRegex(ValueError, "support_bounce_enabled"):
             normalize_strategy_params(
                 "support_resistance",
                 {
                     "signal": {
                         "support_bounce_enabled": False,
-                        "resistance_breakout_enabled": False,
-                        "breakout_retest_enabled": False,
                     }
                 },
+            )
+
+    def test_minimum_two_pivots_is_accepted_and_one_is_rejected(self) -> None:
+        self.assertEqual(
+            normalize_strategy_params("support_resistance", {})["signal"]["min_line_pivots"],
+            2,
+        )
+        self.assertEqual(
+            normalize_strategy_params(
+                "support_resistance", {"signal": {"min_line_pivots": 2}}
+            )["signal"]["min_line_pivots"],
+            2,
+        )
+        with self.assertRaisesRegex(ValueError, "at least 2"):
+            normalize_strategy_params(
+                "support_resistance", {"signal": {"min_line_pivots": 1}}
             )
 
     def test_rejects_non_daily_or_mislabelled_price_semantics(self) -> None:
@@ -292,8 +266,6 @@ class SupportResistanceStrategyTests(unittest.TestCase):
 
         self.assertTrue(catalog["engine_ready"])
         self.assertTrue(catalog["defaults"]["signal"]["support_bounce_enabled"])
-        self.assertTrue(catalog["defaults"]["signal"]["resistance_breakout_enabled"])
-        self.assertTrue(catalog["defaults"]["signal"]["breakout_retest_enabled"])
 
     def _classify(
         self,
@@ -354,40 +326,6 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         self.assertFalse(candidate["entry_eligible"])
         self.assertFalse(candidate["regime_eligible"])
         self.assertTrue(any(event["event_type"] == "regime_rejection" for event in state.events))
-
-    def test_range_allows_only_support_bounce_and_audits_other_candidates(self) -> None:
-        state = SupportResistanceSymbolState(cached_regime_timeline=_cached_regime("range"))
-        state.history.append(_bar(-1, high=106, low=102, close=103.2))
-        state.zones = {
-            "support": _zone("support", "support", 100),
-            "breakout": _zone("breakout", "resistance", 102),
-            "ceiling": _zone("ceiling", "resistance", 110),
-        }
-
-        decision = advance_symbol(
-            state,
-            _bar(1, high=107, low=100, close=105.5, volume=160),
-            self.signal,
-            self.risk,
-        )
-
-        self.assertIsNotNone(decision)
-        self.assertEqual(decision["support_resistance"]["selected_setup"], "support_bounce")
-        candidates = {
-            event["setup"]: event
-            for event in state.events
-            if event["event_type"] == "candidate"
-        }
-        self.assertTrue(candidates["support_bounce"]["entry_eligible"])
-        self.assertFalse(candidates["resistance_breakout"]["entry_eligible"])
-        self.assertFalse(candidates["resistance_breakout"]["regime_eligible"])
-        self.assertTrue(
-            any(
-                event["event_type"] == "direct_breakout_audit"
-                and event["setup"] == "resistance_breakout"
-                for event in state.events
-            )
-        )
 
     def test_downtrend_rejects_buy_candidate_but_keeps_audit_event(self) -> None:
         state = SupportResistanceSymbolState(cached_regime_timeline=_cached_regime("downtrend"))
@@ -500,45 +438,6 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         pivot = next(pivot for pivot in state.pivots if pivot.trade_date == bars[1]["dt_ny"])
         self.assertEqual(pivot.confirmed_on, bars[3]["dt_ny"])
 
-    def test_same_day_candidates_emit_strongest_buy_deterministically(self) -> None:
-        state = SupportResistanceSymbolState(cached_regime_timeline=_cached_regime())
-        state.history.append(_bar(-1, high=106, low=102, close=103.2))
-        state.zones = {
-            "support": _zone("support", "support", 100),
-            "breakout": _zone("breakout", "resistance", 102),
-            "retest": _zone("retest", "resistance", 104),
-            "ceiling": _zone("ceiling", "resistance", 110),
-        }
-        state.breakouts["retest"] = BreakoutRecord(
-            zone_key="retest",
-            breakout_date=date(2024, 12, 31),
-            breakout_session_index=0,
-            breakout_volume=200,
-            original_lower=103,
-            original_upper=105,
-        )
-        current = _bar(1, high=107, low=100, close=105.5, volume=160)
-
-        decision = advance_symbol(state, current, self.signal, self.risk)
-
-        self.assertIsNotNone(decision)
-        self.assertEqual(decision["action"], "BUY")
-        self.assertEqual(decision["support_resistance"]["selected_setup"], "breakout_retest")
-        selected_strength = decision["support_resistance"]["strength"]["score"]
-        self.assertEqual(
-            selected_strength,
-            max(candidate["strength"]["score"] for candidate in decision["support_resistance"]["candidates"]
-                if candidate["entry_eligible"]),
-        )
-        self.assertEqual(
-            set(decision["support_resistance"]["candidate_setups"]),
-            {"support_bounce", "resistance_breakout", "breakout_retest"},
-        )
-        self.assertEqual(
-            len([event for event in state.events if event["event_type"] == "selection"]),
-            1,
-        )
-
     def test_outcomes_use_close_exit_signals_and_next_open_fills(self) -> None:
         state = SupportResistanceSymbolState(cached_regime_timeline=_cached_regime())
         state.pending_outcomes.append(
@@ -603,101 +502,6 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         self.assertEqual(candidate["score"], 0.5)
         self.assertEqual(candidate["score_evidence"]["resolved_samples"], 0)
         self.assertEqual(state.stats["support_bounce"].losses, 1)
-
-    def test_retest_can_trigger_when_direct_breakout_entry_is_disabled(self) -> None:
-        signal = dict(self.signal)
-        signal.update(
-            {
-                "support_bounce_enabled": False,
-                "resistance_breakout_enabled": False,
-                "breakout_retest_enabled": True,
-            }
-        )
-        state = SupportResistanceSymbolState(cached_regime_timeline=_cached_regime())
-        state.history.append(_bar(0, high=102, low=100, close=101))
-        state.zones["resistance"] = _zone("resistance", "resistance", 101)
-
-        breakout_decision = advance_symbol(
-            state,
-            _bar(1, high=104, low=102, close=103, volume=200),
-            signal,
-            self.risk,
-        )
-        self.assertIsNone(breakout_decision)
-        self.assertIn("resistance", state.breakouts)
-        self.assertTrue(
-            any(event["event_type"] == "breakout" for event in state.events)
-        )
-        transition = next(
-            event for event in state.events if event["event_type"] == "role_transition"
-        )
-        self.assertEqual(
-            (transition["from_role"], transition["to_role"], transition["reason"]),
-            ("resistance", "support", "confirmed_breakout"),
-        )
-
-        state.zones["resistance"] = _zone("resistance", "support", 101)
-        state.zones["new-resistance"] = _zone("new-resistance", "resistance", 106)
-        retest_decision = advance_symbol(
-            state,
-            _bar(2, high=103, low=101.5, close=102.2, volume=150),
-            signal,
-            self.risk,
-        )
-
-        self.assertIsNotNone(retest_decision)
-        self.assertEqual(
-            retest_decision["support_resistance"]["selected_setup"],
-            "breakout_retest",
-        )
-        self.assertTrue(any(event["event_type"] == "retest" for event in state.events))
-        self.assertNotIn("resistance", state.breakouts)
-
-    def test_breakout_is_audit_only_before_end_of_day_role_change(self) -> None:
-        state = SupportResistanceSymbolState(cached_regime_timeline=_cached_regime())
-        state.history.append(_bar(0, high=102, low=100, close=101))
-        state.zones["resistance"] = _zone("resistance", "resistance", 101)
-
-        decision = advance_symbol(
-            state,
-            _bar(1, high=104, low=102, close=103, volume=200),
-            self.signal,
-            self.risk,
-        )
-
-        self.assertIsNone(decision)
-        self.assertTrue(
-            any(
-                event["event_type"] == "direct_breakout_audit"
-                and event["reason_code"] == "direct_breakout_audit_only"
-                for event in state.events
-            )
-        )
-        transition = next(
-            event for event in state.events if event["event_type"] == "role_transition"
-        )
-        self.assertEqual((transition["lower"], transition["upper"]), (100.0, 102.0))
-        self.assertEqual(transition["to_role"], "support")
-
-    def test_close_above_resistance_changes_role_without_emitting_breakout_signal(self) -> None:
-        state = SupportResistanceSymbolState()
-        state.history.append(_bar(0, high=102, low=100, close=101))
-        state.zones["resistance"] = _zone("resistance", "resistance", 101)
-
-        decision = advance_symbol(
-            state,
-            _bar(1, high=104, low=102, close=103, volume=100),
-            self.signal,
-            self.risk,
-        )
-
-        self.assertIsNone(decision)
-        self.assertFalse(any(event["event_type"] == "breakout" for event in state.events))
-        transition = next(
-            event for event in state.events if event["event_type"] == "role_transition"
-        )
-        self.assertEqual(transition["reason"], "close_above_resistance")
-        self.assertEqual(transition["to_role"], "support")
 
     def test_entry_zone_is_frozen_for_exit(self) -> None:
         snapshot = _bar(1, high=101, low=96, close=97)
@@ -845,7 +649,7 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         for offset in (1, 2, 3):
             advance_symbol(
                 state,
-                _bar(offset, high=103, low=102, close=102.5),
+                _bar(offset, high=103, low=98 if offset == 2 else 102, close=98 if offset == 2 else 102.5),
                 self.signal,
                 self.risk,
                 emit_signals=False,
@@ -862,12 +666,17 @@ class SupportResistanceStrategyTests(unittest.TestCase):
                     "event_type": "invalidation",
                     "zone_key": "support",
                     "role": "support",
+                    "reason": "close_break",
+                    "phase_start": "2025-01-02",
+                    "effective_to": "2025-01-02",
+                    "close": 98.0,
+                    "broken_zone_keys": ["support"],
                 }
             ],
         )
         self.assertNotIn("support", state.zones)
 
-    def test_weighted_theil_sen_requires_three_pivots_and_filters_extreme_slope(self) -> None:
+    def test_weighted_theil_sen_requires_two_pivots_and_filters_extreme_slope(self) -> None:
         def pivot(index: int, price: float) -> Pivot:
             return Pivot(
                 pivot_key=f"low:{index}",
@@ -879,7 +688,10 @@ class SupportResistanceStrategyTests(unittest.TestCase):
                 atr=1.0,
             )
 
-        self.assertIsNone(_fit_pivot_line([pivot(0, 100), pivot(10, 101)], 20, self.signal))
+        self.assertIsNone(_fit_pivot_line([pivot(0, 100)], 20, self.signal))
+        self.assertIsNotNone(
+            _fit_pivot_line([pivot(0, 100), pivot(10, 101)], 20, self.signal)
+        )
         fit = _fit_pivot_line(
             [pivot(0, 100), pivot(10, 101), pivot(20, 102), pivot(15, 110)],
             20,
@@ -920,31 +732,6 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         by_role = {zone.role: zone for zone in state.zones.values()}
         self.assertAlmostEqual(by_role["support"].slope_per_session, 0.1)
         self.assertAlmostEqual(by_role["resistance"].slope_per_session, -0.1)
-
-    def test_touch_and_role_transition_use_event_day_projected_bounds(self) -> None:
-        state = SupportResistanceSymbolState(history=[_bar(0, high=106, low=104, close=105)])
-        zone = _zone("sloped", "support", 100)
-        zone.anchor_session_index = 0
-        zone.anchor_center = 100
-        zone.anchor_lower = 99
-        zone.anchor_upper = 101
-        zone.slope_per_session = 1
-        state.zones[zone.zone_key] = zone
-
-        advance_symbol(
-            state,
-            _bar(1, high=102.5, low=99.5, close=99.5),
-            self.signal,
-            self.risk,
-            emit_signals=False,
-        )
-
-        touch = next(event for event in state.events if event["event_type"] == "touch")
-        transition = next(
-            event for event in state.events if event["event_type"] == "role_transition"
-        )
-        self.assertEqual((touch["lower"], touch["upper"]), (100.0, 102.0))
-        self.assertEqual((transition["lower"], transition["upper"]), (100.0, 102.0))
 
     def test_new_high_pivot_line_below_close_is_initialized_as_support(self) -> None:
         state = SupportResistanceSymbolState(
@@ -1012,8 +799,8 @@ class SupportResistanceStrategyTests(unittest.TestCase):
         self.assertEqual(zone.center, 100.1234567892)
         self.assertEqual(zone.atr, 1.2345678902)
         detector = normalized_detector_params({"signal": self.signal})
-        self.assertEqual(detector["implementation_revision"], 12)
-        self.assertEqual(detector["regime_logic_revision"], 3)
+        self.assertEqual(detector["implementation_revision"], 13)
+        self.assertEqual(detector["regime_logic_revision"], 4)
 
     def test_rebuild_rejects_geometry_rounded_to_zero_before_recording_a_zone(self) -> None:
         for price, atr, expected_lower in (
@@ -1533,7 +1320,7 @@ class SupportResistancePersistenceTests(unittest.TestCase):
             coverage_end=date(2025, 1, 3),
         )
         zone = _zone("expired", "support", 100)
-        zone.anchor_session_index = 1
+        zone.anchor_session_index = 0
         zone.anchor_center = 100
         zone.anchor_lower = 99
         zone.anchor_upper = 101
@@ -2054,7 +1841,7 @@ class SupportResistancePersistenceTests(unittest.TestCase):
         "src.services.support_resistance_persistence_service._instrument_ids",
         return_value={"TEST": 1},
     )
-    def test_role_transition_parameter_change_creates_cache_miss(self, _ids) -> None:
+    def test_zone_width_parameter_change_creates_cache_miss(self, _ids) -> None:
         with self.Session() as db:
             persist_support_resistance_run(
                 db,
@@ -2070,7 +1857,7 @@ class SupportResistancePersistenceTests(unittest.TestCase):
             changed_runtime = copy.deepcopy(self.runtime)
             changed_runtime["params"] = normalize_strategy_params(
                 "support_resistance",
-                {"signal": {"retest_volume_ratio_max": 0.6}},
+                {"signal": {"zone_half_width_atr": 0.6}},
             )
             persist_support_resistance_run(
                 db,

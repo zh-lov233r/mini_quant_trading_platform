@@ -29,7 +29,7 @@ describe("strategy clone draft", () => {
     expect(draft.name).toBe("Source Strategy Copy");
     expect(draft.description).toBe("Source description");
     expect(draft.strategyType).toBe("mean_reversion");
-    expect(draft.symbolsText).toBe("AAPL, MSFT");
+    expect(draft.params.universe).toEqual({ symbols: [], selection_mode: "all_common_stock" });
     expect(draft.params).not.toBe(source.params);
 
     (draft.params.signal as Record<string, unknown>).lookback_window = 10;

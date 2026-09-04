@@ -736,6 +736,7 @@ def run_backtest(
         runtime["params"]["universe"]["symbols"] = symbols
         if universe_metadata:
             runtime["params"]["universe"]["basket"] = universe_metadata
+            runtime["params"]["universe"]["selection_mode"] = "stock_basket"
         resolved = resolve_backtest_universe(
             db, symbols, start_date=start_date - timedelta(days=400), end_date=end_date
         )

@@ -23,7 +23,6 @@ export interface StrategyCloneDraft {
   strategyType: StrategyType;
   params: Record<string, unknown>;
   rawJson: string;
-  symbolsText: string;
 }
 
 export function isCurrentStrategyType(value: string): value is StrategyType {
@@ -43,7 +42,7 @@ export function buildStrategyCloneDraft(source: StrategyOut): StrategyCloneDraft
 
   const params = cloneRecord(source.params as Record<string, unknown>);
   const metadataDescription = getPathValue(params, "metadata.description");
-  const symbols = getPathValue(params, "universe.symbols");
+  params.universe = { symbols: [], selection_mode: "all_common_stock" };
   return {
     name: buildStrategyCloneName(source.name),
     description: source.description?.trim()
@@ -51,6 +50,5 @@ export function buildStrategyCloneDraft(source: StrategyOut): StrategyCloneDraft
     strategyType: source.strategy_type,
     params,
     rawJson: JSON.stringify(params, null, 2),
-    symbolsText: Array.isArray(symbols) ? symbols.map(String).join(", ") : "",
   };
 }

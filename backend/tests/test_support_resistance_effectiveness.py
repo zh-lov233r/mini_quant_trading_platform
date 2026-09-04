@@ -4,6 +4,8 @@ from datetime import date
 import tempfile
 from pathlib import Path
 import unittest
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from pydantic import ValidationError
 
@@ -56,14 +58,34 @@ class PointInTimeUniversePolicyTests(unittest.TestCase):
 
 
 class PreRegisteredCandidateTests(unittest.TestCase):
+    def test_one_bounce_discovery_advances_to_three_eight_trial_folds(self) -> None:
+        from src.services.support_resistance_validation_service import _create_fold_children
+        candidate = SimpleNamespace(id="candidate", params_hash="hash", parameter_overrides={})
+        parent = SimpleNamespace(id="parent", spec={}, child_experiments=[SimpleNamespace(
+            spec={"validationPhase": "discovery:support_bounce"}, status="completed")],
+            run_manifest={}, workflow_run_id="workflow", idempotency_key="key")
+        db = MagicMock()
+        db.get.return_value = parent
+        module = "src.services.support_resistance_validation_service"
+        with patch(f"{module}.SupportResistanceEffectivenessSpec.model_validate", return_value=SimpleNamespace(name="test")), \
+             patch(f"{module}._mode_champion", return_value=candidate), \
+             patch(f"{module}._child_spec", return_value={}) as child_spec, \
+             patch("src.services.adaptive_research_service.create_category_study", side_effect=[
+                 SimpleNamespace(id=str(i), spec={}) for i in range(3)]):
+            _create_fold_children(db, parent)
+        self.assertEqual(child_spec.call_count, 3)
+        for call in child_spec.call_args_list:
+            self.assertEqual(call.kwargs["max_trials"], 8)
+            self.assertEqual(len(call.kwargs["proposals"]), 2)
+        self.assertEqual(parent.progress, {"phase": "annual_folds", "total": 200, "scheduled": 72, "completed": 48})
+
     def test_direct_breakout_has_no_discovery_budget(self) -> None:
-        with self.assertRaisesRegex(ValueError, "audit-only"):
+        with self.assertRaisesRegex(ValueError, "only support_bounce"):
             fixed_mode_candidates("resistance_breakout")
 
     def test_each_setup_has_exactly_twelve_unique_single_mode_candidates(self) -> None:
         switches = {
             "support_bounce": "signal.support_bounce_enabled",
-            "breakout_retest": "signal.breakout_retest_enabled",
         }
         for setup, enabled_key in switches.items():
             candidates = fixed_mode_candidates(setup)

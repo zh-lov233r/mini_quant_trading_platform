@@ -397,10 +397,11 @@ describe("chart models", () => {
     ])).toEqual({ lane: 1, bounds: { left: 50, right: 90 } });
   });
 
-  it("omits invalidation audit markers from the chart and legend", () => {
+  it("only shows recorded touches when a support/resistance zone is selected", () => {
     expect(isDisplayableSupportResistanceEventType("invalidation")).toBe(false);
     expect(isDisplayableSupportResistanceEventType("touch")).toBe(true);
-    expect(isDisplayableSupportResistanceEventType("role_transition")).toBe(true);
+    expect(isDisplayableSupportResistanceEventType("role_transition")).toBe(false);
+    expect(isDisplayableSupportResistanceEventType("retest")).toBe(false);
   });
 
   it("places both fill arrows above their bars", () => {

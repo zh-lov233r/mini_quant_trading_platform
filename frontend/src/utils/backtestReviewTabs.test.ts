@@ -2,11 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   BACKTEST_REVIEW_TABS,
+  DEFAULT_BACKTEST_REVIEW_TAB,
   backtestReviewTabLabel,
   nextBacktestReviewTab,
 } from "./backtestReviewTabs";
 
 describe("backtest review tabs", () => {
+  it("opens the workbench on lifecycles", () => {
+    expect(DEFAULT_BACKTEST_REVIEW_TAB).toBe("lifecycles");
+  });
+
   it("keeps the requested five-module order and bilingual labels", () => {
     expect(BACKTEST_REVIEW_TABS).toEqual([
       "symbolPnl",

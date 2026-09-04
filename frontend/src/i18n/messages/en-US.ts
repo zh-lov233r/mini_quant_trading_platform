@@ -4,6 +4,13 @@ import { strategyCreateEnUS } from "./strategy-create/en-US";
 
 export const enUSMessages: MessageSchema = {
   dashboard: dashboardEnUS,
+  lifecycleZones: {
+    showAll: "Show all zones",
+    all: "Showing all support/resistance zone history in this window.",
+    tradeOnly: "Showing only support/resistance zone history explicitly linked to this trade.",
+    noAssociation: "No explicit trade-linked zones available; show all zones to inspect history. No price-based inference is used.",
+    outsideWindow: "No drawable segments of this trade's linked zones are available in this window.",
+  },
   common: {
     appName: "Quant Strategy Workspace",
     language: "Language",

@@ -28,6 +28,7 @@ import type {
   ChartZoneOverlay,
 } from "@/components/charts/chartModels";
 import { LifecycleOverlayPrimitive } from "@/components/charts/overlayPrimitive";
+import { SelectControl } from "@/components/workspace/SelectControl";
 import type { CandleBarOut } from "@/types/quote";
 
 interface Props {
@@ -48,13 +49,17 @@ interface Props {
 
 type CandleApi = ISeriesApi<"Candlestick">;
 type VolumeApi = ISeriesApi<"Histogram">;
+const EMPTY_MARKERS: ChartOverlayMarker[] = [];
+const EMPTY_GAPS: ChartGapOverlay[] = [];
+const EMPTY_ZONES: ChartZoneOverlay[] = [];
+const EMPTY_REGIMES: ChartRegimeOverlay[] = [];
 
 export default function CandlestickLightweightChart({
   bars,
-  markers = [],
-  gaps = [],
-  zones = [],
-  regimes = [],
+  markers = EMPTY_MARKERS,
+  gaps = EMPTY_GAPS,
+  zones = EMPTY_ZONES,
+  regimes = EMPTY_REGIMES,
   requireRegimeCoverage = false,
   regimeCoverageStart = null,
   regimeCoverageEnd = null,
@@ -73,6 +78,12 @@ export default function CandlestickLightweightChart({
   const primitiveRef = useRef<LifecycleOverlayPrimitive | null>(null);
   const [pinnedMarker, setPinnedMarker] = useState<ChartOverlayMarker | null>(null);
   const [pinnedRegime, setPinnedRegime] = useState<ChartRegimeOverlay | null>(null);
+  const [activeZoneKey, setActiveZoneKey] = useState<string | null>(null);
+  const pinnedZoneRef = useRef<string | null>(null);
+  const zoneByKey = useMemo(() => new Map(zones.map((zone) => [zone.zoneKey || zone.key, zone])), [zones]);
+  const zoneByKeyRef = useRef(zoneByKey);
+  zoneByKeyRef.current = zoneByKey;
+  const activeZone = activeZoneKey ? zoneByKey.get(activeZoneKey) : null;
   const normalizedBars = useMemo(() => normalizeCandleBars(bars), [bars]);
   const normalizedGaps = useMemo(
     () => normalizeGapOverlays(gaps, new Set(normalizedBars.map((bar) => bar.time))),
@@ -185,6 +196,9 @@ export default function CandlestickLightweightChart({
     volumeRef.current = volume;
 
     const onCrosshairMove = (param: MouseEventParams<Time>) => {
+      const zoneKey = typeof param.hoveredObjectId === "string" && param.hoveredObjectId.startsWith("zone:")
+        ? param.hoveredObjectId.slice(5) : null;
+      if (!pinnedZoneRef.current) setActiveZoneKey(zoneKey);
       const tooltip = tooltipRef.current;
       if (!tooltip || !param.point || !param.time) {
         if (tooltip) tooltip.style.display = "none";
@@ -204,7 +218,8 @@ export default function CandlestickLightweightChart({
       const title = document.createElement("div");
       title.style.fontWeight = "800";
       title.style.marginBottom = "4px";
-      title.textContent = marker?.description || regime?.description || String(param.time);
+      title.textContent = (zoneKey ? zoneByKeyRef.current.get(zoneKey)?.description : null)
+        || marker?.description || regime?.description || String(param.time);
       tooltip.appendChild(title);
       const row = document.createElement("div");
       row.textContent = `O ${formatPrice(candleData.open, activeLocale)}  H ${formatPrice(candleData.high, activeLocale)}  L ${formatPrice(candleData.low, activeLocale)}  C ${formatPrice(candleData.close, activeLocale)}`;
@@ -222,6 +237,10 @@ export default function CandlestickLightweightChart({
     };
     chart.subscribeCrosshairMove(onCrosshairMove);
     const onClick = (param: MouseEventParams<Time>) => {
+      const key = typeof param.hoveredObjectId === "string" && param.hoveredObjectId.startsWith("zone:")
+        ? param.hoveredObjectId.slice(5) : null;
+      pinnedZoneRef.current = key;
+      setActiveZoneKey(key);
       const marker = typeof param.hoveredObjectId === "string"
         ? markerByIdRef.current.get(param.hoveredObjectId) || null
         : null;
@@ -248,6 +267,8 @@ export default function CandlestickLightweightChart({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        pinnedZoneRef.current = null;
+        setActiveZoneKey(null);
         setPinnedMarker(null);
         setPinnedRegime(null);
       }
@@ -298,6 +319,7 @@ export default function CandlestickLightweightChart({
       leaderMarkers,
     );
     primitiveRef.current = primitive;
+    primitive.selectZone(pinnedZoneRef.current);
     candle.attachPrimitive(primitive);
     return () => {
       if (candleRef.current !== candle || chartRef.current == null) {
@@ -313,9 +335,13 @@ export default function CandlestickLightweightChart({
     };
   }, [leaderMarkers, normalizedBars, normalizedGaps, normalizedRegimes, normalizedZones]);
 
+  useEffect(() => {
+    primitiveRef.current?.selectZone(activeZoneKey);
+  }, [activeZoneKey]);
+
   return (
     <div
-      role="img"
+      role="group"
       tabIndex={0}
       aria-label={ariaLabel || (isZh ? "交互式蜡烛图" : "Interactive candlestick chart")}
       style={{
@@ -330,6 +356,27 @@ export default function CandlestickLightweightChart({
     >
       <div ref={containerRef} style={{ width: "100%", height }} />
       <div ref={tooltipRef} style={tooltipStyle} />
+      {zoneByKey.size > 0 ? (
+        <div style={{ padding: "10px 12px", fontSize: 12 }}>
+          <label>
+            {isZh ? "区域明细（点击固定，Esc 清除）：" : "Zone details (click to pin, Esc to clear): "}
+            <SelectControl style={{ maxWidth: "100%" }} density="compact"
+              placeholder={isZh ? "选择区域" : "Select zone"}
+              aria-label={isZh ? "区域明细（点击固定，Esc 清除）" : "Zone details (click to pin, Esc to clear)"}
+              value={activeZoneKey || ""} onValueChange={(value) => {
+              const key = value || null;
+              pinnedZoneRef.current = key;
+              setActiveZoneKey(key);
+            }} options={[
+              { value: "", label: isZh ? "选择区域" : "Select zone" },
+              ...[...zoneByKey].map(([key, zone]) => ({ value: key, label: zone.description })),
+            ]} />
+          </label>
+          {activeZone ? <div aria-live="polite" style={{ marginTop: 8, overflowWrap: "anywhere" }}>
+            {(activeZone.details || [activeZone.description]).map((detail, index) => <div key={index}>{detail}</div>)}
+          </div> : null}
+        </div>
+      ) : null}
       {normalizedRegimeResult.error ? (
         <div role="alert" style={regimeErrorStyle}>
           {isZh ? "市场状态区间数据不完整，已停止绘制状态背景：" : "Regime interval data is invalid; background rendering was stopped: "}

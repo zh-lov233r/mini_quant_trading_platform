@@ -290,26 +290,16 @@ export default function StrategyForm({
   const [supportBounceEnabled, setSupportBounceEnabled] = useState(
     toBoolean(initialSignal.support_bounce_enabled, true)
   );
-  const [resistanceBreakoutEnabled, setResistanceBreakoutEnabled] = useState(
-    toBoolean(initialSignal.resistance_breakout_enabled, true)
-  );
-  const [breakoutRetestEnabled, setBreakoutRetestEnabled] = useState(
-    toBoolean(initialSignal.breakout_retest_enabled, true)
-  );
   const [srPivotLeftBars, setSrPivotLeftBars] = useState(toFiniteNumber(initialSignal.pivot_left_bars, 3));
   const [srPivotRightBars, setSrPivotRightBars] = useState(toFiniteNumber(initialSignal.pivot_right_bars, 3));
   const [srDetectionWindow, setSrDetectionWindow] = useState(toFiniteNumber(initialSignal.detection_window, 120));
-  const [srMinLinePivots, setSrMinLinePivots] = useState(toFiniteNumber(initialSignal.min_line_pivots, 3));
+  const [srMinLinePivots, setSrMinLinePivots] = useState(toFiniteNumber(initialSignal.min_line_pivots, 2));
   const [srMinLineSpanSessions, setSrMinLineSpanSessions] = useState(toFiniteNumber(initialSignal.min_line_span_sessions, 10));
   const [srLineInlierToleranceAtr, setSrLineInlierToleranceAtr] = useState(toFiniteNumber(initialSignal.line_inlier_tolerance_atr, 0.75));
   const [srMaxAbsSlopeAtrPerSession, setSrMaxAbsSlopeAtrPerSession] = useState(toFiniteNumber(initialSignal.max_abs_slope_atr_per_session, 0.25));
   const [srZoneHalfWidthAtr, setSrZoneHalfWidthAtr] = useState(toFiniteNumber(initialSignal.zone_half_width_atr, 0.5));
   const [srDecayHalfLife, setSrDecayHalfLife] = useState(toFiniteNumber(initialSignal.decay_half_life, 60));
   const [srBounceConfirmationAtr, setSrBounceConfirmationAtr] = useState(toFiniteNumber(initialSignal.bounce_confirmation_atr, 0.25));
-  const [srBreakoutConfirmationAtr, setSrBreakoutConfirmationAtr] = useState(toFiniteNumber(initialSignal.breakout_confirmation_atr, 0.5));
-  const [srBreakoutVolumeRatioMin, setSrBreakoutVolumeRatioMin] = useState(toFiniteNumber(initialSignal.breakout_volume_ratio_min, 1.5));
-  const [srRetestWindow, setSrRetestWindow] = useState(toFiniteNumber(initialSignal.retest_window, 10));
-  const [srRetestVolumeRatioMax, setSrRetestVolumeRatioMax] = useState(toFiniteNumber(initialSignal.retest_volume_ratio_max, 0.8));
   const [srStopLossAtr, setSrStopLossAtr] = useState(toFiniteNumber(initialRisk.stop_loss_atr, 1.5));
   const [srMaxLossPct, setSrMaxLossPct] = useState(toFiniteNumber(initialRisk.max_loss_pct, 0.08));
   const [srTakeProfitAtr, setSrTakeProfitAtr] = useState(toFiniteNumber(initialRisk.take_profit_atr, 3));
@@ -432,22 +422,16 @@ export default function StrategyForm({
 
     if (template.strategy_type === "support_resistance") {
       setSupportBounceEnabled(toBoolean(signal.support_bounce_enabled, true));
-      setResistanceBreakoutEnabled(toBoolean(signal.resistance_breakout_enabled, true));
-      setBreakoutRetestEnabled(toBoolean(signal.breakout_retest_enabled, true));
       setSrPivotLeftBars(toFiniteNumber(signal.pivot_left_bars, 3));
       setSrPivotRightBars(toFiniteNumber(signal.pivot_right_bars, 3));
       setSrDetectionWindow(toFiniteNumber(signal.detection_window, 120));
-      setSrMinLinePivots(toFiniteNumber(signal.min_line_pivots, 3));
+      setSrMinLinePivots(toFiniteNumber(signal.min_line_pivots, 2));
       setSrMinLineSpanSessions(toFiniteNumber(signal.min_line_span_sessions, 10));
       setSrLineInlierToleranceAtr(toFiniteNumber(signal.line_inlier_tolerance_atr, 0.75));
       setSrMaxAbsSlopeAtrPerSession(toFiniteNumber(signal.max_abs_slope_atr_per_session, 0.25));
       setSrZoneHalfWidthAtr(toFiniteNumber(signal.zone_half_width_atr, 0.5));
       setSrDecayHalfLife(toFiniteNumber(signal.decay_half_life, 60));
       setSrBounceConfirmationAtr(toFiniteNumber(signal.bounce_confirmation_atr, 0.25));
-      setSrBreakoutConfirmationAtr(toFiniteNumber(signal.breakout_confirmation_atr, 0.5));
-      setSrBreakoutVolumeRatioMin(toFiniteNumber(signal.breakout_volume_ratio_min, 1.5));
-      setSrRetestWindow(toFiniteNumber(signal.retest_window, 10));
-      setSrRetestVolumeRatioMax(toFiniteNumber(signal.retest_volume_ratio_max, 0.8));
       setSrStopLossAtr(toFiniteNumber(risk.stop_loss_atr, 1.5));
       setSrMaxLossPct(toFiniteNumber(risk.max_loss_pct, 0.08));
       setSrTakeProfitAtr(toFiniteNumber(risk.take_profit_atr, 3));
@@ -951,8 +935,6 @@ export default function StrategyForm({
       signal: {
         min_strength_score: Number(minStrengthScore),
         support_bounce_enabled: supportBounceEnabled,
-        resistance_breakout_enabled: resistanceBreakoutEnabled,
-        breakout_retest_enabled: breakoutRetestEnabled,
         pivot_left_bars: Number(srPivotLeftBars),
         pivot_right_bars: Number(srPivotRightBars),
         detection_window: Number(srDetectionWindow),
@@ -965,10 +947,6 @@ export default function StrategyForm({
         zone_half_width_atr: Number(srZoneHalfWidthAtr),
         decay_half_life: Number(srDecayHalfLife),
         bounce_confirmation_atr: Number(srBounceConfirmationAtr),
-        breakout_confirmation_atr: Number(srBreakoutConfirmationAtr),
-        breakout_volume_ratio_min: Number(srBreakoutVolumeRatioMin),
-        retest_window: Number(srRetestWindow),
-        retest_volume_ratio_max: Number(srRetestVolumeRatioMax),
       },
       universe: {
         symbols: parsedSymbols,
@@ -997,12 +975,12 @@ export default function StrategyForm({
       },
     };
   }, [
-    breakoutRetestEnabled, description, maxPositions, positionSizePct, rebalance,
-    resistanceBreakoutEnabled, runAt, srBounceConfirmationAtr, srBreakoutConfirmationAtr,
-    srBreakoutVolumeRatioMin, srDecayHalfLife, srDetectionWindow,
+    description, maxPositions, positionSizePct, rebalance,
+    runAt, srBounceConfirmationAtr,
+    srDecayHalfLife, srDetectionWindow,
     srLineInlierToleranceAtr, srMaxAbsSlopeAtrPerSession, srMaxHoldingDays, srMaxLossPct,
     srMinLinePivots, srMinLineSpanSessions, srMinRewardRisk, minStrengthScore,
-    srPivotLeftBars, srPivotRightBars, srRetestVolumeRatioMax, srRetestWindow,
+    srPivotLeftBars, srPivotRightBars,
     srStopLossAtr,
     srTakeProfitAtr, srZoneHalfWidthAtr, supportBounceEnabled, symbols,
     srMaxZonesPerKind, srPivotToleranceAtr, srRiskPerTradePct, srStopCooldownSessions, srBreakEvenAtR, srMarketFilterEnabled, srMarketFilterSymbol,
@@ -1308,15 +1286,14 @@ export default function StrategyForm({
           params: doubleBottomParams,
         };
       } else if (strategyType === "support_resistance") {
-        if (!supportBounceEnabled && !breakoutRetestEnabled) {
-          throw new Error(isZh ? "至少启用支撑反弹或突破回踩" : "Enable support bounce or breakout retest");
+        if (!supportBounceEnabled) {
+          throw new Error(isZh ? "必须启用支撑反弹" : "Enable support bounce");
         }
         const positiveValues = [
           srPivotLeftBars, srPivotRightBars, srDetectionWindow, srMinLinePivots,
           srMinLineSpanSessions, srLineInlierToleranceAtr, srMaxAbsSlopeAtrPerSession,
           srZoneHalfWidthAtr, srDecayHalfLife,
-          srBounceConfirmationAtr, srBreakoutConfirmationAtr, srBreakoutVolumeRatioMin,
-          srRetestWindow, srRetestVolumeRatioMax,
+          srBounceConfirmationAtr,
           srStopLossAtr, srTakeProfitAtr, srMinRewardRisk,
           srMaxHoldingDays, maxPositions, positionSizePct,
         ];
@@ -1430,13 +1407,13 @@ export default function StrategyForm({
     gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
     gap: 12,
   };
-  const srDetectionFields: Array<{ labelZh: string; labelEn: string; value: number; setValue: (value: number) => void }> = [
+  const srDetectionFields: Array<{ labelZh: string; labelEn: string; min?: number; step?: number | "any"; value: number; setValue: (value: number) => void }> = [
     { labelZh: "Pivot 左侧 K 线", labelEn: "Pivot Left Bars", value: srPivotLeftBars, setValue: setSrPivotLeftBars },
     { labelZh: "Pivot 右侧确认 K 线", labelEn: "Pivot Right Bars", value: srPivotRightBars, setValue: setSrPivotRightBars },
     { labelZh: "检测窗口", labelEn: "Detection Window", value: srDetectionWindow, setValue: setSrDetectionWindow },
     { labelZh: "每类最多区域数", labelEn: "Maximum Zones Per Kind", value: srMaxZonesPerKind, setValue: setSrMaxZonesPerKind },
     { labelZh: "Pivot 并列容差（ATR）", labelEn: "Pivot Tie Tolerance (ATR)", value: srPivotToleranceAtr, setValue: setSrPivotToleranceAtr },
-    { labelZh: "最少拟合 Pivot", labelEn: "Minimum Line Pivots", value: srMinLinePivots, setValue: setSrMinLinePivots },
+    { labelZh: "最少拟合 Pivot", labelEn: "Minimum Line Pivots", min: 2, step: 1, value: srMinLinePivots, setValue: setSrMinLinePivots },
     { labelZh: "最小跨度（交易日）", labelEn: "Minimum Span (Sessions)", value: srMinLineSpanSessions, setValue: setSrMinLineSpanSessions },
     { labelZh: "内点容差（ATR）", labelEn: "Inlier Tolerance (ATR)", value: srLineInlierToleranceAtr, setValue: setSrLineInlierToleranceAtr },
     { labelZh: "最大斜率（ATR/日）", labelEn: "Maximum Slope (ATR/Session)", value: srMaxAbsSlopeAtrPerSession, setValue: setSrMaxAbsSlopeAtrPerSession },
@@ -1445,10 +1422,6 @@ export default function StrategyForm({
   ];
   const srSignalFields: Array<{ labelZh: string; labelEn: string; value: number; setValue: (value: number) => void }> = [
     { labelZh: "支撑反弹确认（ATR）", labelEn: "Bounce Confirmation (ATR)", value: srBounceConfirmationAtr, setValue: setSrBounceConfirmationAtr },
-    { labelZh: "压力突破确认（ATR）", labelEn: "Breakout Confirmation (ATR)", value: srBreakoutConfirmationAtr, setValue: setSrBreakoutConfirmationAtr },
-    { labelZh: "突破成交量 / ADV20", labelEn: "Breakout Volume / ADV20", value: srBreakoutVolumeRatioMin, setValue: setSrBreakoutVolumeRatioMin },
-    { labelZh: "回踩窗口", labelEn: "Retest Window", value: srRetestWindow, setValue: setSrRetestWindow },
-    { labelZh: "回踩量 / 突破量上限", labelEn: "Retest / Breakout Volume Max", value: srRetestVolumeRatioMax, setValue: setSrRetestVolumeRatioMax },
   ];
   const srRiskFields: Array<{ labelZh: string; labelEn: string; percent?: boolean; value: number; setValue: (value: number) => void }> = [
     { labelZh: "最大持仓数", labelEn: "Max Positions", value: maxPositions, setValue: setMaxPositions },
@@ -2572,8 +2545,8 @@ export default function StrategyForm({
                   <div style={groupedPanelTitleStyle}>{isZh ? "固定市场状态规则" : "Fixed Market-Regime Policy"}</div>
                   <p style={groupedPanelHintStyle}>
                     {isZh
-                      ? "v3 将每个交易日唯一归入上行、下行、震荡或过渡区间。上行允许支撑反弹和突破回踩，直接突破仅审计，震荡仅允许支撑反弹，下行与过渡暂停买入；确认下行会触发下一交易日开盘退出。该规则没有额外可调参数。"
-                      : "v3 assigns every session to exactly one uptrend, downtrend, range, or transition interval. Uptrends allow bounces and retests; direct breakouts are audit-only, ranges allow support bounces only, and downtrend/transition states pause buys; a confirmed downtrend exits at the next session open. This policy has no extra tunable parameters."}
+                      ? "区域确认后永久冻结，收盘破坏或区域冲突结束整个阶段。上行与震荡允许支撑反弹，下行/过渡暂停买入；平仓后可在同一区域再次合规入场。阶段结束不强制清仓，已有持仓继续原退出规则。"
+                      : "Confirmed zones are immutable; a close break or zone conflict ends the whole phase. Uptrend/range allow support bounces; downtrend/transition pause entries. Qualifying re-entry in the same zone is allowed after exit. Phase end does not force liquidation; existing exit rules continue."}
                   </p>
                 </div>
                 <div style={groupedPanelStyle}>
@@ -2582,8 +2555,6 @@ export default function StrategyForm({
                   <div style={groupedCompactGridStyle}>
                     {[
                       { label: isZh ? "支撑反弹" : "Support Bounce", value: supportBounceEnabled, setValue: setSupportBounceEnabled },
-                      { label: isZh ? "压力突破审计（不交易）" : "Breakout Audit (No Trade)", value: resistanceBreakoutEnabled, setValue: setResistanceBreakoutEnabled },
-                      { label: isZh ? "突破回踩" : "Breakout Retest", value: breakoutRetestEnabled, setValue: setBreakoutRetestEnabled },
                     ].map((item) => (
                       <label key={item.label} style={{ ...groupedBoxStyle, flexDirection: "row", alignItems: "center" }}>
                         <input type="checkbox" checked={item.value} onChange={(event) => item.setValue(event.target.checked)} />
@@ -2599,7 +2570,7 @@ export default function StrategyForm({
                     {srDetectionFields.map((field) => (
                       <div key={field.labelEn} style={groupedBoxStyle}>
                         <label>{isZh ? field.labelZh : field.labelEn}</label>
-                        <input type="number" min={0} step="any" style={inputStyle} value={field.value} onChange={(event) => field.setValue(Number(event.target.value))} />
+                        <input type="number" min={field.min ?? 0} step={field.step ?? "any"} style={inputStyle} value={field.value} onChange={(event) => field.setValue(Number(event.target.value))} />
                       </div>
                     ))}
                   </div>
