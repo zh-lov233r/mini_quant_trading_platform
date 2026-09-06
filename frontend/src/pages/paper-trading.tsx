@@ -135,7 +135,7 @@ export default function PaperTradingPage() {
   const immediateWorkspaceRefreshAccountRef = useRef<string | null>(null);
 
   const activeStrategies = useMemo(
-    () => strategies.filter((item) => item.status === "active" && item.engine_ready),
+    () => strategies.filter((item) => item.status === "active"),
     [strategies]
   );
   const currentPortfolios = useMemo(
@@ -253,7 +253,7 @@ export default function PaperTradingPage() {
             ? storedAccountId
           : accountItems[0]?.id || "");
       const preferredStrategy = strategyItems.find(
-        (item) => item.status === "active" && item.engine_ready
+        (item) => item.status === "active"
       );
 
       setAccounts(accountItems);

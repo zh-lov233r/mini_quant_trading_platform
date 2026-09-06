@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
@@ -18,31 +19,19 @@ except ModuleNotFoundError:
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-IDENTITY_UPDATE_SQL = """
-UPDATE eod_bars
-SET
-  fwd_factor = 1.0,
-  bwd_factor = 1.0,
-  open_fa = open_u,
-  high_fa = high_u,
-  low_fa = low_u,
-  close_fa = close_u,
-  open_ba = open_u,
-  high_ba = high_u,
-  low_ba = low_u,
-  close_ba = close_u
-WHERE
-  (%(start_date)s::date IS NULL OR dt_ny >= %(start_date)s::date)
-  AND (%(end_date)s::date IS NULL OR dt_ny <= %(end_date)s::date)
-  AND COALESCE(vendor, '') <> 'tushare';
+ACTION_INSTRUMENTS_SQL = """
+SELECT i.id FROM instruments i
+WHERE i.currency = 'USD' AND i.vendor_source <> 'tushare'
+  AND EXISTS (SELECT 1 FROM eod_bars b WHERE b.instrument_id=i.id)
+ORDER BY i.id;
 """
 
-ACTION_INSTRUMENTS_SQL = """
-SELECT DISTINCT ca.instrument_id
-FROM corporate_actions ca
-WHERE ca.action_type IN ('split', 'reverse_split', 'cash_dividend', 'stock_dividend')
-ORDER BY ca.instrument_id;
+STORED_ADJUSTMENTS_SQL = """
+SELECT dt_ny, fwd_factor, bwd_factor, open_fa, high_fa, low_fa, close_fa,
+       open_ba, high_ba, low_ba, close_ba
+FROM eod_bars WHERE instrument_id=%(instrument_id)s ORDER BY dt_ny
 """
+
 
 BARS_SQL = """
 SELECT dt_ny, open_u, high_u, low_u, close_u
@@ -145,12 +134,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--start-date",
         default=None,
-        help="Optional inclusive start date in YYYY-MM-DD format.",
+        help="Ingestion start date for audit context; corrections cover full history.",
     )
     parser.add_argument(
         "--end-date",
         default=None,
-        help="Optional inclusive end date in YYYY-MM-DD format.",
+        help="Ingestion end date for audit context; corrections cover full history.",
     )
     parser.add_argument(
         "--database-url",
@@ -175,11 +164,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional single instrument_id for targeted validation.",
     )
-    parser.add_argument(
-        "--skip-initialize",
-        action="store_true",
-        help="Skip the identity pass that sets default factors/prices on eod_bars.",
-    )
+    parser.add_argument("--dry-run", action="store_true", help="Count inconsistent adjusted rows without writing.")
     return parser.parse_args()
 
 
@@ -313,86 +298,56 @@ def _flush_stage(conn: psycopg.Connection, stage_rows: list[tuple]) -> None:
     conn.commit()
 
 
+def changed_adjustment_rows(expected: list[tuple], stored: dict[date, tuple]) -> list[tuple]:
+    def equal(left, right):
+        if left is None or right is None:
+            return left is right
+        return math.isclose(float(left), float(right), rel_tol=1e-12, abs_tol=1e-12)
+    return [row for row in expected if not all(
+        equal(left, right) for left, right in zip(row[2:], stored[row[1]])
+    )]
+
+
 def main() -> None:
     load_dotenv(REPO_ROOT / ".env")
     args = parse_args()
     if not args.database_url:
         raise SystemExit("Missing DATABASE_URL or SQLALCHEMY_DATABASE_URL")
-    require_market_data_maintenance_owner(args.database_url)
-
+    if not args.dry_run:
+        require_market_data_maintenance_owner(args.database_url)
+    if args.batch_rows < 1 or (args.instrument_limit is not None and args.instrument_limit < 1):
+        raise SystemExit("batch rows and instrument limit must be positive")
+    if args.start_date and args.end_date and date.fromisoformat(args.start_date) > date.fromisoformat(args.end_date):
+        raise SystemExit("start date must be on or before end date")
+    changed_instruments = changed_rows = 0
     with psycopg.connect(_psycopg_dsn(args.database_url)) as conn:
-        with conn.cursor() as cur:
-            cur.execute(CREATE_STAGE_SQL)
-        conn.commit()
-
-        if not args.skip_initialize:
-            print("Initializing default identity-adjusted prices on eod_bars...", flush=True)
-            with conn.cursor() as cur:
-                cur.execute(
-                    IDENTITY_UPDATE_SQL,
-                    {
-                        "start_date": args.start_date,
-                        "end_date": args.end_date,
-                    },
-                )
+        if args.dry_run:
+            conn.execute("SET TRANSACTION READ ONLY")
+        else:
+            conn.execute(CREATE_STAGE_SQL)
             conn.commit()
-            print("Identity initialization completed.", flush=True)
-
         instrument_ids = _load_action_instruments(conn)
         if args.instrument_id is not None:
-            # Targeted rebuilds should also work for instruments without any
-            # corporate actions so repaired raw OHLC values can refresh the
-            # identity-adjusted columns.
+            if args.instrument_id not in instrument_ids:
+                raise SystemExit("instrument must have US market data and cannot be Tushare-owned")
             instrument_ids = [args.instrument_id]
         elif args.instrument_limit is not None:
-            instrument_ids = instrument_ids[: args.instrument_limit]
-
-        total_instruments = len(instrument_ids)
-        print(f"Recomputing adjusted prices for {total_instruments} instruments...", flush=True)
-
-        staged: list[tuple] = []
-        processed_instruments = 0
-        updated_rows = 0
-
-        for instrument_id in instrument_ids:
+            instrument_ids = instrument_ids[:args.instrument_limit]
+        for index, instrument_id in enumerate(instrument_ids, 1):
+            # New/corrected actions change prices outside the ingestion window.
             bars = _fetch_bars(conn, instrument_id)
-            if not bars:
-                processed_instruments += 1
-                continue
-            actions = _fetch_actions(conn, instrument_id)
-            adjusted_rows = _compute_adjusted_rows(instrument_id, bars, actions)
-            if args.start_date is not None:
-                start_bound = date.fromisoformat(args.start_date)
-                adjusted_rows = [row for row in adjusted_rows if row[1] >= start_bound]
-            if args.end_date is not None:
-                end_bound = date.fromisoformat(args.end_date)
-                adjusted_rows = [row for row in adjusted_rows if row[1] <= end_bound]
-            staged.extend(adjusted_rows)
-            updated_rows += len(adjusted_rows)
-            processed_instruments += 1
-
-            if len(staged) >= args.batch_rows:
-                _flush_stage(conn, staged)
-                staged.clear()
-                print(
-                    f"Processed instruments={processed_instruments}/{total_instruments} "
-                    f"updated_rows={updated_rows}",
-                    flush=True,
-                )
-
-        if staged:
-            _flush_stage(conn, staged)
-            print(
-                f"Processed instruments={processed_instruments}/{total_instruments} "
-                f"updated_rows={updated_rows}",
-                flush=True,
-            )
-
-    print(
-        f"Adjustment backfill completed. instruments={processed_instruments} "
-        f"updated_rows={updated_rows}",
-        flush=True,
-    )
+            expected = _compute_adjusted_rows(instrument_id, bars, _fetch_actions(conn, instrument_id))
+            stored = {r[0]: r[1:] for r in conn.execute(STORED_ADJUSTMENTS_SQL, {"instrument_id": instrument_id})}
+            changed = changed_adjustment_rows(expected, stored)
+            if changed:
+                changed_instruments += 1
+                changed_rows += len(changed)
+                if not args.dry_run:
+                    for offset in range(0, len(changed), args.batch_rows):
+                        _flush_stage(conn, changed[offset:offset + args.batch_rows])
+            if index % 500 == 0:
+                print(f"Adjustment progress={index}/{len(instrument_ids)} changed_rows={changed_rows}", flush=True)
+        print(f"Adjustment audit complete: instruments={len(instrument_ids)} changed_instruments={changed_instruments} changed_rows={changed_rows} dry_run={args.dry_run}", flush=True)
 
 
 if __name__ == "__main__":

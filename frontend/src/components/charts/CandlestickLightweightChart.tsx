@@ -4,6 +4,7 @@ import {
   ColorType,
   createChart,
   HistogramSeries,
+  LineSeries,
 } from "lightweight-charts";
 import type {
   CandlestickData,
@@ -31,7 +32,12 @@ import { LifecycleOverlayPrimitive } from "@/components/charts/overlayPrimitive"
 import { SelectControl } from "@/components/workspace/SelectControl";
 import type { CandleBarOut } from "@/types/quote";
 
+import type { Indicator } from "@/types/signals";
+
 interface Props {
+  indicators?: Indicator[];
+  viewKey?: string;
+  resetKey?: string;
   bars: CandleBarOut[];
   markers?: ChartOverlayMarker[];
   gaps?: ChartGapOverlay[];
@@ -54,8 +60,13 @@ const EMPTY_GAPS: ChartGapOverlay[] = [];
 const EMPTY_ZONES: ChartZoneOverlay[] = [];
 const EMPTY_REGIMES: ChartRegimeOverlay[] = [];
 
+const EMPTY_INDICATORS: Indicator[] = [];
+
 export default function CandlestickLightweightChart({
   bars,
+  indicators = EMPTY_INDICATORS,
+  viewKey = "default",
+  resetKey = "default",
   markers = EMPTY_MARKERS,
   gaps = EMPTY_GAPS,
   zones = EMPTY_ZONES,
@@ -72,6 +83,7 @@ export default function CandlestickLightweightChart({
   const isZh = locale === "zh-CN";
   const containerRef = useRef<HTMLDivElement | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const previousViewRef = useRef<string | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<CandleApi | null>(null);
   const volumeRef = useRef<VolumeApi | null>(null);
@@ -122,6 +134,8 @@ export default function CandlestickLightweightChart({
   // new marker tone to fall back to an inline dot over a candle.
   const leaderMarkers = useMemo(() => buildLifecycleLeaderMarkers(markers), [markers]);
   const hasLeaderMarkers = leaderMarkers.length > 0;
+  const initialHeight = useRef(height);
+  const initialLeaders = useRef(hasLeaderMarkers);
   const markerById = useMemo(
     () => new Map(leaderMarkers.map((marker) => [marker.key, marker])),
     [leaderMarkers],
@@ -138,7 +152,7 @@ export default function CandlestickLightweightChart({
     if (!container) return;
     const chart = createChart(container, {
       autoSize: true,
-      height,
+      height: initialHeight.current,
       layout: {
         attributionLogo: true,
         background: { type: ColorType.Solid, color: "rgba(3, 7, 18, 0.96)" },
@@ -156,7 +170,7 @@ export default function CandlestickLightweightChart({
       },
       rightPriceScale: {
         borderColor: "rgba(71, 85, 105, 0.36)",
-        scaleMargins: hasLeaderMarkers
+        scaleMargins: initialLeaders.current
           ? { top: 0.24, bottom: 0.22 }
           : { top: 0.18, bottom: showVolume ? 0.08 : 0.12 },
       },
@@ -224,6 +238,10 @@ export default function CandlestickLightweightChart({
       const row = document.createElement("div");
       row.textContent = `O ${formatPrice(candleData.open, activeLocale)}  H ${formatPrice(candleData.high, activeLocale)}  L ${formatPrice(candleData.low, activeLocale)}  C ${formatPrice(candleData.close, activeLocale)}`;
       tooltip.appendChild(row);
+      const volumeRow = document.createElement("div");
+      const volumeData = volume ? param.seriesData.get(volume) : null;
+      volumeRow.textContent = `V ${volumeData && "value" in volumeData && typeof volumeData.value === "number" ? volumeData.value.toLocaleString(activeLocale) : activeLocale === "zh-CN" ? "缺失" : "Missing"}`;
+      tooltip.appendChild(volumeRow);
       if (regime && marker) {
         const regimeRow = document.createElement("div");
         regimeRow.style.marginTop = "4px";
@@ -262,7 +280,11 @@ export default function CandlestickLightweightChart({
       volumeRef.current = null;
       primitiveRef.current = null;
     };
-  }, [hasLeaderMarkers, height, showVolume]);
+  }, [showVolume]);
+
+  useEffect(() => {
+    chartRef.current?.applyOptions({rightPriceScale:{scaleMargins:hasLeaderMarkers?{top:0.24,bottom:0.22}:{top:0.18,bottom:showVolume?0.08:0.12}}});
+  }, [height,hasLeaderMarkers,showVolume]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -287,6 +309,7 @@ export default function CandlestickLightweightChart({
         priceFormatter: (value: number) => formatPrice(value, locale),
       },
     });
+    const visible = chart.timeScale().getVisibleRange();
     candle.setData(normalizedBars.map((bar) => ({
       time: bar.time,
       open: bar.open,
@@ -297,15 +320,33 @@ export default function CandlestickLightweightChart({
       borderColor: bar.borderColor,
       wickColor: bar.wickColor,
     })));
-    volumeRef.current?.setData(normalizedBars.map((bar) => ({
+    volumeRef.current?.setData(normalizedBars.filter(bar => bar.volume !== null).map((bar) => ({
       time: bar.time,
       value: bar.volume,
       color: bar.close === bar.open
         ? "rgba(251, 191, 36, 0.82)"
         : bar.close > bar.open ? "rgba(52, 211, 153, 0.78)" : "rgba(251, 113, 133, 0.78)",
     } as HistogramData<Time>)));
-    chart.timeScale().fitContent();
-  }, [locale, normalizedBars]);
+    const target = `${viewKey}:${resetKey}`;
+    if (previousViewRef.current !== target || !visible) chart.timeScale().fitContent();
+    else chart.timeScale().setVisibleRange(visible);
+    previousViewRef.current = target;
+  }, [locale, normalizedBars, viewKey, resetKey, height, hasLeaderMarkers, showVolume]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const units = Array.from(new Set(indicators.filter(i => i.pane !== "price").map(i => i.unit)));
+    const series = indicators.map(indicator => {
+      const pane = indicator.pane === "price" ? 0 : (showVolume ? 2 : 1) + units.indexOf(indicator.unit);
+      const line = chart.addSeries(LineSeries, { title: indicator.key, color: "#fbbf24", lineWidth: 1, priceLineVisible: false }, pane);
+      indicator.thresholds?.forEach(price => line.createPriceLine({price,color:"#94a3b8",lineWidth:1,lineStyle:2,axisLabelVisible:true,title:""}));
+      line.setData(indicator.values.filter(v => v.value !== null).map(v => ({ time: v.time, value: v.value! })));
+      if (pane > 0) chart.panes()[pane]?.setHeight(100);
+      return line;
+    });
+    return () => { if (chartRef.current === chart) [...series].reverse().forEach(line => chart.removeSeries(line)); };
+  }, [indicators, showVolume, height, hasLeaderMarkers]);
 
   useEffect(() => {
     const candle = candleRef.current;

@@ -35,19 +35,7 @@ const stagedRisk: GuidedFieldDefinition[] = [
   { key: "stage3TargetPct", path: "risk.stage_3_target_pct", kind: "percent", min: 1, max: 1, step: 1 },
 ];
 
-export const ENGINE_READY_TYPES: StrategyType[] = [
-  "trend",
-  "mean_reversion",
-  "momentum_breakout",
-  "island_reversal",
-  "double_bottom",
-  "head_shoulders_bottom",
-  "rounded_bottom",
-  "v_reversal",
-  "support_resistance",
-];
-
-export const STRATEGY_GUIDANCE: Record<Exclude<StrategyType, "custom">, StrategyGuidanceDefinition> = {
+export const STRATEGY_GUIDANCE: Record<StrategyType, StrategyGuidanceDefinition> = {
   trend: {
     signal: [
       ...commonSignal,

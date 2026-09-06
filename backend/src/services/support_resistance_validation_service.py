@@ -29,7 +29,6 @@ from src.services.market_data_maintenance_service import assert_market_data_subm
 from src.services.strategy_registry import (
     build_strategy_catalog,
     extract_description,
-    is_engine_ready,
 )
 from src.services.strategy_service import validate_strategy_params
 
@@ -196,8 +195,6 @@ def validate_effectiveness_study_request(
         "selection_mode": "point_in_time_liquid",
         "policy": policy,
     }
-    if not is_engine_ready("support_resistance", params):
-        raise ValueError("generated strategy is not engine-ready")
     proposal_hash = canonical_hash(payload.model_dump(mode="json", by_alias=True))
     params.setdefault("metadata", {})["research_origin"] = {
         "workflowRunId": payload.workflow_run_id,

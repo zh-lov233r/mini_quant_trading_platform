@@ -9,7 +9,6 @@ from src.models.tables import Strategy
 from src.services.strategy_registry import (
     extract_description,
     get_trend_engine_supported_windows,
-    is_engine_ready,
     json_signature,
     normalize_strategy_params,
 )
@@ -52,8 +51,6 @@ def validate_strategy_params(
     description: str | None,
 ) -> dict[str, Any]:
     normalized = normalize_strategy_params(strategy_type, params, description)
-    if not is_engine_ready(strategy_type, normalized):
-        raise ValueError(f"strategy type is not engine-ready: {strategy_type}")
     if strategy_type != "trend":
         return normalized
 
@@ -74,23 +71,6 @@ def validate_strategy_params(
             available = ", ".join(str(item) for item in windows) or "none"
             raise ValueError(f"unsupported {label} {kind.upper()}{window}; available windows: {available}")
     return normalized
-
-
-def normalize_creatable_strategy_params(
-    db: Session,
-    *,
-    strategy_type: str,
-    params: dict[str, Any],
-    description: str | None,
-) -> dict[str, Any]:
-    if strategy_type == "custom":
-        return normalize_strategy_params(strategy_type, params, description)
-    return validate_strategy_params(
-        db,
-        strategy_type=strategy_type,
-        params=params,
-        description=description,
-    )
 
 
 def _matches_create_request(
@@ -124,7 +104,7 @@ def create_strategy_version(
     status: str,
     idempotency_key: str | None,
 ) -> Strategy:
-    normalized = normalize_creatable_strategy_params(
+    normalized = validate_strategy_params(
         db,
         strategy_type=strategy_type,
         params=params,
@@ -220,7 +200,7 @@ def create_independent_strategy(
     description: str | None,
     idempotency_key: str | None,
 ) -> Strategy:
-    normalized = normalize_creatable_strategy_params(
+    normalized = validate_strategy_params(
         db,
         strategy_type=strategy_type,
         params=params,

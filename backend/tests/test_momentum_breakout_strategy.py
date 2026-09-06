@@ -9,7 +9,6 @@ from src.services.strategy_engine import FEATURE_SNAPSHOT_SQL, evaluate_native_s
 from src.services.strategy_registry import (
     MOMENTUM_BREAKOUT_DEFAULTS,
     build_strategy_catalog,
-    is_engine_ready,
     normalize_strategy_params,
     required_feature_keys,
 )
@@ -47,14 +46,13 @@ def _snapshot(symbol: str, trade_date: date, *, timestamp: datetime | None = Non
 
 
 class MomentumBreakoutStrategyTests(unittest.TestCase):
-    def test_catalog_registers_engine_ready_strategy_without_activation(self) -> None:
+    def test_catalog_registers_strategy_without_activation(self) -> None:
         catalog_item = next(
             item for item in build_strategy_catalog()
             if item["strategy_type"] == "momentum_breakout"
         )
         normalized = normalize_strategy_params("momentum_breakout", catalog_item["defaults"])
-        self.assertTrue(catalog_item["engine_ready"])
-        self.assertTrue(is_engine_ready("momentum_breakout", normalized))
+        self.assertNotIn("engine_ready", catalog_item)
         self.assertNotIn("status", catalog_item)
         self.assertEqual(
             ["open", "close", "sma_20", "ret_20d", "volume", "volume_sma_20", "atr_14"],

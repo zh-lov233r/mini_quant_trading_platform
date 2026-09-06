@@ -42,6 +42,9 @@ function mapConflictMessage(detail: string, path: string, locale: Locale): strin
 }
 
 function mapApiErrorMessage(status: number, detail: string, path: string): string {
+  if (status === 503 && detail.includes("signal_schema_missing")) {
+    return detectLocale() === "zh-CN" ? "信号中心数据库表尚未部署，请先完成数据库预检和授权建表。" : "Signal Center schema is not installed. Preflight and authorize schema installation first.";
+  }
   const normalizedDetail = detail.trim();
   const locale = detectLocale();
 

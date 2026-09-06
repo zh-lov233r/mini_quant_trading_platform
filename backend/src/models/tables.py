@@ -1072,3 +1072,140 @@ class PortfolioSnapshot(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     run = relationship("StrategyRun", back_populates="portfolio_snapshots")
+
+
+# Signal Center owns observations and assets independently of trading runs.
+class SignalScanPlan(Base):
+    __tablename__ = "signal_scan_plans"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(128), nullable=False)
+    market = Column(String(2), nullable=False)
+    basket_id = Column(UUID(as_uuid=True), nullable=False)
+    strategies = Column(JSON_VARIANT, nullable=False)
+    language = Column(String(5), nullable=False, default="zh-CN")
+    recipients = Column(JSON_VARIANT, nullable=False, default=list)
+    retention_sessions = Column(Integer, nullable=False, default=3)
+    enabled = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime_utc())
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime_utc())
+    __table_args__ = (CheckConstraint("market IN ('US','CN')"), CheckConstraint("retention_sessions > 0"))
+
+
+def datetime_utc():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc)
+
+
+class SignalJobColumns:
+    status = Column(String(24), nullable=False, default="queued", index=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    claimed_by = Column(String(128))
+    lease_expires_at = Column(DateTime(timezone=True))
+    error = Column(Text)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime_utc)
+    finished_at = Column(DateTime(timezone=True))
+
+
+class SignalScanRun(SignalJobColumns, Base):
+    __tablename__ = "signal_scan_runs"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    plan_id = Column(UUID(as_uuid=True))
+    request_key = Column(String(128), nullable=False, unique=True)
+    name = Column(String(128), nullable=False)
+    market = Column(String(2), nullable=False)
+    session_date = Column(Date, nullable=False, index=True)
+    manifest = Column(JSON_VARIANT, nullable=False)
+    coverage = Column(JSON_VARIANT, nullable=False, default=dict)
+    assets = Column(JSON_VARIANT, nullable=False, default=dict)
+    purged_at = Column(DateTime(timezone=True))
+    __table_args__ = (UniqueConstraint("plan_id", "session_date", name="uq_signal_schedule_session"),)
+
+
+class SignalScanStrategyRun(Base):
+    __tablename__ = "signal_scan_strategy_runs"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    scan_id = Column(UUID(as_uuid=True), ForeignKey("signal_scan_runs.id"), nullable=False, index=True)
+    strategy_id = Column(UUID(as_uuid=True), nullable=False)
+    strategy_type = Column(String(32), nullable=False)
+    version = Column(Integer, nullable=False)
+    params_hash = Column(String(64), nullable=False)
+    algorithm_revision = Column(String(64), nullable=False)
+    runtime = Column(JSON_VARIANT, nullable=False)
+    status = Column(String(24), nullable=False, default="queued")
+    coverage = Column(JSON_VARIANT, nullable=False, default=dict)
+    error = Column(Text)
+    __table_args__ = (UniqueConstraint("scan_id", "strategy_id", name="uq_signal_strategy_instance"),)
+
+
+class SignalObservation(Base):
+    __tablename__ = "signal_observations"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    scan_id = Column(UUID(as_uuid=True), ForeignKey("signal_scan_runs.id"), nullable=False, index=True)
+    strategy_run_id = Column(UUID(as_uuid=True), ForeignKey("signal_scan_strategy_runs.id"), nullable=False, index=True)
+    instrument_id = Column(BigInteger, nullable=False, index=True)
+    symbol_as_of = Column(String(64), nullable=False)
+    session_date = Column(Date, nullable=False)
+    confirmed_at = Column(DateTime(timezone=True))
+    event_type = Column(String(128), nullable=False)
+    event_kind = Column(String(16), nullable=False)
+    direction = Column(String(16))
+    event_key = Column(String(64), nullable=False)
+    passes_signal_filters = Column(Boolean, nullable=False)
+    strength = Column(JSON_VARIANT)
+    strategy_rank = Column(Integer)
+    evidence = Column(JSON_VARIANT, nullable=False)
+    snapshot_ref = Column(String(64), nullable=False)
+    __table_args__ = (UniqueConstraint("strategy_run_id", "event_key", name="uq_signal_observation_event"),)
+
+
+class SignalReport(SignalJobColumns, Base):
+    __tablename__ = "signal_reports"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    scan_id = Column(UUID(as_uuid=True), ForeignKey("signal_scan_runs.id"), nullable=False, index=True)
+    request_key = Column(String(128), nullable=False, unique=True)
+    language = Column(String(5), nullable=False)
+    automatic = Column(Boolean, nullable=False, default=False)
+    document = Column(JSON_VARIANT)
+    assets = Column(JSON_VARIANT, nullable=False, default=dict)
+    render_errors = Column(JSON_VARIANT, nullable=False, default=dict)
+    published_at = Column(DateTime(timezone=True))
+    expires_at = Column(DateTime(timezone=True))
+    retention_sessions = Column(Integer)
+    retention_reason = Column(String(128))
+    expired_at = Column(DateTime(timezone=True))
+    summary = Column(JSON_VARIANT, nullable=False, default=dict)
+
+
+class SignalReportRenderJob(SignalJobColumns, Base):
+    __tablename__ = "signal_report_render_jobs"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    report_id = Column(UUID(as_uuid=True), ForeignKey("signal_reports.id"), nullable=False, unique=True)
+
+
+class SignalReportDelivery(SignalJobColumns, Base):
+    __tablename__ = "signal_report_deliveries"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    report_id = Column(UUID(as_uuid=True), ForeignKey("signal_reports.id"), nullable=False, index=True)
+    recipient = Column(String(320), nullable=False)
+    __table_args__ = (UniqueConstraint("report_id", "recipient", name="uq_signal_report_recipient"),)
+
+
+class SignalMarketSession(Base):
+    __tablename__ = "signal_market_sessions"
+    market = Column(String(2), primary_key=True)
+    session_date = Column(Date, primary_key=True)
+    is_open = Column(Boolean, nullable=False)
+    opens_at = Column(DateTime(timezone=True))
+    closes_at = Column(DateTime(timezone=True))
+    source = Column(String(64), nullable=False)
+    fetched_at = Column(DateTime(timezone=True), nullable=False, default=datetime_utc)
+
+
+class SignalDataReady(Base):
+    __tablename__ = "signal_data_ready"
+    market = Column(String(2), primary_key=True)
+    session_date = Column(Date, primary_key=True)
+    version = Column(String(64), nullable=False)
+    coverage = Column(JSON_VARIANT, nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=False, default=datetime_utc)
+    valid = Column(Boolean, nullable=False, default=True)

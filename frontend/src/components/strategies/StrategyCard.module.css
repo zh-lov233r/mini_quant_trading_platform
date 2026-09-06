@@ -1,0 +1,41 @@
+.card {
+  --strategy-card-accent: #5eead4;
+  --strategy-card-accent-rgb: 94,234,212;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(var(--strategy-card-accent-rgb),.36);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at top right,rgba(var(--strategy-card-accent-rgb),.16),transparent 34%),
+    linear-gradient(140deg,rgba(8,15,24,.96),rgba(15,23,42,.9));
+  color: #e2e8f0;
+  font-family: "Avenir Next","Segoe UI","Helvetica Neue",sans-serif;
+}
+.card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: var(--strategy-card-accent);
+}
+.card.library { display: flex; flex-direction: column; height: 100%; padding: 22px; border-radius: 22px; }
+.card.compact { display: grid; grid-template-rows: auto 1fr auto; gap: 10px; min-width: 0; min-height: 112px; padding: 16px; border-radius: 22px; cursor: pointer; }
+.interactive { cursor: pointer; }
+.selected {
+  border-color: rgba(var(--strategy-card-accent-rgb),.78);
+  background:
+    radial-gradient(circle at top right,rgba(var(--strategy-card-accent-rgb),.27),transparent 42%),
+    linear-gradient(140deg,rgba(var(--strategy-card-accent-rgb),.11),rgba(15,23,42,.94));
+  box-shadow: 0 0 0 1px rgba(var(--strategy-card-accent-rgb),.2),0 14px 30px rgba(2,6,23,.3);
+}
+.disabled { cursor: not-allowed; filter: saturate(.55); opacity: .5; }
+.categoryRow { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.category { display: inline-flex; align-items: center; gap: 7px; color: var(--strategy-card-accent); font-size: 16px; font-weight: 800; letter-spacing: .01em; }
+.dot { width: 9px; height: 9px; border-radius: 999px; background: var(--strategy-card-accent); box-shadow: 0 0 0 4px rgba(var(--strategy-card-accent-rgb),.13); }
+.technical { color: rgba(148,163,184,.92); font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size: 12px; overflow-wrap: anywhere; }
+.title { margin: 0; color: #f1f5f9; line-height: 1.3; overflow-wrap: anywhere; }
+.compact .title { align-self: center; font-size: 16px; }
+.status { padding-right: 28px; color: rgba(148,163,184,.9); font-size: 12px; }
+.checkbox { position: absolute; right: 16px; bottom: 15px; width: 17px; height: 17px; margin: 0; accent-color: var(--strategy-card-accent); color-scheme: dark; }
+.compact:has(.checkbox:focus-visible) { outline: 2px solid var(--strategy-card-accent); outline-offset: 3px; }
+@media(max-width:767px) { .compact { min-height: 104px; } }

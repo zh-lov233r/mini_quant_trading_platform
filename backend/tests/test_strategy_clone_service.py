@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.api.strategies import StrategyCloneCreate, clone_strategy  # noqa: E402
+from src.api.strategies import StrategyCloneCreate, StrategyConfigUpdate, clone_strategy, update_strategy_config  # noqa: E402
 from src.models.tables import Base, Strategy  # noqa: E402
 from src.services.strategy_registry import MEAN_REVERSION_DEFAULTS  # noqa: E402
 from src.services.strategy_service import (  # noqa: E402
@@ -124,28 +124,31 @@ class StrategyCloneServiceTests(unittest.TestCase):
                 idempotency_key="reused-key",
             )
 
-    def test_custom_create_and_clone_remain_stored_only(self) -> None:
-        custom = create_strategy_version(
-            self.db,
-            name="Custom Source",
-            strategy_type="custom",
-            params={"rules": [{"kind": "note"}]},
-            description="Stored only",
-            status="draft",
-            idempotency_key="custom-source",
-        )
-        clone = create_independent_strategy(
-            self.db,
-            name="Custom Copy",
-            strategy_type=custom.strategy_type,
-            params=copy.deepcopy(custom.params),
-            description="Stored only copy",
-            idempotency_key="custom-copy",
-        )
+    def test_config_update_uses_validation_and_preserves_lifecycle(self) -> None:
+        result = update_strategy_config(self.source.id, StrategyConfigUpdate(
+            params={"signal": {"lookback_window": 10}}, description="Updated",
+        ), db=self.db)
+        self.assertEqual(result.status, "active")
+        self.assertEqual(result.version, 7)
+        self.assertEqual(result.params["signal"]["lookback_window"], 10)
+        self.assertEqual(result.description, "Updated")
+        with self.assertRaises(HTTPException) as invalid:
+            update_strategy_config(self.source.id, StrategyConfigUpdate(
+                params={"risk": {"max_positions": 0}},
+            ), db=self.db)
+        self.assertEqual(invalid.exception.status_code, 422)
+        self.assertEqual(self.source.params, result.params)
 
-        self.assertEqual(clone.strategy_type, "custom")
-        self.assertEqual(clone.status, "draft")
-        self.assertEqual(clone.params["rules"], [{"kind": "note"}])
+    def test_custom_create_and_clone_are_rejected_without_writes(self) -> None:
+        for create, extra in (
+            (create_strategy_version, {"status": "draft"}),
+            (create_independent_strategy, {}),
+        ):
+            with self.subTest(entrypoint=create.__name__):
+                with self.assertRaisesRegex(ValueError, "unsupported strategy_type: custom"):
+                    create(self.db, name="Unsupported", strategy_type="custom", params={},
+                           description="", idempotency_key="unsupported", **extra)
+        self.assertEqual(list(self.db.scalars(select(Strategy))), [self.source])
 
     def test_clone_api_returns_not_found_and_structured_name_conflict(self) -> None:
         with self.assertRaises(HTTPException) as missing:

@@ -89,7 +89,7 @@ NEXT_PUBLIC_AGENTOPS_PROJECT_ID=<project-id>
 
 引擎大类工作流支持 `support_resistance`，且不会替换用户选定类型。Planner 可以搜索已有的标量模式开关和数值型 `signal.*` / `risk.*` 叶子；三个入场模式全部关闭的候选会被 Quant 拒绝。这不会新增 portfolio、scheduler 或订单权限。
 
-同一工作流也把 `head_shoulders_bottom`、`rounded_bottom` 和 `v_reversal` 作为锁定的 engine-ready 大类。Planner 可以研究现有形态阈值和三阶段目标，但 Quant 会拒绝非严格递增或第三阶段不等于 100% 的目标组合；生成策略仍固定为 Draft。
+同一工作流也把 `head_shoulders_bottom`、`rounded_bottom` 和 `v_reversal` 作为锁定的已注册大类。Planner 可以研究现有形态阈值和三阶段目标，但 Quant 会拒绝非严格递增或第三阶段不等于 100% 的目标组合；生成策略仍固定为 Draft。
 
 workflow 处于 `waiting_external` 时，AgentOps 会定期向认证后的实验用量接口发送累计用量。Quant 保存用量并重新检查全部停止条件。触发停止后会记录终止证据、取消排队 trial，并允许运行中的同步工作安全结束。具体字段和语义见[研究实验](research-experiments.zh-CN.md)。
 
@@ -102,5 +102,7 @@ workflow 处于 `waiting_external` 时，AgentOps 会定期向认证后的实验
 - 排他行情维护门禁会拒绝新研究和推广，等待整个实验排空，失效派生缓存后才允许写源表；维护失败后持续阻塞，直到重跑成功。
 - 取消会阻止领取新 trial；运行中的同步回测到达安全边界后进入 `cancelled`。
 - 已因策略停止或取消的实验不会在重启后恢复排队工作。
-- 新代码策略会停留在 Draft PR，直到被审查、合并、重新构建进原生 wheel、部署并出现在 engine-ready catalog 中。
+- 新代码策略会停留在 Draft PR，直到被审查、合并、重新构建进原生 wheel、部署并出现在已注册catalog 中。
 - 稳健性报告是研究证据，不是盈利或实盘安全证明。
+
+目录、策略列表/详情、runtime、校验及 Dashboard 响应不再包含 `engine_ready`，共享类型契约拒绝 `custom`。AgentOps 等消费者需移除就绪筛选，改用目录成员与参数校验结果。`POST /api/strategies/validate` 返回 `valid`、`strategy_type`、`normalized_params`；本次不实现 AgentOps 解耦或原生代码自动发布。

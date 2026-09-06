@@ -248,6 +248,9 @@ std::optional<PatternDecision> evaluate_pattern(
     const PatternPositionView& position
 );
 
+std::optional<PatternDecision> observe_pattern(const PatternConfig& config, const std::string& symbol,
+    const PatternState& state, const PatternPositionView* position = nullptr);
+
 std::string pattern_setup_json(const PatternSetup& setup);
 std::string pattern_strength_inputs_json(const PatternObject& inputs);
 std::string pattern_metadata_json(

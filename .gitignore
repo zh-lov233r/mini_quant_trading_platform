@@ -37,3 +37,9 @@ frontend/.next-codex-*/
 data/massive/
 data/backtest_prepared/
 data/reports/
+
+# Isolated frontend validation outputs
+frontend/.next-signal-*/
+
+# Immutable user report assets
+data/signal-reports/

@@ -30,6 +30,7 @@ export const enUSMessages: MessageSchema = {
     requestFailed: "Request failed with status {status}",
   },
   nav: {
+    signals: "Signal Center",
     dashboard: "Dashboard",
     strategies: "Strategies",
     stockBaskets: "Stock Baskets",
@@ -113,7 +114,7 @@ export const enUSMessages: MessageSchema = {
       },
       runnableStrategies: {
         label: "Runnable Strategies",
-        hint: "Active, engine-ready strategies that can be consumed directly by paper trading",
+        hint: "Active strategies that can be consumed directly by paper trading",
       },
     },
     accounts: {
@@ -239,7 +240,7 @@ export const enUSMessages: MessageSchema = {
       multiSubtitle:
         "This entry point runs strategies in the order of active allocations under the same portfolio on one Alpaca account.",
       strategy: "Strategy",
-      strategyDescription: "Select an active, engine-ready strategy",
+      strategyDescription: "Select an active strategy",
       strategyPlaceholder: "Select a strategy",
       tradeDate: "Trade Date",
       singleTradeDateDescription:

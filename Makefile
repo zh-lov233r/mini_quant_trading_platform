@@ -4,6 +4,7 @@ ROOT_DIR := $(CURDIR)
 BACKEND_DIR := $(ROOT_DIR)/backend
 FRONTEND_DIR := $(ROOT_DIR)/frontend
 PYTHON := $(ROOT_DIR)/.venv/bin/python
+SUPERVISE_SIGNAL_WORKER = while true; do (cd "$(BACKEND_DIR)" && PAPER_TRADING_SCHEDULER_ENABLED=false PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false "$(PYTHON)" -m src.workers.signal_worker); sleep 2; done
 SUPERVISE_BACKTEST_MANAGER = while true; do (cd "$(BACKEND_DIR)" && PAPER_TRADING_SCHEDULER_ENABLED=false PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false "$(PYTHON)" -m src.workers.backtest_worker_manager $(BACKTEST_WORKER_MANAGER_ARGS)); exit_code=$$?; echo "Backtest worker manager exited (code $$exit_code); restarting in 2 seconds." >&2; sleep 2; done
 
 .PHONY: help dev dev-agent-all dev-agent-safe dev-backend dev-frontend backtest-worker backtest-worker-manager benchmark-backtests backfill-daily import-a-share check-data explain-feature-query docker-build docker-up docker-down docker-logs
@@ -15,6 +16,9 @@ help:
 	@echo "  make dev-agent-safe Start Quant for AgentOps with all paper order automation disabled"
 	@echo "  make dev-backend  Start FastAPI backend only (partial stack; no automatic backtest worker)"
 	@echo "  make dev-frontend Start Next.js frontend only (partial stack)"
+	@echo "  make signal-worker Run the independent Signal Center worker"
+	@echo "  make signal-schema Preflight additive signal tables (SIGNAL_SCHEMA_ARGS=--apply after authorization)"
+	@echo "  make signal-cleanup Preview expired report cleanup (SIGNAL_CLEANUP_ARGS=--apply to delete)"
 	@echo "  make backtest-worker Run the independent durable backtest worker"
 	@echo "  make backtest-worker-manager Run and supervise the manager (inherits BACKTEST_WORKER_CONCURRENCY and BACKTEST_INTRA_RUN_THREADS)"
 	@echo "  make benchmark-backtests Plan or run the controlled benchmark funnel (BENCHMARK_ARGS='plan')"
@@ -30,6 +34,7 @@ help:
 dev:
 	@trap 'kill 0' INT TERM EXIT; \
 		$(SUPERVISE_BACKTEST_MANAGER) & \
+		$(SUPERVISE_SIGNAL_WORKER) & \
 		cd "$(BACKEND_DIR)" && PAPER_TRADING_SCHEDULER_ENABLED=false PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false "$(PYTHON)" -m uvicorn src.main:app --reload --port 8000 & \
 		cd "$(FRONTEND_DIR)" && npm run dev & \
 		wait
@@ -40,8 +45,9 @@ dev-agent-all:
 dev-agent-safe:
 	@test -n "$(QUANT_AGENT_SERVICE_TOKEN)" || { echo "QUANT_AGENT_SERVICE_TOKEN is required"; exit 1; }
 	@test -n "$(AGENTOPS_PROJECT_ID)" || { echo "AGENTOPS_PROJECT_ID is required"; exit 1; }
-	@trap 'kill 0' INT TERM EXIT; \
+	@export SIGNAL_SCAN_SCHEDULER_ENABLED=false SIGNAL_REPORT_DELIVERY_ENABLED=false SIGNAL_REPORT_RETENTION_ENABLED=false; trap 'kill 0' INT TERM EXIT; \
 		$(SUPERVISE_BACKTEST_MANAGER) & \
+		$(SUPERVISE_SIGNAL_WORKER) & \
 		cd "$(BACKEND_DIR)" && QUANT_AGENT_INTEGRATION_ENABLED=true QUANT_AGENT_SERVICE_TOKEN="$(QUANT_AGENT_SERVICE_TOKEN)" RESEARCH_WORKER_ENABLED=true PAPER_TRADING_SCHEDULER_ENABLED=false PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS=false "$(PYTHON)" -m uvicorn src.main:app --reload --port 8000 & \
 		cd "$(FRONTEND_DIR)" && NEXT_PUBLIC_AGENTOPS_API_BASE_URL=http://localhost:8100 NEXT_PUBLIC_AGENTOPS_PROJECT_ID="$(AGENTOPS_PROJECT_ID)" npm run dev & \
 		wait
@@ -84,3 +90,11 @@ docker-down:
 
 docker-logs:
 	@docker compose --env-file .env.docker logs -f --tail=100
+
+.PHONY: signal-worker signal-schema signal-cleanup
+signal-worker:
+	@$(SUPERVISE_SIGNAL_WORKER)
+signal-schema:
+	@"$(PYTHON)" backend/utils/signal_center_schema.py $(SIGNAL_SCHEMA_ARGS)
+signal-cleanup:
+	@"$(PYTHON)" backend/utils/cleanup_signal_reports.py $(SIGNAL_CLEANUP_ARGS)

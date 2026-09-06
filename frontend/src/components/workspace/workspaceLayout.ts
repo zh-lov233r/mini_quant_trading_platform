@@ -2,6 +2,7 @@ export const SIDEBAR_STORAGE_KEY = "quant.workspace.sidebar.v1";
 export const DEFAULT_VIRTUALIZE_ABOVE = 200;
 
 export type WorkspaceNavKey =
+  | "signals"
   | "dashboard"
   | "strategies"
   | "stockBaskets"
@@ -17,6 +18,7 @@ export interface WorkspaceNavItem {
 
 export const WORKSPACE_NAV_ITEMS: WorkspaceNavItem[] = [
   { href: "/dashboard", key: "dashboard" },
+  { href: "/signals", key: "signals" },
   { href: "/strategies", key: "strategies" },
   { href: "/stock-baskets", key: "stockBaskets" },
   { href: "/backtests", key: "backtests" },

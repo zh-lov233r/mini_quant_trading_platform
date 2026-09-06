@@ -427,7 +427,6 @@ class BacktestPerformanceComponentTests(unittest.TestCase):
                     "strategy_id": "strategy-id",
                     "strategy_type": strategy_type,
                     "params": normalize_strategy_params(strategy_type, {}),
-                    "engine_ready": True,
                 }
                 prepared = {
                     symbol: {**snapshot, "ts": ts, "asset_type": "CS"}

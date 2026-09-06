@@ -396,7 +396,7 @@ export default function StrategyDetailPage() {
           {strategy ? (
             <WorkspaceDialog triggerLabel={isZh ? "策略摘要" : "Strategy Summary"} title={isZh ? "策略上下文" : "Strategy Context"}>
               <ContextStack>
-                <ContextGroup title={strategy.name}><ContextStats><ContextStat label={isZh ? "类型" : "Type"} value={strategy.strategy_type} /><ContextStat label={isZh ? "版本" : "Version"} value={`v${strategy.version}`} /><ContextStat label={isZh ? "状态" : "Status"} value={strategy.status} /><ContextStat label="Engine ready" value={strategy.engine_ready ? (isZh ? "是" : "Yes") : (isZh ? "否" : "No")} /><ContextStat label={isZh ? "近期回测" : "Recent runs"} value={recentRuns.length} /></ContextStats></ContextGroup>
+                <ContextGroup title={strategy.name}><ContextStats><ContextStat label={isZh ? "类型" : "Type"} value={strategy.strategy_type} /><ContextStat label={isZh ? "版本" : "Version"} value={`v${strategy.version}`} /><ContextStat label={isZh ? "状态" : "Status"} value={strategy.status} /><ContextStat label={isZh ? "近期回测" : "Recent runs"} value={recentRuns.length} /></ContextStats></ContextGroup>
                 <ContextGroup title={isZh ? "运行时" : "Runtime"}><ContextNote>{runtime ? jsonSummary(runtime, locale) : (isZh ? "运行时信息尚不可用。" : "Runtime information is unavailable.")}</ContextNote></ContextGroup>
                 <ContextGroup title={isZh ? "快速入口" : "Quick Links"}><ContextLinks><ContextLink href={`/strategies/${encodeURIComponent(strategy.id)}/edit`}>{isZh ? "编辑参数" : "Edit parameters"}</ContextLink><ContextLink href={`/strategies/new?cloneFrom=${encodeURIComponent(strategy.id)}`}>{isZh ? "基于此策略新建" : "Create from this strategy"}</ContextLink><ContextLink href={`/backtests?strategyId=${encodeURIComponent(strategy.id)}`}>{isZh ? "使用此策略回测" : "Backtest this strategy"}</ContextLink></ContextLinks></ContextGroup>
               </ContextStack>
@@ -504,9 +504,6 @@ export default function StrategyDetailPage() {
               <div className={responsiveGridStyles.strategyOverview}>
                 <div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-                    <Badge tone={strategy.engine_ready ? "success" : "warning"}>
-                      {strategy.engine_ready ? "engine-ready" : "stored-only"}
-                    </Badge>
                     <Badge>{strategy.status}</Badge>
                     <Badge tone="info">{getTypeLabel(strategy.strategy_type, catalog)}</Badge>
                   </div>
@@ -560,25 +557,11 @@ export default function StrategyDetailPage() {
                     </div>
                     <div style={{ color: "rgba(148, 163, 184, 0.88)", lineHeight: 1.6 }}>
                       {isZh
-                        ? "这块不是后端校验的替代，而是让你在前端一眼看懂这个策略是否已具备进入引擎的条件。"
-                        : "This is not a replacement for backend validation. It is a fast read on whether the strategy is ready for the engine."}
+                        ? "执行时仍会检查参数、行情数据和交易权限。"
+                        : "Execution still checks parameters, market data, and trading permissions."}
                     </div>
                   </div>
-                  <div
-                    style={{
-                      padding: 14,
-                      borderRadius: 18,
-                      background: strategy.engine_ready
-                        ? "rgba(20, 83, 45, 0.28)"
-                        : "rgba(120, 53, 15, 0.28)",
-                      border: strategy.engine_ready
-                        ? "1px solid rgba(74, 222, 128, 0.22)"
-                        : "1px solid rgba(251, 191, 36, 0.2)",
-                      color: strategy.engine_ready ? "#bbf7d0" : "#fde68a",
-                    }}
-                  >
-                    {isZh ? "引擎可执行" : "Engine Ready"}: {strategy.engine_ready ? (isZh ? "是" : "Yes") : isZh ? "否" : "No"}
-                  </div>
+
                   <div
                     style={{
                       padding: 14,

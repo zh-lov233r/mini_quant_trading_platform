@@ -7,6 +7,7 @@ This index contains the maintained documentation for developers and local operat
 ## Start Here
 
 - [Project README](../README.md): capabilities, setup, commands, and the main UI and API surfaces.
+- [Signal Center: manual scans, daily reports, immutable charts and operations](signal-center.md)
 - [System architecture](architecture.md): subsystem boundaries, data flow, execution timing, and safety invariants.
 - [Research experiments](research-experiments.md): experiment inputs, trial lifecycle, stop policies, reports, and recovery.
 - [Backtest performance and worker operations](backtest-performance.md): shared native-kernel boundaries, typed COPY persistence, durable jobs, benchmark gates, and recovery.

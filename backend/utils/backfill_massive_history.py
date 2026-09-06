@@ -190,7 +190,7 @@ def main() -> None:
         flush=True,
     )
 
-    maintenance = MaintenanceWindow(database_url)
+    maintenance = MaintenanceWindow(database_url, market="US")
     maintenance.start()
     try:
         with psycopg.connect(database_url) as conn:

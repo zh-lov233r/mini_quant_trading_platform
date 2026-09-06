@@ -14,7 +14,6 @@ const CURRENT_STRATEGY_TYPES = new Set<StrategyType>([
   "rounded_bottom",
   "v_reversal",
   "support_resistance",
-  "custom",
 ]);
 
 export interface StrategyCloneDraft {
@@ -40,7 +39,7 @@ export function buildStrategyCloneDraft(source: StrategyOut): StrategyCloneDraft
     throw new Error(`unsupported strategy type: ${source.strategy_type}`);
   }
 
-  const params = cloneRecord(source.params as Record<string, unknown>);
+  const params = cloneRecord({ ...source.params });
   const metadataDescription = getPathValue(params, "metadata.description");
   params.universe = { symbols: [], selection_mode: "all_common_stock" };
   return {

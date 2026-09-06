@@ -1,11 +1,33 @@
 from __future__ import annotations
 
 import json
+import time
+import asyncio
+import aiohttp
 from datetime import date, datetime, timezone
 from urllib import error, parse, request
 
 
 MASSIVE_API_BASE = "https://api.massive.com"
+MAX_FETCH_ATTEMPTS = 5
+RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
+
+
+async def fetch_async_json(session, url: str, params: dict | None) -> dict:
+    for attempt in range(MAX_FETCH_ATTEMPTS):
+        try:
+            async with session.get(url, params=params, timeout=180) as response:
+                if response.status == 200:
+                    return await response.json()
+                if response.status not in RETRYABLE_HTTP_STATUSES:
+                    raise RuntimeError(f"Massive HTTP {response.status}") from None
+                failure = f"HTTP {response.status}"
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            failure = type(exc).__name__
+        if attempt + 1 == MAX_FETCH_ATTEMPTS:
+            raise RuntimeError(f"Massive request failed after {MAX_FETCH_ATTEMPTS} attempts ({failure})") from None
+        await asyncio.sleep(2 ** attempt)
+    raise AssertionError("unreachable")
 
 
 def normalize_dsn(url: str) -> str:
@@ -36,16 +58,22 @@ def fetch_json(
         },
         method="GET",
     )
-    try:
-        with request.urlopen(req, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except error.HTTPError as exc:
-        if exc.code == 404:
-            return {}
-        body = exc.read().decode("utf-8", errors="replace")
-        # Do not include the request URL: paginated vendor URLs may contain
-        # credentials or opaque cursors that should stay out of logs.
-        raise RuntimeError(f"Massive HTTP {exc.code} {exc.reason}: {body[:500]}") from exc
+    for attempt in range(MAX_FETCH_ATTEMPTS):
+        try:
+            with request.urlopen(req, timeout=timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except error.HTTPError as exc:
+            if exc.code == 404:
+                return {}
+            if exc.code not in RETRYABLE_HTTP_STATUSES:
+                raise RuntimeError(f"Massive HTTP {exc.code}") from None
+            failure = f"HTTP {exc.code}"
+        except (error.URLError, TimeoutError, ConnectionError) as exc:
+            failure = type(exc).__name__
+        if attempt + 1 == MAX_FETCH_ATTEMPTS:
+            raise RuntimeError(f"Massive request failed after {MAX_FETCH_ATTEMPTS} attempts ({failure})") from None
+        time.sleep(2 ** attempt)
+    raise AssertionError("unreachable")
 
 
 def iter_results(

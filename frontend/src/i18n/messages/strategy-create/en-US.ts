@@ -54,11 +54,6 @@ export const strategyCreateEnUS = {
     loading: "Loading the strategy catalog and database feature support…",
     failed: "Strategy templates could not be loaded, so manual creation is temporarily unavailable.",
     retry: "Retry",
-    engineReady: "Engine Ready",
-    storedOnly: "Stored Only",
-    customTitle: "Custom JSON (Advanced)",
-    customDescription: "Stores rules or a DSL but is not executed by the current engine. Prefer Agent new-algorithm research for a new handler.",
-    customAction: "Choose Custom JSON",
     execution: "Signals form at the daily close and fill at the next valid session open",
   },
   basics: {
@@ -91,12 +86,6 @@ export const strategyCreateEnUS = {
     rebalance: "Rebalance",
     rebalanceValue: "Catalog default: {value}",
   },
-  custom: {
-    title: "Custom JSON",
-    subtitle: "This stores structured rules only. It does not accept executable code and will not be engine-ready.",
-    label: "Strategy Parameters JSON",
-    invalid: "The JSON is invalid. Fix it before continuing.",
-  },
   review: {
     title: "Review And Validate",
     subtitle: "Run read-only backend normalization first. Saving is enabled only after validation succeeds.",
@@ -106,7 +95,6 @@ export const strategyCreateEnUS = {
     executionValue: "Day-T close signal → next valid session open fill",
     validationPending: "Not validated yet. Nothing will be written to the strategy library.",
     validationPassed: "Validation passed. The backend returned normalized parameters and this strategy can be saved as Draft.",
-    customValidationPassed: "JSON structure validation passed. This definition can only be saved as a stored-only Draft and cannot enter the backtest or execution engine.",
     validationFailed: "Validation failed. Return to the relevant step and correct the input.",
     normalized: "View Backend-Normalized Parameters",
     payload: "View Submission Parameters",
@@ -149,7 +137,6 @@ export const strategyCreateEnUS = {
     rounded_bottom: { title: "Rounded Bottom", summary: "Uses a log-price quadratic fit and higher right-side pullbacks to find bowl-shaped bases.", suitable: "Best suited to long-forming bottoms that strengthen gradually on the right side.", data: "OHLCV, quadratic fit, Pivots" },
     v_reversal: { title: "V Reversal", summary: "Finds a high-volume pivot, continuation, and breakout retest after a sharp decline.", suitable: "Best suited to fast reversals with strict price-and-volume confirmation.", data: "OHLCV, ATR, 60-day decline" },
     support_resistance: { title: "Support / Resistance Zones", summary: "Uses confirmed Pivots and ATR clustering to trade qualifying bounces from frozen support.", suitable: "Best suited to causal, phase-isolated zone detection.", data: "OHLCV, ATR, ADV20, historical window" },
-    custom: { title: "Custom JSON", summary: "Stores rules or a DSL without an execution handler.", suitable: "Use for structured storage; use Agent research for a new algorithm.", data: "Defined by the custom payload" },
   },
   fields: {
     previousBodyAtrMin: { label: "Previous bearish body / ATR", hint: "At least 0.5 ATR14 by default." },

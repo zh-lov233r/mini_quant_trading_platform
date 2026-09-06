@@ -29,6 +29,7 @@ export const zhCNMessages = {
     requestFailed: "{status} 请求失败",
   },
   nav: {
+    signals: "信号中心",
     dashboard: "总览",
     strategies: "策略库",
     stockBaskets: "股票池",
@@ -112,7 +113,7 @@ export const zhCNMessages = {
       },
       runnableStrategies: {
         label: "可运行策略",
-        hint: "active 且 engine-ready 的策略数量，是当前能被 paper trading 直接消费的策略池",
+        hint: "active 的策略数量，是当前能被 paper trading 直接消费的策略池",
       },
     },
     accounts: {
@@ -234,7 +235,7 @@ export const zhCNMessages = {
       multiSubtitle:
         "这个入口会按 portfolio 下的 active allocation 顺序，把多个策略跑在同一个 Alpaca account 上。",
       strategy: "策略",
-      strategyDescription: "选择一个 active 且 engine-ready 的策略",
+      strategyDescription: "选择一个 active 的策略",
       strategyPlaceholder: "选择策略",
       tradeDate: "交易日期",
       singleTradeDateDescription:

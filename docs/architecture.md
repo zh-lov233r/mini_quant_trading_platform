@@ -2,6 +2,10 @@
 
 [中文](architecture.zh-CN.md) | [Documentation index](README.md)
 
+The formal strategy catalog comes directly from native descriptors. There is one supported `StrategyType` contract; all creation, cloning, proposal, research, and execution boundaries reject unsupported types and invalid parameters. There is no persistent strategy readiness flag. New native modules must be implemented, tested, rebuilt, deployed, and registered before catalog inclusion. Strategy lifecycle status, research evidence, data completeness, and broker permissions keep their separate meanings.
+
+This contract change removes `custom` and `engine_ready`; no database column or algorithm revision changes are required. Before adopting it against an existing database, use a read-only transaction to check unsupported strategies and their runs, signals, transactions, snapshots, allocations, research, pending jobs, and frozen scan plans. Unsupported records or incompatible task snapshots block that database upgrade until a separately authorized cleanup. Archiving alone is insufficient. There is no automatic migration or cleanup, and no Alembic workflow. Preserve a scoped backup before any later authorized cleanup; recover by restoring that backup and its matching code. Do not reset market data or invoke strategy deletion that can close broker positions.
+
 ## System Boundaries
 
 The system has a FastAPI backend, a Next.js Pages Router frontend, and PostgreSQL persistence. Massive supplies market data. Alpaca is used only for paper-trading accounts and paper orders. The optional AgentOps integration orchestrates draft strategies, bounded research experiments, and Draft-PR-only strategy-code delivery.

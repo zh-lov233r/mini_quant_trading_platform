@@ -7,7 +7,7 @@ import { enUSMessages } from "@/i18n/messages/en-US";
 import { zhCNMessages } from "@/i18n/messages/zh-CN";
 
 export function getUniverseSymbols(strategy: StrategyOut): string[] {
-  const maybeUniverse = (strategy.params as Record<string, unknown>)?.universe;
+  const maybeUniverse = strategy.params.universe;
   if (!maybeUniverse || typeof maybeUniverse !== "object") {
     return [];
   }
@@ -39,7 +39,7 @@ export function getStrategyDescription(strategy: StrategyOut): string {
     return description;
   }
 
-  const maybeMetadata = (strategy.params as Record<string, unknown>)?.metadata;
+  const maybeMetadata = strategy.params.metadata;
   if (!maybeMetadata || typeof maybeMetadata !== "object") {
     return "暂无说明";
   }
@@ -120,13 +120,6 @@ export function getStrategyTemplateCopy(
           ? "使用已确认 Pivot 与 ATR 聚类识别动态价格区，仅在支撑与压力内沿通道中交易反弹/回踩；压力突破只做审计。"
           : "Dynamic confirmed-Pivot and ATR-clustered zones for support bounces and breakout retests; direct breakouts are audit-only.",
       };
-    case "custom":
-      return {
-        label: isZh ? "自定义配置" : "Custom Config",
-        description: isZh
-          ? "自定义 JSON/DSL 策略定义。建议存储规则，不要直接存储可执行代码。"
-          : "Custom JSON/DSL strategy definition. Prefer storing rules rather than executable code.",
-      };
     default:
       throw new Error(`Unregistered strategy type: ${String(strategyType)}`);
   }
@@ -152,7 +145,6 @@ const STRATEGY_CATEGORY_VISUALS: Record<
   rounded_bottom: { accent: "#34d399", accentRgb: "52, 211, 153" },
   v_reversal: { accent: "#f472b6", accentRgb: "244, 114, 182" },
   support_resistance: { accent: "#fb923c", accentRgb: "251, 146, 60" },
-  custom: { accent: "#94a3b8", accentRgb: "148, 163, 184" },
 };
 
 export function isStrategyType(value: string): value is StrategyType {
@@ -198,7 +190,6 @@ export function summarizeStrategies(strategies: StrategyOut[]) {
   const total = strategies.length;
   const active = strategies.filter((item) => item.status === "active").length;
   const drafts = strategies.filter((item) => item.status === "draft").length;
-  const engineReady = strategies.filter((item) => item.engine_ready).length;
 
   const manualUniverse = strategies.filter((item) => getUniverseSymbols(item).length > 0).length;
   const totalUniverseSize = strategies.reduce(
@@ -212,7 +203,6 @@ export function summarizeStrategies(strategies: StrategyOut[]) {
     total,
     active,
     drafts,
-    engineReady,
     manualUniverse,
     averageUniverseSize,
   };
@@ -223,7 +213,7 @@ export function getStrategyFieldNumber(
   section: string,
   field: string
 ): number | null {
-  const sectionValue = (strategy.params as Record<string, unknown>)?.[section];
+  const sectionValue = Object.entries(strategy.params).find(([key]) => key === section)?.[1];
   if (!sectionValue || typeof sectionValue !== "object") {
     return null;
   }
@@ -239,7 +229,7 @@ export function getStrategyFieldText(
   section: string,
   field: string
 ): string | null {
-  const sectionValue = (strategy.params as Record<string, unknown>)?.[section];
+  const sectionValue = Object.entries(strategy.params).find(([key]) => key === section)?.[1];
   if (!sectionValue || typeof sectionValue !== "object") {
     return null;
   }

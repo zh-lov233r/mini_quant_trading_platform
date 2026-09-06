@@ -48,7 +48,7 @@ export interface CandleChartPoint {
   high: number;
   low: number;
   close: number;
-  volume: number;
+  volume: number | null;
   color: string;
   wickColor: string;
   borderColor: string;
@@ -177,7 +177,7 @@ export function normalizeCandleBars(bars: CandleBarOut[]): CandleChartPoint[] {
       high: bar.high,
       low: bar.low,
       close: bar.close,
-      volume: typeof bar.volume === "number" && Number.isFinite(bar.volume) ? Math.max(0, bar.volume) : 0,
+      volume: typeof bar.volume === "number" && Number.isFinite(bar.volume) ? Math.max(0, bar.volume) : null,
       ...tone,
     });
   });

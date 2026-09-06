@@ -7,8 +7,7 @@ export type StrategyType =
   | "head_shoulders_bottom"
   | "rounded_bottom"
   | "v_reversal"
-  | "support_resistance"
-  | "custom";
+  | "support_resistance";
 export type StrategyStatus = "draft" | "active" | "archived";
 
 export interface IndicatorSpec {
@@ -334,8 +333,6 @@ export interface SupportResistanceStrategyParams {
   };
 }
 
-export type CustomStrategyParams = Record<string, unknown>;
-
 export interface StrategyParamsByType {
   trend: TrendStrategyParams;
   mean_reversion: MeanReversionStrategyParams;
@@ -346,7 +343,6 @@ export interface StrategyParamsByType {
   rounded_bottom: RoundedBottomStrategyParams;
   v_reversal: VReversalStrategyParams;
   support_resistance: SupportResistanceStrategyParams;
-  custom: CustomStrategyParams;
 }
 
 export type StrategyParams = StrategyParamsByType[StrategyType];
@@ -367,7 +363,7 @@ export interface StrategyCloneCreate {
 
 export interface StrategyValidation {
   valid: boolean;
-  engine_ready: boolean;
+
   strategy_type: StrategyType;
   normalized_params: StrategyParams;
 }
@@ -392,7 +388,7 @@ export interface StrategyOut {
   status: string;
   version: number;
   params: StrategyParams;
-  engine_ready: boolean;
+
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -405,7 +401,7 @@ export interface StrategyRuntimeOut {
   version: number;
   status: string;
   strategy_type: StrategyType;
-  engine_ready: boolean;
+
   params: StrategyParams;
 }
 
@@ -429,7 +425,7 @@ export interface StrategyCatalogItem {
   strategy_type: StrategyType;
   label: string;
   description: string;
-  engine_ready: boolean;
+
   defaults: Record<string, unknown>;
   parameter_schema: Record<string, unknown>;
   required_features: string[];

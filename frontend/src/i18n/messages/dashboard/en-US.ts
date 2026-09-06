@@ -23,6 +23,7 @@ export const dashboardEnUS: typeof dashboardZhCN = {
   actions: "Action center", noAlerts: "No immediate action required", noAlertsHint: "This does not mean every subsystem has been checked or is healthy.", handle: "Resolve", count: "{count} items",
   severity: { critical: "Critical", warning: "Warning", info: "Info" },
   alerts: {
+    signal_schema_missing: "Signal Center database schema is not installed", signals_waiting: "Signal tasks await complete market data", signals_failed: "Signal scans failed or have incomplete coverage", signal_reports_failed: "Signal report generation failed", signal_email_failed: "Signal email failed or delivery is uncertain",
     overallocated: "Active allocations exceed 100% in portfolios", maintenance_blocked: "Data maintenance is blocking execution", backtest_blocked: "Backtests are waiting but the manager is unavailable", research_blocked: "Research is waiting but its worker cannot dispatch",
     backtests_failed: "Backtests failed in the last 24 hours", research_failed: "Research failed or partially failed in the last 24 hours", strategy_configuration: "Active strategies are not executable", allocation_configuration: "Active allocations reference inactive or non-executable strategies",
     scheduler_failed: "Latest scheduled strategy run failed in eligible portfolios", no_allocations: "Active portfolios have no valid allocations", never_run: "Configured active portfolios have no strategy run yet",
@@ -31,7 +32,7 @@ export const dashboardEnUS: typeof dashboardZhCN = {
   stages: { experiments: "Research experiments", evaluated_candidates: "Evaluated candidates", verified_candidates: "Candidates with full verification completed", promoted_strategies: "Promoted strategies", paper_strategies: "Strategies configured for Paper" },
   waiting: "Awaiting research dispatch: {count} (not yet in the backtest queue)", completed: "Backtests completed in 24h: {count}",
   evidence: "Strategy evidence", evidenceHint: "10 most recently updated strategies; manual backtest metrics require matching current strategy rules. Universe and window belong to each run; different scopes are not ranked. Promotion is historical lineage only.",
-  strategy: "Strategy", type: "Type", return: "Return", sharpe: "Sharpe", drawdown: "Max drawdown", trades: "Trades", window: "Window", evidenceColumn: "Backtest evidence", lineage: "Research lineage", engineUnavailable: "Not executable",
+  strategy: "Strategy", type: "Type", return: "Return", sharpe: "Sharpe", drawdown: "Max drawdown", trades: "Trades", window: "Window", evidenceColumn: "Backtest evidence", lineage: "Research lineage",
   evidenceStatus: { available: "Backtest available", missing: "No current-version backtest", configuration_changed: "Configuration changed", invalid: "Evidence unavailable" },
   issues: { invalid_configuration: "Invalid configuration snapshot", invalid_metrics: "Some metrics are invalid or unavailable", invalid_research_evidence: "Invalid research lineage evidence" },
   promoted: "Promotion source", verification: "Candidate verification: {status}", noLineage: "No linked source", noStrategies: "No strategies yet. Create one to begin research.",

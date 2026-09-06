@@ -4,6 +4,7 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "utils" / "backfill_missing_eod_from_massive.py"
@@ -20,6 +21,23 @@ def _load_module():
 
 
 class BackfillMissingEodFromMassiveTests(unittest.TestCase):
+    def test_weekend_only_range_succeeds_without_eod_work(self) -> None:
+        module = _load_module()
+        argv = ["backfill", "--start-date", "2026-09-05", "--end-date", "2026-09-06"]
+        with patch.object(sys, "argv", argv), patch.object(module, "load_dotenv"), patch.dict(
+            "os.environ", {"MASSIVE_API_KEY": "test-key", "DATABASE_URL": "postgresql://localhost/test"}
+        ), patch.object(module, "require_market_data_maintenance_owner") as guard, patch(
+            "psycopg.connect"
+        ) as connect, patch.object(module.subprocess, "run") as run, patch("builtins.print") as output:
+            module.main()
+
+        guard.assert_called_once_with("postgresql://localhost/test")
+        connect.assert_not_called()
+        run.assert_not_called()
+        output.assert_called_once_with(
+            "No weekday trade dates in the requested range; skipping EOD gap fill.", flush=True
+        )
+
     def test_missing_symbols_sql_targets_active_primary_symbols_only(self) -> None:
         module = _load_module()
 

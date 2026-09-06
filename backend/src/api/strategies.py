@@ -36,7 +36,6 @@ from src.services.strategy_registry import (
     build_strategy_catalog,
     extract_description,
     get_trend_engine_supported_windows,
-    is_engine_ready,
     json_signature,
     normalize_strategy_params,
 )
@@ -52,7 +51,7 @@ from src.services.adaptive_research_service import (
     archive_unused_research_draft,
 )
 from src.services.research_experiment_service import ExperimentConflictError, ExperimentNotFoundError
-from src.services.strategy_types import EngineReadyStrategyType, StrategyType
+from src.services.strategy_types import StrategyType
 
 
 class StrategyCreate(BaseModel):
@@ -88,7 +87,6 @@ class StrategyCatalogItem(BaseModel):
     strategy_type: StrategyType
     label: str
     description: str
-    engine_ready: bool
     defaults: Dict[str, Any]
     parameter_schema: Dict[str, Any]
     required_features: list[str]
@@ -115,7 +113,6 @@ class StrategyOut(BaseModel):
     params: Dict[str, Any]
     status: str
     version: int
-    engine_ready: bool
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -128,7 +125,6 @@ class StrategyRuntimeOut(BaseModel):
     version: int
     status: str
     strategy_type: StrategyType
-    engine_ready: bool
     params: Dict[str, Any]
 
 
@@ -136,7 +132,6 @@ class StrategyValidationOut(BaseModel):
     valid: bool = True
     strategy_type: StrategyType
     normalized_params: Dict[str, Any]
-    engine_ready: bool
 
 
 class StrategyParameterOverride(BaseModel):
@@ -147,7 +142,7 @@ class StrategyParameterOverride(BaseModel):
 class StrategyProposal(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=500)
-    strategy_type: EngineReadyStrategyType
+    strategy_type: StrategyType
     overrides: list[StrategyParameterOverride] = Field(default_factory=list, max_length=30)
     symbols: list[str] = Field(min_length=1, max_length=500)
 
@@ -197,7 +192,6 @@ def _to_strategy_out(obj: Strategy) -> StrategyOut:
         params=normalized_params,
         status=obj.status,
         version=obj.version,
-        engine_ready=is_engine_ready(obj.strategy_type, normalized_params),
         created_at=obj.created_at,
         updated_at=obj.updated_at,
     )
@@ -309,39 +303,6 @@ def _build_delete_summary(db: Session, strategy_id: UUID) -> dict[str, int]:
     }
 
 
-def _validate_feature_support(
-    db: Session,
-    *,
-    strategy_type: str,
-    params: Dict[str, Any],
-) -> None:
-    if strategy_type != "trend":
-        return
-
-    support = _build_feature_support_payload(db)
-    signal = params.get("signal") or {}
-    fast = signal.get("fast_indicator") or {}
-    slow = signal.get("slow_indicator") or {}
-
-    for label, indicator in (("快线", fast), ("慢线", slow)):
-        kind = str(indicator.get("kind") or "").strip().lower()
-        window = indicator.get("window")
-        if kind not in {"ema", "sma"}:
-            raise ValueError(f"{label}类型不受支持: {kind or '空'}")
-        if not isinstance(window, int):
-            raise ValueError(f"{label}周期格式不正确")
-
-        supported_windows = (
-            support.trend.ema_windows if kind == "ema" else support.trend.sma_windows
-        )
-        if window not in supported_windows:
-            supported_text = ", ".join(str(item) for item in supported_windows) or "无"
-            raise ValueError(
-                f"当前数据库不支持 {label}{kind.upper()}{window}。"
-                f"可用 {kind.upper()} 周期: {supported_text}"
-            )
-
-
 @router.get("/catalog", response_model=list[StrategyCatalogItem])
 def get_strategy_catalog():
     return [StrategyCatalogItem(**item) for item in build_strategy_catalog()]
@@ -366,7 +327,6 @@ def validate_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
     return StrategyValidationOut(
         strategy_type=payload.strategy_type,
         normalized_params=normalized,
-        engine_ready=True,
     )
 
 
@@ -376,8 +336,8 @@ def validate_strategy_proposal(payload: StrategyProposal, db: Session = Depends(
         (item for item in build_strategy_catalog() if item["strategy_type"] == payload.strategy_type),
         None,
     )
-    if catalog_item is None or not catalog_item["engine_ready"]:
-        raise HTTPException(status_code=422, detail={"code": "invalid_strategy", "message": "strategy is not engine-ready"})
+    if catalog_item is None:
+        raise HTTPException(status_code=422, detail={"code": "invalid_strategy", "message": "unsupported strategy type"})
     params = catalog_item["defaults"]
     override_paths = [item.path for item in payload.overrides]
     if len(override_paths) != len(set(override_paths)):
@@ -426,7 +386,7 @@ def validate_strategy_proposal(payload: StrategyProposal, db: Session = Depends(
 def list_strategies(
     db: Session = Depends(get_db),
     status_filter: Optional[str] = Query(default=None, alias="status"),
-    strategy_type: Optional[str] = Query(default=None),
+    strategy_type: Optional[StrategyType] = Query(default=None),
     name: Optional[str] = Query(default=None, description="按策略名模糊搜索"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
@@ -647,15 +607,11 @@ def update_strategy_config(
     next_status = payload.status or obj.status
 
     try:
-        normalized_params = normalize_strategy_params(
-            obj.strategy_type,
-            payload.params,
-            next_description,
-        )
-        _validate_feature_support(
+        normalized_params = validate_strategy_params(
             db,
             strategy_type=obj.strategy_type,
-            params=normalized_params,
+            params=payload.params,
+            description=next_description,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc

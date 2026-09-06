@@ -10,9 +10,9 @@ import {
 } from "./workspaceLayout";
 
 describe("workspace navigation", () => {
-  it("keeps the seven primary workbench destinations in a stable order", () => {
+  it("keeps the eight primary workbench destinations in a stable order", () => {
     expect(WORKSPACE_NAV_ITEMS.map((item) => item.href)).toEqual([
-      "/dashboard", "/strategies", "/stock-baskets", "/backtests", "/backtest-tasks", "/research", "/paper-trading",
+      "/dashboard", "/signals", "/strategies", "/stock-baskets", "/backtests", "/backtest-tasks", "/research", "/paper-trading",
     ]);
   });
 

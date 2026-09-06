@@ -1,3 +1,4 @@
+import { signalMessages,signalStatus } from "@/i18n/messages/signals";
 import Link from "next/link";
 import { useState } from "react";
 import Badge from "@/components/Badge";
@@ -62,6 +63,14 @@ export function DashboardContent({ data }: { data: DashboardOverview }) {
         <Link href="/backtest-tasks" className={styles.actionLink}>{t("dashboard.tasks")} →</Link>
       </DensePanel>
     </div>
+    <DensePanel><div className={styles.sectionHeading}><h2>{signalMessages[locale].reports}</h2><Link href="/signals">{t("dashboard.all")} →</Link></div>
+      {!data.signal_reports.available ? <p role="alert">{signalMessages[locale].schemaMissing}</p> : <>
+      <p className={styles.hint}>{signalMessages[locale].scheduled}: {data.signal_reports.enabled_plans} · {signalMessages[locale].status}: {data.signal_reports.running} running / {data.signal_reports.queued} queued</p>
+      {(data.signal_reports.waiting_data > 0 || data.signal_reports.failed > 0 || data.signal_reports.delivery_errors > 0) && <p role="status">{locale === "zh-CN" ? "等待数据 / 扫描失败 / 邮件异常" : "Waiting data / failed scans / email errors"}: {data.signal_reports.waiting_data} / {data.signal_reports.failed} / {data.signal_reports.delivery_errors}</p>}
+      {data.signal_reports.reports.length === 0 && <p>{signalMessages[locale].empty}</p>}
+      {data.signal_reports.reports.map(report => <div key={report.id} className={styles.run}><Link href={`/signals/reports/${report.id}`}>{report.summary.name} · {report.summary.market} · {report.summary.session_date}</Link><span>{report.summary.observation_count} · {signalStatus(report.summary.status,locale)} · {Object.entries(report.deliveries).map(([status,count])=>`${signalStatus(status,locale)} ${count}`).join(" · ")||signalStatus("not_sent",locale)}</span><span>{signalMessages[locale].expires}: {report.expires_at ? formatDateTime(report.expires_at, locale) : report.retention_reason ? signalMessages[locale].calendar : "—"}</span></div>)}
+      </>}
+    </DensePanel>
     <DensePanel><div className={styles.sectionHeading}><h2>{t("dashboard.evidence")}</h2><Link href="/strategies">{t("dashboard.all")} →</Link></div>
       <p className={styles.hint}>{t("dashboard.evidenceHint")}</p>
       {data.strategy_evidence.length ? <StrategyEvidenceTable rows={data.strategy_evidence} /> : <div className={styles.empty}><p>{t("dashboard.noStrategies")}</p><Link href="/strategies/new">{t("dashboard.create")} →</Link></div>}

@@ -23,7 +23,8 @@ from src.models.tables import (
 )
 from src.schemas.dashboard import DashboardOverview, DashboardStrategyEvidence
 from src.services.backtest_worker_status_service import load_backtest_worker_status
-from src.services.strategy_registry import is_engine_ready
+from src.services.signal_dashboard_service import dashboard_signals
+from src.services.strategy_registry import normalize_strategy_params
 
 log = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def _verification(value: Any) -> tuple[str | None, list[str]]:
     return verification["status"], []
 
 
-def _strategy_evidence(db: Session, strategies: list[Any], ready: dict) -> list[DashboardStrategyEvidence]:
+def _strategy_evidence(db: Session, strategies: list[Any], configuration_errors: dict) -> list[DashboardStrategyEvidence]:
     selected = strategies[:10]
     ids = [s.id for s in selected]
     ranked = (
@@ -89,7 +90,7 @@ def _strategy_evidence(db: Session, strategies: list[Any], ready: dict) -> list[
     for strategy in selected:
         item = DashboardStrategyEvidence(
             strategy_id=str(strategy.id), name=strategy.name, strategy_type=strategy.strategy_type,
-            version=strategy.version, engine_ready=ready[strategy.id], evidence_status="missing",
+            version=strategy.version, evidence_status="missing",
         )
         run = runs.get(strategy.id)
         if run is not None:
@@ -121,6 +122,9 @@ def _strategy_evidence(db: Session, strategies: list[Any], ready: dict) -> list[
                         item.issues.append("invalid_metrics")
                     else:
                         setattr(item, key, int(value) if key == "trade_count" else value)
+        if strategy.id in configuration_errors:
+            item.evidence_status = "invalid"
+            item.issues.append("invalid_configuration")
         candidate = candidates.get(strategy.id)
         if candidate is not None:
             item.candidate_id = str(candidate.id)
@@ -134,11 +138,11 @@ def _strategy_evidence(db: Session, strategies: list[Any], ready: dict) -> list[
     return result
 
 
-def _paper_data(db: Session, ready: dict) -> tuple[dict, dict]:
+def _paper_data(db: Session, configuration_errors: dict) -> tuple[dict, dict]:
     eligible_accounts = and_(PaperTradingAccount.status == "active", PaperTradingAccount.mode == "paper")
     eligible_portfolios = and_(eligible_accounts, StrategyPortfolio.status == "active")
     allocation_active = StrategyAllocation.status == "active"
-    executable = and_(allocation_active, Strategy.status == "active", Strategy.id.in_([sid for sid, value in ready.items() if value]))
+    executable = and_(allocation_active, Strategy.status == "active", Strategy.id.not_in(configuration_errors))
     schedulable = and_(allocation_active, Strategy.status == "active", StrategyAllocation.auto_run_enabled.is_(True))
     paper_cfg = StrategyRun.config_snapshot["paper_trading"]
 
@@ -236,7 +240,12 @@ def build_dashboard_overview(db: Session, *, research: dict, scheduler: dict, ch
     worker = load_backtest_worker_status(db, checked_at=now)
     strategies = list(db.execute(select(Strategy.id, Strategy.name, Strategy.strategy_type, Strategy.params,
         Strategy.version, Strategy.status, Strategy.updated_at).order_by(Strategy.updated_at.desc(), Strategy.id.desc())))
-    ready = {s.id: isinstance(s.params, dict) and is_engine_ready(s.strategy_type, s.params) for s in strategies}
+    configuration_errors = {}
+    for strategy in strategies:
+        try:
+            normalize_strategy_params(strategy.strategy_type, strategy.params)
+        except (TypeError, ValueError) as exc:
+            configuration_errors[strategy.id] = str(exc)
     # Waiting means a trial has not entered the durable queue, not every queued trial.
     waiting = _count(db, ExperimentTrial, ExperimentTrial.status == "queued", ExperimentTrial.backtest_run_id.is_(None))
     run_counts = db.execute(select(
@@ -254,7 +263,7 @@ def build_dashboard_overview(db: Session, *, research: dict, scheduler: dict, ch
         _sum(ExperimentCandidate.aggregate_metrics["verification"]["status"].as_string() == "completed").label("verified"),
         func.count(func.distinct(ExperimentCandidate.promoted_strategy_id)).label("promoted"),
     )).one()
-    paper, paper_alerts = _paper_data(db, ready)
+    paper, paper_alerts = _paper_data(db, configuration_errors)
     paper_strategies = db.scalar(select(func.count(func.distinct(StrategyAllocation.strategy_id)))
         .join(StrategyPortfolio, StrategyPortfolio.name == StrategyAllocation.portfolio_name)
         .join(PaperTradingAccount, PaperTradingAccount.id == StrategyPortfolio.paper_account_id)
@@ -262,7 +271,7 @@ def build_dashboard_overview(db: Session, *, research: dict, scheduler: dict, ch
                PaperTradingAccount.status == "active", PaperTradingAccount.mode == "paper"))
     invalid_allocation_rows = db.execute(select(StrategyAllocation.strategy_id, func.count().label("count"))
         .join(Strategy, Strategy.id == StrategyAllocation.strategy_id)
-        .where(StrategyAllocation.status == "active", or_(Strategy.status != "active", Strategy.id.in_([sid for sid, value in ready.items() if not value])))
+        .where(StrategyAllocation.status == "active", or_(Strategy.status != "active", Strategy.id.in_(configuration_errors)))
         .group_by(StrategyAllocation.strategy_id)).all()
     invalid_allocations = sum(r.count for r in invalid_allocation_rows)
     allocation_problem_strategies = {r.strategy_id for r in invalid_allocation_rows}
@@ -297,16 +306,23 @@ def build_dashboard_overview(db: Session, *, research: dict, scheduler: dict, ch
     alert("research_blocked", "warning", waiting if research_status != "healthy" else 0, "/backtest-tasks")
     alert("backtests_failed", "warning", run_counts.failed, "/backtest-tasks", run_counts.failed_at)
     alert("research_failed", "warning", experiments.failed, "/research", experiments.failed_at)
-    # Combine inactive/invalid allocation references and active non-executable strategies into one root category.
-    invalid_strategies = sum(s.status == "active" and not ready[s.id] and s.id not in allocation_problem_strategies for s in strategies)
+    # Combine inactive/invalid allocation references and active strategies with invalid parameters into one root category.
+    invalid_strategies = sum(s.status == "active" and s.id in configuration_errors and s.id not in allocation_problem_strategies for s in strategies)
     alert("strategy_configuration", "warning", invalid_strategies, "/strategies")
     alert("allocation_configuration", "warning", invalid_allocations, "/paper-trading")
     alert("scheduler_failed", "critical", paper_alerts["scheduler_failed"], "/paper-trading", paper_alerts["failed_at"])
     alert("no_allocations", "info", paper_alerts["no_allocations"], "/paper-trading")
     alert("never_run", "info", paper_alerts["never_run"], "/paper-trading")
+    signals=dashboard_signals(db)
+    alert("signal_schema_missing", "critical", int(not signals["available"]), "/signals")
+    alert("signals_waiting", "info", signals["waiting_data"], "/signals")
+    alert("signals_failed", "warning", signals["failed"], "/signals")
+    alert("signal_reports_failed", "warning", signals["report_errors"], "/signals")
+    alert("signal_email_failed", "warning", signals["delivery_errors"], "/signals")
     alerts.sort(key=lambda a: ({"critical": 0, "warning": 1, "info": 2}[a["severity"]],
                               -(a["occurred_at"].timestamp() if a["occurred_at"] else 0), a["id"]))
     return DashboardOverview(
+        signal_reports=signals,
         generated_at=now, system=[dict(s, checked_at=now) for s in system],
         research_kpis=dict(active_strategies=sum(s.status == "active" for s in strategies), running_experiments=experiments.running,
                            running_backtests=worker["active_jobs"], queued_backtests=worker["queued_jobs"]),
@@ -314,5 +330,5 @@ def build_dashboard_overview(db: Session, *, research: dict, scheduler: dict, ch
                           failed_backtests_last_24h=run_counts.failed, failed_research_last_24h=experiments.failed),
         research_progress=dict(experiments=experiments.total, evaluated_candidates=candidates.evaluated,
                                verified_candidates=candidates.verified, promoted_strategies=candidates.promoted, paper_strategies=paper_strategies),
-        strategy_evidence=_strategy_evidence(db, strategies, ready), paper_summary=paper, alerts=alerts, activity=_activity(db),
+        strategy_evidence=_strategy_evidence(db, strategies, configuration_errors), paper_summary=paper, alerts=alerts, activity=_activity(db),
     )

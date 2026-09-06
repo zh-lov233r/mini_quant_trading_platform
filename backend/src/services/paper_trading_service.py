@@ -201,8 +201,6 @@ def run_paper_trading(
         universe_symbols=universe_symbols,
         universe_metadata=universe_metadata,
     )
-    if not runtime["engine_ready"]:
-        raise ValueError("strategy is not engine-ready")
 
     symbols = runtime["params"]["universe"]["symbols"]
     if not symbols:

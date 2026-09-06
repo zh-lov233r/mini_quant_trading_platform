@@ -48,7 +48,6 @@ class DashboardStrategyEvidence(BaseModel):
     name: str
     strategy_type: str
     version: int
-    engine_ready: bool
     backtest_id: str | None = None
     evidence_status: Literal["available", "missing", "configuration_changed", "invalid"]
     total_return: float | None = None
@@ -103,7 +102,28 @@ class DashboardActivity(BaseModel):
     href: str
 
 
+class DashboardSignalReportItem(BaseModel):
+    id: str
+    summary: dict[str, object]
+    status: str
+    published_at: datetime
+    expires_at: datetime | None
+    retention_reason: str | None
+    deliveries: dict[str,int]
+
+class DashboardSignalReports(BaseModel):
+    available: bool = True
+    reports: list[DashboardSignalReportItem] = Field(default_factory=list)
+    enabled_plans: int = 0
+    waiting_data: int = 0
+    queued: int = 0
+    running: int = 0
+    failed: int = 0
+    delivery_errors: int = 0
+    report_errors: int = 0
+
 class DashboardOverview(BaseModel):
+    signal_reports: DashboardSignalReports = Field(default_factory=DashboardSignalReports)
     generated_at: datetime
     system: list[DashboardSystemItem]
     research_kpis: DashboardKpis

@@ -9,6 +9,7 @@ used by backtests and paper trading.
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -58,6 +59,7 @@ WITH symbol_map AS (
       -- gaps, which inflates still-missing counts dramatically.
       AND sh.is_primary
       AND instr.is_active = TRUE
+      AND instr.currency = 'USD'
       AND (
         instr.asset_type = 'CS'
         OR (
@@ -77,7 +79,7 @@ LEFT JOIN eod_bars e
   ON e.instrument_id = map.instrument_id
  AND e.dt_ny = %(trade_date)s::date
 WHERE map.match_count = 1
-  AND e.instrument_id IS NULL
+  AND (%(refresh_existing)s OR e.instrument_id IS NULL)
 ORDER BY map.symbol;
 """
 
@@ -138,6 +140,11 @@ WITH upserted AS (
         trades = EXCLUDED.trades,
         vendor = EXCLUDED.vendor,
         asof = now()
+    WHERE (eod_bars.ts_utc, eod_bars.open_u, eod_bars.high_u, eod_bars.low_u,
+           eod_bars.close_u, eod_bars.volume, eod_bars.vwap, eod_bars.trades, eod_bars.vendor)
+      IS DISTINCT FROM
+          (EXCLUDED.ts_utc, EXCLUDED.open_u, EXCLUDED.high_u, EXCLUDED.low_u,
+           EXCLUDED.close_u, EXCLUDED.volume, EXCLUDED.vwap, EXCLUDED.trades, EXCLUDED.vendor)
     RETURNING 1
 )
 SELECT COUNT(*) FROM upserted;
@@ -228,6 +235,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip the instrument + symbol_history sync step before gap filling.",
     )
+    parser.add_argument("--refresh-existing", action="store_true", help="Refresh existing bars as well as gaps from the vendor.")
     return parser.parse_args()
 
 
@@ -303,10 +311,10 @@ def _ts_ms_to_utc(ts_ms: int | float | str) -> datetime:
     return datetime.fromtimestamp(float(ts_ms) / 1000.0, tz=timezone.utc)
 
 
-def _load_missing_symbols(conn, trade_date: date) -> list[tuple[str, int]]:
+def _load_missing_symbols(conn, trade_date: date, *, refresh_existing: bool = False) -> list[tuple[str, int]]:
     """Load symbols that are expected for trade_date but missing in eod_bars."""
     with conn.cursor() as cur:
-        cur.execute(MISSING_SYMBOLS_SQL, {"trade_date": trade_date.isoformat()})
+        cur.execute(MISSING_SYMBOLS_SQL, {"trade_date": trade_date.isoformat(), "refresh_existing": refresh_existing})
         return [(str(row[0]).upper(), int(row[1])) for row in cur.fetchall()]
 
 
@@ -343,6 +351,12 @@ def _build_stage_rows(
                 item[0],
             ),
         )
+        prices = (chosen_bar.open_u, chosen_bar.high_u, chosen_bar.low_u, chosen_bar.close_u)
+        if (any(value is None or not math.isfinite(value) or value <= 0 for value in prices)
+                or chosen_bar.high_u < max(chosen_bar.open_u, chosen_bar.close_u, chosen_bar.low_u)
+                or chosen_bar.low_u > min(chosen_bar.open_u, chosen_bar.close_u, chosen_bar.high_u)
+                or chosen_bar.volume is None or chosen_bar.volume < 0):
+            raise ValueError(f"Invalid vendor OHLCV for {chosen_symbol}; existing data was not overwritten")
         deduped_symbol_aliases += max(0, len(available_bars) - 1)
         api_missing_symbols += len(candidate_symbols) - len(available_bars)
         stage_rows.append(
@@ -376,22 +390,11 @@ def _stage_and_upsert_rows(conn, rows: list[tuple]) -> int:
 
 
 def _fetch_json(url: str, *, headers: dict[str, str], params: dict[str, str] | None) -> dict:
-    """Issue a GET request and decode the JSON payload."""
-    final_url = url
-    if params:
-        final_url = f"{url}?{parse.urlencode(params)}"
-
-    req = request.Request(final_url, headers=headers, method="GET")
-    try:
-        with request.urlopen(req, timeout=180) as response:
-            body = response.read().decode("utf-8")
-    except error.HTTPError as exc:
-        if exc.code == 404:
-            return {}
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"{exc.code} {exc.reason} | {final_url} | {body}") from exc
-
-    return json.loads(body)
+    if __package__:
+        from .massive_enrichment_common import fetch_json
+    else:
+        from massive_enrichment_common import fetch_json
+    return fetch_json(url, api_key=headers["Authorization"].removeprefix("Bearer "), params=params)
 
 
 def _fetch_grouped_daily(
@@ -416,6 +419,8 @@ def _fetch_grouped_daily(
             timestamp_ms = item.get("t")
             if not symbol or timestamp_ms in (None, ""):
                 continue
+            if _ts_ms_to_utc(timestamp_ms).astimezone(NEW_YORK).date() != trade_date:
+                raise ValueError(f"Vendor bar date differs from requested date for {symbol}")
             bars[symbol] = GroupedDailyBar(
                 symbol=symbol,
                 ts_utc=_ts_ms_to_utc(timestamp_ms),
@@ -536,7 +541,8 @@ def main() -> None:
     start_date, end_date = _resolve_date_range(args)
     trade_dates = _iter_weekdays(start_date, end_date)
     if not trade_dates:
-        raise SystemExit("No weekday trade dates in the requested range")
+        print("No weekday trade dates in the requested range; skipping EOD gap fill.", flush=True)
+        return
 
     print(
         f"Scanning {len(trade_dates)} weekday(s) for missing eod_bars "
@@ -576,7 +582,7 @@ def main() -> None:
     headers = {"Authorization": f"Bearer {api_key}"}
     with psycopg.connect(_psycopg_dsn(args.database_url)) as conn:
         for trade_date in trade_dates:
-            missing_symbols = _load_missing_symbols(conn, trade_date)
+            missing_symbols = _load_missing_symbols(conn, trade_date, refresh_existing=args.refresh_existing)
             missing_count = len(missing_symbols)
             total_missing += missing_count
             unique_missing_instruments = len({instrument_id for _, instrument_id in missing_symbols})

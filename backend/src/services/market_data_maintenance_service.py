@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from src.models.tables import (
     BacktestJob,
+    SignalScanRun,
+    SignalDataReady,
     MarketDataMaintenanceState,
     ResearchExperiment,
     SupportResistanceMaterialization,
@@ -83,7 +85,8 @@ def active_market_data_work_counts(db: Session) -> dict[str, int]:
         )
         or 0
     )
-    return {"backtest_jobs": jobs, "research_experiments": experiments}
+    scans = int(db.scalar(select(func.count()).select_from(SignalScanRun).where(SignalScanRun.status.in_(("queued", "running")))) or 0)
+    return {"backtest_jobs": jobs, "research_experiments": experiments, "signal_scans": scans}
 
 
 def begin_market_data_draining(db: Session, owner_token: UUID) -> MarketDataMaintenanceState:
@@ -100,13 +103,14 @@ def begin_market_data_draining(db: Session, owner_token: UUID) -> MarketDataMain
     return state
 
 
-def begin_market_data_update(db: Session, owner_token: UUID) -> MarketDataMaintenanceState:
+def begin_market_data_update(db: Session, owner_token: UUID, *, market: str) -> MarketDataMaintenanceState:
     state = load_market_data_maintenance_state(db, for_update=True)
     if state.status != "draining" or state.owner_token != owner_token:
         raise MarketDataMaintenanceError("market data maintenance ownership changed while draining")
     counts = active_market_data_work_counts(db)
     if any(counts.values()):
         raise MarketDataMaintenanceError("market data work is still active")
+    db.execute(update(SignalDataReady).where(SignalDataReady.market == market).values(valid=False))
     state.status = "updating"
     state.started_at = datetime.now(UTC)
     db.flush()

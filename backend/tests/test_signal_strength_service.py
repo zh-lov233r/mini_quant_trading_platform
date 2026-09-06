@@ -16,7 +16,7 @@ from src.services.strategy_registry import normalize_strategy_params
 
 
 class SignalStrengthServiceTests(unittest.TestCase):
-    def test_all_engine_ready_strategies_default_and_validate_threshold(self) -> None:
+    def test_all_registered_strategies_default_and_validate_threshold(self) -> None:
         for strategy_type in (
             "trend",
             "mean_reversion",

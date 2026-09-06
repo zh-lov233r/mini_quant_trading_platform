@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { readApiError } from "./client";
 
-function useLocale(locale: "zh-CN" | "en-US") {
+function setTestLocale(locale: "zh-CN" | "en-US") {
   vi.stubGlobal("window", {
     localStorage: { getItem: () => locale },
     navigator: { language: locale },
@@ -14,8 +14,16 @@ afterEach(() => {
 });
 
 describe("readApiError", () => {
+  it("explains missing Signal Center schema in both languages", async () => {
+    for (const [locale,message] of [["zh-CN","信号中心数据库表尚未部署"],["en-US","Signal Center schema is not installed"]] as const) {
+      setTestLocale(locale);
+      const error = await readApiError(new Response(JSON.stringify({detail:{code:"signal_schema_missing",missing_tables:["signal_reports"]}}),{status:503}),"/api/signal-reports");
+      expect(error.status).toBe(503);
+      expect(error.message).toContain(message);
+    }
+  });
   it("localizes known 409 conflicts without changing ApiError fields", async () => {
-    useLocale("en-US");
+    setTestLocale("en-US");
     const error = await readApiError(
       new Response(JSON.stringify({ detail: "paper account name already exists" }), {
         status: 409,
@@ -31,7 +39,7 @@ describe("readApiError", () => {
   });
 
   it("uses Chinese fallbacks for empty 404 and 422 responses", async () => {
-    useLocale("zh-CN");
+    setTestLocale("zh-CN");
 
     await expect(
       readApiError(new Response("", { status: 404 }), "/api/strategies/missing"),

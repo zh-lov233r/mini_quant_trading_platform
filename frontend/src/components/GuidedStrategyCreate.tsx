@@ -10,7 +10,6 @@ import {
   getStrategyFeatureSupport,
   validateStrategy,
 } from "@/api/strategies";
-import Badge from "@/components/Badge";
 import { SelectControl } from "@/components/workspace/SelectControl";
 import { useI18n } from "@/i18n/provider";
 import type {
@@ -24,7 +23,6 @@ import type {
 import { getStrategyCategoryPresentation } from "@/utils/strategy";
 import {
   cloneRecord,
-  ENGINE_READY_TYPES,
   getPathValue,
   parseGuidedNumberInput,
   setPathValue,
@@ -47,14 +45,6 @@ function interpolate(template: string, values: Record<string, string | number>):
 
 function fieldId(path: string): string {
   return `strategy-create-${path.replaceAll(".", "-")}`;
-}
-
-function parseStrategyParamsJson(raw: string): Record<string, unknown> {
-  const value: unknown = JSON.parse(raw);
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Strategy params must be a JSON object");
-  }
-  return value as Record<string, unknown>;
 }
 
 function formatValue(value: unknown, field?: GuidedFieldDefinition): string {
@@ -85,7 +75,6 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
   const [selectedType, setSelectedType] = useState<StrategyType | null>(null);
   const [params, setParams] = useState<Record<string, unknown>>({});
   const [initialParams, setInitialParams] = useState<Record<string, unknown>>({});
-  const [rawJson, setRawJson] = useState("{}");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [dirty, setDirty] = useState(false);
@@ -132,7 +121,6 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
     setSelectedType(draft.strategyType);
     setParams(cloneRecord(draft.params));
     setInitialParams(cloneRecord(draft.params));
-    setRawJson(draft.rawJson);
     setName(draft.name);
     setDescription(draft.description);
     setErrors({});
@@ -161,7 +149,6 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
     setSelectedType(strategyType);
     setParams(defaults);
     setInitialParams(cloneRecord(defaults));
-    setRawJson(JSON.stringify(defaults, null, 2));
     setErrors({});
     setValidation(null);
     setValidationError(null);
@@ -194,12 +181,7 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
   };
 
   const buildParams = (): Record<string, unknown> => {
-    let result: Record<string, unknown>;
-    if (selectedType === "custom") {
-      result = parseStrategyParamsJson(rawJson);
-    } else {
-      result = cloneRecord(params);
-    }
+    let result = cloneRecord(params);
     result = setPathValue(result, "universe.symbols", []);
     result = setPathValue(result, "universe.selection_mode", "all_common_stock");
     result = setPathValue(result, "metadata.description", description.trim());
@@ -245,13 +227,7 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
       if (description.length > 500) next.description = copy.errors.descriptionTooLong;
     }
     if (step === 2) {
-      if (selectedType === "custom") {
-        try {
-          parseStrategyParamsJson(rawJson);
-        } catch {
-          next.rawJson = copy.custom.invalid;
-        }
-      } else if (selectedType) {
+      if (selectedType) {
         next = validateFields(STRATEGY_GUIDANCE[selectedType].signal);
         if (selectedType === "island_reversal" && Number(getPathValue(params, "signal.max_island_bars")) < Number(getPathValue(params, "signal.min_island_bars"))) {
           next["signal.max_island_bars"] = copy.errors.islandRange;
@@ -272,7 +248,7 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
         }
       }
     }
-    if (step === 3 && selectedType && selectedType !== "custom") {
+    if (step === 3 && selectedType) {
       next = validateFields(STRATEGY_GUIDANCE[selectedType].risk);
       if (["island_reversal", "double_bottom", "head_shoulders_bottom", "rounded_bottom", "v_reversal"].includes(selectedType)) {
         const stage1 = Number(getPathValue(params, "risk.stage_1_target_pct"));
@@ -300,14 +276,7 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
     setValidating(true);
     try {
       const payload = buildPayload();
-      const data = selectedType === "custom"
-        ? {
-            valid: true,
-            engine_ready: false,
-            strategy_type: "custom" as const,
-            normalized_params: payload.params,
-          }
-        : await validateStrategy(payload);
+      const data = await validateStrategy(payload);
       setValidation(data);
     } catch (error) {
       setValidationError(error instanceof Error ? error.message : copy.errors.validateFailed);
@@ -402,8 +371,7 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
         <h2 style={sectionTitleStyle}>{copy.wizard.stepType}</h2>
         <p style={sectionSubtitleStyle}>{copy.catalog.execution}</p>
         <div style={templateGridStyle}>
-          {ENGINE_READY_TYPES.map((strategyType) => {
-            const item = catalog.find((candidate) => candidate.strategy_type === strategyType)!;
+          {catalog.map(({ strategy_type: strategyType }) => {
             const guidance = typeCopy[strategyType];
             const selected = selectedType === strategyType;
             const presentation = getStrategyCategoryPresentation(strategyType, locale);
@@ -417,7 +385,6 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
               >
                 <div style={cardHeaderStyle}>
                   <strong style={{ fontSize: 18, color: presentation.accent }}>{guidance.title}</strong>
-                  <Badge tone="success">{copy.catalog.engineReady}</Badge>
                 </div>
                 <code style={codeStyle(presentation.accent)}>{strategyType}</code>
                 <p style={cardTextStyle}>{guidance.summary}</p>
@@ -429,16 +396,6 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
           })}
         </div>
         {errors.strategyType ? <p role="alert" style={errorStyle}>{errors.strategyType}</p> : null}
-        {catalog.some((item) => item.strategy_type === "custom") ? (
-          <details style={{ ...detailsStyle, marginTop: 18 }}>
-            <summary style={summaryStyle}>{copy.catalog.customTitle}</summary>
-            <p style={cardTextStyle}>{copy.catalog.customDescription}</p>
-            <button type="button" onClick={() => chooseType("custom")} style={secondaryButtonStyle}>{copy.catalog.customAction}</button>
-            {selectedType === "custom" ? (
-              <span style={selectedPillStyle("#94a3b8", "148, 163, 184")}>{copy.wizard.selected}</span>
-            ) : null}
-          </details>
-        ) : null}
       </section>
     );
   };
@@ -547,22 +504,6 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
   };
 
   const renderSignalStep = () => {
-    if (selectedType === "custom") return (
-      <section style={panelStyle}>
-        <h2 style={sectionTitleStyle}>{copy.custom.title}</h2>
-        <p style={sectionSubtitleStyle}>{copy.custom.subtitle}</p>
-        <FieldShell label={copy.custom.label} error={errors.rawJson} inputId={fieldId("rawJson")} full>
-          <textarea
-            id={fieldId("rawJson")}
-            value={rawJson}
-            rows={24}
-            spellCheck={false}
-            onChange={(event) => { setRawJson(event.target.value); invalidate(); setErrors((current) => ({ ...current, rawJson: "" })); }}
-            style={{ ...inputStyle(Boolean(errors.rawJson)), resize: "vertical", fontFamily: "SFMono-Regular, Consolas, monospace", fontSize: 12 }}
-          />
-        </FieldShell>
-      </section>
-    );
     if (!selectedType) return null;
     const fields = STRATEGY_GUIDANCE[selectedType].signal;
     const hasAdvanced = fields.some((field) => field.advanced);
@@ -600,13 +541,6 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
   };
 
   const renderRiskStep = () => {
-    if (selectedType === "custom") return (
-      <section style={panelStyle}>
-        <h2 style={sectionTitleStyle}>{copy.parameters.riskTitle}</h2>
-        <p style={sectionSubtitleStyle}>{copy.custom.subtitle}</p>
-        <ExecutionSummary copy={copy.parameters} params={parseStrategyParamsJson(rawJson)} />
-      </section>
-    );
     if (!selectedType) return null;
     const fields = STRATEGY_GUIDANCE[selectedType].risk;
     const hasAdvanced = fields.some((field) => field.advanced);
@@ -639,7 +573,7 @@ export default function GuidedStrategyCreate({ cloneSource = null }: GuidedStrat
           <ReviewItem label={copy.review.execution} value={copy.review.executionValue} wide />
         </div>
         <div style={{ ...validationStyle, borderColor: validation ? "rgba(34,197,94,.52)" : validationError ? "rgba(244,63,94,.5)" : "rgba(14,165,233,.4)" }}>
-          <strong>{validation ? selectedType === "custom" ? copy.review.customValidationPassed : copy.review.validationPassed : validationError ? copy.review.validationFailed : copy.review.validationPending}</strong>
+          <strong>{validation ? copy.review.validationPassed : validationError ? copy.review.validationFailed : copy.review.validationPending}</strong>
           {validationError ? <p style={{ margin: "8px 0 0", color: "#fda4af" }}>{validationError}</p> : null}
         </div>
         <div style={reviewActionsStyle}>

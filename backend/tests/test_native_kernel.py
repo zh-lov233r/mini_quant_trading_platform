@@ -33,7 +33,6 @@ class NativeKernelParityTests(unittest.TestCase):
             "strategy_id": "native-parity",
             "strategy_type": strategy_type,
             "params": normalize_strategy_params(strategy_type, raw_params),
-            "engine_ready": True,
         }
         python_signals = [
             asdict(signal) for signal in evaluate_native_signals(runtime, snapshots)
@@ -91,7 +90,7 @@ class NativeKernelParityTests(unittest.TestCase):
             return
         self.assertEqual(actual, expected)
 
-    def test_native_abi_and_all_engine_ready_strategy_catalog(self) -> None:
+    def test_native_abi_and_all_registered_strategy_catalog(self) -> None:
         self.assertEqual(quant_kernel.KERNEL_VERSION, "cpp-v1")
         self.assertEqual(quant_kernel.ABI_VERSION, 3)
         self.assertTrue(quant_kernel.BUILD_ID)

@@ -54,11 +54,6 @@ export const strategyCreateZhCN = {
     loading: "正在加载策略 catalog 和数据库特征支持…",
     failed: "无法加载策略模板，手工创建暂不可用。",
     retry: "重试",
-    engineReady: "Engine Ready",
-    storedOnly: "仅存储",
-    customTitle: "自定义 JSON（高级）",
-    customDescription: "用于保存规则或 DSL，不会被当前策略引擎执行。需要新算法时优先使用 Agent 新算法研究。",
-    customAction: "选择自定义 JSON",
     execution: "日线收盘生成信号，下一有效交易日开盘成交",
   },
   basics: {
@@ -91,12 +86,6 @@ export const strategyCreateZhCN = {
     rebalance: "调仓频率",
     rebalanceValue: "沿用 catalog 默认值：{value}",
   },
-  custom: {
-    title: "自定义 JSON",
-    subtitle: "这里只保存结构化规则，不接受可执行代码，也不会成为 engine-ready 策略。",
-    label: "策略参数 JSON",
-    invalid: "JSON 格式无效，请修正后继续。",
-  },
   review: {
     title: "确认并校验",
     subtitle: "先调用后端进行只读标准化校验；校验通过后才会开放保存按钮。",
@@ -106,7 +95,6 @@ export const strategyCreateZhCN = {
     executionValue: "T 日收盘信号 → 下一有效交易日开盘成交",
     validationPending: "尚未校验，当前不会写入策略库。",
     validationPassed: "校验通过；后端已返回规范化参数，当前策略可保存为 Draft。",
-    customValidationPassed: "JSON 结构校验通过；当前定义只能保存为 stored-only Draft，不能进入回测或执行引擎。",
     validationFailed: "校验未通过，请返回对应步骤修正。",
     normalized: "查看后端规范化参数",
     payload: "查看提交参数",
@@ -149,7 +137,6 @@ export const strategyCreateZhCN = {
     rounded_bottom: { title: "圆弧底", summary: "用对数价格二次拟合和右侧更高回踩识别碗形底。", suitable: "适合形成周期较长、右侧逐步转强的底部。", data: "OHLCV、二次曲线拟合、Pivot" },
     v_reversal: { title: "V 型反转", summary: "识别快速下跌后的放量转折、延续和突破回踩。", suitable: "适合急跌急涨但需要严格量价确认的反转。", data: "OHLCV、ATR、60 日跌幅" },
     support_resistance: { title: "支撑 / 压力区域", summary: "用已确认 Pivot 与 ATR 聚类，在冻结支撑区交易符合条件的反弹。", suitable: "适合需要因果、阶段隔离区域检测的研究。", data: "OHLCV、ATR、ADV20、历史窗口" },
-    custom: { title: "自定义 JSON", summary: "仅保存规则或 DSL，不接入执行引擎。", suitable: "适合暂存结构化定义；新算法请使用 Agent。", data: "由自定义定义决定" },
   },
   fields: {
     previousBodyAtrMin: { label: "前一阴线最小实体 / ATR", hint: "默认至少 0.5 ATR14。" },

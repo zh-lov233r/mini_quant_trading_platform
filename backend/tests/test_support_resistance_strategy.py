@@ -262,10 +262,10 @@ class SupportResistanceStrategyTests(unittest.TestCase):
                 {"metadata": {"price_semantics": "unadjusted"}},
             )
 
-    def test_category_research_catalog_exposes_engine_ready_defaults(self) -> None:
+    def test_category_research_catalog_exposes_defaults(self) -> None:
         catalog = _catalog_item("support_resistance")
 
-        self.assertTrue(catalog["engine_ready"])
+        self.assertNotIn("engine_ready", catalog)
         self.assertTrue(catalog["defaults"]["signal"]["support_bounce_enabled"])
 
     def _classify(

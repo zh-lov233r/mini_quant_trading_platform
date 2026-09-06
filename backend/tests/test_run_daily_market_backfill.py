@@ -141,10 +141,11 @@ class DailyMarketBackfillRunnerTests(unittest.TestCase):
             run_daily_market_backfill, "_run_quality_check"
         ) as quality_check, patch.object(
             run_daily_market_backfill, "MaintenanceWindow"
-        ) as maintenance_class, patch.object(run_daily_market_backfill, "load_dotenv"):
+        ) as maintenance_class, patch.object(run_daily_market_backfill, "load_dotenv"), patch("backend.utils.signal_market_state.sync_us_calendar"), patch("backend.utils.signal_market_state.publish_ready") as publish:
             run_daily_market_backfill.main()
 
         maintenance = maintenance_class.return_value
         maintenance.start.assert_called_once_with()
         quality_check.assert_called_once()
         maintenance.succeed.assert_called_once_with()
+        publish.assert_not_called()

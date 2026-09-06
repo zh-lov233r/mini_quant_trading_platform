@@ -226,7 +226,7 @@ py::dict strength_for(
             support["strength"]
         ).cast<py::dict>();
     }
-    throw std::invalid_argument("unsupported engine-ready strategy type: " + type);
+    throw std::invalid_argument("unsupported strategy type: " + type);
 }
 
 bool entry_buy(const py::dict& event) {

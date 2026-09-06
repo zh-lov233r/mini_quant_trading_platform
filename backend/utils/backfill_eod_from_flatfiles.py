@@ -76,7 +76,7 @@ def main() -> None:
 
     print(f"Found {len(files)} flat files under {args.root}")
 
-    maintenance = MaintenanceWindow(args.database_url)
+    maintenance = MaintenanceWindow(args.database_url, market="US")
     maintenance.start()
     try:
         with psycopg.connect(args.database_url) as conn:

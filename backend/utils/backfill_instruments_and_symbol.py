@@ -11,6 +11,11 @@ try:
 except ModuleNotFoundError:
     from market_data_maintenance_guard import require_market_data_maintenance_owner
 
+try:
+    from backend.utils.massive_enrichment_common import fetch_async_json
+except ModuleNotFoundError:
+    from massive_enrichment_common import fetch_async_json
+
 load_dotenv()
 API = os.getenv("MASSIVE_API_KEY")
 URL = os.getenv("DATABASE_URL")
@@ -516,16 +521,9 @@ async def backfill():
                         "sort": "ticker"
                     }
                     while next_url:
-                        async with sess.get(
-                            next_url,
-                            params=params if next_url == BASE else None,
-                            timeout=180
-                        ) as r:
-                            # 打印更清晰的错误信息
-                            if r.status != 200:
-                                body = await r.text()
-                                raise RuntimeError(f"{r.status} {r.reason} | {next_url} | {body}")
-                            js = await r.json()
+                        js = await fetch_async_json(
+                            sess, next_url, params if next_url == BASE else None
+                        )
 
                         results = js.get("results") or []
                         if not results:

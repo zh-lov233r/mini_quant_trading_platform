@@ -17,7 +17,7 @@ export interface DashboardStrategyEvidence {
   name: string;
   strategy_type: string;
   version: number;
-  engine_ready: boolean;
+
   backtest_id: string | null;
   evidence_status: "available" | "missing" | "configuration_changed" | "invalid";
   total_return: number | null;
@@ -63,6 +63,7 @@ export interface DashboardActivity {
   href: string;
 }
 export interface DashboardOverview {
+  signal_reports: { available: boolean; reports: { id: string; summary: { name: string; market: string; session_date: string; observation_count: number; status: string }; status: string; expires_at: string | null; retention_reason: string | null; deliveries: Record<string,number> }[]; enabled_plans: number; waiting_data: number; queued: number; running: number; failed: number; report_errors: number; delivery_errors: number };
   generated_at: string;
   system: DashboardSystemItem[];
   research_kpis: {

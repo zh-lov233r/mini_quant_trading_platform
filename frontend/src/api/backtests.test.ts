@@ -51,6 +51,7 @@ describe("backtest persistence selection", () => {
       start_date: "2025-01-01",
       end_date: "2025-01-31",
       persist_level: persistLevel,
+      basket_id: "basket-id",
     });
 
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({

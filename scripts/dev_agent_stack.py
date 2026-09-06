@@ -354,6 +354,9 @@ def main() -> int:
                 "QUANT_AGENT_SERVICE_TOKEN": shared_token,
                 "RESEARCH_WORKER_ENABLED": "true",
                 "RESEARCH_WORKER_CONCURRENCY": os.getenv("RESEARCH_WORKER_CONCURRENCY", "2"),
+                "SIGNAL_SCAN_SCHEDULER_ENABLED": "false",
+                "SIGNAL_REPORT_DELIVERY_ENABLED": "false",
+                "SIGNAL_REPORT_RETENTION_ENABLED": "false",
                 "PAPER_TRADING_SCHEDULER_ENABLED": "false",
                 "PAPER_TRADING_SCHEDULER_SUBMIT_ORDERS": "false",
             }
@@ -381,6 +384,11 @@ def main() -> int:
             env=quant_env,
         )
         processes.append(backtest_manager)
+        signal_worker = start_process(
+            "Signal Worker", ["make", "--no-print-directory", "signal-worker"],
+            cwd=quant_repo, env=quant_env,
+        )
+        processes.append(signal_worker)
         wait_for_endpoint("Quant Platform", f"{QUANT_BACKEND_URL}/readyz", quant_backend[1], 60)
 
         frontend_env = base_env.copy()

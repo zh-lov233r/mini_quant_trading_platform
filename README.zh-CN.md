@@ -2,12 +2,16 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
+- [信号中心：手动扫描、每日报告、快照图表、邮件与保留](docs/signal-center.zh-CN.md)
+
 一个面向股票量化研究与交易执行的全栈项目，覆盖了策略定义、特征数据准备、回测、paper trading、组合分配，以及基于 Alpaca 的定时自动下单链路。
 
 当前仓库由两部分组成：
 
 - `backend`：FastAPI + SQLAlchemy + PostgreSQL，负责策略、回测、市场数据、paper account、组合分配和调度执行
 - `frontend`：Next.js，提供策略管理、回测查看、篮子管理、组合配置和 paper trading 页面
+
+正式目录仅包含已实现、测试、部署并在原生模块注册的策略大类。新算法在注册前留在开发/研究流程，不再以仅存储 JSON/DSL 的占位策略进入目录；已有大类仍保留高级 JSON 参数编辑。注册不代表策略有效或盈利，参数校验成功不代表行情完整或获准进行 Paper Trading。Draft/active/archived 生命周期与输入校验保持独立。
 
 ## 当前支持的核心功能
 
@@ -17,10 +21,9 @@
   - 手工创建在落库前完成校验和标准化，并且始终保存为 `draft`；不会激活 portfolio、创建 allocation、启动调度或提交订单
   - 可从策略列表或详情页“基于此策略新建”：向导预填并锁定原策略类型，保存为名称唯一、独立 `strategy_key`、从 `v1` 开始的 Draft；不会复制回测、allocation、运行记录或持仓
   - 获取策略 catalog 和 normalized runtime payload；共享 C++ descriptor registry 是默认值、JSON Schema、所需特征、历史窗口、校验和算法 revision 的唯一来源
-  - 当前策略类型包含 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`、`head_shoulders_bottom`、`rounded_bottom`、`v_reversal`、`support_resistance`、`custom`
+  - 当前策略类型包含 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`、`head_shoulders_bottom`、`rounded_bottom`、`v_reversal`、`support_resistance`
   - 五类底部反转策略使用 20% / 50% / 100% 累计目标分批建仓；详见 [底部反转策略](docs/bottom-reversal-strategies.zh-CN.md)
-  - 当前 engine-ready 的执行型策略包含 `trend`、`mean_reversion`、`momentum_breakout`、`island_reversal`、`double_bottom`、`head_shoulders_bottom`、`rounded_bottom`、`v_reversal`、`support_resistance`
-  - 九个 engine-ready 策略全部只由共享 C++ 内核执行；`custom` 继续 stored-only，不是可执行 DSL
+  - 九个已注册策略全部只由共享 C++ 内核执行
   - `momentum_breakout` 只使用现有优先前复权的日线收盘价、SMA20、20 日收益和成交量特征；T 日收盘信号在下一有效交易日（T+1）开盘成交
 
 - 市场数据与特征工程
@@ -36,7 +39,7 @@
   - 使用 `make benchmark-backtests BENCHMARK_ARGS="plan"` 只读规划 correctness/screening 漏斗；写入基准必须显式增加 `--apply` 并满足性能指南的安全门禁
   - 手动、研究和验证回测统一解析稳定 instrument identity，并通过队列深度为 1 的生产者—消费者流水线处理“日历年 × 完整股票池”的 v5 PreparedDataset 块；热命中直接打开，损坏缓存会原子重建
   - 通过增量接口加载摘要、下采样权益、signals 和 transactions
-  - 所有 engine-ready 运行统一经过有状态的进程内 C++20 `BacktestSession`；typed 普通明细、共享支撑/压力生命周期事件、运行决策事件、链接和最终摘要在同一数据库事务中发布
+  - 所有策略运行统一经过有状态的进程内 C++20 `BacktestSession`；typed 普通明细、共享支撑/压力生命周期事件、运行决策事件、链接和最终摘要在同一数据库事务中发布
   - 按 T 日冻结的信号强度对同策略 BUY 排名，再于下一有效交易日（T+1）开盘尝试成交；详见[信号强度](docs/signal-strength.zh-CN.md)
 
 - Paper trading
@@ -55,7 +58,7 @@
 
 - Agent 辅助策略研究
   - 通过 AgentOps 工作流生成策略草案、执行有界研究实验，并为 C++ 策略模块、descriptor、golden 差分和 wheel 验证准备 Draft PR
-  - 支持 engine-ready 的 `support_resistance` 研究：冻结支撑区反弹入场，保留通道与风险筛选；平仓后可在同一区域再次满足条件入场
+  - 支持已注册的 `support_resistance` 研究：冻结支撑区反弹入场，保留通道与风险筛选；平仓后可在同一区域再次满足条件入场
   - 股票阶段身份与四状态分类独立；收盘破坏或区域冲突结束整个旧阶段，独立有效性研究采用检测器 revision 14
   - 持久化实验规格、确定性的 trial 展开、进度、token 用量、终止证据和稳健性报告
   - 支持按运行时长、工作流 token 用量或目标指标自动停止
@@ -129,7 +132,7 @@
 - `/research/[experimentId]`
 - `/agent-runs/[runId]`
 
-14 个正式工作台页面统一使用宽屏紧凑布局。主导航位于可收缩左侧栏；可手动收放的宽屏下，主内容视口宽度保持不变，卡片和表格不会随侧栏移动而多显示或少显示内容。不再保留固定右侧上下文栏。页面相关的配置、创建、身份和风险详情通过带明确标签、支持键盘操作的弹窗按需打开；低于 768px 时弹窗切换为全屏。重要进度、校验结果、券商警告和 engine-ready 状态仍直接显示在主区。全平台的短枚举与分页选择统一使用深色、青色强调的 Radix 自定义选项面板，不再调用操作系统菜单，并共享键盘、hover、focus、错误、禁用和移动端状态；回测与 Paper Trading 中的策略、股票组合和 Portfolio 实体选择器继续支持搜索和完整键盘导航，同时保留原有请求值。总览不再显示重复的“风险与待办”和“今日待办”卡片；回测工作台可从页面右上角发起新回测，策略库和策略详情中的“用它回测”入口则会直接打开同一回测窗口并预选当前 engine-ready 策略。结果列表支持按策略名或股票组合搜索，并按策略大类和运行状态筛选，默认每页显示 10 条、支持切换页容量，上一页/下一页固定居中，每张结果卡片复用策略库的大类颜色与标签。终态手动回测可在二次确认后逐条删除；确认后弹窗立即关闭，删除在后台继续，仅在成功或失败后于视口中间偏上显示固定通知，随后自动淡出。排队中和运行中的回测保持保护，研究与验证回测只能在所属实验中管理。创建策略的大类卡片和选中状态也使用同一套颜色。回测详情独立加载与市场匹配的对比曲线：A 股回测使用上证指数与深证成指，其他回测使用 SPY 与 QQQ；该接口不扩大紧凑 summary/equity payload。详情页同时取消原始摘要指标列表，最新持仓只保留数量、成本价、收盘价和市值。密集表格支持排序、筛选、列显示、列宽调整以及明确的客户端/服务端分页；较小结果集保留语义化表格，达到 200 行后才启用可视区域虚拟化。窄屏下详情页双栏会切换为单栏，紧凑指标卡也会在卡片宽度不足时上下排列，以完整保留标签、金额和技术字段。开发服务与 production build 使用不同的 Next.js 输出目录，验证构建不会破坏正在运行的开发服务。
+14 个正式工作台页面统一使用宽屏紧凑布局。主导航位于可收缩左侧栏；可手动收放的宽屏下，主内容视口宽度保持不变，卡片和表格不会随侧栏移动而多显示或少显示内容。不再保留固定右侧上下文栏。页面相关的配置、创建、身份和风险详情通过带明确标签、支持键盘操作的弹窗按需打开；低于 768px 时弹窗切换为全屏。重要进度、校验结果、券商警告仍直接显示在主区。全平台的短枚举与分页选择统一使用深色、青色强调的 Radix 自定义选项面板，不再调用操作系统菜单，并共享键盘、hover、focus、错误、禁用和移动端状态；回测与 Paper Trading 中的策略、股票组合和 Portfolio 实体选择器继续支持搜索和完整键盘导航，同时保留原有请求值。总览不再显示重复的“风险与待办”和“今日待办”卡片；回测工作台可从页面右上角发起新回测，策略库和策略详情中的“用它回测”入口则会直接打开同一回测窗口并预选当前已注册策略。结果列表支持按策略名或股票组合搜索，并按策略大类和运行状态筛选，默认每页显示 10 条、支持切换页容量，上一页/下一页固定居中，每张结果卡片复用策略库的大类颜色与标签。终态手动回测可在二次确认后逐条删除；确认后弹窗立即关闭，删除在后台继续，仅在成功或失败后于视口中间偏上显示固定通知，随后自动淡出。排队中和运行中的回测保持保护，研究与验证回测只能在所属实验中管理。创建策略的大类卡片和选中状态也使用同一套颜色。回测详情独立加载与市场匹配的对比曲线：A 股回测使用上证指数与深证成指，其他回测使用 SPY 与 QQQ；该接口不扩大紧凑 summary/equity payload。详情页同时取消原始摘要指标列表，最新持仓只保留数量、成本价、收盘价和市值。密集表格支持排序、筛选、列显示、列宽调整以及明确的客户端/服务端分页；较小结果集保留语义化表格，达到 200 行后才启用可视区域虚拟化。窄屏下详情页双栏会切换为单栏，紧凑指标卡也会在卡片宽度不足时上下排列，以完整保留标签、金额和技术字段。开发服务与 production build 使用不同的 Next.js 输出目录，验证构建不会破坏正在运行的开发服务。
 
 持仓生命周期按纽约交易日显示事件；未平仓行明确区分期末估值与真实卖出成交。SR 审计数据按可见 K 线窗口加载，不依赖首批信号分页；相同已完成请求复用，加载期间 K 线仍可交互。生命周期图不再绘制行情阶段背景或入场通道。
 
@@ -397,7 +400,7 @@ make docker-logs
 
 - `import_tushare_a_share.py`
   - 导入沪深北 A 股证券主数据、未复权日线、前/后复权 OHLC、大盘指数和 `daily_features`
-  - 同步 `All A Shares (Tushare)` 股票组合，供九个 engine-ready 策略从回测工作台选择
+  - 同步 `All A Shares (Tushare)` 股票组合，供九个已注册策略从回测工作台选择
   - A 股结果使用上证指数和深证成指对比，不再显示 SPY 与 QQQ
 
 - `check_market_data_quality.py`
@@ -436,6 +439,18 @@ make backfill-daily BACKFILL_ARGS="--skip-sic --skip-ticker-events --skip-vwap -
 
 dry-run 会读取所选增强数据集的供应商覆盖，但不会写事实表或修改身份区间；证券主数据同步会被跳过，因为其独立脚本尚无 dry-run 模式。所有写入均可幂等重跑。失败后的恢复方式是修复错误并重跑同一日期范围，不删除或重建历史；ticker-event 修复前后的区间快照保存在 `security_ticker_events` 中。
 
+如果请求范围仅包含周末，EOD 补数步骤会成功跳过，不请求或写入行情。每日维护流水线仍继续其余步骤和最终质量门禁；空的周末范围本身不会导致维护失败。
+
+美股默认 catch-up 即使已经存在较新数据，也始终重查最近至少 14 个自然日，同时刷新已有行情和补齐缺行。显式日期范围仍严格限定供应商请求范围，覆盖进度仅统计美股。更早的缺口和窗口外的供应商修订需要指定历史范围。
+
+复权修复检查美股完整历史，仅写入不一致的行；分红或拆并股改变价格基准时，也会更新补数范围之前的历史行。Tushare 所属价格不参与该修复。特征步骤使用 `--market US --repair-stale`，对缺少特征或 `daily_features.asof < eod_bars.asof` 的标的重算完整历史，支持修复中断后的重跑。这可能更新供应商请求范围之外的派生数据。先用 `.venv/bin/python backend/utils/backfill_adjusted_prices.py --dry-run` 预览复权影响；应用修复前备份 `eod_bars`、`daily_features`、证券资料/公司行动表及维护/就绪状态。修复沿用现有 schema，无需迁移，不重置历史或修改券商状态。
+
+质量 JSON 分别报告 `markets.US` 和 `markets.CN`，按市场计算每日行数、基准和可信交易日历的新鲜度。`--market US` 或 `--market CN` 限定这些检查的市场，结构完整性仍全局检查。美股 VWAP 权限、SIC 和空头持仓告警不用于 CN 检查。缺少日历覆盖会明确提示，不从另一个市场推断。
+
+完整流水线成功后，就绪发布会重新验证已发布日期和市场最新数据日，包括周末运行。发布要求价格和特征行齐全、特征未过期，且覆盖至少 99% 的预期普通股/基准标的人群（前 30 个自然日出现过行情的标的加近期上市标的，排除尚未上市或已退市的标的）。剩余缺行情数量记录为 `missing_unclassified`，不会把缺行直接认定为停牌。该阈值是市场就绪门禁，不保证每个股票池成员都有行情；逐次扫描仍检查成员覆盖。失败或部分执行的流水线不会重新发布就绪状态。
+
+Massive 证券资料、EOD 和增强数据请求对 DNS/网络超时、HTTP 429 和临时 5xx 最多尝试五次，间隔为 1/2/4/8 秒；认证错误立即失败。维护错误保留市场、请求日期范围、失败步骤和脱敏后的子进程异常，隐藏凭证及 URL 中的 API key。修复原因后通过维护入口重跑，不手工强制设置 `ready`。
+
 单独运行完整性门禁。关键错误始终返回非零状态；warning 默认只记录，传入 `--strict` 后才会导致失败：
 
 ```bash
@@ -443,7 +458,7 @@ make check-data
 make check-data CHECK_DATA_ARGS="--strict --json"
 ```
 
-特殊维护运行可用 `--skip-quality-check` 跳过最终门禁，或用 `--strict-quality-check` 让流水线中的 warning 也阻断任务。正常安装任务保持默认的“仅关键失败阻断”策略。
+`--skip-quality-check` 仅允许与 `--dry-run` 一起使用，写入运行始终执行最终门禁。可用 `--strict-quality-check` 让流水线中的 warning 也阻断任务。正常安装任务保持默认的“仅关键失败阻断”策略。
 
 已安装的 macOS LaunchAgent 每天按本地时间 20:15 运行，并将日志写入 `logs/daily-market-backfill.log` 和 `logs/daily-market-backfill.err.log`。可用 `launchctl print "gui/$(id -u)/com.quant.daily-market-backfill"` 检查状态；补数脚本不会修改其日程或安装路径。写入运行先进入单例 `draining` 状态，拒绝新回测/研究并等待现有工作，取得数据库排他 advisory lock、失效派生缓存后才写源表。每个子进程收到同一维护所有者令牌，两项 Paper scheduler 配置始终显式关闭。流水线或质量门禁失败会把状态留在 `failed`，持续阻止策略工作，直到后续重跑成功。
 
@@ -528,7 +543,7 @@ PaperTradingAccount
 - Paper 仅统计 active paper 账户和 active 组合，最多展示 10 个组合。自动运行资格沿用调度选择条件：active 账户、组合、策略和 allocation，且 allocation 开启 auto-run；不可执行配置另行告警。最近策略运行保留 dry-run/提交订单模式区分，不代表整个组合结果。首页不提供实时挂单、账户权益、当日盈亏或权益曲线，后续优先单独接入真实单账户数据。
 - 最近活动合并各来源最近记录，API 最多 20 条、页面显示 10 条；同一 run 不再以 job 重复呈现。空集合计数为 `0`，无法获得的数值为 `null`，界面显示 `—`。告警与活动使用稳定代码和本地化文本。
 
-后端使用固定数量的批量查询与窗口查询，不逐账户调用 overview，不读取交易、信号或权益明细。需要校验当前策略参数的 engine-ready 状态，因此参数读取与校验成本仍随策略数量增长；查询次数固定不等同于耗时恒定。数据库或程序故障会暴露为请求失败，异常 JSON 仅影响对应证据。数据库结构、交易与回测语义均未改变，无需迁移。回滚使用代码版本，不保留第二套 Dashboard。
+后端使用固定数量的批量查询与窗口查询，不逐账户调用 overview，不读取交易、信号或权益明细。需要检查当前策略参数是否合法，因此参数读取与校验成本仍随策略数量增长；查询次数固定不等同于耗时恒定。数据库或程序故障会暴露为请求失败，异常 JSON 仅影响对应证据。数据库结构、交易与回测语义均未改变，无需迁移。回滚使用代码版本，不保留第二套 Dashboard。
 
 ## Agent 研究工作台
 

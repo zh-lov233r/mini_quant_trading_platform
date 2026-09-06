@@ -4,7 +4,7 @@
 
 ## Native execution boundary
 
-All nine engine-ready daily long strategies use one in-process C++20 kernel for both full backtests and Paper Trading signal evaluation. Signal rules, day-T close decisions, next-valid-session (T+1) open fills, sell-before-buy ordering, shared cash, costs, corporate actions, dynamic-universe handling, position limits, and deterministic ordering remain invariants. Python owns data access, the durable queue, database transactions, progress/cancellation, broker effects, and result persistence. `custom` remains stored-only.
+All nine registered daily long strategies use one in-process C++20 kernel for both full backtests and Paper Trading signal evaluation. Signal rules, day-T close decisions, next-valid-session (T+1) open fills, sell-before-buy ordering, shared cash, costs, corporate actions, dynamic-universe handling, position limits, and deterministic ordering remain invariants. Python owns data access, the durable queue, database transactions, progress/cancellation, broker effects, and result persistence.
 
 There is no runtime engine selector, job-level engine version, or Python execution fallback. New run summaries record `kernel.version=cpp-v1`, ABI, build ID, PreparedDataset schema `v5`, and the strategy algorithm revision. Historical records remain readable. Operational rollback means redeploying the previously validated application/wheel build, not selecting an old engine inside the current process.
 

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 
 import {
   deleteStrategy,
@@ -11,6 +11,7 @@ import {
 import AppShell from "@/components/AppShell";
 import Badge from "@/components/Badge";
 import MetricCard from "@/components/MetricCard";
+import strategyCard from "@/components/strategies/StrategyCard.module.css";
 import { SelectControl } from "@/components/workspace/SelectControl";
 import { DialogGroup as ContextGroup, DialogLink as ContextLink, DialogLinks as ContextLinks, DialogStack as ContextStack, DialogStat as ContextStat, DialogStats as ContextStats, WorkspaceDialog } from "@/components/workspace/WorkspaceDialog";
 import { useI18n } from "@/i18n/provider";
@@ -38,7 +39,6 @@ export default function StrategiesPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
-  const [engineFilter, setEngineFilter] = useState("all");
   const [selectedStrategy, setSelectedStrategy] = useState<StrategyOut | null>(null);
 
   const categoryEntries = useMemo(() => {
@@ -162,15 +162,15 @@ export default function StrategiesPage() {
           </Link>
           <WorkspaceDialog triggerLabel={isZh ? "筛选概览" : "Filter Summary"} title={isZh ? "筛选与概览" : "Filters & Summary"}>
             <ContextStack>
-              <ContextGroup title={isZh ? "策略库存" : "Strategy Inventory"}><ContextStats><ContextStat label={isZh ? "全部策略" : "All strategies"} value={summarizeStrategies(items).total} /><ContextStat label="Draft" value={summarizeStrategies(items).drafts} /><ContextStat label="Active" value={summarizeStrategies(items).active} /><ContextStat label="Engine ready" value={summarizeStrategies(items).engineReady} /></ContextStats></ContextGroup>
-              <ContextGroup title={isZh ? "当前筛选" : "Current Filters"}><ContextStats><ContextStat label={isZh ? "搜索" : "Search"} value={search || (isZh ? "全部" : "All")} /><ContextStat label={isZh ? "类别" : "Category"} value={typeFilter} /><ContextStat label={isZh ? "状态" : "Status"} value={statusFilter} /><ContextStat label="Engine" value={engineFilter} /></ContextStats></ContextGroup>
+              <ContextGroup title={isZh ? "策略库存" : "Strategy Inventory"}><ContextStats><ContextStat label={isZh ? "全部策略" : "All strategies"} value={summarizeStrategies(items).total} /><ContextStat label="Draft" value={summarizeStrategies(items).drafts} /><ContextStat label="Active" value={summarizeStrategies(items).active} /></ContextStats></ContextGroup>
+              <ContextGroup title={isZh ? "当前筛选" : "Current Filters"}><ContextStats><ContextStat label={isZh ? "搜索" : "Search"} value={search || (isZh ? "全部" : "All")} /><ContextStat label={isZh ? "类别" : "Category"} value={typeFilter} /><ContextStat label={isZh ? "状态" : "Status"} value={statusFilter} /></ContextStats></ContextGroup>
               <ContextGroup title={isZh ? "快速入口" : "Quick Links"}><ContextLinks><ContextLink href="/strategies/new">{isZh ? "新建策略" : "New strategy"}</ContextLink><ContextLink href="/research">{isZh ? "Agent 研究" : "Agent research"}</ContextLink><ContextLink href="/backtests">{isZh ? "回测工作台" : "Backtests"}</ContextLink></ContextLinks></ContextGroup>
             </ContextStack>
           </WorkspaceDialog>
         </>
       }
     >
-      {loading && <p>{isZh ? "加载中..." : "Loading..."}</p>}
+      {loading && <p role="status">{isZh ? "加载中..." : "Loading..."}</p>}
       {error && <p style={{ color: "#fda4af" }}>{error}</p>}
       {deleteError && <p style={{ color: "#fda4af" }}>{deleteError}</p>}
 
@@ -213,16 +213,6 @@ export default function StrategiesPage() {
                   : "Strategies already in the main observation set. They will become the main entry points once backtests and run lists are wired in."
               }
               accent="#2563eb"
-            />
-            <MetricCard
-              label="Engine Ready"
-              value={String(summarizeStrategies(items).engineReady)}
-              hint={
-                isZh
-                  ? "真正能被引擎直接消费的策略数量，这个数字很适合放在策略库页顶上盯住"
-                  : "Strategies that can be consumed directly by the engine. This is a great top-line number to monitor."
-              }
-              accent="#ca8a04"
             />
           </section>
 
@@ -423,17 +413,6 @@ export default function StrategiesPage() {
                   })),
                 ]}
               />
-
-              <SelectControl
-                aria-label={isZh ? "引擎状态" : "Engine status"}
-                value={engineFilter}
-                onValueChange={setEngineFilter}
-                options={[
-                  { value: "all", label: isZh ? "全部可执行状态" : "All Execution States" },
-                  { value: "ready", label: isZh ? "仅 engine-ready" : "Engine-ready Only" },
-                  { value: "stored", label: isZh ? "仅 stored-only" : "Stored-only Only" },
-                ]}
-              />
             </div>
           </section>
 
@@ -444,12 +423,6 @@ export default function StrategiesPage() {
                 return false;
               }
               if (typeFilter !== "all" && item.strategy_type !== typeFilter) {
-                return false;
-              }
-              if (engineFilter === "ready" && !item.engine_ready) {
-                return false;
-              }
-              if (engineFilter === "stored" && item.engine_ready) {
                 return false;
               }
 
@@ -547,22 +520,12 @@ export default function StrategiesPage() {
                       return (
                         <article
                           key={item.id}
-                          className={motion.card}
+                          className={`${motion.card} ${strategyCard.card} ${strategyCard.library} ${strategyCard.interactive}`}
                           style={{
-                            ...{ "--workspace-card-accent": categoryPresentation.accentRgb },
-                            display: "flex",
-                            flexDirection: "column",
-                            height: "100%",
-                            padding: 22,
-                            borderRadius: 22,
-                            border: `1px solid rgba(${categoryPresentation.accentRgb}, 0.36)`,
-                            background:
-                              `radial-gradient(circle at top right, rgba(${categoryPresentation.accentRgb}, 0.16), transparent 34%), linear-gradient(140deg, rgba(8,15,24,0.96), rgba(15,23,42,0.9))`,
-                            color: "#e2e8f0",
-                            cursor: "pointer",
-                            position: "relative",
-                            overflow: "hidden",
-                          }}
+                            "--strategy-card-accent": categoryPresentation.accent,
+                            "--strategy-card-accent-rgb": categoryPresentation.accentRgb,
+                            "--workspace-card-accent": categoryPresentation.accentRgb,
+                          } as CSSProperties}
                           role="button"
                           tabIndex={0}
                           onClick={() => setSelectedStrategy(item)}
@@ -573,15 +536,6 @@ export default function StrategiesPage() {
                             }
                           }}
                         >
-                          <div
-                            aria-hidden="true"
-                            style={{
-                              position: "absolute",
-                              inset: "0 0 auto",
-                              height: 4,
-                              background: categoryPresentation.accent,
-                            }}
-                          />
                           <div
                             style={{
                               display: "flex",
@@ -611,43 +565,16 @@ export default function StrategiesPage() {
                                     flexWrap: "wrap",
                                   }}
                                 >
-                                  <span
-                                    style={{
-                                      display: "inline-flex",
-                                      alignItems: "center",
-                                      gap: 7,
-                                      color: categoryPresentation.accent,
-                                      fontSize: 16,
-                                      fontWeight: 800,
-                                      letterSpacing: "0.01em",
-                                      fontFamily:
-                                        "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
-                                    }}
-                                  >
-                                    <span
-                                      aria-hidden="true"
-                                      style={{
-                                        width: 9,
-                                        height: 9,
-                                        borderRadius: 999,
-                                        background: categoryPresentation.accent,
-                                        boxShadow: `0 0 0 4px rgba(${categoryPresentation.accentRgb}, 0.13)`,
-                                      }}
-                                    />
+                                  <span className={strategyCard.category}>
+                                    <span aria-hidden="true" className={strategyCard.dot} />
                                     {categoryPresentation.label}
                                   </span>
-                                  <span
-                                    style={{
-                                      color: "rgba(148, 163, 184, 0.92)",
-                                      fontSize: 12,
-                                      fontFamily:
-                                        "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-                                    }}
-                                  >
+                                  <span className={strategyCard.technical}>
                                     {item.strategy_type} · v{item.version}
                                   </span>
                                 </div>
                                 <h2
+                                  className={strategyCard.title}
                                   style={{
                                     margin: "0 0 6px",
                                     fontSize: 22,
@@ -682,9 +609,6 @@ export default function StrategiesPage() {
                                 alignContent: "flex-start",
                               }}
                             >
-                              <Badge tone={item.engine_ready ? "success" : "warning"}>
-                                {item.engine_ready ? "engine-ready" : "stored-only"}
-                              </Badge>
                               <Badge>{item.status}</Badge>
                             </div>
 
@@ -827,7 +751,7 @@ export default function StrategiesPage() {
                           <ContextStat label={isZh ? "技术类型" : "Technical type"} value={selectedStrategy.strategy_type} />
                           <ContextStat label={isZh ? "版本" : "Version"} value={`v${selectedStrategy.version}`} />
                           <ContextStat label={isZh ? "状态" : "Status"} value={selectedStrategy.status} />
-                          <ContextStat label="Engine ready" value={selectedStrategy.engine_ready ? (isZh ? "是" : "Yes") : (isZh ? "否" : "No")} />
+
                           <ContextStat label={isZh ? "股票池" : "Universe"} value={getUniverseSummary(selectedStrategy)} />
                         </ContextStats>
                       </ContextGroup>

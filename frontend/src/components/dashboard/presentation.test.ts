@@ -17,6 +17,7 @@ function Providers({ children }: { children: ReactNode }) {
 }
 
 const empty: DashboardOverview = {
+  signal_reports: { available: true, reports: [], enabled_plans: 0, waiting_data: 0, queued: 0, running: 0, failed: 0, report_errors: 0, delivery_errors: 0 },
   generated_at: "2026-09-03T00:00:00Z", system: [],
   research_kpis: { active_strategies: 0, running_experiments: 0, running_backtests: 0, queued_backtests: 0 },
   task_summary: { waiting_research: 0, completed_last_24h: 0, failed_backtests_last_24h: 0, failed_research_last_24h: 0 },

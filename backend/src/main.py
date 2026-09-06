@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # 引入 API routers 和数据库初始化函数
 from src.api.backtests import router as backtests_router
+from src.api.signals import router as signals_router
 from src.api.dashboard import router as dashboard_router
 from src.api.market_data import router as market_data_router
 from src.api.paper_accounts import router as paper_accounts_router
@@ -29,6 +30,7 @@ from src.services.research_experiment_service import ResearchExperimentWorker
 from src.services.stock_basket_service import ensure_default_common_stock_basket
 from src.services.backtest_worker_status_service import load_backtest_worker_status
 from src.services.backtest_worker_config import resolve_backtest_worker_concurrency
+from src.services.signal_schema_service import missing_signal_tables
 
 # -----------------------------
 # 基本配置（可用环境变量覆盖）
@@ -61,6 +63,7 @@ app.add_middleware(
 
 # 挂载你的业务路由
 app.include_router(dashboard_router)
+app.include_router(signals_router)
 app.include_router(strategies_router)
 app.include_router(agent_strategies_router)
 app.include_router(backtests_router)
@@ -123,6 +126,11 @@ def readyz(response: Response):
     db = SessionLocal()
     try:
         worker_status = load_backtest_worker_status(db, checked_at=datetime.now(timezone.utc))
+        missing = missing_signal_tables(db)
+        if missing:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+            return {"status":"not_ready","backtest_automation_available":worker_status["automation_available"],
+                    "reason":"signal_schema_missing","missing_tables":missing}
     except Exception:
         log.exception("Readiness check failed")
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE

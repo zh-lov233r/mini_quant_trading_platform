@@ -39,6 +39,870 @@ tags:
     description: Manual and scheduled Alpaca paper-strategy execution.
 
 paths:
+  "/api/signal-scan-plans":
+    get:
+      tags:
+      - signals
+      summary: Plans
+      operationId: plans_api_signal_scan_plans_get
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/PlanPage"
+        '503':
+          description: Signal Center schema has not been installed
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
+    post:
+      tags:
+      - signals
+      summary: Add Plan
+      operationId: add_plan_api_signal_scan_plans_post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/PlanCreate"
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/PlanOut"
+        '503':
+          description: Signal Center schema has not been installed
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
+  "/api/signal-scan-plans/{identity}":
+    patch:
+      tags:
+      - signals
+      summary: Update Plan
+      operationId: update_plan_api_signal_scan_plans__identity__patch
+      parameters:
+      - name: identity
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Identity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/PlanCreate"
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/PlanOut"
+        '503':
+          description: Signal Center schema has not been installed
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
+  "/api/signal-scan-plans/{identity}/enabled":
+    post:
+      tags:
+      - signals
+      summary: Toggle Plan
+      operationId: toggle_plan_api_signal_scan_plans__identity__enabled_post
+      parameters:
+      - name: identity
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Identity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/PlanToggle"
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/PlanOut"
+        '503':
+          description: Signal Center schema has not been installed
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
+  "/api/signal-scans":
+    post:
+      tags:
+      - signals
+      summary: Scan
+      operationId: scan_api_signal_scans_post
+      parameters:
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 128
+          - type: 'null'
+          title: Idempotency-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/ScanCreate"
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ScanOut"
+        '503':
+          description: Signal Center schema has not been installed
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
+    get:
+      tags:
+      - signals
+      summary: Scans
+      operationId: scans_api_signal_scans_get
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ScanPage"
+        '503':
+          description: Signal Center schema has not been installed
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
+  "/api/signal-scans/{identity}":
+    get:
+      tags:
+      - signals
+      summary: Scan Detail
+      operationId: scan_detail_api_signal_scans__identity__get
+      parameters:
+      - name: identity
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Identity
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ScanDetailOut"
+        '503':
+          description: Signal Center schema has not been installed
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
+  "/api/signal-scans/{identity}/observations":
+    get:
+      tags:
+      - signals
+      summary: Scan Observations
+      operationId: scan_observations_api_signal_scans__identity__observations_get
+      parameters:
+      - name: identity
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Identity
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      - name: strategy_run_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Strategy Run Id
+      - name: instrument_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Instrument Id
+      - name: passes
+        in: query
+        required: false
+        schema:
+          enum:
+          - 'true'
+          - 'false'
+          - all
+          type: string
+          default: 'true'
+          title: Passes
+      - name: q
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 100
+          default: ''
+          title: Q
+      - name: group
+        in: query
+        required: false
+        schema:
+          enum:
+          - strategy
+          - instrument
+          type: string
+          default: strategy
+          title: Group
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ObservationPage"
+        '503':
+          description: Signal Center schema has not been installed
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
+  "/api/signal-scans/{identity}/reports":
+    post:
+      tags:
+      - signals
+      summary: Make Report
+      operationId: make_report_api_signal_scans__identity__reports_post
+      parameters:
+      - name: identity
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Identity
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 128
+          - type: 'null'
+          title: Idempotency-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/ReportCreate"
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ReportOut"
+        '503':
+          description: Signal Center schema has not been installed
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
+  "/api/signal-reports":
+    get:
+      tags:
+      - signals
+      summary: Reports
+      operationId: reports_api_signal_reports_get
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ReportPage"
+        '503':
+          description: Signal Center schema has not been installed
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
+  "/api/signal-reports/{identity}":
+    get:
+      tags:
+      - signals
+      summary: Report
+      operationId: report_api_signal_reports__identity__get
+      parameters:
+      - name: identity
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Identity
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ReportOut"
+        '503':
+          description: Signal Center schema has not been installed
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
+  "/api/signal-reports/{identity}/observations":
+    get:
+      tags:
+      - signals
+      summary: Report Observations
+      operationId: report_observations_api_signal_reports__identity__observations_get
+      parameters:
+      - name: identity
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Identity
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      - name: strategy_run_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Strategy Run Id
+      - name: instrument_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Instrument Id
+      - name: passes
+        in: query
+        required: false
+        schema:
+          enum:
+          - 'true'
+          - 'false'
+          - all
+          type: string
+          default: 'true'
+          title: Passes
+      - name: q
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 100
+          default: ''
+          title: Q
+      - name: group
+        in: query
+        required: false
+        schema:
+          enum:
+          - strategy
+          - instrument
+          type: string
+          default: strategy
+          title: Group
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ObservationPage"
+        '503':
+          description: Signal Center schema has not been installed
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
+  "/api/signal-reports/{identity}/observations/{signal_id}":
+    get:
+      tags:
+      - signals
+      summary: Observation
+      operationId: observation_api_signal_reports__identity__observations__signal_id__get
+      parameters:
+      - name: identity
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Identity
+      - name: signal_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Signal Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ObservationOut"
+        '503':
+          description: Signal Center schema has not been installed
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
+  "/api/signal-scans/{identity}/instruments/{instrument_id}/chart":
+    get:
+      tags:
+      - signals
+      summary: Scan Chart
+      operationId: scan_chart_api_signal_scans__identity__instruments__instrument_id__chart_get
+      parameters:
+      - name: identity
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Identity
+      - name: instrument_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Instrument Id
+      - name: strategy_run_id
+        in: query
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Strategy Run Id
+      - name: signal_id
+        in: query
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Signal Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          default: 120
+          title: Limit
+      - name: before
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Before
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/SignalChartOut"
+        '409':
+          description: Scan is not finished
+        '410':
+          description: Scan content expired
+        '503':
+          description: Signal Center schema has not been installed
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
+  "/api/signal-reports/{identity}/instruments/{instrument_id}/chart":
+    get:
+      tags:
+      - signals
+      summary: Chart
+      operationId: chart_api_signal_reports__identity__instruments__instrument_id__chart_get
+      parameters:
+      - name: identity
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Identity
+      - name: instrument_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Instrument Id
+      - name: strategy_run_id
+        in: query
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Strategy Run Id
+      - name: signal_id
+        in: query
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Signal Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          default: 120
+          title: Limit
+      - name: before
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Before
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/SignalChartOut"
+        '503':
+          description: Signal Center schema has not been installed
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
+  "/api/signal-reports/{identity}/export":
+    get:
+      tags:
+      - signals
+      summary: Export
+      operationId: export_api_signal_reports__identity__export_get
+      parameters:
+      - name: identity
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Identity
+      - name: format
+        in: query
+        required: true
+        schema:
+          enum:
+          - json
+          - csv
+          - html
+          - pdf
+          type: string
+          title: Format
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: string
+                format: binary
+            text/csv:
+              schema:
+                type: string
+                format: binary
+            text/html:
+              schema:
+                type: string
+                format: binary
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '503':
+          description: Signal Center schema has not been installed
+        '409':
+          description: Requested format is not ready
+        '410':
+          description: Report expired
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
+  "/api/signal-reports/{identity}/render":
+    post:
+      tags:
+      - signals
+      summary: Rerender
+      operationId: rerender_api_signal_reports__identity__render_post
+      parameters:
+      - name: identity
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Identity
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ReportOut"
+        '503':
+          description: Signal Center schema has not been installed
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
+  "/api/signal-reports/{identity}/deliveries":
+    post:
+      tags:
+      - signals
+      summary: Deliver
+      operationId: deliver_api_signal_reports__identity__deliveries_post
+      parameters:
+      - name: identity
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Identity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/DeliveryCreate"
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/QueuedOut"
+        '503':
+          description: Signal Center schema has not been installed
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
+  "/api/signal-reports/{identity}/deliveries/{delivery_id}/retry":
+    post:
+      tags:
+      - signals
+      summary: Retry Delivery
+      operationId: retry_delivery_api_signal_reports__identity__deliveries__delivery_id__retry_post
+      parameters:
+      - name: identity
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Identity
+      - name: delivery_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Delivery Id
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/DeliveryOut"
+        '503':
+          description: Signal Center schema has not been installed
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HTTPValidationError"
   /api/stock-screening/stocks:
     get:
       tags: [Market]
@@ -189,6 +1053,17 @@ paths:
               schema:
                 $ref: "#/components/schemas/RootResponse"
 
+  "/readyz":
+    get:
+      tags:
+      - Health
+      summary: Deployment and backtest worker readiness
+      responses:
+        '200':
+          description: Signal schema installed and backtest manager available
+        '503':
+          description: Unavailable worker or missing Signal Center tables; reason=signal_schema_missing
+            includes missing_tables
   /healthz:
     get:
       tags: [Health]
@@ -324,7 +1199,7 @@ paths:
   /api/strategies/proposals/validate:
     post:
       tags: [Strategies]
-      summary: Resolve a bounded Agent proposal against engine-ready catalog defaults
+      summary: Resolve a bounded Agent proposal against registered catalog defaults
       operationId: validateStrategyProposal
       x-implementation-status: implemented
       requestBody:
@@ -1565,6 +2440,1078 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
 
   schemas:
+    ChartBarOut:
+      properties:
+        trade_date:
+          type: string
+          format: date
+          title: Trade Date
+        open:
+          type: number
+          title: Open
+        high:
+          type: number
+          title: High
+        low:
+          type: number
+          title: Low
+        close:
+          type: number
+          title: Close
+        volume:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Volume
+        session_index:
+          type: integer
+          title: Session Index
+        price_source:
+          additionalProperties:
+            type: string
+          type: object
+          title: Price Source
+      type: object
+      required:
+      - trade_date
+      - open
+      - high
+      - low
+      - close
+      - volume
+      - session_index
+      - price_source
+      title: ChartBarOut
+    CoverageOut:
+      properties:
+        expected:
+          type: integer
+          title: Expected
+        evaluated:
+          type: integer
+          title: Evaluated
+        not_evaluated:
+          type: integer
+          title: Not Evaluated
+        reasons:
+          additionalProperties:
+            type: integer
+          type: object
+          title: Reasons
+      type: object
+      required:
+      - expected
+      - evaluated
+      - not_evaluated
+      - reasons
+      title: CoverageOut
+    DashboardSignalReportItem:
+      properties:
+        id:
+          type: string
+          title: Id
+        summary:
+          additionalProperties: true
+          type: object
+          title: Summary
+        status:
+          type: string
+          title: Status
+        published_at:
+          type: string
+          format: date-time
+          title: Published At
+        expires_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Expires At
+        retention_reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Retention Reason
+        deliveries:
+          additionalProperties:
+            type: integer
+          type: object
+          title: Deliveries
+      type: object
+      required:
+      - id
+      - summary
+      - status
+      - published_at
+      - expires_at
+      - retention_reason
+      - deliveries
+      title: DashboardSignalReportItem
+    DashboardSignalReports:
+      properties:
+        available:
+          type: boolean
+          title: Available
+          default: true
+        reports:
+          items:
+            "$ref": "#/components/schemas/DashboardSignalReportItem"
+          type: array
+          title: Reports
+        enabled_plans:
+          type: integer
+          title: Enabled Plans
+          default: 0
+        waiting_data:
+          type: integer
+          title: Waiting Data
+          default: 0
+        queued:
+          type: integer
+          title: Queued
+          default: 0
+        running:
+          type: integer
+          title: Running
+          default: 0
+        failed:
+          type: integer
+          title: Failed
+          default: 0
+        delivery_errors:
+          type: integer
+          title: Delivery Errors
+          default: 0
+        report_errors:
+          type: integer
+          title: Report Errors
+          default: 0
+      type: object
+      title: DashboardSignalReports
+    DeliveryCreate:
+      properties:
+        recipients:
+          items:
+            type: string
+          type: array
+          maxItems: 20
+          minItems: 1
+          title: Recipients
+      type: object
+      required:
+      - recipients
+      title: DeliveryCreate
+    DeliveryOut:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        report_id:
+          type: string
+          format: uuid
+          title: Report Id
+        recipient:
+          type: string
+          title: Recipient
+        status:
+          type: string
+          title: Status
+        attempts:
+          type: integer
+          title: Attempts
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        finished_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Finished At
+      type: object
+      required:
+      - id
+      - report_id
+      - recipient
+      - status
+      - attempts
+      - error
+      - created_at
+      - finished_at
+      title: DeliveryOut
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            "$ref": "#/components/schemas/ValidationError"
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    IndicatorOut:
+      properties:
+        key:
+          type: string
+          title: Key
+        unit:
+          type: string
+          title: Unit
+        pane:
+          type: string
+          title: Pane
+        values:
+          items:
+            "$ref": "#/components/schemas/IndicatorValueOut"
+          type: array
+          title: Values
+        thresholds:
+          items:
+            type: number
+          type: array
+          title: Thresholds
+      type: object
+      required:
+      - key
+      - unit
+      - pane
+      - values
+      title: IndicatorOut
+    IndicatorValueOut:
+      properties:
+        time:
+          type: string
+          format: date
+          title: Time
+        value:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Value
+      type: object
+      required:
+      - time
+      - value
+      title: IndicatorValueOut
+    ObservationOut:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        scan_id:
+          type: string
+          format: uuid
+          title: Scan Id
+        strategy_run_id:
+          type: string
+          format: uuid
+          title: Strategy Run Id
+        instrument_id:
+          type: integer
+          title: Instrument Id
+        symbol_as_of:
+          type: string
+          title: Symbol As Of
+        session_date:
+          type: string
+          format: date
+          title: Session Date
+        confirmed_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Confirmed At
+        event_type:
+          type: string
+          title: Event Type
+        event_kind:
+          type: string
+          enum:
+          - event
+          - condition
+          title: Event Kind
+        direction:
+          anyOf:
+          - type: string
+            enum:
+            - bullish
+            - bearish
+            - neutral
+          - type: 'null'
+          title: Direction
+        passes_signal_filters:
+          type: boolean
+          title: Passes Signal Filters
+        strength:
+          anyOf:
+          - additionalProperties:
+              "$ref": "#/components/schemas/JsonValue"
+            type: object
+          - type: 'null'
+          title: Strength
+        strategy_rank:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Strategy Rank
+        snapshot_ref:
+          type: string
+          title: Snapshot Ref
+        strategy_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Strategy Name
+        strategy_type:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Strategy Type
+        strategy_version:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Strategy Version
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason
+        evidence:
+          anyOf:
+          - additionalProperties:
+              "$ref": "#/components/schemas/JsonValue"
+            type: object
+          - type: 'null'
+          title: Evidence
+      type: object
+      required:
+      - id
+      - scan_id
+      - strategy_run_id
+      - instrument_id
+      - symbol_as_of
+      - session_date
+      - confirmed_at
+      - event_type
+      - event_kind
+      - direction
+      - passes_signal_filters
+      - strength
+      - strategy_rank
+      - snapshot_ref
+      title: ObservationOut
+    ObservationPage:
+      properties:
+        items:
+          items:
+            "$ref": "#/components/schemas/ObservationOut"
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+      type: object
+      required:
+      - items
+      - total
+      title: ObservationPage
+    PlanCreate:
+      properties:
+        basket_id:
+          type: string
+          format: uuid
+          title: Basket Id
+        strategy_ids:
+          items:
+            type: string
+            format: uuid
+          type: array
+          maxItems: 50
+          minItems: 1
+          title: Strategy Ids
+        market:
+          type: string
+          enum:
+          - US
+          - CN
+          title: Market
+        session_date:
+          anyOf:
+          - type: string
+            format: date
+          - type: 'null'
+          title: Session Date
+        name:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Name
+          default: Signal scan
+        language:
+          type: string
+          enum:
+          - zh-CN
+          - en-US
+          title: Language
+          default: zh-CN
+        recipients:
+          items:
+            type: string
+          type: array
+          maxItems: 20
+          title: Recipients
+        retention_sessions:
+          type: integer
+          maximum: 365.0
+          minimum: 1.0
+          title: Retention Sessions
+          default: 3
+        enabled:
+          type: boolean
+          title: Enabled
+          default: false
+      type: object
+      required:
+      - basket_id
+      - strategy_ids
+      - market
+      title: PlanCreate
+    PlanOut:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        name:
+          type: string
+          title: Name
+        market:
+          type: string
+          enum:
+          - US
+          - CN
+          title: Market
+        basket_id:
+          type: string
+          format: uuid
+          title: Basket Id
+        strategies:
+          items:
+            additionalProperties:
+              "$ref": "#/components/schemas/JsonValue"
+            type: object
+          type: array
+          title: Strategies
+        language:
+          type: string
+          enum:
+          - zh-CN
+          - en-US
+          title: Language
+        recipients:
+          items:
+            type: string
+          type: array
+          title: Recipients
+        retention_sessions:
+          type: integer
+          title: Retention Sessions
+        enabled:
+          type: boolean
+          title: Enabled
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+      type: object
+      required:
+      - id
+      - name
+      - market
+      - basket_id
+      - strategies
+      - language
+      - recipients
+      - retention_sessions
+      - enabled
+      - created_at
+      - updated_at
+      title: PlanOut
+    PlanPage:
+      properties:
+        items:
+          items:
+            "$ref": "#/components/schemas/PlanOut"
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+      type: object
+      required:
+      - items
+      - total
+      title: PlanPage
+    PlanToggle:
+      properties:
+        enabled:
+          type: boolean
+          title: Enabled
+      type: object
+      required:
+      - enabled
+      title: PlanToggle
+    QueuedOut:
+      properties:
+        status:
+          type: string
+          const: queued
+          title: Status
+      type: object
+      required:
+      - status
+      title: QueuedOut
+    ReportCreate:
+      properties:
+        language:
+          type: string
+          enum:
+          - zh-CN
+          - en-US
+          title: Language
+          default: zh-CN
+      type: object
+      title: ReportCreate
+    ReportOut:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        scan_id:
+          type: string
+          format: uuid
+          title: Scan Id
+        status:
+          type: string
+          title: Status
+        language:
+          type: string
+          enum:
+          - zh-CN
+          - en-US
+          title: Language
+        automatic:
+          type: boolean
+          title: Automatic
+        summary:
+          additionalProperties:
+            "$ref": "#/components/schemas/JsonValue"
+          type: object
+          title: Summary
+        published_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Published At
+        expires_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Expires At
+        expired_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Expired At
+        retention_reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Retention Reason
+        retention_sessions:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Retention Sessions
+        render_errors:
+          additionalProperties:
+            type: string
+          type: object
+          title: Render Errors
+        render_status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Render Status
+        render_error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Render Error
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        finished_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Finished At
+        formats:
+          items:
+            type: string
+          type: array
+          title: Formats
+        document:
+          anyOf:
+          - additionalProperties:
+              "$ref": "#/components/schemas/JsonValue"
+            type: object
+          - type: 'null'
+          title: Document
+        deliveries:
+          items:
+            additionalProperties:
+              "$ref": "#/components/schemas/JsonValue"
+            type: object
+          type: array
+          title: Deliveries
+      type: object
+      required:
+      - id
+      - scan_id
+      - status
+      - language
+      - automatic
+      - summary
+      - published_at
+      - expires_at
+      - expired_at
+      - retention_reason
+      - retention_sessions
+      - render_errors
+      - error
+      - created_at
+      - finished_at
+      title: ReportOut
+    ReportPage:
+      properties:
+        items:
+          items:
+            "$ref": "#/components/schemas/ReportOut"
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+      type: object
+      required:
+      - items
+      - total
+      title: ReportPage
+    ScanCreate:
+      properties:
+        basket_id:
+          type: string
+          format: uuid
+          title: Basket Id
+        strategy_ids:
+          items:
+            type: string
+            format: uuid
+          type: array
+          maxItems: 50
+          minItems: 1
+          title: Strategy Ids
+        market:
+          type: string
+          enum:
+          - US
+          - CN
+          title: Market
+        session_date:
+          anyOf:
+          - type: string
+            format: date
+          - type: 'null'
+          title: Session Date
+        name:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Name
+          default: Signal scan
+      type: object
+      required:
+      - basket_id
+      - strategy_ids
+      - market
+      title: ScanCreate
+    ScanDetailOut:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        name:
+          type: string
+          title: Name
+        market:
+          type: string
+          enum:
+          - US
+          - CN
+          title: Market
+        session_date:
+          type: string
+          format: date
+          title: Session Date
+        plan_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Plan Id
+        status:
+          type: string
+          title: Status
+        attempts:
+          type: integer
+          title: Attempts
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        finished_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Finished At
+        coverage:
+          additionalProperties:
+            "$ref": "#/components/schemas/CoverageOut"
+          type: object
+          title: Coverage
+        purged_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Purged At
+        manifest:
+          additionalProperties:
+            "$ref": "#/components/schemas/JsonValue"
+          type: object
+          title: Manifest
+        strategies:
+          items:
+            "$ref": "#/components/schemas/ScanStrategyOut"
+          type: array
+          title: Strategies
+      type: object
+      required:
+      - id
+      - name
+      - market
+      - session_date
+      - plan_id
+      - status
+      - attempts
+      - error
+      - created_at
+      - finished_at
+      - coverage
+      - purged_at
+      - manifest
+      - strategies
+      title: ScanDetailOut
+    ScanOut:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        name:
+          type: string
+          title: Name
+        market:
+          type: string
+          enum:
+          - US
+          - CN
+          title: Market
+        session_date:
+          type: string
+          format: date
+          title: Session Date
+        plan_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Plan Id
+        status:
+          type: string
+          title: Status
+        attempts:
+          type: integer
+          title: Attempts
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        finished_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Finished At
+        coverage:
+          additionalProperties:
+            "$ref": "#/components/schemas/CoverageOut"
+          type: object
+          title: Coverage
+        purged_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Purged At
+      type: object
+      required:
+      - id
+      - name
+      - market
+      - session_date
+      - plan_id
+      - status
+      - attempts
+      - error
+      - created_at
+      - finished_at
+      - coverage
+      - purged_at
+      title: ScanOut
+    ScanPage:
+      properties:
+        items:
+          items:
+            "$ref": "#/components/schemas/ScanOut"
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+      type: object
+      required:
+      - items
+      - total
+      title: ScanPage
+    ScanStrategyOut:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        scan_id:
+          type: string
+          format: uuid
+          title: Scan Id
+        strategy_id:
+          type: string
+          format: uuid
+          title: Strategy Id
+        strategy_type:
+          type: string
+          title: Strategy Type
+        version:
+          type: integer
+          title: Version
+        params_hash:
+          type: string
+          title: Params Hash
+        algorithm_revision:
+          type: string
+          title: Algorithm Revision
+        runtime:
+          additionalProperties:
+            "$ref": "#/components/schemas/JsonValue"
+          type: object
+          title: Runtime
+        status:
+          type: string
+          title: Status
+        coverage:
+          additionalProperties:
+            "$ref": "#/components/schemas/JsonValue"
+          type: object
+          title: Coverage
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error
+      type: object
+      required:
+      - id
+      - scan_id
+      - strategy_id
+      - strategy_type
+      - version
+      - params_hash
+      - algorithm_revision
+      - runtime
+      - status
+      - coverage
+      - error
+      title: ScanStrategyOut
+    SignalChartOut:
+      properties:
+        report_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Report Id
+        scan_id:
+          type: string
+          format: uuid
+          title: Scan Id
+        snapshot_id:
+          type: string
+          title: Snapshot Id
+        instrument_id:
+          type: integer
+          title: Instrument Id
+        symbol_as_of:
+          type: string
+          title: Symbol As Of
+        market:
+          type: string
+          enum:
+          - US
+          - CN
+          title: Market
+        session_timezone:
+          type: string
+          title: Session Timezone
+        timeframe:
+          type: string
+          const: 1d
+          title: Timeframe
+        price_semantics:
+          type: string
+          title: Price Semantics
+        as_of_session:
+          type: string
+          format: date
+          title: As Of Session
+        available_from:
+          type: string
+          format: date
+          title: Available From
+        available_to:
+          type: string
+          format: date
+          title: Available To
+        bars:
+          items:
+            "$ref": "#/components/schemas/ChartBarOut"
+          type: array
+          title: Bars
+        indicator_series:
+          items:
+            "$ref": "#/components/schemas/IndicatorOut"
+          type: array
+          title: Indicator Series
+        selected_signal_id:
+          type: string
+          format: uuid
+          title: Selected Signal Id
+        observation:
+          "$ref": "#/components/schemas/ObservationOut"
+        next_cursor:
+          anyOf:
+          - type: string
+            format: date
+          - type: 'null'
+          title: Next Cursor
+      type: object
+      required:
+      - report_id
+      - scan_id
+      - snapshot_id
+      - instrument_id
+      - symbol_as_of
+      - market
+      - session_timezone
+      - timeframe
+      - price_semantics
+      - as_of_session
+      - available_from
+      - available_to
+      - bars
+      - indicator_series
+      - selected_signal_id
+      - observation
+      - next_cursor
+      title: SignalChartOut
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+    JsonValue: {}
     StockFilters:
       type: object
       description: Industry and cap bounds require market. Cap amounts are base currency units; min_cap must not exceed max_cap.
@@ -1825,9 +3772,6 @@ components:
         version:
           title: Version
           type: integer
-        engine_ready:
-          title: Engine Ready
-          type: boolean
         backtest_id:
           anyOf:
             - type: string
@@ -1919,7 +3863,6 @@ components:
         - name
         - strategy_type
         - version
-        - engine_ready
         - evidence_status
       title: DashboardStrategyEvidence
       type: object
@@ -2023,6 +3966,8 @@ components:
       type: object
     DashboardOverview:
       properties:
+        signal_reports:
+          $ref: '#/components/schemas/DashboardSignalReports'
         generated_at:
           format: date-time
           title: Generated At
@@ -2156,28 +4101,13 @@ components:
       example:
         detail: strategy not found
 
-    ValidationError:
-      type: object
-      required: [loc, msg, type]
-      properties:
-        loc:
-          type: array
-          items:
-            oneOf:
-              - type: string
-              - type: integer
-        msg:
-          type: string
-        type:
-          type: string
-
     FreeFormObject:
       type: object
       additionalProperties: true
 
     StrategyType:
       type: string
-      enum: [trend, mean_reversion, momentum_breakout, island_reversal, double_bottom, head_shoulders_bottom, rounded_bottom, v_reversal, support_resistance, custom]
+      enum: [trend, mean_reversion, momentum_breakout, island_reversal, double_bottom, head_shoulders_bottom, rounded_bottom, v_reversal, support_resistance]
 
     StrategyStatus:
       type: string
@@ -2722,7 +4652,7 @@ components:
 
     StrategyCatalogItem:
       type: object
-      required: [strategy_type, label, description, engine_ready, defaults, parameter_schema, required_features, algorithm_revision, history_length]
+      required: [strategy_type, label, description, defaults, parameter_schema, required_features, algorithm_revision, history_length]
       properties:
         strategy_type:
           $ref: "#/components/schemas/StrategyType"
@@ -2730,8 +4660,6 @@ components:
           type: string
         description:
           type: string
-        engine_ready:
-          type: boolean
         defaults:
           oneOf:
             - $ref: "#/components/schemas/TrendStrategyParams"
@@ -2807,7 +4735,7 @@ components:
     StrategyOut:
       type: object
       required:
-        [id, strategy_key, display_name, name, strategy_type, params, status, version, engine_ready]
+        [id, strategy_key, display_name, name, strategy_type, params, status, version]
       properties:
         id:
           type: string
@@ -2830,8 +4758,6 @@ components:
         version:
           type: integer
           minimum: 1
-        engine_ready:
-          type: boolean
         created_at:
           type: string
           format: date-time
@@ -2874,12 +4800,12 @@ components:
 
     StrategyValidation:
       type: object
-      required: [valid, engine_ready, normalized_params]
+      required: [valid, strategy_type, normalized_params]
       properties:
         valid:
           type: boolean
-        engine_ready:
-          type: boolean
+        strategy_type:
+          $ref: "#/components/schemas/StrategyType"
         normalized_params:
           $ref: "#/components/schemas/FreeFormObject"
 
@@ -3130,11 +5056,15 @@ components:
     StrategyRuntimeOut:
       type: object
       required:
-        [strategy_id, name, version, status, strategy_type, engine_ready, params]
+        [strategy_id, strategy_key, display_name, name, version, status, strategy_type, params]
       properties:
         strategy_id:
           type: string
           format: uuid
+        strategy_key:
+          type: string
+        display_name:
+          type: string
         name:
           type: string
         version:
@@ -3143,9 +5073,7 @@ components:
         status:
           type: string
         strategy_type:
-          type: string
-        engine_ready:
-          type: boolean
+          $ref: "#/components/schemas/StrategyType"
         params:
           $ref: "#/components/schemas/FreeFormObject"
 

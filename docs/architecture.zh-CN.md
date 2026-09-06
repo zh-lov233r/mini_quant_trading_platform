@@ -2,6 +2,10 @@
 
 [English](architecture.md) | [文档索引](README.zh-CN.md)
 
+正式策略目录直接来自原生 descriptor，统一使用 `StrategyType` 契约；创建、克隆、proposal、研究与执行入口拒绝未支持类型和非法参数，不再保存策略就绪标记。新原生模块必须完成实现、测试、重建、部署与注册后才能进入目录。策略生命周期、研究证据、数据完整性和券商权限保持各自含义。
+
+本次契约移除 `custom` 与 `engine_ready`，不需要删除数据库列或改变算法 revision。连接现有数据库升级前，应在只读事务中检查未支持策略及关联的运行、信号、交易、快照、allocation、研究、待执行任务和冻结扫描计划。旧类型或不兼容任务快照会阻塞该数据库升级，清理需另行明确授权；仅归档不足以解决。没有自动迁移或清理，也没有 Alembic 工作流。后续授权清理前先备份确切范围，恢复时使用该备份及匹配代码；不得重置行情或调用可能联动券商平仓的策略删除入口。
+
 ## 系统边界
 
 系统由 FastAPI 后端、Next.js Pages Router 前端和 PostgreSQL 持久化组成。Massive 提供市场数据，Alpaca 只用于 paper trading 账户和 paper 订单。可选的 AgentOps 集成负责组织策略草案、有界研究实验以及只交付 Draft PR 的策略代码开发。

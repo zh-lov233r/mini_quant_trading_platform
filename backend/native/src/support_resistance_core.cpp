@@ -1582,12 +1582,12 @@ void record_zone(
     record_zone_version(state, zone, effective_date, status);
 }
 
-std::optional<Decision> advance_symbol(
+std::optional<Decision> advance_market_symbol(
     SymbolState& state,
     const Bar& bar,
-    const PositionView& position,
     const Config& config,
-    bool emit_signals
+    bool emit_signals,
+    const PositionView* position
 ) {
     if (!std::isfinite(bar.open) || !std::isfinite(bar.high) || !std::isfinite(bar.low)
         || !std::isfinite(bar.close) || !std::isfinite(bar.volume)
@@ -1693,8 +1693,8 @@ std::optional<Decision> advance_symbol(
         regime.payload = state.current_regime_evidence;
     }
 
-    const std::optional<Decision> exit_decision = position.quantity > 0.0
-        ? resolve_exit(position, bar, config, regime, state)
+    const std::optional<Decision> exit_decision = position && position->quantity > 0.0
+        ? resolve_exit(*position, bar, config, regime, state)
         : std::nullopt;
     std::vector<Candidate> candidates = detect_candidates(
         state, bar, frozen_zones, session_index, config
@@ -1726,7 +1726,7 @@ std::optional<Decision> advance_symbol(
     }
     const Candidate* selected = select_candidate(candidates);
 
-    resolve_prior_outcomes(state, bar, session_index, config, regime);
+    if (position) resolve_prior_outcomes(state, bar, session_index, config, regime);
     for (const Candidate& candidate : candidates) {
         JsonObject event = object({
             {"event_date", iso_date(bar.date_ordinal)},
@@ -1736,7 +1736,7 @@ std::optional<Decision> advance_symbol(
             set(event, item.first, item.second);
         }
         state.events.push_back(std::move(event));
-        if (candidate.entry_eligible && candidate.strength.passes_threshold
+        if (position && candidate.entry_eligible && candidate.strength.passes_threshold
             && std::none_of(state.pending_outcomes.begin(), state.pending_outcomes.end(),
                 [&](const PendingOutcome& outcome) { return outcome.setup == candidate.setup; })) {
             const auto channel = project_entry_channel(candidate.entry_channel);
@@ -1785,7 +1785,7 @@ std::optional<Decision> advance_symbol(
 
     if (!emit_signals) return std::nullopt;
     if (exit_decision) return exit_decision;
-    if (position.quantity > 0.0 || selected == nullptr || !selected->entry_eligible) {
+    if (position && position->quantity > 0.0 || selected == nullptr || !selected->entry_eligible) {
         return std::nullopt;
     }
     JsonArray raw_candidates;
@@ -1843,6 +1843,11 @@ std::optional<Decision> advance_symbol(
         selected->setup,
     };
     return decision;
+}
+
+std::optional<Decision> advance_symbol(SymbolState& state, const Bar& bar, const PositionView& position,
+    const Config& config, bool emit_signals) {
+    return advance_market_symbol(state, bar, config, emit_signals, &position);
 }
 
 EntrySizing size_entry(const JsonObject& frozen, double price, double equity, double cash,

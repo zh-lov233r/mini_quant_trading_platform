@@ -16,7 +16,7 @@ describe("cloneStrategy", () => {
       status: "draft",
       version: 1,
       params: {},
-      engine_ready: true,
+
     };
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

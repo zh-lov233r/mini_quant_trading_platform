@@ -4,6 +4,8 @@ from datetime import date, datetime
 from typing import Any, Literal
 from uuid import UUID
 
+from src.services.strategy_types import StrategyType
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -235,14 +237,7 @@ class CategoryStrategyProposal(BaseModel):
 
     name: str = Field(min_length=1, max_length=128)
     description: str = Field(min_length=1, max_length=500)
-    strategy_type: Literal[
-        "trend",
-        "mean_reversion",
-        "momentum_breakout",
-        "island_reversal",
-        "double_bottom",
-        "support_resistance",
-    ] = Field(alias="strategyType")
+    strategy_type: StrategyType = Field(alias="strategyType")
     overrides: dict[str, Any] = Field(default_factory=dict, max_length=30)
 
 
@@ -251,14 +246,7 @@ class CategoryStudyValidationRequest(BaseModel):
 
     workflow_run_id: str = Field(min_length=1, max_length=64, alias="workflowRunId")
     goal: str = Field(min_length=1, max_length=4000)
-    strategy_type: Literal[
-        "trend",
-        "mean_reversion",
-        "momentum_breakout",
-        "island_reversal",
-        "double_bottom",
-        "support_resistance",
-    ] = Field(alias="strategyType")
+    strategy_type: StrategyType = Field(alias="strategyType")
     strategy: CategoryStrategyProposal
     name: str = Field(min_length=1, max_length=160)
     hypothesis: str = Field(min_length=1, max_length=2000)
@@ -334,7 +322,7 @@ class AdaptiveExperimentSpec(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     hypothesis: str = Field(min_length=1, max_length=2000)
     strategy_id: UUID = Field(alias="strategyId")
-    strategy_type: str = Field(min_length=1, max_length=32, alias="strategyType")
+    strategy_type: StrategyType = Field(alias="strategyType")
     basket_id: UUID | None = Field(default=None, alias="basketId")
     symbols: list[str] = Field(default_factory=list)
     universe_policy: PointInTimeUniversePolicy | None = Field(

@@ -39,7 +39,6 @@ from src.services.market_data_maintenance_service import assert_market_data_subm
 from src.services.strategy_registry import (
     build_strategy_catalog,
     extract_description,
-    is_engine_ready,
     normalize_strategy_params,
 )
 from src.services.strategy_service import create_strategy_version, validate_strategy_params
@@ -58,7 +57,7 @@ def _catalog_item(strategy_type: str) -> dict[str, Any]:
         (entry for entry in build_strategy_catalog() if entry["strategy_type"] == strategy_type),
         None,
     )
-    if item is None or not item.get("engine_ready"):
+    if item is None:
         raise ValueError(f"strategy type has no engine handler: {strategy_type}")
     return item
 
@@ -147,8 +146,6 @@ def validate_category_study(
     else:
         base_params["universe"]["symbols"] = symbols
         base_params["universe"]["selection_mode"] = "stock_basket" if payload.basket_id else "manual"
-    if not is_engine_ready(payload.strategy_type, base_params):
-        raise ValueError("generated strategy is not engine-ready")
 
     seen: set[str] = set()
     normalized_candidates: list[dict[str, Any]] = []
@@ -402,8 +399,6 @@ def create_category_study(
         params=strategy.params,
         description=extract_description(strategy.params),
     )
-    if not is_engine_ready(strategy.strategy_type, base_params):
-        raise ValueError("draft strategy is not engine-ready")
     symbols, universe = _load_universe(db, spec)
     now = datetime.now(UTC)
     experiment = ResearchExperiment(

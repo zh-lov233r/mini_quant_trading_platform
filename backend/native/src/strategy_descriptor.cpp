@@ -453,7 +453,6 @@ py::list strategy_catalog() {
         item["strategy_type"] = value.strategy_type;
         item["label"] = value.label;
         item["description"] = value.description;
-        item["engine_ready"] = true;
         item["defaults"] = defaults;
         item["algorithm_revision"] = value.revision;
         item["history_length"] = value.history_length;

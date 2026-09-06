@@ -89,7 +89,7 @@ The published Quant research workflow requires `stopPolicy` with at least one ti
 
 The engine-category workflow accepts `support_resistance` without changing the selected type. The planner may vary existing scalar mode switches and numeric `signal.*` / `risk.*` leaves, while Quant rejects any candidate that disables all three entry modes. This does not add portfolio, scheduler, or order permissions.
 
-The same workflow treats `head_shoulders_bottom`, `rounded_bottom`, and `v_reversal` as locked engine-ready categories. The planner may study existing pattern thresholds and staged targets, but Quant rejects targets that are not strictly increasing or whose third stage is not 100%; generated strategies remain Draft.
+The same workflow treats `head_shoulders_bottom`, `rounded_bottom`, and `v_reversal` as locked registered categories. The planner may study existing pattern thresholds and staged targets, but Quant rejects targets that are not strictly increasing or whose third stage is not 100%; generated strategies remain Draft.
 
 While the workflow is `waiting_external`, AgentOps periodically sends cumulative usage to the authenticated experiment usage endpoint. Quant records that usage and re-evaluates all stop conditions. A triggered stop records termination evidence, cancels queued trials, and lets already-running synchronous work finish safely. See [Research experiments](research-experiments.md) for exact fields and semantics.
 
@@ -102,5 +102,7 @@ While the workflow is `waiting_external`, AgentOps periodically sends cumulative
 - The exclusive market-data maintenance gate rejects new studies and promotions, drains the complete experiment, invalidates derived caches, and only then permits source writes. A failed maintenance stays blocked until a successful rerun.
 - Cancellation stops new trial claims; already-running synchronous backtests reach a safe boundary before `cancelled`.
 - Policy-stopped and cancelled experiments do not resume queued work after restart.
-- A new code strategy remains in a Draft PR until it is reviewed, merged, rebuilt into the native wheel, deployed, and present in the engine-ready catalog.
+- A new code strategy remains in a Draft PR until it is reviewed, merged, rebuilt into the native wheel, deployed, and present in the registered catalog.
 - Robustness reports are research evidence, not proof of profitability or live-trading safety.
+
+The catalog, strategy detail/list, runtime, validation, and Dashboard responses no longer expose `engine_ready`; `custom` is rejected by the shared type contract. Consumers such as AgentOps must remove readiness filters and use catalog membership plus parameter validation. `POST /api/strategies/validate` returns `valid`, `strategy_type`, and `normalized_params`. This change does not implement AgentOps decoupling or automatic native-code publication.

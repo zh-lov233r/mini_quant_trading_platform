@@ -1,5 +1,7 @@
 # 自动策略验证与自动回测交付报告（2026-08-25）
 
+> 历史记录：本文中的 custom / Engine Ready 契约已被移除；当前行为见 [策略架构](architecture.zh-CN.md) 与 [Agent 研究集成](agent-research-integration.zh-CN.md)。
+
 ## 结论
 
 **最终状态：PASS**

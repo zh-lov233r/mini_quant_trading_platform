@@ -50,7 +50,7 @@ export default function ResearchHomePage() {
     Promise.all([listResearchExperiments(), getStrategyCatalog(), getStrategyFeatureSupport()])
       .then(([experiments, categories, support]) => {
         if (cancelled) return;
-        const executable = categories.filter((item) => item.engine_ready);
+        const executable = categories;
         setItems(experiments);
         setCatalog(executable);
         setFeatureSupport(support);
@@ -139,7 +139,7 @@ export default function ResearchHomePage() {
               </div>
               <p style={noticeStyle}>{isZh ? "默认 3 轮 / 48 个实际回测；目标、自动创建的 draft 和首轮候选会在实验审批前展示。" : "Defaults: 3 rounds / 48 actual backtests. Objectives, the auto-created draft, and first-round candidates appear before approval."}</p>
             </>
-          ) : <p style={noticeStyle}>{isZh ? "Draft PR 合并部署并注册为 engine-ready 后，才能从“大类研究”发起参数实验。" : "After the Draft PR is merged, deployed, and registered as engine-ready, use category research for parameter experiments."}</p>}
+          ) : <p style={noticeStyle}>{isZh ? "Draft PR 合并部署并注册后，才能从“大类研究”发起参数实验。" : "After the Draft PR is merged, deployed, and registered in the catalog, use category research for parameter experiments."}</p>}
           <label htmlFor="research-goal" style={labelStyle}>{isZh ? "研究目标与约束" : "Research goal and constraints"}</label>
           <textarea id="research-goal" value={goal} onChange={(event) => setGoal(event.target.value)} rows={7} placeholder={mode === "category" ? (isZh ? "例如：在 AAPL、MSFT 上研究低回撤趋势策略，明确样本内外窗口与成本压力。" : "For example: research a low-drawdown trend strategy on AAPL and MSFT with explicit windows and cost stress.") : (isZh ? "描述没有现成 handler 的算法、验收标准和回归测试。" : "Describe the algorithm without an existing handler, acceptance criteria, and regression tests.")} style={inputStyle} />
           <div style={actionRowStyle}><span style={{ color: "#94a3b8" }}>{isZh ? "Agent 无权激活策略、创建 allocation 或触发订单。" : "The agent cannot activate strategies, allocate capital, or submit orders."}</span><button disabled={submitting || !goal.trim() || (mode === "category" && !strategyType)} style={primaryButton}>{submitting ? (isZh ? "正在启动…" : "Starting…") : (isZh ? "生成研究提案" : "Generate research proposal")}</button></div>

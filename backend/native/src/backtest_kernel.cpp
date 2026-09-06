@@ -1,3 +1,4 @@
+#include "market_conditions.hpp"
 #include "backtest_kernel.hpp"
 #include "pattern_kernel.hpp"
 #include "support_resistance_kernel.hpp"
@@ -1236,10 +1237,10 @@ std::optional<SignalRecord> evaluate_signal(
             const double previous_slow = dataset.floats.at(row, config.previous_slow_column);
             if (!std::isfinite(fast) || !std::isfinite(slow)
                 || !std::isfinite(previous_fast) || !std::isfinite(previous_slow)) return std::nullopt;
-            if (previous_fast <= previous_slow && fast > slow) {
+            if (market::crossover(previous_fast, previous_slow, fast, slow) == 1) {
                 action = Action::Buy;
                 reason = config.fast_key + " crossed above " + config.slow_key;
-            } else if (previous_fast >= previous_slow && fast < slow) {
+            } else if (market::crossover(previous_fast, previous_slow, fast, slow) == -1) {
                 action = Action::Sell;
                 reason = config.fast_key + " crossed below " + config.slow_key;
             } else {
@@ -1286,10 +1287,10 @@ std::optional<SignalRecord> evaluate_signal(
             reason = "zscore_" + std::to_string(config.zscore_lookback) + " reverted above exit threshold";
         } else if (!zscore) {
             return std::nullopt;
-        } else if (*zscore <= -config.zscore_entry) {
+        } else if (market::deviation(*zscore, config.zscore_entry) == 1) {
             action = Action::Buy;
             reason = "zscore_" + std::to_string(config.zscore_lookback) + " below negative entry threshold";
-        } else if (*zscore >= config.zscore_entry) {
+        } else if (market::deviation(*zscore, config.zscore_entry) == -1) {
             action = Action::Sell;
             reason = "zscore_" + std::to_string(config.zscore_lookback) + " above positive entry threshold";
         } else {
@@ -1326,9 +1327,7 @@ std::optional<SignalRecord> evaluate_signal(
         } else if (quantity > 0.0 && (*close < *sma || *return_20d <= config.exit_return_20d)) {
             action = Action::Sell;
             reason = "20-day momentum or SMA20 support failed";
-        } else if (quantity <= 0.0 && *close >= threshold
-            && *return_20d >= config.minimum_return_20d
-            && volume_ratio >= config.volume_multiplier) {
+        } else if (quantity <= 0.0 && market::momentum(*close, threshold, *return_20d, config.minimum_return_20d, volume_ratio, config.volume_multiplier)) {
             action = Action::Buy;
             reason = "adjusted close confirmed a volume-backed 20-day momentum breakout";
         } else {

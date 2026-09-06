@@ -4,6 +4,7 @@ import argparse
 import atexit
 import os
 import subprocess
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -24,8 +25,8 @@ MAINTENANCE_OWNER_TOKEN: str | None = None
 
 LATEST_COVERAGE_SQL = """
 SELECT
-  (SELECT MAX(dt_ny) FROM eod_bars) AS latest_eod_date,
-  (SELECT MAX(dt_ny) FROM daily_features) AS latest_feature_date
+  (SELECT MAX(b.dt_ny) FROM eod_bars b JOIN instruments i ON i.id=b.instrument_id WHERE i.currency='USD') AS latest_eod_date,
+  (SELECT MAX(f.dt_ny) FROM daily_features f JOIN instruments i ON i.id=f.instrument_id WHERE i.currency='USD') AS latest_feature_date
 """
 
 
@@ -36,17 +37,25 @@ class CoverageWindow:
 
 
 class MaintenanceWindow:
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, *, market: str) -> None:
         self.database_url = database_url
+        if market not in ("US", "CN"):
+            raise ValueError("maintenance market must be US or CN")
+        self.market = market
         self.owner_token = str(uuid4())
         self.conn: psycopg.Connection | None = None
         self.closed = False
+        self.error_message = "maintenance exited before pipeline and quality gate completed"
 
     def start(self) -> None:
         global MAINTENANCE_OWNER_TOKEN
 
         self.conn = psycopg.connect(_psycopg_dsn(self.database_url), autocommit=True)
         with self.conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('signal_data_ready'), to_regclass('signal_scan_runs')")
+            if any(name is None for name in cur.fetchone()):
+                self.conn.close()
+                raise SystemExit("Signal Center schema is missing; preflight and authorize schema installation before maintenance")
             cur.execute("SELECT pg_try_advisory_lock(%s)", (MARKET_DATA_COORDINATOR_LOCK_KEY,))
             if not cur.fetchone()[0]:
                 self.conn.close()
@@ -90,6 +99,7 @@ class MaintenanceWindow:
                 """
             )
             invalidated = cur.rowcount
+            cur.execute("UPDATE signal_data_ready SET valid = FALSE WHERE valid AND market = %s", (self.market,))
 
         backend_path = str(REPO_ROOT / "backend")
         if backend_path not in sys.path:
@@ -110,7 +120,8 @@ class MaintenanceWindow:
                 cur.execute(
                     """
                     SELECT
-                      (SELECT COUNT(*) FROM backtest_jobs WHERE status IN ('queued', 'running')),
+                      (SELECT COUNT(*) FROM backtest_jobs WHERE status IN ('queued', 'running')) +
+                      (SELECT COUNT(*) FROM signal_scan_runs WHERE status IN ('queued', 'running')),
                       (SELECT COUNT(*) FROM research_experiments WHERE status NOT IN (
                         'completed', 'partially_failed', 'failed', 'cancelled'
                       ))
@@ -162,7 +173,7 @@ class MaintenanceWindow:
                     WHERE id = 1 AND owner_token = %s
                     """,
                     (
-                        "market-data maintenance exited before the pipeline and quality gate completed",
+                        self.error_message[:2000],
                         self.owner_token,
                     ),
                 )
@@ -323,7 +334,7 @@ def _resolve_date_range(
             catchup_candidates.append(coverage.latest_feature_date + timedelta(days=1))
 
         if catchup_candidates:
-            start_date = min(catchup_candidates)
+            start_date = min(min(catchup_candidates), end_date - timedelta(days=args.lookback_days - 1))
             reason = "catching up from the earliest missing table coverage"
         else:
             start_date = end_date - timedelta(days=args.lookback_days - 1)
@@ -353,7 +364,21 @@ def _run_step(
     if MAINTENANCE_OWNER_TOKEN is not None:
         env["MARKET_DATA_MAINTENANCE_OWNER"] = MAINTENANCE_OWNER_TOKEN
     print(f"\n[{step_name}] {printable}", flush=True)
-    subprocess.run(command, cwd=REPO_ROOT, env=env, check=True)
+    try:
+        result = subprocess.run(command, cwd=REPO_ROOT, env=env, check=True, stderr=subprocess.PIPE, text=True)
+        if isinstance(result.stderr, str) and result.stderr:
+            print(redact_error(result.stderr), file=sys.stderr, flush=True)
+    except subprocess.CalledProcessError as exc:
+        detail = redact_error(exc.stderr or "child exited without an error message")
+        raise RuntimeError(f"step={step_name} exit={exc.returncode}: {detail[-1200:]}") from None
+
+
+def redact_error(message: str) -> str:
+    for key, value in os.environ.items():
+        if value and len(value) > 4 and any(name in key.upper() for name in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "DATABASE_URL")):
+            message = message.replace(value, "[REDACTED]")
+    message = re.sub(r"postgres(?:ql)?(?:\+\w+)?://[^\s'\"]+", "[REDACTED_DATABASE]", message)
+    return re.sub(r"(?i)(apiKey=)[^&\s'\"]+", r"\1[REDACTED]", message)
 
 
 def _run_adjusted_price_refresh(shared_args: list[str], *, database_url: str) -> None:
@@ -381,6 +406,7 @@ def _run_quality_check(database_url: str, as_of_date: date, *, strict: bool) -> 
     quality_args = [
         "--as-of-date",
         as_of_date.isoformat(),
+        "--market", "US",
     ]
     if strict:
         quality_args.append("--strict")
@@ -438,149 +464,166 @@ def main() -> None:
     if args.skip_quality_check and not args.dry_run:
         raise SystemExit("--skip-quality-check is only allowed with --dry-run")
 
-    maintenance: MaintenanceWindow | None = None
-    if not args.dry_run:
-        maintenance = MaintenanceWindow(args.database_url)
-        maintenance.start()
+    maintenance = None if args.dry_run else MaintenanceWindow(args.database_url, market="US")
+    try:
+        if maintenance is not None:
+            maintenance.start()
+        shared_args = [
+            "--start-date",
+            start_date.isoformat(),
+            "--end-date",
+            end_date.isoformat(),
+        ]
 
-    shared_args = [
-        "--start-date",
-        start_date.isoformat(),
-        "--end-date",
-        end_date.isoformat(),
-    ]
-
-    if args.dry_run:
-        print("\nDry run: security-master sync is skipped because it has no dry-run mode.", flush=True)
-    elif args.skip_security_master:
-        print("\nSkipping security-master sync by request.", flush=True)
-    else:
-        _run_script(
-            "sync-security-master",
-            "backfill_instruments_and_symbol.py",
-            [],
-            database_url=args.database_url,
-        )
-
-    reference_args: list[str] = []
-    if args.full_reference_refresh:
-        reference_args.append("--full-refresh")
-    if args.dry_run:
-        reference_args.append("--dry-run")
-
-    if args.skip_sic:
-        print("\nSkipping SIC enrichment by request.", flush=True)
-    else:
-        _run_script(
-            "sync-sic-reference",
-            "backfill_sic_from_massive.py",
-            reference_args,
-            database_url=args.database_url,
-        )
-
-    if args.skip_ticker_events:
-        print("\nSkipping ticker-event sync by request.", flush=True)
-    else:
-        _run_script(
-            "sync-ticker-events",
-            "backfill_ticker_events_from_massive.py",
-            reference_args,
-            database_url=args.database_url,
-        )
-
-    eod_args = [
-        *shared_args,
-        "--skip-security-master",
-        "--skip-features",
-        "--skip-adjustments",
-        "--skip-corporate-actions",
-    ]
-    if args.dry_run:
-        eod_args.append("--dry-run")
-    _run_script(
-        "fill-eod-gaps",
-        "backfill_missing_eod_from_massive.py",
-        eod_args,
-        database_url=args.database_url,
-    )
-
-    if args.skip_vwap:
-        print("\nSkipping VWAP enrichment by request.", flush=True)
-    else:
-        vwap_args = [*shared_args]
         if args.dry_run:
-            vwap_args.append("--dry-run")
+            print("\nDry run: security-master sync is skipped because it has no dry-run mode.", flush=True)
+        elif args.skip_security_master:
+            print("\nSkipping security-master sync by request.", flush=True)
+        else:
+            _run_script(
+                "sync-security-master",
+                "backfill_instruments_and_symbol.py",
+                [],
+                database_url=args.database_url,
+            )
+
+        reference_args: list[str] = []
+        if args.full_reference_refresh:
+            reference_args.append("--full-refresh")
+        if args.dry_run:
+            reference_args.append("--dry-run")
+
+        if args.skip_sic:
+            print("\nSkipping SIC enrichment by request.", flush=True)
+        else:
+            _run_script(
+                "sync-sic-reference",
+                "backfill_sic_from_massive.py",
+                reference_args,
+                database_url=args.database_url,
+            )
+
+        if args.skip_ticker_events:
+            print("\nSkipping ticker-event sync by request.", flush=True)
+        else:
+            _run_script(
+                "sync-ticker-events",
+                "backfill_ticker_events_from_massive.py",
+                reference_args,
+                database_url=args.database_url,
+            )
+
+        eod_args = [
+            *shared_args,
+            "--refresh-existing",
+            "--skip-security-master",
+            "--skip-features",
+            "--skip-adjustments",
+            "--skip-corporate-actions",
+        ]
+        if args.dry_run:
+            eod_args.append("--dry-run")
         _run_script(
-            "fill-vwap-gaps",
-            "backfill_vwap_from_massive.py",
-            vwap_args,
+            "fill-eod-gaps",
+            "backfill_missing_eod_from_massive.py",
+            eod_args,
             database_url=args.database_url,
         )
 
-    if args.dry_run:
+        if args.skip_vwap:
+            print("\nSkipping VWAP enrichment by request.", flush=True)
+        else:
+            vwap_args = [*shared_args]
+            if args.dry_run:
+                vwap_args.append("--dry-run")
+            _run_script(
+                "fill-vwap-gaps",
+                "backfill_vwap_from_massive.py",
+                vwap_args,
+                database_url=args.database_url,
+            )
+
+        if args.dry_run:
+            print(
+                "\nDry run enabled; skipping corporate-action, adjusted-price, and daily_features refresh because no EOD rows were written.",
+                flush=True,
+            )
+        elif args.skip_corporate_actions:
+            print("\nSkipping corporate-action sync by request.", flush=True)
+        else:
+            _run_corporate_action_sync(shared_args, database_url=args.database_url)
+
+        if args.dry_run:
+            pass
+        elif args.skip_adjustments:
+            print("\nSkipping adjusted-price refresh by request.", flush=True)
+        else:
+            _run_adjusted_price_refresh(shared_args, database_url=args.database_url)
+
+        if args.skip_short_interest:
+            print("\nSkipping short-interest sync by request.", flush=True)
+        else:
+            short_args = ["--end-date", end_date.isoformat()]
+            if args.start_date:
+                short_args[0:0] = ["--start-date", start_date.isoformat()]
+            else:
+                short_args.extend(["--lookback-days", "60"])
+            if args.dry_run:
+                short_args.append("--dry-run")
+            _run_script(
+                "sync-short-interest",
+                "backfill_short_interest_from_massive.py",
+                short_args,
+                database_url=args.database_url,
+            )
+
+        if args.dry_run:
+            pass
+        elif args.skip_features:
+            print("\nSkipping daily_features refresh by request.", flush=True)
+        else:
+            feature_script = REPO_ROOT / "backend" / "utils" / "backfill_daily_features.py"
+            _run_step(
+                "refresh-daily-features",
+                feature_script,
+                [*shared_args, "--market", "US", "--repair-stale"],
+                database_url=args.database_url,
+            )
+
+        final_coverage = _load_latest_coverage(args.database_url)
+        print("\nCoverage after run:", flush=True)
         print(
-            "\nDry run enabled; skipping corporate-action, adjusted-price, and daily_features refresh because no EOD rows were written.",
+            f"  latest_eod_date={final_coverage.latest_eod_date} "
+            f"latest_feature_date={final_coverage.latest_feature_date}",
             flush=True,
         )
-    elif args.skip_corporate_actions:
-        print("\nSkipping corporate-action sync by request.", flush=True)
-    else:
-        _run_corporate_action_sync(shared_args, database_url=args.database_url)
-
-    if args.dry_run:
-        pass
-    elif args.skip_adjustments:
-        print("\nSkipping adjusted-price refresh by request.", flush=True)
-    else:
-        _run_adjusted_price_refresh(shared_args, database_url=args.database_url)
-
-    if args.skip_short_interest:
-        print("\nSkipping short-interest sync by request.", flush=True)
-    else:
-        short_args = ["--end-date", end_date.isoformat()]
-        if args.start_date:
-            short_args[0:0] = ["--start-date", start_date.isoformat()]
+        if args.skip_quality_check:
+            print("Skipping market-data quality check by request.", flush=True)
         else:
-            short_args.extend(["--lookback-days", "60"])
-        if args.dry_run:
-            short_args.append("--dry-run")
-        _run_script(
-            "sync-short-interest",
-            "backfill_short_interest_from_massive.py",
-            short_args,
-            database_url=args.database_url,
-        )
-
-    if args.dry_run:
-        pass
-    elif args.skip_features:
-        print("\nSkipping daily_features refresh by request.", flush=True)
-    else:
-        feature_script = REPO_ROOT / "backend" / "utils" / "backfill_daily_features.py"
-        _run_step(
-            "refresh-daily-features",
-            feature_script,
-            shared_args,
-            database_url=args.database_url,
-        )
-
-    final_coverage = _load_latest_coverage(args.database_url)
-    print("\nCoverage after run:", flush=True)
-    print(
-        f"  latest_eod_date={final_coverage.latest_eod_date} "
-        f"latest_feature_date={final_coverage.latest_feature_date}",
-        flush=True,
-    )
-    if args.skip_quality_check:
-        print("Skipping market-data quality check by request.", flush=True)
-    else:
-        _run_quality_check(
-            args.database_url,
-            end_date,
-            strict=args.strict_quality_check,
-        )
-    if maintenance is not None:
-        maintenance.succeed()
+            _run_quality_check(
+                args.database_url,
+                end_date,
+                strict=args.strict_quality_check,
+            )
+        if maintenance is not None:
+            try:
+                from .signal_market_state import publish_ready, sync_us_calendar
+            except ImportError:
+                from signal_market_state import publish_ready, sync_us_calendar
+            if not args.skip_features and not args.skip_adjustments and not args.skip_corporate_actions and not args.skip_quality_check:
+                publish_ready(args.database_url,"US",start_date,end_date)
+            try:
+                sync_us_calendar(args.database_url)
+            except (ValueError, OSError) as exc:
+                print(f"Signal calendar unavailable: {type(exc).__name__}; retention will wait.", flush=True)
+            maintenance.succeed()
+    except (Exception, SystemExit) as exc:
+        if maintenance is not None:
+            maintenance.error_message = redact_error(f"US {start_date}..{end_date}: {type(exc).__name__}: {exc}")
+        raise
+    finally:
+        if maintenance is not None:
+            maintenance.fail_if_open()
 
 
 if __name__ == "__main__":

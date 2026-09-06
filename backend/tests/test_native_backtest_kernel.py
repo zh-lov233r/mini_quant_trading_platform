@@ -158,7 +158,6 @@ class NativeBacktestKernelTests(unittest.TestCase):
                     "risk": {"max_positions": 1, "position_size_pct": 0.5},
                 },
             ),
-            "engine_ready": True,
         }
 
     def _universe_policy(self) -> dict[str, object]:
@@ -276,7 +275,6 @@ class NativeBacktestKernelTests(unittest.TestCase):
                     "risk": {"max_positions": 1, "position_size_pct": 0.5},
                 },
             ),
-            "engine_ready": True,
         }
 
     @staticmethod
@@ -347,7 +345,6 @@ class NativeBacktestKernelTests(unittest.TestCase):
             "strategy_id": f"native-{strategy_type}",
             "strategy_type": strategy_type,
             "params": normalize_strategy_params(strategy_type, raw),
-            "engine_ready": True,
         }
 
     def _pattern_matrix_days(
@@ -1051,7 +1048,6 @@ class NativeBacktestKernelTests(unittest.TestCase):
                     "risk": {"max_positions": 100, "position_size_pct": 0.001},
                 },
             ),
-            "engine_ready": True,
         }
         begin = threading.Event()
         ready = threading.Event()
@@ -1495,7 +1491,6 @@ class NativeBacktestKernelTests(unittest.TestCase):
                     "universe": {"symbols": ["TEST"], "selection_mode": "manual"},
                 },
             ),
-            "engine_ready": True,
         }
         callbacks: list[tuple[int, int]] = []
 

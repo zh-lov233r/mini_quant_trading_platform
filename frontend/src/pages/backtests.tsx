@@ -26,7 +26,6 @@ import {
   formatPercent,
   getStrategyCategoryPresentation,
   getStrategyDescription,
-  summarizeStrategies,
 } from "@/utils/strategy";
 import { clampPageIndex, pageCount, paginateItems } from "@/utils/pagination";
 import { defaultBenchmarkForBasket, filterBacktestRuns, isAShareBasket } from "@/utils/backtestFilters";
@@ -319,30 +318,29 @@ export default function BacktestsPage() {
         setBaskets(basketItems);
         setWorkerStatus(statusItem);
         setWorkerStatusUnavailable(statusItem == null);
-        const eligibleStrategyItems = strategyItems.filter((item) => item.engine_ready);
         setStrategyId((current) => {
           if (
             preselectedStrategyId
-            && eligibleStrategyItems.some((item) => item.id === preselectedStrategyId)
+            && strategyItems.some((item) => item.id === preselectedStrategyId)
           ) {
             return preselectedStrategyId;
           }
-          if (current && eligibleStrategyItems.some((item) => item.id === current)) {
+          if (current && strategyItems.some((item) => item.id === current)) {
             return current;
           }
 
           const restoredStrategyId = restoredStrategyIdRef.current;
           if (
             restoredStrategyId
-            && eligibleStrategyItems.some((item) => item.id === restoredStrategyId)
+            && strategyItems.some((item) => item.id === restoredStrategyId)
           ) {
             return restoredStrategyId;
           }
 
           const preferred = strategyItems.find(
-            (item) => item.engine_ready && item.status === "active"
+            (item) => item.status === "active"
           );
-          return preferred?.id || eligibleStrategyItems[0]?.id || strategyItems[0]?.id || "";
+          return preferred?.id || strategyItems[0]?.id || "";
         });
       })
       .catch((err: Error) => {
@@ -442,10 +440,6 @@ export default function BacktestsPage() {
     };
   }, [loading]);
 
-  const eligibleStrategies = useMemo(
-    () => strategies.filter((item) => item.engine_ready),
-    [strategies]
-  );
 
   const strategyTypesById = useMemo(
     () => new Map(strategies.map((item) => [item.id, item.strategy_type])),
@@ -591,8 +585,8 @@ export default function BacktestsPage() {
       title={isZh ? "回测工作台" : "Backtest Workspace"}
       subtitle={
         isZh
-          ? "从策略库直接挑选 engine-ready 策略，提交一次完整回测，并把 run、交易、净值快照沉淀到后端"
-          : "Select an engine-ready strategy from the library, submit a full backtest, and persist runs, transactions, and equity snapshots to the backend."
+          ? "从策略库直接挑选策略，提交一次完整回测，并把 run、交易、净值快照沉淀到后端"
+          : "Select a strategy from the library, submit a full backtest, and persist runs, transactions, and equity snapshots to the backend."
       }
       actions={
         <>
@@ -687,11 +681,11 @@ export default function BacktestsPage() {
           >
             <MetricCard
               label={isZh ? "可回测策略" : "Backtestable Strategies"}
-              value={String(eligibleStrategies.length)}
+              value={String(strategies.length)}
               hint={
                 isZh
-                  ? `当前共有 ${summarizeStrategies(strategies).engineReady} 个 engine-ready 策略。回测页默认只建议你挑这部分策略`
-                  : `${summarizeStrategies(strategies).engineReady} engine-ready strategies are currently available. The backtest page prioritizes this set by default.`
+                  ? `当前共有 ${strategies.length} 个策略；运行前会检查参数和所需数据`
+                  : `${strategies.length} strategies are available; parameters and required data are checked before execution.`
               }
               accent="#0f766e"
             />
@@ -770,7 +764,7 @@ export default function BacktestsPage() {
                     fontFamily: "\"Avenir Next\", \"Segoe UI\", \"Helvetica Neue\", sans-serif",
                   }}
                 >
-                  <div>{isZh ? "1. 选择一个 `engine-ready` 的策略" : "1. Choose an `engine-ready` strategy"}</div>
+                  <div>{isZh ? "1. 选择一个策略" : "1. Choose a strategy"}</div>
                   <div>{isZh ? "2. 设定回测区间、初始资金和对标基准" : "2. Set the backtest window, starting cash, and benchmark"}</div>
                   <div>{isZh ? "3. 提交后在后台继续运行" : "3. Submit and let it continue in the background"}</div>
                 </div>
@@ -788,8 +782,8 @@ export default function BacktestsPage() {
                     {fieldBlock(
                       isZh ? "策略" : "Strategy",
                       isZh
-                        ? "选择本次要回测的策略定义。优先选择 active 且 engine-ready 的策略，因为它们已经能被后端引擎直接消费"
-                        : "Choose the strategy definition for this run. Prefer active, engine-ready strategies because the backend engine can consume them directly.",
+                        ? "选择本次回测的策略；Draft 也可回测，执行前会检查参数和所需数据"
+                        : "Choose a strategy for this run. Drafts can also be backtested; parameters and required data are checked before execution.",
                       <SearchableSelect
                         value={strategyId}
                         onValueChange={setStrategyId}
@@ -800,7 +794,7 @@ export default function BacktestsPage() {
                         clearSearchLabel={isZh ? "清空策略搜索" : "Clear strategy search"}
                         invalid={Boolean(submitError && !strategyId)}
                         sortOptions={false}
-                        options={eligibleStrategies.map((item) => {
+                        options={strategies.map((item) => {
                           const presentation = getStrategyCategoryPresentation(item.strategy_type, locale);
                           return {
                             value: item.id,
@@ -1262,8 +1256,8 @@ export default function BacktestsPage() {
                   }}
                 >
                   {isZh
-                    ? "还没有回测记录。先从一个 active 且 engine-ready 的策略开始"
-                    : "No backtests yet. Start with one active, engine-ready strategy."}
+                    ? "还没有回测记录。先从一个 active 的策略开始"
+                    : "No backtests yet. Start with one active strategy."}
                 </div>
               ) : filteredRuns.length === 0 ? (
                 <div style={{ ...emptyRunFilterStateStyle }}>

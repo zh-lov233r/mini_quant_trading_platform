@@ -75,7 +75,6 @@ function isStrategyType(value: unknown): value is StrategyType {
     || value === "rounded_bottom"
     || value === "v_reversal"
     || value === "support_resistance"
-    || value === "custom"
   );
 }
 
@@ -1619,7 +1618,6 @@ export default function StrategyForm({
               </div>
             </div>
 
-            {strategyType !== "custom" ? (
               <div style={{ ...boxStyle, marginTop: 12 }}>
                 <label>{isZh ? "最低 BUY 信号强度（0–100）" : "Minimum BUY Signal Strength (0–100)"}</label>
                 <input
@@ -1637,7 +1635,7 @@ export default function StrategyForm({
                     : "BUY signals below this threshold remain auditable but cannot consume a position slot."}
                 </small>
               </div>
-            ) : null}
+
           </section>
 
           {strategyType === "trend" ? (
@@ -2625,17 +2623,9 @@ export default function StrategyForm({
             <section style={cardStyle}>
               <h3 style={{ marginTop: 0 }}>{isZh ? "高级 JSON 配置" : "Advanced JSON Config"}</h3>
               <p style={{ marginTop: 0, color: "rgba(148, 163, 184, 0.88)", lineHeight: 1.6 }}>
-                {selectedTemplate?.engine_ready
-                  ? (
-                    isZh
-                      ? "这个策略类型已经接入后端执行器。这里直接编辑 JSON 参数模板，保存后即可用于回测和 paper trading。"
-                      : "This strategy type is already wired into the backend evaluator. Edit the JSON template here and save it for backtesting and paper trading."
-                  )
-                  : (
-                    isZh
-                      ? "该策略类型目前先以 JSON/DSL 形式落库，当前后端支持存储和查询，等专门 evaluator 接好后即可执行。"
-                      : "This strategy type is currently stored as JSON/DSL. The backend already supports persistence and retrieval, and it can execute once a dedicated evaluator is wired in."
-                  )}
+                {isZh
+                  ? "编辑 JSON 参数后，请校验配置；数据完整性与交易权限仍由执行入口检查。"
+                  : "Validate the edited JSON parameters; execution still checks data completeness and trading permissions."}
               </p>
               <textarea
                 style={{

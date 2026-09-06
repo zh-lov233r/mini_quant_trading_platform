@@ -16,7 +16,6 @@ class BacktestRuntimeOverrideTests(unittest.TestCase):
         runtime = {
             "strategy_type": "trend",
             "params": {"universe": {"symbols": ["MSFT"]}},
-            "engine_ready": True,
         }
         with (
             patch("src.services.backtest_engine.build_runtime_payload", return_value=runtime),
@@ -24,10 +23,6 @@ class BacktestRuntimeOverrideTests(unittest.TestCase):
                 "src.services.backtest_engine.normalize_strategy_params",
                 return_value=override,
             ) as normalize,
-            patch(
-                "src.services.backtest_engine.is_engine_ready",
-                return_value=True,
-            ),
             patch(
                 "src.services.backtest_engine.normalize_point_in_time_policy",
                 return_value={"enabled": True},
@@ -55,7 +50,6 @@ class BacktestRuntimeOverrideTests(unittest.TestCase):
         runtime = {
             "strategy_type": "trend",
             "params": {"universe": {"symbols": ["AAPL"]}, "execution": {}},
-            "engine_ready": True,
         }
         resolved = SimpleNamespace(
             membership_semantics="current_active_snapshot",

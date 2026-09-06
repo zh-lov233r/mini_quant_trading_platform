@@ -383,7 +383,7 @@ def required_recent_bar_count_for_runtime(runtime_strategy: RuntimeStrategy) -> 
         None,
     )
     if descriptor is None:
-        raise ValueError(f"unsupported engine-ready strategy_type: {strategy_type}")
+        raise ValueError(f"unsupported strategy_type: {strategy_type}")
     return int(descriptor["history_length"])
 
 

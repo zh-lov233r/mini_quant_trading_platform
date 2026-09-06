@@ -14,7 +14,7 @@ from backend.utils.import_tushare_a_share import (
     normalize_index,
     normalize_instrument,
 )
-from backend.utils.backfill_adjusted_prices import IDENTITY_UPDATE_SQL
+from backend.utils.backfill_adjusted_prices import ACTION_INSTRUMENTS_SQL
 
 
 class _Response:
@@ -119,7 +119,7 @@ class TushareAShareImportTests(unittest.TestCase):
         self.assertEqual(factors, {"000001.SZ": 1.0, "600000.SH": 2.0})
 
     def test_generic_adjustment_backfill_preserves_tushare_factors(self) -> None:
-        self.assertIn("COALESCE(vendor, '') <> 'tushare'", IDENTITY_UPDATE_SQL)
+        self.assertIn("i.currency = 'USD' AND i.vendor_source <> 'tushare'", ACTION_INSTRUMENTS_SQL)
 
     def test_normalizes_a_share_identity_without_losing_exchange_suffix(self) -> None:
         row = normalize_instrument(

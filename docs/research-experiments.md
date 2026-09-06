@@ -2,7 +2,7 @@
 
 [中文](research-experiments.zh-CN.md) | [Documentation index](README.md)
 
-Category research starts from an existing engine handler, not an existing Strategy row. AgentOps generates a concrete engine-ready draft and a bounded adaptive Pareto plan; Quant owns deterministic validation, trials, ranking, lineage, and reports. Historical finite-grid experiments remain readable but can no longer be created.
+Category research starts from an existing engine handler, not an existing Strategy row. AgentOps generates a concrete registered draft and a bounded adaptive Pareto plan; Quant owns deterministic validation, trials, ranking, lineage, and reports. Historical finite-grid experiments remain readable but can no longer be created.
 
 `support_resistance` participates as an existing engine category. Its three boolean mode switches and numeric `signal.*` / `risk.*` leaves are scalar search paths; validation rejects a candidate that disables all three modes. Every trial uses the same T-1-frozen zone detector and versioned cache semantics described in the [strategy guide](support-resistance-strategy.md).
 

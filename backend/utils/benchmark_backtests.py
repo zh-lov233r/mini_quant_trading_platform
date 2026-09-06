@@ -155,8 +155,8 @@ def _strategy_ids(db: Any) -> dict[str, str]:
         if strategy.strategy_type in result:
             continue
         try:
-            if build_runtime_payload(strategy)["engine_ready"]:
-                result[strategy.strategy_type] = str(strategy.id)
+            build_runtime_payload(strategy)
+            result[strategy.strategy_type] = str(strategy.id)
         except ValueError:
             continue
     return result

@@ -12,11 +12,13 @@ function strategy(overrides: Partial<StrategyOut> = {}): StrategyOut {
     status: "active",
     version: 7,
     params: {
-      signal: { lookback_window: 20 },
-      universe: { symbols: ["AAPL", "MSFT"] },
+      signal: { lookback_window: 20, min_strength_score: 0, zscore_entry: -2, zscore_exit: 0, price_field: "close" },
+      universe: { symbols: ["AAPL", "MSFT"], selection_mode: "explicit" },
+      risk: { max_positions: 10, position_size_pct: 0.1, max_holding_days: 20, stop_loss_pct: 0.05, take_profit_pct: 0.1 },
+      execution: { timeframe: "1d", rebalance: "daily", run_at: "close" },
       metadata: { description: "Source description", schema_version: 1 },
     },
-    engine_ready: true,
+
     ...overrides,
   };
 }

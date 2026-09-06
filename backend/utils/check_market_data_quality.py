@@ -133,6 +133,7 @@ def parse_args() -> argparse.Namespace:
         type=date.fromisoformat,
         help="Only assess data through this YYYY-MM-DD date.",
     )
+    parser.add_argument("--market", choices=("US", "CN"), help="Scope coverage checks to one market; structural checks remain global.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     parser.add_argument(
         "--strict",
@@ -197,7 +198,16 @@ def scalar(conn: psycopg.Connection, query: str, params: dict[str, Any] | None =
     return int(row[0])
 
 
-def run_checks(conn: psycopg.Connection, *, as_of_date: date | None) -> dict[str, Any]:
+def load_market_counts(conn, currency: str, as_of_date: date | None) -> list[DailyCount]:
+    rows = conn.execute("""SELECT b.dt_ny,count(*) FROM eod_bars b
+        JOIN instruments i ON i.id=b.instrument_id WHERE i.currency=%s
+          AND (%s::date IS NULL OR b.dt_ny<=%s)
+        GROUP BY b.dt_ny ORDER BY b.dt_ny DESC LIMIT 31""", (currency, as_of_date, as_of_date)).fetchall()
+    counts = [DailyCount(row[0], int(row[1])) for row in reversed(rows)]
+    return counts
+
+
+def run_checks(conn: psycopg.Connection, *, as_of_date: date | None, market: str | None = None) -> dict[str, Any]:
     totals = {
         "eod_bars": scalar(conn, "SELECT count(*) FROM eod_bars"),
         "daily_features": scalar(conn, "SELECT count(*) FROM daily_features"),
@@ -209,150 +219,117 @@ def run_checks(conn: psycopg.Connection, *, as_of_date: date | None) -> dict[str
         name: scalar(conn, query) for name, query in CRITICAL_COUNT_QUERIES.items()
     }
 
-    recent_rows = conn.execute(
-        """
-        SELECT dt_ny, row_count FROM (
-          SELECT dt_ny, count(*) AS row_count
-          FROM eod_bars
-          WHERE (%(as_of)s::date IS NULL OR dt_ny <= %(as_of)s::date)
-          GROUP BY dt_ny ORDER BY dt_ny DESC LIMIT 31
-        ) recent ORDER BY dt_ny
-        """,
-        {"as_of": as_of_date},
-    ).fetchall()
-    counts = [DailyCount(row[0], int(row[1])) for row in recent_rows]
-    latest_complete, baseline = choose_latest_complete_day(counts)
-    latest_observed = counts[-1]
-    shocks = find_daily_count_shocks(counts, through=latest_complete.trade_date)
-    critical_counts["recent_daily_count_shocks"] = len(shocks)
+    warnings = []
+    market_results = {}
+    for market_name, currency in (("US", "USD"), ("CN", "CNY")):
+        if market is not None and market_name != market:
+            continue
+        counts = load_market_counts(conn, currency, as_of_date)
+        if not counts:
+            if market is not None:
+                critical_counts[f"{market_name}_missing_market_data"] = 1
+            continue
+        latest_complete, baseline = choose_latest_complete_day(counts)
+        latest_observed = counts[-1]
+        shocks = find_daily_count_shocks(counts, through=latest_complete.trade_date)
+        critical_counts[f"{market_name}_recent_daily_count_shocks"] = len(shocks)
+        stale_features = scalar(conn, """SELECT count(*) FROM eod_bars b
+            JOIN instruments i ON i.id=b.instrument_id
+            JOIN daily_features f ON f.instrument_id=b.instrument_id AND f.dt_ny=b.dt_ny
+            WHERE i.currency=%(currency)s AND f.asof < b.asof""", {"currency": currency})
+        critical_counts[f"{market_name}_stale_daily_features"] = stale_features
+        market_results[market_name] = dict(latest_observed=asdict(latest_observed),
+            latest_complete=asdict(latest_complete), recent_median_rows=baseline, daily_count_shocks=shocks)
+        if latest_observed.trade_date != latest_complete.trade_date:
+            warnings.append(dict(name="latest_observed_day_is_partial", market=market_name,
+                date=latest_observed.trade_date, rows=latest_observed.rows, baseline_rows=baseline))
+        expected_day = conn.execute("""SELECT max(session_date) FROM signal_market_sessions
+            WHERE market=%s AND is_open AND closes_at<=now()
+              AND (%s::date IS NULL OR session_date<=%s)""", (market_name, as_of_date, as_of_date)).fetchone()[0]
+        if expected_day and latest_complete.trade_date < expected_day:
+            warnings.append(dict(name="market_data_is_stale", market=market_name,
+                expected_session=expected_day, latest_complete=latest_complete.trade_date))
+        elif expected_day is None:
+            warnings.append(dict(name="market_calendar_coverage_missing", market=market_name))
+        stale_rows = conn.execute("""SELECT i.id,i.ticker_canonical,max(e.dt_ny)
+            FROM instruments i LEFT JOIN eod_bars e ON e.instrument_id=i.id
+            WHERE i.currency=%s AND i.is_active AND i.asset_type='CS'
+              AND (i.listed_at IS NULL OR i.listed_at<=%s)
+            GROUP BY i.id HAVING max(e.dt_ny) IS NULL OR max(e.dt_ny)<%s::date-10
+            ORDER BY max(e.dt_ny) NULLS FIRST,i.ticker_canonical""", (currency,latest_complete.trade_date,latest_complete.trade_date)).fetchall()
+        if stale_rows:
+            warnings.append(dict(name="stale_active_common_stocks",market=market_name,count=len(stale_rows),
+                sample=[dict(instrument_id=r[0],ticker=r[1],last_bar=r[2]) for r in stale_rows[:20]]))
 
-    stale_rows = conn.execute(
-        """
-        SELECT i.id, i.ticker_canonical, MAX(e.dt_ny) AS last_bar
-        FROM instruments i
-        LEFT JOIN eod_bars e ON e.instrument_id = i.id
-        WHERE i.is_active AND i.asset_type = 'CS'
-        GROUP BY i.id
-        HAVING MAX(e.dt_ny) IS NULL
-            OR MAX(e.dt_ny) < %(latest_complete)s::date - 10
-        ORDER BY last_bar NULLS FIRST, i.ticker_canonical
-        """,
-        {"latest_complete": latest_complete.trade_date},
-    ).fetchall()
-    missing_latest = scalar(
-        conn,
-        """
-        SELECT count(*) FROM instruments i
-        WHERE i.is_active AND i.asset_type = 'CS'
-          AND NOT EXISTS (
-            SELECT 1 FROM eod_bars e
-            WHERE e.instrument_id = i.id AND e.dt_ny = %(latest_complete)s
-          )
-        """,
-        {"latest_complete": latest_complete.trade_date},
-    )
+    if market != "CN":
+        vwap_entitlement_start = date(2016, 8, 29)
+        pre_entitlement_vwap = scalar(
+            conn,
+            "SELECT count(*) FROM eod_bars b JOIN instruments i ON i.id=b.instrument_id WHERE i.currency='USD' AND dt_ny < %(start)s AND vwap IS NULL",
+            {"start": vwap_entitlement_start},
+        )
+        eligible_missing_vwap = scalar(
+            conn,
+            """
+            SELECT count(*) FROM eod_bars b JOIN instruments i ON i.id=b.instrument_id
+            WHERE i.currency='USD' AND dt_ny >= %(start)s
+              AND (%(as_of)s::date IS NULL OR dt_ny <= %(as_of)s::date)
+              AND vwap IS NULL
+            """,
+            {"start": vwap_entitlement_start, "as_of": as_of_date},
+        )
+        missing_sic = scalar(
+            conn,
+            """
+            SELECT count(*) FROM instruments
+            WHERE currency='USD' AND is_active AND asset_type = 'CS' AND sic_code IS NULL
+            """,
+        )
+        unresolved_events = scalar(
+            conn,
+            "SELECT count(*) FROM security_ticker_events WHERE resolution_status = 'unresolved'",
+        )
+        latest_short_interest = conn.execute(
+            "SELECT max(settlement_date) FROM stock_short_interest"
+        ).fetchone()[0]
 
-    warnings: list[dict[str, Any]] = []
-    if latest_observed.trade_date != latest_complete.trade_date:
-        warnings.append(
-            {
-                "name": "latest_observed_day_is_partial",
-                "date": latest_observed.trade_date,
-                "rows": latest_observed.rows,
-                "baseline_rows": baseline,
-            }
-        )
-    if stale_rows:
-        warnings.append(
-            {
-                "name": "stale_active_common_stocks",
-                "count": len(stale_rows),
-                "sample": [
-                    {"instrument_id": row[0], "ticker": row[1], "last_bar": row[2]}
-                    for row in stale_rows[:20]
-                ],
-            }
-        )
-    if missing_latest:
-        warnings.append(
-            {
-                "name": "active_common_stocks_without_latest_bar",
-                "count": missing_latest,
-                "date": latest_complete.trade_date,
-            }
-        )
-
-    vwap_entitlement_start = date(2016, 8, 29)
-    pre_entitlement_vwap = scalar(
-        conn,
-        "SELECT count(*) FROM eod_bars WHERE dt_ny < %(start)s AND vwap IS NULL",
-        {"start": vwap_entitlement_start},
-    )
-    eligible_missing_vwap = scalar(
-        conn,
-        """
-        SELECT count(*) FROM eod_bars
-        WHERE dt_ny >= %(start)s
-          AND (%(as_of)s::date IS NULL OR dt_ny <= %(as_of)s::date)
-          AND vwap IS NULL
-        """,
-        {"start": vwap_entitlement_start, "as_of": as_of_date},
-    )
-    missing_sic = scalar(
-        conn,
-        """
-        SELECT count(*) FROM instruments
-        WHERE is_active AND asset_type = 'CS' AND sic_code IS NULL
-        """,
-    )
-    unresolved_events = scalar(
-        conn,
-        "SELECT count(*) FROM security_ticker_events WHERE resolution_status = 'unresolved'",
-    )
-    latest_short_interest = conn.execute(
-        "SELECT max(settlement_date) FROM stock_short_interest"
-    ).fetchone()[0]
-
-    if pre_entitlement_vwap:
-        warnings.append(
-            {
-                "name": "vwap_before_plan_entitlement_missing",
-                "count": pre_entitlement_vwap,
-                "before": vwap_entitlement_start,
-            }
-        )
-    if eligible_missing_vwap:
-        warnings.append(
-            {
-                "name": "provider_or_identity_vwap_missing",
-                "count": eligible_missing_vwap,
-                "from": vwap_entitlement_start,
-            }
-        )
-    if missing_sic:
-        warnings.append({"name": "active_common_stocks_without_sic", "count": missing_sic})
-    if unresolved_events:
-        warnings.append({"name": "unresolved_ticker_events", "count": unresolved_events})
-    stale_short_interest_cutoff = (as_of_date or latest_complete.trade_date) - timedelta(days=45)
-    if latest_short_interest is None or latest_short_interest < stale_short_interest_cutoff:
-        warnings.append(
-            {
-                "name": "short_interest_is_stale",
-                "latest_settlement_date": latest_short_interest,
-                "expected_on_or_after": stale_short_interest_cutoff,
-            }
-        )
+        if pre_entitlement_vwap:
+            warnings.append(
+                {
+                    "name": "vwap_before_plan_entitlement_missing",
+                    "count": pre_entitlement_vwap,
+                    "before": vwap_entitlement_start,
+                }
+            )
+        if eligible_missing_vwap:
+            warnings.append(
+                {
+                    "name": "provider_or_identity_vwap_missing",
+                    "count": eligible_missing_vwap,
+                    "from": vwap_entitlement_start,
+                }
+            )
+        if missing_sic:
+            warnings.append({"name": "active_common_stocks_without_sic", "count": missing_sic})
+        if unresolved_events:
+            warnings.append({"name": "unresolved_ticker_events", "count": unresolved_events})
+        stale_short_interest_cutoff = (as_of_date or date.today()) - timedelta(days=45)
+        if latest_short_interest is None or latest_short_interest < stale_short_interest_cutoff:
+            warnings.append(
+                {
+                    "name": "short_interest_is_stale",
+                    "latest_settlement_date": latest_short_interest,
+                    "expected_on_or_after": stale_short_interest_cutoff,
+                }
+            )
 
     failures = [name for name, count in critical_counts.items() if count]
     status = "FAIL" if failures else ("WARN" if warnings else "PASS")
     return {
         "status": status,
         "totals": totals,
-        "latest_observed": asdict(latest_observed),
-        "latest_complete": asdict(latest_complete),
-        "recent_median_rows": baseline,
+        "markets": market_results,
         "critical_counts": critical_counts,
-        "daily_count_shocks": shocks,
         "warnings": warnings,
         "failures": failures,
     }
@@ -368,12 +345,9 @@ def print_text(result: dict[str, Any]) -> None:
         f"short_interest={result['totals']['stock_short_interest']} "
         f"ticker_events={result['totals']['security_ticker_events']}"
     )
-    observed = result["latest_observed"]
-    complete = result["latest_complete"]
-    print(
-        f"Latest observed: {observed['trade_date']} ({observed['rows']} rows); "
-        f"latest complete: {complete['trade_date']} ({complete['rows']} rows)"
-    )
+    for market, summary in result["markets"].items():
+        observed, complete = summary["latest_observed"], summary["latest_complete"]
+        print(f"{market}: latest observed={observed['trade_date']} ({observed['rows']} rows); latest complete={complete['trade_date']} ({complete['rows']} rows)")
     print("Critical checks:")
     for name, count in result["critical_counts"].items():
         print(f"  {'PASS' if count == 0 else 'FAIL'} {name}={count}")
@@ -399,7 +373,7 @@ def main() -> None:
 
     with psycopg.connect(normalize_dsn(database_url)) as conn:
         conn.execute("SET TRANSACTION READ ONLY")
-        result = run_checks(conn, as_of_date=args.as_of_date)
+        result = run_checks(conn, as_of_date=args.as_of_date, market=args.market)
 
     if args.json:
         print(json.dumps(result, default=str, ensure_ascii=False, indent=2))

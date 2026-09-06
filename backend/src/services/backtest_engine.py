@@ -53,7 +53,6 @@ from src.services.strategy_registry import (
     build_runtime_payload,
     build_strategy_catalog,
     extract_description,
-    is_engine_ready,
     normalize_strategy_params,
     strategy_data_requirements,
 )
@@ -726,9 +725,6 @@ def run_backtest(
             extract_description(runtime_params_override),
         )
         runtime["params"] = normalized
-        runtime["engine_ready"] = is_engine_ready(strategy.strategy_type, normalized)
-    if not runtime["engine_ready"]:
-        raise ValueError("strategy is not engine-ready")
 
     universe_started = perf_counter()
     policy = normalize_point_in_time_policy(universe_policy) if universe_policy else None

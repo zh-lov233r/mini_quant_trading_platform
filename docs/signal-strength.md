@@ -2,7 +2,7 @@
 
 [中文](signal-strength.zh-CN.md)
 
-The nine engine-ready strategy categories calculate a deterministic, strategy-local BUY strength from 0 to 100. Strength compares entry candidates produced by the same strategy on the same signal date. It is not a historical win probability and must not be compared across strategy categories.
+The nine registered strategy categories calculate a deterministic, strategy-local BUY strength from 0 to 100. Strength compares entry candidates produced by the same strategy on the same signal date. It is not a historical win probability and must not be compared across strategy categories.
 
 ## Execution semantics
 

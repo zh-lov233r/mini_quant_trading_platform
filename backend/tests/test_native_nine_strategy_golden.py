@@ -43,7 +43,6 @@ class NativeNineStrategyGoldenTests(unittest.TestCase):
                     "risk": {"max_positions": 20, "position_size_pct": 0.02},
                 },
             ),
-            "engine_ready": True,
         }
 
     def _stateless_days(

@@ -369,6 +369,8 @@ std::optional<Decision> advance_symbol(
     const Config& config,
     bool emit_signals = true
 );
+std::optional<Decision> advance_market_symbol(SymbolState& state, const Bar& bar,
+    const Config& config, bool emit_signals = true, const PositionView* position = nullptr);
 void record_execution_rejection(
     SymbolState& state,
     const EntryChannel& entry_channel,

@@ -279,10 +279,10 @@ std::optional<std::tuple<double, double, double>> quadratic_fit(const std::vecto
 std::optional<PatternDecision> common_position_exit(
     const PatternConfig& config,
     const PatternState& state,
-    const PatternPositionView& position
+    const PatternPositionView* position
 ) {
-    if (position.quantity <= 0.0 || state.bars.empty()) return std::nullopt;
-    PatternSetup setup = position.setup ? *position.setup : PatternSetup{
+    if (!position || position->quantity <= 0.0 || state.bars.empty()) return std::nullopt;
+    PatternSetup setup = position && position->setup ? *position->setup : PatternSetup{
         config.strategy_type,
         config.strategy_type + ":position:position",
         3,
@@ -299,16 +299,16 @@ std::optional<PatternDecision> common_position_exit(
     if (setup.invalidation_price && current.low && *current.low < *setup.invalidation_price) {
         reason = "pattern invalidation price was breached";
         stage = "pattern_invalidation";
-    } else if (current.close && position.average_entry_price && *position.average_entry_price > 0.0
-        && *current.close <= *position.average_entry_price * (1.0 - config.risk.max_loss_pct)) {
+    } else if (current.close && position->average_entry_price && *position->average_entry_price > 0.0
+        && *current.close <= *position->average_entry_price * (1.0 - config.risk.max_loss_pct)) {
         reason = "price fell through the configured maximum loss";
         stage = "max_loss_stop";
-    } else if (current.close && current.atr_14 && position.average_entry_price
-        && *current.close <= *position.average_entry_price - config.risk.stop_loss_atr * *current.atr_14) {
+    } else if (current.close && current.atr_14 && position->average_entry_price
+        && *current.close <= *position->average_entry_price - config.risk.stop_loss_atr * *current.atr_14) {
         reason = "price hit the ATR stop";
         stage = "atr_stop";
-    } else if (current.close && current.atr_14 && position.average_entry_price
-        && *current.close >= *position.average_entry_price + config.risk.take_profit_atr * *current.atr_14) {
+    } else if (current.close && current.atr_14 && position->average_entry_price
+        && *current.close >= *position->average_entry_price + config.risk.take_profit_atr * *current.atr_14) {
         reason = "price reached the ATR take-profit target";
         stage = "take_profit";
     }
@@ -658,13 +658,13 @@ std::optional<PatternDecision> evaluate_double_bottom(
     const PatternConfig& config,
     const std::string& symbol,
     const PatternState& state,
-    const PatternPositionView& position
+    const PatternPositionView* position
 ) {
     if (state.bars.empty()) return std::nullopt;
     const auto& signal = std::get<DoubleBottomConfig>(config.signal);
-    PatternSetup setup = position.setup ? *position.setup : PatternSetup{};
-    bool has_setup = position.setup != nullptr;
-    if (position.quantity > 0.0 && !has_setup && state.double_bottom_best) {
+    PatternSetup setup = position && position->setup ? *position->setup : PatternSetup{};
+    bool has_setup = position && position->setup != nullptr;
+    if (position && position->quantity > 0.0 && !has_setup && state.double_bottom_best) {
         const auto& pattern = *state.double_bottom_best;
         const DoubleBottomRightCandidate candidate{
             pattern.left_index, pattern.neckline_index, pattern.right_index,
@@ -673,7 +673,7 @@ std::optional<PatternDecision> evaluate_double_bottom(
         setup = double_bottom_setup(config, symbol, state, candidate, 3, "neckline_breakout", pattern);
         has_setup = true;
     }
-    if (position.quantity > 0.0 && has_setup) {
+    if (position && position->quantity > 0.0 && has_setup) {
         const PatternBar& current = state.bars.back();
         const PatternObject& fields = payload_fields(setup);
         const auto left_low = pattern_number(fields, "left_bottom_low");
@@ -684,8 +684,8 @@ std::optional<PatternDecision> evaluate_double_bottom(
         std::optional<std::string> stage;
         if (right_low && current.close && *current.close < *right_low) {
             reason = "price closed below the right bottom after confirmation"; stage = "right_bottom_break";
-        } else if (current.close && position.average_entry_price && *position.average_entry_price > 0.0
-            && *current.close <= *position.average_entry_price * (1.0 - config.risk.max_loss_pct)) {
+        } else if (current.close && position->average_entry_price && *position->average_entry_price > 0.0
+            && *current.close <= *position->average_entry_price * (1.0 - config.risk.max_loss_pct)) {
             reason = "price fell more than the configured max-loss threshold from entry"; stage = "max_loss_stop";
         } else if (left_low && right_low && current.low
             && *current.low < std::min(*left_low, *right_low) * (1.0 - signal.support_tolerance_pct)) {
@@ -695,7 +695,7 @@ std::optional<PatternDecision> evaluate_double_bottom(
             reason = "price reached the ATR take-profit target from the breakout confirmation"; stage = "take_profit";
         } else {
             const auto current_atr = recent_atr(state.bars, static_cast<int>(state.bars.size()));
-            const auto stop_anchor = breakout_close ? breakout_close : position.average_entry_price;
+            const auto stop_anchor = breakout_close ? breakout_close : position->average_entry_price;
             if (current.close && current_atr && stop_anchor
                 && *current.close < *stop_anchor - config.risk.stop_loss_atr * *current_atr) {
                 reason = "price hit the ATR stop from the breakout confirmation"; stage = "atr_stop";
@@ -759,7 +759,7 @@ std::optional<PricePlatform> head_platform(
 
 std::optional<PatternDecision> evaluate_head_shoulders(
     const PatternConfig& config, const std::string& symbol,
-    const PatternState& state, const PatternPositionView& position
+    const PatternState& state, const PatternPositionView* position
 ) {
     if (auto exit = common_position_exit(config, state, position)) return exit;
     const auto& signal = std::get<HeadShouldersConfig>(config.signal);
@@ -919,7 +919,7 @@ bool v_continuous(const std::vector<PatternBar>& bars, int start, int end, doubl
 
 std::optional<PatternDecision> evaluate_v_reversal(
     const PatternConfig& config, const std::string& symbol,
-    const PatternState& state, const PatternPositionView& position
+    const PatternState& state, const PatternPositionView* position
 ) {
     if (auto exit = common_position_exit(config, state, position)) return exit;
     const auto& signal = std::get<VReversalConfig>(config.signal);
@@ -933,12 +933,12 @@ std::optional<PatternDecision> evaluate_v_reversal(
     const auto breakout = v_breakout(bars, anchor->reversal, signal, current);
     const auto ratio = volume_ratio(bar);
     const auto body = body_atr(bar);
-    if (position.quantity > 0.0 && position.setup && position.setup->stage_index < 3 && !breakout
+    if (position && position->quantity > 0.0 && position->setup && position->setup->stage_index < 3 && !breakout
         && body && *body >= signal.bearish_body_atr_min && bar.close && bar.open && *bar.close < *bar.open
         && ratio && *ratio >= signal.bearish_reversal_volume_ratio_min
         && current >= anchor->reversal + 2
         && v_continuous(bars, current - 2, current - 1, signal.continuation_volume_ratio_min)) {
-        auto setup = *position.setup;
+        auto setup = *position->setup;
         setup.exit_stage = "bearish_volume_failure";
         setup.anchors["failure"] = iso_date(bar.date_ordinal);
         payload_fields(setup)["bearish_body_atr"] = *body;
@@ -998,13 +998,13 @@ std::optional<PatternDecision> evaluate_v_reversal(
 }
 
 std::optional<PatternDecision> rounded_weakness_exit(
-    const PatternConfig& config, const PatternState& state, const PatternPositionView& position
+    const PatternConfig& config, const PatternState& state, const PatternPositionView* position
 ) {
-    if (position.quantity <= 0.0 || !position.setup || position.setup->stage_index >= 3) return std::nullopt;
+    if (!position || position->quantity <= 0.0 || !position->setup || position->setup->stage_index >= 3) return std::nullopt;
     const auto& signal = std::get<RoundedBottomConfig>(config.signal);
     const auto& bars = state.bars;
     if (bars.empty() || !bars.back().close) return std::nullopt;
-    const auto bottom = pattern_text(position.setup->anchors, "bottom");
+    const auto bottom = pattern_text(position->setup->anchors, "bottom");
     if (!bottom) return std::nullopt;
     const auto highs = confirmed_pivots(bars, signal.pivot_left_bars, signal.pivot_right_bars, true);
     const auto lows = confirmed_pivots(bars, signal.pivot_left_bars, signal.pivot_right_bars);
@@ -1023,7 +1023,7 @@ std::optional<PatternDecision> rounded_weakness_exit(
                 && *ratio >= signal.breakout_volume_ratio_min) recovered = true;
         }
         if (recovered) continue;
-        auto setup = *position.setup;
+        auto setup = *position->setup;
         setup.exit_stage = "right_side_failure";
         setup.anchors["failure_peak"] = iso_date(bars[first].date_ordinal);
         setup.anchors["lower_high"] = iso_date(bars[second].date_ordinal);
@@ -1043,7 +1043,7 @@ std::optional<PatternDecision> evaluate_rounded_bottom(
     const PatternConfig& config,
     const std::string& symbol,
     const PatternState& state,
-    const PatternPositionView& position
+    const PatternPositionView* position
 ) {
     if (auto exit = common_position_exit(config, state, position)) return exit;
     if (auto exit = rounded_weakness_exit(config, state, position)) return exit;
@@ -1271,27 +1271,27 @@ std::optional<PatternDecision> evaluate_island(
     const PatternConfig& config,
     const std::string& symbol,
     const PatternState& state,
-    const PatternPositionView& position
+    const PatternPositionView* position
 ) {
     if (state.bars.empty()) return std::nullopt;
     const auto& signal = std::get<IslandConfig>(config.signal);
     const PatternBar& current = state.bars.back();
-    if (position.quantity > 0.0 && position.setup) {
-        PatternSetup setup = *position.setup;
+    if (position && position->quantity > 0.0 && position->setup) {
+        PatternSetup setup = *position->setup;
         auto atr = current.atr_14;
         if (!atr || *atr == 0.0) atr = recent_atr(state.bars, static_cast<int>(state.bars.size()));
         std::optional<std::string> reason;
         std::optional<std::string> stage;
         if (setup.invalidation_price && current.low && *current.low < *setup.invalidation_price) {
             reason = "price broke the staged pattern invalidation level"; stage = "pattern_invalidation";
-        } else if (current.close && position.average_entry_price
-            && *current.close <= *position.average_entry_price * (1.0 - config.risk.max_loss_pct)) {
+        } else if (current.close && position->average_entry_price
+            && *current.close <= *position->average_entry_price * (1.0 - config.risk.max_loss_pct)) {
             reason = "price fell more than the configured max-loss threshold from entry"; stage = "max_loss_stop";
-        } else if (current.close && atr && position.average_entry_price
-            && *current.close <= *position.average_entry_price - config.risk.stop_loss_atr * *atr) {
+        } else if (current.close && atr && position->average_entry_price
+            && *current.close <= *position->average_entry_price - config.risk.stop_loss_atr * *atr) {
             reason = "price hit the ATR stop"; stage = "atr_stop";
-        } else if (current.close && atr && position.average_entry_price
-            && *current.close >= *position.average_entry_price + config.risk.take_profit_atr * *atr) {
+        } else if (current.close && atr && position->average_entry_price
+            && *current.close >= *position->average_entry_price + config.risk.take_profit_atr * *atr) {
             reason = "price reached the ATR take-profit target"; stage = "take_profit";
         }
         if (reason) {
@@ -1541,11 +1541,11 @@ void append_pattern_bar(PatternState& state, const PatternConfig& config, Patter
     }
 }
 
-std::optional<PatternDecision> evaluate_pattern(
+std::optional<PatternDecision> observe_pattern(
     const PatternConfig& config,
     const std::string& symbol,
     const PatternState& state,
-    const PatternPositionView& position
+    const PatternPositionView* position
 ) {
     switch (config.kind) {
         case PatternKind::IslandReversal: return evaluate_island(config, symbol, state, position);
@@ -1555,6 +1555,11 @@ std::optional<PatternDecision> evaluate_pattern(
         case PatternKind::VReversal: return evaluate_v_reversal(config, symbol, state, position);
     }
     return std::nullopt;
+}
+
+std::optional<PatternDecision> evaluate_pattern(const PatternConfig& config, const std::string& symbol,
+    const PatternState& state, const PatternPositionView& position) {
+    return observe_pattern(config, symbol, state, &position);
 }
 
 std::string pattern_setup_json(const PatternSetup& setup) {

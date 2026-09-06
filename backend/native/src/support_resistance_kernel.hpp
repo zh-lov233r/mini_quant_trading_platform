@@ -19,7 +19,7 @@ void hydrate_support_resistance_symbol_state(
 pybind11::list evaluate_support_resistance_day(
     const pybind11::dict& runtime,
     const pybind11::dict& market,
-    pybind11::dict audit
+    pybind11::dict audit, bool observation_only = false
 );
 void bind_support_resistance(pybind11::module_& module);
 

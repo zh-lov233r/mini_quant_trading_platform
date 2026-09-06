@@ -7,6 +7,7 @@
 ## 从这里开始
 
 - [项目 README](../README.zh-CN.md)：功能、安装、命令以及主要 UI 和 API 入口。
+- [信号中心：手动扫描、每日报告、不可变图表与运维](signal-center.zh-CN.md)
 - [系统架构](architecture.zh-CN.md)：子系统边界、数据流、执行时序和安全不变量。
 - [研究实验](research-experiments.zh-CN.md)：实验输入、trial 生命周期、停止策略、报告和恢复行为。
 - [回测性能与 worker 运维](backtest-performance.zh-CN.md)：共享原生内核边界、typed COPY 持久化、durable job、benchmark 门槛和恢复。

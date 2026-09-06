@@ -30,8 +30,7 @@ SELECT
   close_u,
   volume
 FROM eod_bars
-WHERE (%(start_date)s::date IS NULL OR dt_ny >= (%(start_date)s::date - 400))
-  AND (%(end_date)s::date IS NULL OR dt_ny <= %(end_date)s::date)
+WHERE (%(end_date)s::date IS NULL OR dt_ny <= %(end_date)s::date)
   {instrument_filter}
 ORDER BY instrument_id, dt_ny;
 """
@@ -394,6 +393,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional instrument_id filter. Repeat the flag to target multiple instruments.",
     )
+    parser.add_argument("--market", choices=("US", "CN"))
+    parser.add_argument("--repair-stale", action="store_true", help="Rebuild full feature histories for instruments with missing or older features.")
     return parser.parse_args()
 
 
@@ -689,12 +690,30 @@ def main() -> None:
         raise SystemExit("Missing DATABASE_URL or SQLALCHEMY_DATABASE_URL")
     require_market_data_maintenance_owner(args.database_url)
 
+    instrument_ids = args.instrument_id
+    if args.repair_stale or args.market:
+        with psycopg.connect(_psycopg_dsn(args.database_url)) as conn:
+            conn.execute("SET TRANSACTION READ ONLY")
+            rows = conn.execute("""SELECT DISTINCT b.instrument_id FROM eod_bars b
+                JOIN instruments i ON i.id=b.instrument_id
+                LEFT JOIN daily_features f ON f.instrument_id=b.instrument_id AND f.dt_ny=b.dt_ny
+                WHERE (%s::text IS NULL OR i.currency=%s)
+                  AND (%s::bigint[] IS NULL OR b.instrument_id=ANY(%s))
+                  AND (NOT %s OR f.instrument_id IS NULL OR f.asof < b.asof)
+                ORDER BY b.instrument_id""", (
+                    args.market, {"US":"USD","CN":"CNY"}.get(args.market),
+                    instrument_ids, instrument_ids, args.repair_stale,
+                )).fetchall()
+            instrument_ids = [row[0] for row in rows]
+        if not instrument_ids:
+            print("No stale market features to rebuild.", flush=True)
+            return
     processed_instruments, upserted_rows = backfill_daily_features(
         args.database_url,
-        start_date=args.start_date,
-        end_date=args.end_date,
+        start_date=None if args.repair_stale else args.start_date,
+        end_date=None if args.repair_stale else args.end_date,
         batch_rows=args.batch_rows,
-        instrument_ids=args.instrument_id,
+        instrument_ids=instrument_ids,
         instrument_limit=args.instrument_limit,
     )
     print(

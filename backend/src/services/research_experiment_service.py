@@ -32,7 +32,7 @@ from src.models.tables import (
 from src.schemas.research import ExperimentSpec, ExperimentTokenUsageUpdate
 from src.services.backtest_job_service import enqueue_backtest_job, request_backtest_cancel
 from src.services.backtest_universe_service import resolve_point_in_time_universe
-from src.services.strategy_registry import extract_description, is_engine_ready, normalize_strategy_params
+from src.services.strategy_registry import extract_description, normalize_strategy_params
 from src.services.strategy_service import validate_strategy_params
 
 
@@ -138,8 +138,6 @@ def expand_experiment(
         strategy.params,
         extract_description(strategy.params),
     )
-    if not is_engine_ready(strategy.strategy_type, base_params):
-        raise ValueError("strategy is not engine-ready")
 
     symbols, universe = _load_universe(db, spec)
     grid_keys = sorted(spec.parameter_grid)

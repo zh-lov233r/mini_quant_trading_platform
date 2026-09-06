@@ -88,6 +88,7 @@ export default function AppShell({
 
   const navLabels: Record<WorkspaceNavKey, string> = {
     dashboard: messages.nav.dashboard,
+    signals: messages.nav.signals,
     strategies: messages.nav.strategies,
     stockBaskets: messages.nav.stockBaskets,
     backtests: messages.nav.backtests,

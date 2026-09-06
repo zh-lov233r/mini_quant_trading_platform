@@ -270,7 +270,7 @@ PatternConfig parse_pattern_config(const py::dict& runtime) {
     return config;
 }
 
-py::list evaluate_pattern_day(const py::dict& runtime, const py::dict& market) {
+py::list evaluate_pattern_day(const py::dict& runtime, const py::dict& market, bool observation_only) {
     const PatternConfig config = parse_pattern_config(runtime);
     const py::dict params = py::cast<py::dict>(runtime["params"]);
     const py::object json_loads = py::module_::import("json").attr("loads");
@@ -287,7 +287,7 @@ py::list evaluate_pattern_day(const py::dict& runtime, const py::dict& market) {
         const PatternPositionView position{
             number_or(snapshot, "position"), optional_number(snapshot, "avg_entry_price"), stored ? &*stored : nullptr,
         };
-        const auto decision = evaluate_pattern(config, symbol, state, position);
+        const auto decision = observation_only ? observe_pattern(config, symbol, state) : evaluate_pattern(config, symbol, state, position);
         if (!decision) continue;
         py::dict event;
         event["strategy_id"] = runtime["strategy_id"];
@@ -296,7 +296,12 @@ py::list evaluate_pattern_day(const py::dict& runtime, const py::dict& market) {
         event["action"] = decision->buy ? "BUY" : "SELL";
         event["reason"] = decision->reason;
         event["score"] = decision->score ? py::cast(*decision->score) : py::none();
-        event["metadata"] = json_loads(pattern_metadata_json(config, state.bars.back(), position, *decision));
+        if (observation_only) {
+            py::dict metadata;
+            metadata["setup"] = json_loads(pattern_setup_json(decision->setup));
+            metadata["strength_inputs"] = json_loads(pattern_strength_inputs_json(decision->strength_inputs));
+            event["metadata"] = metadata;
+        } else event["metadata"] = json_loads(pattern_metadata_json(config, state.bars.back(), position, *decision));
         event["instrument_id"] = snapshot.contains("instrument_id")
             ? py::reinterpret_borrow<py::object>(snapshot["instrument_id"])
             : py::object(py::none());

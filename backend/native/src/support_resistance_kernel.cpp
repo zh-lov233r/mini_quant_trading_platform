@@ -615,7 +615,7 @@ void hydrate_support_resistance_symbol_state(sr::SymbolState& state, const py::d
 py::list evaluate_support_resistance_day(
     const py::dict& runtime,
     const py::dict& market,
-    py::dict audit
+    py::dict audit, bool observation_only
 ) {
     const py::dict params = py::cast<py::dict>(runtime["params"]);
     const sr::Config config = parse_support_resistance_config(
@@ -697,7 +697,7 @@ py::list evaluate_support_resistance_day(
         for (WorkItem& item : work) {
             for (std::size_t index = 0; index < item.bars.size(); ++index) {
                 const bool last = index + 1U == item.bars.size();
-                item.decision = sr::advance_symbol(
+                item.decision = observation_only ? sr::advance_market_symbol(item.state, item.bars[index], config, last) : sr::advance_symbol(
                     item.state,
                     item.bars[index],
                     last ? item.position : sr::PositionView{},

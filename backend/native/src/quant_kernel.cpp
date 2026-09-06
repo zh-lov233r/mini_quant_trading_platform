@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "backtest_kernel.hpp"
+#include "market_conditions.hpp"
 #include "native_utils.hpp"
 #include "pattern_kernel.hpp"
 #include "signal_strength.hpp"
@@ -358,7 +359,7 @@ py::dict signal(
     return result;
 }
 
-py::list evaluate_trend(const py::dict& runtime, const py::dict& market) {
+py::list evaluate_trend(const py::dict& runtime, const py::dict& market, bool observation_only = false) {
     const py::dict params = py::cast<py::dict>(runtime["params"]);
     const py::dict signal_cfg = py::cast<py::dict>(params["signal"]);
     const py::dict risk_cfg = py::cast<py::dict>(params["risk"]);
@@ -386,15 +387,15 @@ py::list evaluate_trend(const py::dict& runtime, const py::dict& market) {
         std::optional<std::string> action;
         std::optional<std::string> reason;
         double score = 0.0;
-        if (position > 0.0 && close && average_entry && *average_entry > 0.0 && *close <= *average_entry * (1.0 - stop_loss_pct)) {
+        if (!observation_only && position > 0.0 && close && average_entry && *average_entry > 0.0 && *close <= *average_entry * (1.0 - stop_loss_pct)) {
             action = "SELL";
             reason = "price fell below the fixed stop-loss threshold";
             score = std::abs((*average_entry - *close) / *average_entry);
-        } else if (position > 0.0 && close && average_entry && *average_entry > 0.0 && atr && *atr > 0.0 && *close <= *average_entry - stop_loss_atr * *atr) {
+        } else if (!observation_only && position > 0.0 && close && average_entry && *average_entry > 0.0 && atr && *atr > 0.0 && *close <= *average_entry - stop_loss_atr * *atr) {
             action = "SELL";
             reason = "price hit the ATR stop-loss threshold";
             score = std::abs((*average_entry - *close) / *average_entry);
-        } else if (position > 0.0 && close && average_entry && *average_entry > 0.0 && atr && *atr > 0.0 && *close >= *average_entry + take_profit_atr * *atr) {
+        } else if (!observation_only && position > 0.0 && close && average_entry && *average_entry > 0.0 && atr && *atr > 0.0 && *close >= *average_entry + take_profit_atr * *atr) {
             action = "SELL";
             reason = "price reached the ATR take-profit threshold";
             score = std::abs((*close - *average_entry) / *average_entry);
@@ -431,10 +432,10 @@ py::list evaluate_trend(const py::dict& runtime, const py::dict& market) {
         if (!fast_now || !slow_now || !previous_fast || !previous_slow) {
             continue;
         }
-        if (*previous_fast <= *previous_slow && *fast_now > *slow_now) {
+        if (quant_kernel::market::crossover(*previous_fast, *previous_slow, *fast_now, *slow_now) == 1) {
             action = "BUY";
             reason = fast_key + " crossed above " + slow_key;
-        } else if (*previous_fast >= *previous_slow && *fast_now < *slow_now) {
+        } else if (quant_kernel::market::crossover(*previous_fast, *previous_slow, *fast_now, *slow_now) == -1) {
             action = "SELL";
             reason = fast_key + " crossed below " + slow_key;
         } else {
@@ -460,7 +461,7 @@ py::list evaluate_trend(const py::dict& runtime, const py::dict& market) {
     return results;
 }
 
-py::list evaluate_mean_reversion(const py::dict& runtime, const py::dict& market) {
+py::list evaluate_mean_reversion(const py::dict& runtime, const py::dict& market, bool observation_only = false) {
     const py::dict params = py::cast<py::dict>(runtime["params"]);
     const py::dict signal_cfg = py::cast<py::dict>(params["signal"]);
     const py::dict risk_cfg = py::cast<py::dict>(params["risk"]);
@@ -483,27 +484,27 @@ py::list evaluate_mean_reversion(const py::dict& runtime, const py::dict& market
         const auto holding_days = position_holding_days(snapshot);
         std::optional<std::string> action;
         std::optional<std::string> reason;
-        if (position > 0.0 && close && average_entry && *average_entry > 0.0 && *close <= *average_entry * (1.0 - stop_loss_pct)) {
+        if (!observation_only && position > 0.0 && close && average_entry && *average_entry > 0.0 && *close <= *average_entry * (1.0 - stop_loss_pct)) {
             action = "SELL"; reason = percent_reason("price fell below the ", stop_loss_pct, " stop-loss threshold");
-        } else if (position > 0.0 && close && average_entry && *average_entry > 0.0 && *close >= *average_entry * (1.0 + take_profit_pct)) {
+        } else if (!observation_only && position > 0.0 && close && average_entry && *average_entry > 0.0 && *close >= *average_entry * (1.0 + take_profit_pct)) {
             action = "SELL"; reason = percent_reason("price reached the ", take_profit_pct, " take-profit threshold");
-        } else if (position > 0.0 && max_holding_days > 0 && holding_days && *holding_days >= max_holding_days) {
+        } else if (!observation_only && position > 0.0 && max_holding_days > 0 && holding_days && *holding_days >= max_holding_days) {
             action = "SELL"; reason = "position reached the " + std::to_string(max_holding_days) + "-day max holding period";
-        } else if (position > 0.0 && zscore && *zscore >= -exit) {
+        } else if (!observation_only && position > 0.0 && zscore && *zscore >= -exit) {
             action = "SELL"; reason = zscore_key + " reverted above exit threshold";
-        } else if (position < 0.0 && close && average_entry && *average_entry > 0.0 && *close >= *average_entry * (1.0 + stop_loss_pct)) {
+        } else if (!observation_only && position < 0.0 && close && average_entry && *average_entry > 0.0 && *close >= *average_entry * (1.0 + stop_loss_pct)) {
             action = "BUY"; reason = percent_reason("price rose above the ", stop_loss_pct, " short stop-loss threshold");
-        } else if (position < 0.0 && close && average_entry && *average_entry > 0.0 && *close <= *average_entry * (1.0 - take_profit_pct)) {
+        } else if (!observation_only && position < 0.0 && close && average_entry && *average_entry > 0.0 && *close <= *average_entry * (1.0 - take_profit_pct)) {
             action = "BUY"; reason = percent_reason("price reached the ", take_profit_pct, " short take-profit threshold");
-        } else if (position < 0.0 && max_holding_days > 0 && holding_days && *holding_days >= max_holding_days) {
+        } else if (!observation_only && position < 0.0 && max_holding_days > 0 && holding_days && *holding_days >= max_holding_days) {
             action = "BUY"; reason = "short position reached the " + std::to_string(max_holding_days) + "-day max holding period";
-        } else if (position < 0.0 && zscore && *zscore <= exit) {
+        } else if (!observation_only && position < 0.0 && zscore && *zscore <= exit) {
             action = "BUY"; reason = zscore_key + " reverted below exit threshold";
         } else if (!zscore) {
             continue;
-        } else if (*zscore <= -entry) {
+        } else if (quant_kernel::market::deviation(*zscore, entry) == 1) {
             action = "BUY"; reason = zscore_key + " below negative entry threshold";
-        } else if (*zscore >= entry) {
+        } else if (quant_kernel::market::deviation(*zscore, entry) == -1) {
             action = "SELL"; reason = zscore_key + " above positive entry threshold";
         }
         if (!action) continue;
@@ -535,7 +536,7 @@ py::list evaluate_mean_reversion(const py::dict& runtime, const py::dict& market
     return results;
 }
 
-py::list evaluate_momentum(const py::dict& runtime, const py::dict& market) {
+py::list evaluate_momentum(const py::dict& runtime, const py::dict& market, bool observation_only = false) {
     const py::dict params = py::cast<py::dict>(runtime["params"]);
     const py::dict signal_cfg = py::cast<py::dict>(params["signal"]);
     const py::dict risk_cfg = py::cast<py::dict>(params["risk"]);
@@ -564,13 +565,13 @@ py::list evaluate_momentum(const py::dict& runtime, const py::dict& market) {
         const double volume_ratio = *volume / *average_volume;
         std::optional<std::string> action;
         std::optional<std::string> reason;
-        if (position > 0.0 && average_entry && *average_entry > 0.0 && *close <= *average_entry * (1.0 - stop_loss_pct)) {
+        if (!observation_only && position > 0.0 && average_entry && *average_entry > 0.0 && *close <= *average_entry * (1.0 - stop_loss_pct)) {
             action = "SELL"; reason = percent_reason("price fell below the ", stop_loss_pct, " stop-loss threshold");
-        } else if (position > 0.0 && average_entry && *average_entry > 0.0 && *close >= *average_entry * (1.0 + take_profit_pct)) {
+        } else if (!observation_only && position > 0.0 && average_entry && *average_entry > 0.0 && *close >= *average_entry * (1.0 + take_profit_pct)) {
             action = "SELL"; reason = percent_reason("price reached the ", take_profit_pct, " take-profit threshold");
-        } else if (position > 0.0 && (*close < *sma || *return_20d <= exit_return)) {
+        } else if (!observation_only && position > 0.0 && (*close < *sma || *return_20d <= exit_return)) {
             action = "SELL"; reason = "20-day momentum or SMA20 support failed";
-        } else if (position <= 0.0 && *close >= threshold && *return_20d >= minimum_return && volume_ratio >= volume_multiplier) {
+        } else if ((observation_only || position <= 0.0) && quant_kernel::market::momentum(*close, threshold, *return_20d, minimum_return, volume_ratio, volume_multiplier)) {
             action = "BUY"; reason = "adjusted close confirmed a volume-backed 20-day momentum breakout";
         }
         if (!action) continue;
@@ -627,7 +628,7 @@ T prepared_value(
 
 py::dict prepared_day_market(
     const py::object& dataset,
-    const py::dict& portfolio_state
+    const py::dict& portfolio_state, bool observation_only = false
 ) {
     const py::array integers = py::cast<py::array>(dataset.attr("integers"));
     const py::array floats = py::cast<py::array>(dataset.attr("floats"));
@@ -735,6 +736,7 @@ py::dict prepared_day_market(
     for (auto& [instrument_id, snapshot] : latest_by_instrument) {
         snapshot["recent_bars"] = history_by_instrument.at(instrument_id);
         const py::str instrument_key(std::to_string(instrument_id));
+        if (!observation_only) {
         py::dict position;
         if (positions.contains(instrument_key) && py::isinstance<py::dict>(positions[instrument_key])) {
             position = py::cast<py::dict>(positions[instrument_key]);
@@ -751,6 +753,7 @@ py::dict prepared_day_market(
         if (hydration.contains(instrument_key)
             && py::isinstance<py::dict>(hydration[instrument_key])) {
             snapshot["support_resistance_hydration"] = hydration[instrument_key];
+        }
         }
         market[snapshot["symbol"]] = std::move(snapshot);
     }
@@ -782,6 +785,66 @@ DayResult evaluate_day(
     }
     quant_kernel::annotate_signal_strength(type, runtime, results);
     return typed_day_result(results, std::move(support_resistance));
+}
+
+
+py::dict observe_market(const py::object& dataset, const py::dict& runtime) {
+    const py::dict market = prepared_day_market(dataset, py::dict(), true);
+    const std::string type = py::cast<std::string>(runtime["strategy_type"]);
+    const py::dict sidecar = py::cast<py::dict>(dataset.attr("sidecar"));
+    if (type == "support_resistance" && sidecar.contains("market_context")) {
+        for (auto item : market) py::cast<py::dict>(item.second)["support_risk_context"] = sidecar["market_context"];
+    }
+    py::list results;
+    py::dict audit;
+    if (type == "trend") results = evaluate_trend(runtime, market, true);
+    else if (type == "mean_reversion") results = evaluate_mean_reversion(runtime, market, true);
+    else if (type == "momentum_breakout") results = evaluate_momentum(runtime, market, true);
+    else if (type == "support_resistance") results = quant_kernel::evaluate_support_resistance_day(runtime, market, audit, true);
+    else results = quant_kernel::evaluate_pattern_day(runtime, market, true);
+    quant_kernel::annotate_signal_strength(type, runtime, results);
+    for (const py::handle raw : results) {
+        py::dict event = py::cast<py::dict>(raw);
+        py::dict metadata = py::cast<py::dict>(event["metadata"]);
+        for (const char* key : {"position", "avg_entry_price", "position_holding_days", "config"}) metadata.attr("pop")(key, py::none());
+        event["direction"] = py::cast<std::string>(event["action"]) == "BUY" ? "bullish" : "bearish";
+        event.attr("pop")("action");
+        event["event_kind"] = type == "trend" ? "event" : "condition";
+        event["event_type"] = type;
+        if (metadata.contains("setup")) {
+            py::dict setup = py::cast<py::dict>(metadata["setup"]);
+            event["event_type"] = setup["stage_key"];
+            if (setup.contains("anchors")) {
+                for (auto anchor : py::cast<py::dict>(setup["anchors"])) {
+                    const std::string key = py::cast<std::string>(anchor.first);
+                    if ((key.find("confirmed") != std::string::npos || key.find("breakout") != std::string::npos)
+                        && py::str(anchor.second).equal(py::str(py::cast<py::dict>(market[event["symbol"]])["dt_ny"]))) {
+                        event["event_kind"] = "event";
+                    }
+                }
+            }
+            for (const char* key : {"stage_target_pct", "invalidation_price", "exit_stage"}) setup.attr("pop")(key, py::none());
+        }
+    }
+    py::dict result;
+    result["observations"] = results;
+    result["audit"] = audit;
+    return result;
+}
+
+int observation_history_length(const py::dict& runtime) {
+    const std::string type = py::cast<std::string>(runtime["strategy_type"]);
+    if (type == "trend" || type == "mean_reversion" || type == "momentum_breakout") return 1;
+    if (type == "support_resistance") {
+        const py::dict signal = py::cast<py::dict>(py::cast<py::dict>(runtime["params"])["signal"]);
+        return py::cast<int>(signal["pivot_left_bars"]) + py::cast<int>(signal["pivot_right_bars"]) + 1;
+    }
+    const auto config = quant_kernel::parse_pattern_config(runtime);
+    return std::visit([](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, quant_kernel::RoundedBottomConfig>) return value.min_lookback;
+        else return value.downtrend_lookback + 1;
+    }, config.signal);
 }
 
 py::list catalog() {
@@ -832,6 +895,8 @@ PYBIND11_MODULE(_native, module) {
             }
         )
         .def("__len__", [](const DayResult& value) { return value.actions.size(); });
+    module.def("observe_market", &observe_market);
+    module.def("observation_history_length", &observation_history_length);
     module.def("catalog", &catalog);
     module.def("normalize_strategy", &normalize_strategy, py::arg("strategy_type"), py::arg("params"));
     module.def(

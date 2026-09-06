@@ -2,12 +2,16 @@
 
 [中文文档](README.zh-CN.md)
 
+- [Signal Center: manual scans, daily reports, snapshot charts, email and retention](docs/signal-center.md)
+
 A full-stack quant trading system for equity strategy research and execution, covering strategy definition, feature data preparation, backtesting, paper trading, portfolio allocation, and scheduled Alpaca paper-order execution.
 
 The repository currently has two main parts:
 
 - `backend`: FastAPI + SQLAlchemy + PostgreSQL for strategies, backtests, market data, paper accounts, portfolio allocation, and scheduling
 - `frontend`: Next.js UI for strategy management, backtest inspection, basket management, portfolio configuration, and paper trading workflows
+
+The formal catalog contains only implemented, tested, deployed, and natively registered strategy categories. New algorithms stay in development/research until registration; stored-only JSON/DSL placeholders are no longer strategy types. Existing categories still support advanced JSON parameter editing. Registration does not establish effectiveness or profitability; successful parameter validation does not establish market-data completeness or Paper Trading permission. Draft/active/archived lifecycle semantics remain separate from input validation.
 
 ## Core Features
 
@@ -17,10 +21,9 @@ The repository currently has two main parts:
   - Manual creation validates and normalizes the payload before persistence and always saves a `draft`; it does not activate a portfolio, create an allocation, start scheduling, or submit an order
   - Create from any strategy card or detail page: the wizard preloads the source and locks its type, then saves a uniquely named Draft with an independent `strategy_key` starting at `v1`; backtests, allocations, run history, and positions are not copied
   - Expose a strategy catalog and normalized runtime payloads; the shared C++ descriptor registry is the single source for defaults, JSON Schema, required features, history windows, validation, and algorithm revisions
-  - Current strategy types include `trend`, `mean_reversion`, `momentum_breakout`, `island_reversal`, `double_bottom`, `head_shoulders_bottom`, `rounded_bottom`, `v_reversal`, `support_resistance`, and `custom`
+  - Current strategy types include `trend`, `mean_reversion`, `momentum_breakout`, `island_reversal`, `double_bottom`, `head_shoulders_bottom`, `rounded_bottom`, `v_reversal`, `support_resistance`
   - The five bottom-reversal categories use cumulative 20% / 50% / 100% staged entries; see [Bottom-reversal strategies](docs/bottom-reversal-strategies.md)
-  - Engine-ready execution currently supports `trend`, `mean_reversion`, `momentum_breakout`, `island_reversal`, `double_bottom`, `head_shoulders_bottom`, `rounded_bottom`, `v_reversal`, and `support_resistance`
-  - All nine engine-ready strategies execute only through the shared C++ kernel; `custom` remains stored-only and is not an executable DSL
+  - All nine registered strategies execute only through the shared C++ kernel
   - `momentum_breakout` uses existing forward-adjusted-when-available daily close, SMA20, 20-day return, and volume features; day-T close signals fill at the next valid session (T+1) open
 
 - Market data and feature engineering
@@ -36,7 +39,7 @@ The repository currently has two main parts:
   - Plan the read-only correctness/screening funnel with `make benchmark-backtests BENCHMARK_ARGS="plan"`; write benchmarks require explicit `--apply` and the safety gates in the performance guide
   - Resolve stable instrument identity and stream calendar-year, full-universe v5 PreparedDataset chunks through a depth-one producer/consumer pipeline for manual, research, and verification runs; warm hits open directly and corrupt caches rebuild atomically
   - Load summary, downsampled equity, signals, and transactions through incremental APIs
-  - Execute every engine-ready run through the stateful in-process C++20 `BacktestSession`; typed details, shared Support/Resistance lifecycle events, run decision events, links, and the final summary publish in one database transaction
+  - Execute every strategy run through the stateful in-process C++20 `BacktestSession`; typed details, shared Support/Resistance lifecycle events, run decision events, links, and the final summary publish in one database transaction
   - Rank same-strategy BUY signals by a frozen day-T strength score before next-valid-session (T+1) open fills; see [Signal strength](docs/signal-strength.md)
 
 - Paper trading
@@ -55,7 +58,7 @@ The repository currently has two main parts:
 
 - Agent-assisted strategy research
   - Uses AgentOps workflows to propose draft strategies, run bounded research experiments, and prepare Draft PRs for native C++ strategy modules, descriptors, golden differentials, and wheel validation
-  - Includes engine-ready `support_resistance` research with frozen support-bounce zones, channel/risk filters, and qualifying repeated entries after exit in the same zone
+  - Includes `support_resistance` research with frozen support-bounce zones, channel/risk filters, and qualifying repeated entries after exit in the same zone
   - Separates immutable stock phases from four-regime classification; close breaks or structural conflicts reset the whole phase, and independent effectiveness studies use detector revision 14
   - Persists experiment specifications, deterministic trial expansions, progress, token usage, termination evidence, and robustness reports
   - Supports automatic stop policies based on elapsed time, workflow token usage, or a target metric
@@ -129,7 +132,7 @@ The frontend currently includes:
 - `/research/[experimentId]`
 - `/agent-runs/[runId]`
 
-The 14 active workbench pages use a wide-screen, compact-density shell. Primary navigation lives in a collapsible left sidebar; on manually collapsible wide screens, the content viewport stays the same width so cards and tables do not gain or lose visible content when the sidebar moves. There is no fixed right context rail. Page-specific configuration, creation, identity, and risk details open through clearly labeled, keyboard-accessible dialogs, which become full-screen below 768px. Important progress, validation, broker warnings, and engine-ready status remain visible in the main page. All short enum and pagination selectors use one dark, cyan-accented Radix option panel instead of an operating-system menu, with consistent keyboard, hover, focus, invalid, disabled, and mobile states. Strategy, basket, and portfolio entity selectors in Backtests and Paper Trading remain searchable and keyboard navigable while retaining the existing request values. The dashboard omits the duplicated risk/action and daily TODO cards; new backtests start from the upper-right workbench action, while strategy-library and strategy-detail backtest links open the same dialog with the current engine-ready strategy preselected. The result list supports strategy or basket search plus strategy-category and run-status filters. It shows 10 runs per page by default with selectable page sizes and centered previous/next controls, and each result card reuses its strategy-library category color and label. Terminal manual runs can be deleted individually after confirmation; the dialog closes immediately, deletion continues in the background, and a viewport-fixed upper-center notification appears only after success or failure before fading out automatically. Queued and running runs remain protected, while research and verification runs are managed only from their owning experiment. Strategy creation uses those same colors for category cards and selected states. Backtest detail loads market-appropriate comparison curves independently from the compact summary and equity payloads: A-share runs use Shanghai Composite and Shenzhen Component, while other runs use SPY and QQQ. It removes the raw summary-metric list and limits latest positions to quantity, average cost, closing price, and market value. Dense tables support sorting, filtering, column visibility, resizing, and explicit client/server pagination; they preserve semantic tables for smaller results and virtualize only result sets of 200 rows or more. Detail-page columns collapse to a single column on narrow screens, and compact metric cards stack when their container becomes too narrow so labels, monetary values, and technical fields remain fully readable. Development and production builds use separate Next.js output directories so a verification build cannot invalidate the active development server.
+The 14 active workbench pages use a wide-screen, compact-density shell. Primary navigation lives in a collapsible left sidebar; on manually collapsible wide screens, the content viewport stays the same width so cards and tables do not gain or lose visible content when the sidebar moves. There is no fixed right context rail. Page-specific configuration, creation, identity, and risk details open through clearly labeled, keyboard-accessible dialogs, which become full-screen below 768px. Important progress, validation, broker warnings remain visible in the main page. All short enum and pagination selectors use one dark, cyan-accented Radix option panel instead of an operating-system menu, with consistent keyboard, hover, focus, invalid, disabled, and mobile states. Strategy, basket, and portfolio entity selectors in Backtests and Paper Trading remain searchable and keyboard navigable while retaining the existing request values. The dashboard omits the duplicated risk/action and daily TODO cards; new backtests start from the upper-right workbench action, while strategy-library and strategy-detail backtest links open the same dialog with the current registered strategy preselected. The result list supports strategy or basket search plus strategy-category and run-status filters. It shows 10 runs per page by default with selectable page sizes and centered previous/next controls, and each result card reuses its strategy-library category color and label. Terminal manual runs can be deleted individually after confirmation; the dialog closes immediately, deletion continues in the background, and a viewport-fixed upper-center notification appears only after success or failure before fading out automatically. Queued and running runs remain protected, while research and verification runs are managed only from their owning experiment. Strategy creation uses those same colors for category cards and selected states. Backtest detail loads market-appropriate comparison curves independently from the compact summary and equity payloads: A-share runs use Shanghai Composite and Shenzhen Component, while other runs use SPY and QQQ. It removes the raw summary-metric list and limits latest positions to quantity, average cost, closing price, and market value. Dense tables support sorting, filtering, column visibility, resizing, and explicit client/server pagination; they preserve semantic tables for smaller results and virtualize only result sets of 200 rows or more. Detail-page columns collapse to a single column on narrow screens, and compact metric cards stack when their container becomes too narrow so labels, monetary values, and technical fields remain fully readable. Development and production builds use separate Next.js output directories so a verification build cannot invalidate the active development server.
 
 Position lifecycles use New York trading dates. Open rows distinguish period-end valuation from actual sell fills. SR audit data loads directly for the visible candle window, independently of initial signal pagination; identical completed requests are reused and candles remain interactive while loading. The lifecycle chart does not draw regime backgrounds or entry channels.
 
@@ -397,7 +400,7 @@ make docker-logs
 
 - `import_tushare_a_share.py`
   - Import Shanghai, Shenzhen, and Beijing A-share identities, unadjusted daily bars, forward/backward-adjusted OHLC, broad-market indices, and `daily_features`
-  - Synchronize the `All A Shares (Tushare)` basket for all nine engine-ready strategies in the Backtests workbench
+  - Synchronize the `All A Shares (Tushare)` basket for all nine registered strategies in the Backtests workbench
   - A-share results compare against Shanghai Composite and Shenzhen Component instead of SPY and QQQ
 
 - `check_market_data_quality.py`
@@ -436,6 +439,18 @@ make backfill-daily BACKFILL_ARGS="--skip-sic --skip-ticker-events --skip-vwap -
 
 The dry run fetches provider coverage for the selected enrichment datasets but does not write facts or identity intervals; security-master sync is skipped because its standalone script has no dry-run mode. All writes are idempotent. Recovery after a failure is to fix the reported cause and rerun the same range—do not delete or rebuild history. Ticker-event repairs retain before/after interval snapshots in `security_ticker_events`.
 
+If the requested range contains only weekend dates, the EOD gap-fill step succeeds without fetching or writing bars. The daily maintenance pipeline continues its remaining steps and final quality gate; an empty weekend range does not itself mark maintenance as failed.
+
+The default US catch-up always rechecks at least the last 14 calendar days, even when newer rows exist, and refreshes existing vendor bars as well as missing rows. An explicit range remains exact for vendor requests. Coverage watermarks are US-only. Earlier gaps and vendor corrections outside this window require an explicit historical range.
+
+Adjustment repair audits complete US price histories and writes only inconsistent rows, including rows before the requested ingestion range when a dividend or split changes their basis. Tushare-owned prices are excluded. The feature step uses `--market US --repair-stale`: it rebuilds the full history of each instrument with missing features or `daily_features.asof < eod_bars.asof`, including recovery after an interrupted repair. This can update derived data outside the vendor-request window. Preview adjustment impact with `.venv/bin/python backend/utils/backfill_adjusted_prices.py --dry-run`; back up `eod_bars`, `daily_features`, reference/action tables and maintenance/readiness state before applying a repair. Repairs reuse the existing schema, require no migration, and never reset history or alter broker state.
+
+Quality JSON reports `markets.US` and `markets.CN` separately, with per-market counts, baselines and trusted-calendar freshness checks. `--market US` or `--market CN` scopes these checks; structural integrity checks remain global. US-only VWAP entitlement, SIC and short-interest warnings are not applied to CN checks. Missing calendar coverage is explicit, rather than inferred from another market.
+
+After a successful full pipeline, readiness revalidates previously published sessions and the latest available market day, including weekend runs. Publication requires completed price/feature rows, fresh features, and at least 99% coverage of the expected common-stock/benchmark population (securities observed in the prior 30 calendar days plus recent listings, excluding not-yet-listed and already-delisted securities). The remaining missing count is recorded as `missing_unclassified`: missing bars are not assumed to be suspensions. This threshold is a market readiness gate, not a guarantee that every basket member has bars; per-scan coverage checks still apply. A failed or partial pipeline does not republish readiness.
+
+Massive reference, EOD and enrichment requests retry DNS/network timeouts, HTTP 429 and temporary 5xx errors up to five attempts with 1/2/4/8-second delays. Authentication errors fail immediately. Maintenance errors retain the market, requested range, failed step and sanitized child error; credentials and URL API keys are redacted. Correct the reported cause and rerun through the maintenance entry point; do not manually force `ready`.
+
 Run the integrity gate directly. Critical failures always return a non-zero exit status; warnings are informational unless `--strict` is used:
 
 ```bash
@@ -443,7 +458,7 @@ make check-data
 make check-data CHECK_DATA_ARGS="--strict --json"
 ```
 
-For an exceptional maintenance run, `--skip-quality-check` omits the final gate; `--strict-quality-check` makes pipeline warnings blocking. The normal installed task uses the default critical-failure-only policy.
+`--skip-quality-check` is allowed only with `--dry-run`; write runs always execute the final gate. `--strict-quality-check` makes pipeline warnings blocking. The normal installed task uses the default critical-failure-only policy.
 
 The installed macOS LaunchAgent runs daily at 20:15 local time and writes to `logs/daily-market-backfill.log` and `logs/daily-market-backfill.err.log`. Inspect its status with `launchctl print "gui/$(id -u)/com.quant.daily-market-backfill"`. Its schedule and installed paths are unchanged by the backfill scripts. A write run enters the singleton `draining` state, rejects new backtest/research work, waits for existing work, takes the exclusive database advisory lock, invalidates derived caches, and then updates source tables. Every child receives the same maintenance-owner token and both Paper scheduler controls remain explicitly disabled. A failed pipeline or quality gate leaves the state `failed` and blocks strategy work until a later successful rerun.
 
@@ -537,7 +552,7 @@ This separation makes it easier to:
 - Paper covers active paper accounts and active portfolios, showing up to 10 portfolios. Auto-run eligibility follows scheduler selection: active account, portfolio, strategy and allocation, with allocation auto-run enabled; non-executable configurations are alerted separately. Latest strategy runs distinguish dry-run from order-submission mode and do not represent whole-portfolio results. Real-time orders, account equity, daily PnL and equity charts are deferred, starting with a separate single-account integration.
 - Recent activity merges bounded sources, returning up to 20 events and displaying 10; a run is never duplicated as a job. Empty counts are `0`, unavailable values are `null` and display as `—`. Alerts and activity use stable codes with localized presentation.
 
-The backend uses a fixed number of batch and window queries, without per-account overview calls or transaction, signal, or equity details. Current strategy parameters are still read and validated for engine readiness, so their cost grows with strategy count; fixed query counts do not imply constant latency. Database/program errors fail the request; malformed JSON affects only the associated evidence. No database schema, trading, or backtest semantics change, and no migration is required. Roll back through code versions rather than a parallel Dashboard implementation.
+The backend uses a fixed number of batch and window queries, without per-account overview calls or transaction, signal, or equity details. Current strategy parameters are still read and validated for parameter errors, so their cost grows with strategy count; fixed query counts do not imply constant latency. Database/program errors fail the request; malformed JSON affects only the associated evidence. No database schema, trading, or backtest semantics change, and no migration is required. Roll back through code versions rather than a parallel Dashboard implementation.
 
 ## Agent Research Workspace
 

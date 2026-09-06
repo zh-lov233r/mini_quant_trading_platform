@@ -14,19 +14,6 @@ StrategyType = Literal[
     "rounded_bottom",
     "v_reversal",
     "support_resistance",
-    "custom",
-]
-
-EngineReadyStrategyType = Literal[
-    "trend",
-    "mean_reversion",
-    "momentum_breakout",
-    "island_reversal",
-    "double_bottom",
-    "head_shoulders_bottom",
-    "rounded_bottom",
-    "v_reversal",
-    "support_resistance",
 ]
 
 StagedPatternType = Literal[
@@ -61,7 +48,6 @@ class RuntimeStrategy(TypedDict):
     version: int
     status: str
     strategy_type: StrategyType
-    engine_ready: bool
     params: RuntimeStrategyParams
 
 

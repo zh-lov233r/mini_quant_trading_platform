@@ -96,14 +96,14 @@ class MarketDataMaintenanceTests(unittest.TestCase):
         self.db.rollback()
         self.assertEqual(
             active_market_data_work_counts(self.db),
-            {"backtest_jobs": 1, "research_experiments": 1},
+            {"backtest_jobs": 1, "research_experiments": 1, "signal_scans": 0},
         )
 
         existing_job.status = "completed"
         existing_run.status = "completed"
         experiment.status = "completed"
         self.db.commit()
-        begin_market_data_update(self.db, owner)
+        begin_market_data_update(self.db, owner, market="US")
         self.db.commit()
         self.assertEqual(load_market_data_maintenance_state(self.db).status, "updating")
 
@@ -120,7 +120,7 @@ class MarketDataMaintenanceTests(unittest.TestCase):
 
         second_owner = uuid.uuid4()
         begin_market_data_draining(self.db, second_owner)
-        begin_market_data_update(self.db, second_owner)
+        begin_market_data_update(self.db, second_owner, market="US")
         finish_market_data_maintenance(self.db, second_owner)
         self.db.commit()
         assert_market_data_submission_allowed(self.db)

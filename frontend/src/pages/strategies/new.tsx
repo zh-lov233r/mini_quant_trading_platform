@@ -61,7 +61,7 @@ export default function NewStrategyPage() {
           <PageActionLink href="/strategies">{copy.page.back}</PageActionLink>
           <WorkspaceDialog triggerLabel={isZh ? "创建指引" : "Creation Guide"} title={isZh ? "创建指引" : "Creation Guide"}>
             <ContextStack>
-              <ContextGroup title={isZh ? "安全边界" : "Safety Boundary"}><ContextNote>{isZh ? "新策略首先保存为 Draft。只有通过验证并明确发布为 engine-ready 后，回测引擎才会使用它。" : "New strategies are saved as drafts first. The backtest engine only uses them after validation and explicit engine-ready publication."}</ContextNote></ContextGroup>
+              <ContextGroup title={isZh ? "安全边界" : "Safety Boundary"}><ContextNote>{isZh ? "新策略保存为 Draft；参数校验成功不代表数据完整或已获准交易。" : "New strategies are saved as drafts; parameter validation does not establish data completeness or trading permission."}</ContextNote></ContextGroup>
               <ContextGroup title={isZh ? "相关入口" : "Related Workspaces"}><ContextLinks><ContextLink href="/research">{isZh ? "打开 Agent 研究" : "Open agent research"}</ContextLink><ContextLink href="/strategies">{isZh ? "查看策略库" : "View strategy library"}</ContextLink></ContextLinks></ContextGroup>
             </ContextStack>
           </WorkspaceDialog>

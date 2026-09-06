@@ -721,7 +721,7 @@ def main() -> None:
     token = str(os.getenv("TUSHARE_TOKEN") or "").strip()
     if not token:
         raise SystemExit("Missing TUSHARE_TOKEN")
-    maintenance = MaintenanceWindow(args.database_url)
+    maintenance = MaintenanceWindow(args.database_url, market="CN")
     maintenance.start()
     client = TushareClient(
         token,
@@ -789,7 +789,25 @@ def main() -> None:
             end_date,
             skip_features=args.skip_features,
         )
+        if not selected and not args.skip_features:
+            try:
+                from .signal_market_state import publish_ready, sync_cn_calendar
+            except ImportError:
+                from signal_market_state import publish_ready, sync_cn_calendar
+            publish_ready(args.database_url,"CN",start_date,end_date)
+            from datetime import timedelta
+            try:
+                sync_cn_calendar(args.database_url,client,date.today(),date.today()+timedelta(days=60))
+            except (ValueError, OSError) as exc:
+                print(f"Calendar refresh unavailable ({type(exc).__name__}); retention will wait for a trusted calendar")
         maintenance.succeed()
+    except (Exception, SystemExit) as exc:
+        if __package__:
+            from .run_daily_market_backfill import redact_error
+        else:
+            from run_daily_market_backfill import redact_error
+        maintenance.error_message = redact_error(f"CN {start_date}..{end_date}: {type(exc).__name__}: {exc}")
+        raise
     finally:
         maintenance.fail_if_open()
 

@@ -21,6 +21,7 @@ export const dashboardZhCN = {
   actions: "待处理事项", noAlerts: "暂无需要立即处理的事项", noAlertsHint: "这不代表所有子系统均已检查或完全健康。", handle: "前往处理", count: "{count} 项",
   severity: { critical: "严重", warning: "警告", info: "提示" },
   alerts: {
+    signal_schema_missing: "信号中心数据库表尚未部署", signals_waiting: "信号任务等待完整行情", signals_failed: "信号扫描失败或覆盖不完整", signal_reports_failed: "信号报告生成失败", signal_email_failed: "信号邮件发送失败或结果不确定",
     overallocated: "组合 active allocation 合计超过 100%", maintenance_blocked: "数据维护正在阻塞执行", backtest_blocked: "回测任务等待中，但 manager 不可用", research_blocked: "研究任务等待中，但 worker 无法调度",
     backtests_failed: "最近 24 小时有回测失败", research_failed: "最近 24 小时有研究失败或部分失败", strategy_configuration: "Active 策略不可执行", allocation_configuration: "Active allocation 引用了 inactive 或不可执行策略",
     scheduler_failed: "具备自动运行资格的组合最近调度策略运行失败", no_allocations: "Active 组合没有有效 allocation", never_run: "已配置的 active 组合尚无策略运行记录",
@@ -29,7 +30,7 @@ export const dashboardZhCN = {
   stages: { experiments: "研究实验 · 个", evaluated_candidates: "已评估候选 · 个", verified_candidates: "完整验证完成候选 · 个", promoted_strategies: "已晋升策略 · 个", paper_strategies: "已配置 Paper 策略 · 个" },
   waiting: "等待研究调度：{count}（尚未进入回测队列）", completed: "近 24 小时完成回测：{count}",
   evidence: "策略验证证据", evidenceHint: "最近更新的 10 个策略；仅展示当前策略规则匹配的手动回测指标；股票池与窗口以运行详情为准，不同范围不可直接排名。晋升仅表示历史来源。",
-  strategy: "策略", type: "大类", return: "收益", sharpe: "Sharpe", drawdown: "最大回撤", trades: "交易次数", window: "回测窗口", evidenceColumn: "回测证据", lineage: "研究来源", engineUnavailable: "不可执行",
+  strategy: "策略", type: "大类", return: "收益", sharpe: "Sharpe", drawdown: "最大回撤", trades: "交易次数", window: "回测窗口", evidenceColumn: "回测证据", lineage: "研究来源",
   evidenceStatus: { available: "已有回测", missing: "无当前版本回测", configuration_changed: "配置已变更", invalid: "证据不可用" },
   issues: { invalid_configuration: "参数快照异常", invalid_metrics: "部分指标异常或不可用", invalid_research_evidence: "研究来源证据异常" },
   promoted: "晋升来源", verification: "候选验证：{status}", noLineage: "无关联来源", noStrategies: "还没有策略，先创建策略再开展研究。",

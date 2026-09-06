@@ -10,7 +10,7 @@ PatternConfig parse_pattern_config(const pybind11::dict& runtime);
 
 pybind11::list evaluate_pattern_day(
     const pybind11::dict& runtime,
-    const pybind11::dict& market
+    const pybind11::dict& market, bool observation_only = false
 );
 
 }  // namespace quant_kernel
